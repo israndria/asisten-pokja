@@ -14,6 +14,9 @@ import spse_browser
 import ldk_engine
 import ldk_config
 import checklist_engine
+import masa_berlaku_engine
+import penjelasan_engine
+import penjelasan_config
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -97,10 +100,14 @@ with st.sidebar:
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen",
-    "📋 LDK Auto-fill", "☑️ Checklist Penawaran"
+    "📋 LDK Auto-fill", "☑️ Checklist Penawaran", "⏳ Masa Berlaku",
+    "💬 Penjelasan",
 ])
+
+# Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
+penjelasan_engine.start_scheduler()
 
 
 # ============================================================
@@ -619,3 +626,420 @@ with tab5:
                 key="ck_submit_manual",
             ):
                 _do_submit_checklist()
+
+
+# ============================================================
+# Tab 6: Masa Berlaku Penawaran
+# ============================================================
+
+with tab6:
+    st.subheader("Masa Berlaku Penawaran — Auto-fill Edit Lelang")
+    st.markdown(
+        "Navigasikan browser ke halaman **edit lelang** (`/lelang/[ID]/edit`), "
+        "lalu scan form untuk deteksi otomatis field masa berlaku. "
+        "Bot akan set **40 hari** sejak batas akhir pemasukan dokumen."
+    )
+
+    # ── Deteksi URL edit dari URL aktif ──────────────────────────────────────
+    mb_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
+    mb_url_auto = (
+        f"{SPSE_BASE_URL}lelang/{mb_paket_id}/edit" if mb_paket_id else None
+    )
+
+    mb_url_aktif = spse_browser.get_url() if spse_browser.get_url() else ""
+    is_edit_page = "/edit" in mb_url_aktif
+
+    if is_edit_page:
+        st.success(f"Browser sudah di halaman edit: `{mb_url_aktif[:80]}`")
+    elif mb_url_auto:
+        st.info(f"ID Paket terdeteksi: **{mb_paket_id}** — belum di halaman edit")
+    else:
+        st.warning("Buka halaman paket di browser agar ID terdeteksi otomatis.")
+
+    with st.expander("🔧 Override URL Edit Lelang (opsional)"):
+        mb_url_manual = st.text_input(
+            "URL Halaman Edit",
+            value=mb_url_aktif if is_edit_page else (mb_url_auto or ""),
+            placeholder="https://spse.inaproc.id/tapinkab/lelang/[ID]/edit",
+            key="mb_url_manual",
+        )
+    mb_url_final = st.session_state.get("mb_url_manual") or mb_url_auto
+
+    # Nilai hari (bisa diubah user)
+    mb_nilai_hari = st.number_input(
+        "Nilai Masa Berlaku (hari)",
+        min_value=1, max_value=365, value=40, step=1,
+        help="Default 40 hari — standar konstruksi usaha kecil",
+    )
+
+    st.divider()
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        mb_push = st.button(
+            "🚀 Set Masa Berlaku ke SPSE",
+            type="primary",
+            use_container_width=True,
+            disabled=not bool(mb_url_final),
+        )
+    with col2:
+        mb_scan_only = st.button(
+            "🔍 Scan Saja (Inspect Form)",
+            use_container_width=True,
+            disabled=not bool(mb_url_final),
+        )
+
+    if mb_push or mb_scan_only:
+        if not spse_browser.get_url():
+            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
+            st.stop()
+        if not mb_url_final:
+            st.error("URL edit lelang tidak diketahui.")
+            st.stop()
+
+        if not is_edit_page:
+            with st.spinner(f"Membuka halaman edit {mb_url_final} ..."):
+                try:
+                    spse_browser.navigasi(mb_url_final)
+                    import time; time.sleep(1)  # beri waktu render
+                except Exception as e:
+                    st.error(f"Gagal membuka halaman: {e}")
+                    st.stop()
+
+        with st.spinner("Scanning form..."):
+            try:
+                mb_form = masa_berlaku_engine.scan_edit_form()
+                mb_detected = masa_berlaku_engine.auto_detect_fields(mb_form)
+            except Exception as e:
+                st.error(f"Gagal scan form: {e}")
+                st.stop()
+
+        st.session_state["mb_form"]     = mb_form
+        st.session_state["mb_detected"] = mb_detected
+
+    # ── Preview hasil scan ────────────────────────────────────────────────────
+    if "mb_detected" in st.session_state:
+        mb_form     = st.session_state["mb_form"]
+        mb_detected = st.session_state["mb_detected"]
+
+        st.caption(f"Endpoint: `{mb_form.get('action', '?')}` | Method: `{mb_form.get('method', '?')}`")
+        st.caption(f"CSRF: `{'ada ✅' if mb_form.get('csrf') else 'tidak ditemukan ⚠️'}`")
+
+        if mb_detected["confident"]:
+            st.success("Field masa berlaku berhasil terdeteksi otomatis!")
+        else:
+            st.warning("Tidak terdeteksi otomatis — cek manual di bawah dan gunakan override.")
+
+        # Deteksi otomatis
+        col_r, col_n = st.columns(2)
+        with col_r:
+            st.markdown("**Radio Field:**")
+            if mb_detected["radio_name"]:
+                st.code(f"name = {mb_detected['radio_name']}\nvalue = {mb_detected['radio_value_40']}")
+            else:
+                st.info("Tidak ada radio group terdeteksi")
+
+        with col_n:
+            st.markdown("**Number Field:**")
+            if mb_detected["number_name"]:
+                st.code(f"name = {mb_detected['number_name']}")
+            else:
+                st.info("Tidak ada number field terdeteksi")
+
+        # Semua radio groups — untuk inspeksi manual
+        with st.expander("🔍 Semua Radio Buttons di Form"):
+            for grp_name, options in mb_detected["radio_groups"].items():
+                st.markdown(f"**Group: `{grp_name}`**")
+                for opt in options:
+                    check_icon = "🔵" if opt["checked"] else "⚪"
+                    dis_icon   = " 🔒" if opt["disabled"] else ""
+                    st.write(f"  {check_icon}{dis_icon} value=`{opt['value']}` — {opt['label'][:100]}")
+
+        # Semua field lainnya
+        with st.expander("🔍 Semua Input Fields di Form"):
+            for f in mb_form.get("fields", []):
+                if f["type"] not in ("radio",):
+                    st.write(f"[{f['type']}] `{f['name']}` = `{f['value'][:60] if f.get('value') else ''}` — {f.get('label','')[:80]}")
+
+        # Override manual
+        with st.expander("⚙️ Override Manual (jika auto-detect salah)"):
+            st.caption("Isi hanya jika deteksi otomatis keliru. Kosongkan untuk pakai auto-detect.")
+            mb_radio_override  = st.text_input("Radio name (override)", key="mb_radio_name_override")
+            mb_rval_override   = st.text_input("Radio value untuk 40 hari (override)", key="mb_radio_val_override")
+            mb_number_override = st.text_input("Number field name (override)", key="mb_number_name_override")
+
+        # Payload preview
+        with st.expander("🔧 Preview Payload yang akan dikirim"):
+            payload_preview = masa_berlaku_engine.build_payload(
+                form_info   = mb_form,
+                detected    = mb_detected,
+                nilai_hari  = int(mb_nilai_hari),
+                radio_name  = st.session_state.get("mb_radio_name_override") or None,
+                radio_value = st.session_state.get("mb_radio_val_override")  or None,
+                number_name = st.session_state.get("mb_number_name_override") or None,
+            )
+            st.json(payload_preview)
+
+        st.divider()
+
+        def _do_submit_masa_berlaku():
+            payload = masa_berlaku_engine.build_payload(
+                form_info   = mb_form,
+                detected    = mb_detected,
+                nilai_hari  = int(mb_nilai_hari),
+                radio_name  = st.session_state.get("mb_radio_name_override") or None,
+                radio_value = st.session_state.get("mb_radio_val_override")  or None,
+                number_name = st.session_state.get("mb_number_name_override") or None,
+            )
+            with st.spinner("Mengirim ke SPSE..."):
+                try:
+                    result = masa_berlaku_engine.submit_masa_berlaku(mb_form, payload)
+                except Exception as e:
+                    st.error(f"Error saat submit: {e}")
+                    return
+            if result["ok"]:
+                st.success(
+                    f"✅ Berhasil! Status {result['status']} — "
+                    "silakan verifikasi di browser bahwa masa berlaku sudah tersimpan."
+                )
+            else:
+                st.error(f"❌ Gagal. Status {result['status']}")
+            with st.expander("Response body"):
+                st.code(result["body"][:3000])
+
+        if mb_push:
+            _do_submit_masa_berlaku()
+        elif mb_scan_only:
+            if st.button(
+                f"📤 Submit Masa Berlaku {int(mb_nilai_hari)} Hari ke SPSE",
+                type="primary",
+                key="mb_submit_manual",
+                disabled=not mb_detected["confident"],
+            ):
+                _do_submit_masa_berlaku()
+
+
+# ============================================================
+# Tab 7: Jadwal Penjelasan
+# ============================================================
+
+with tab7:
+    st.subheader("Jadwal Pemberian Penjelasan — Auto POST")
+    st.markdown(
+        "Bot akan **POST penjelasan otomatis** tepat saat jadwal pemberian penjelasan dimulai. "
+        "Pastikan Chrome SPSE dan Streamlit ini tetap terbuka saat jadwal tiba."
+    )
+
+    # ── Status scheduler ──────────────────────────────────────────────────────
+    sched_running = penjelasan_engine.is_scheduler_running()
+    if sched_running:
+        st.success("🟢 Scheduler aktif — monitoring setiap 15 detik")
+    else:
+        st.error("🔴 Scheduler tidak aktif")
+        if st.button("▶️ Aktifkan Scheduler"):
+            penjelasan_engine.start_scheduler()
+            st.rerun()
+
+    st.divider()
+
+    # ── Form tambah paket ─────────────────────────────────────────────────────
+    st.markdown("### Daftarkan Paket")
+
+    with st.form("form_tambah_penjelasan"):
+        col_id, col_nama = st.columns([1, 2])
+        with col_id:
+            input_paket_ids = st.text_area(
+                "ID Paket (satu per baris, bisa banyak)",
+                placeholder="10096884000\n10096884001\n10096884002",
+                height=120,
+                help="Salin dari URL: /lelang/[ID]/jadwal",
+            )
+        with col_nama:
+            input_nama = st.text_input(
+                "Nama / Keterangan Paket (opsional)",
+                placeholder="Paket Jalan Kabupaten, dll.",
+            )
+
+        jenis_options = {v: k for k, v in penjelasan_config.JENIS_PAKET.items()}
+        jenis_label = st.selectbox(
+            "Jenis Penjelasan",
+            options=list(jenis_options.keys()),
+        )
+        jenis_key = jenis_options[jenis_label]
+
+        col_dt1, col_dt2 = st.columns(2)
+        with col_dt1:
+            waktu_scan = st.checkbox(
+                "Scan jadwal otomatis dari SPSE",
+                value=True,
+                help="Navigasi ke /lelang/[ID]/jadwal untuk ambil datetime penjelasan",
+            )
+        with col_dt2:
+            waktu_manual = st.text_input(
+                "Atau isi waktu manual (dd/mm/yyyy HH:MM)",
+                placeholder="10/04/2026 10:00",
+                disabled=waktu_scan,
+            )
+
+        with st.expander("✏️ Override teks penjelasan (opsional — default pakai template)"):
+            teks_override_input = st.text_area(
+                "Teks penjelasan custom",
+                value="",
+                height=200,
+                placeholder="Kosongkan untuk pakai template bawaan",
+            )
+
+        submitted = st.form_submit_button("➕ Daftarkan", type="primary")
+
+    if submitted:
+        paket_ids_raw = [x.strip() for x in input_paket_ids.strip().splitlines() if x.strip()]
+        if not paket_ids_raw:
+            st.error("Isi minimal satu ID paket.")
+        elif not waktu_scan and not waktu_manual:
+            st.error("Isi waktu manual atau centang scan otomatis.")
+        elif not spse_browser.get_url() and waktu_scan:
+            st.error("Browser belum terhubung — tidak bisa scan jadwal.")
+        else:
+            teks_ov = teks_override_input.strip() or None
+            nama    = input_nama.strip() or f"Paket {', '.join(paket_ids_raw)}"
+
+            for paket_id in paket_ids_raw:
+                waktu_fire = None
+
+                if waktu_scan:
+                    with st.spinner(f"Scan jadwal paket {paket_id}..."):
+                        try:
+                            jadwal_list = penjelasan_engine.parse_jadwal(paket_id)
+                            if jadwal_list:
+                                # Untuk seleksi_kualifikasi → ambil baris pertama
+                                # Untuk seleksi_seleksi → baris kedua (jika ada)
+                                idx = 1 if (jenis_key == "seleksi_seleksi" and len(jadwal_list) >= 2) else 0
+                                waktu_fire = jadwal_list[idx]["mulai_dt"]
+                                st.success(
+                                    f"Paket {paket_id}: jadwal ditemukan → "
+                                    f"{waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB"
+                                )
+                            else:
+                                st.warning(f"Paket {paket_id}: jadwal pemberian penjelasan tidak ditemukan di halaman jadwal.")
+                        except Exception as e:
+                            st.error(f"Paket {paket_id}: gagal scan jadwal — {e}")
+                else:
+                    from penjelasan_engine import _parse_datetime_str
+                    waktu_fire = _parse_datetime_str(waktu_manual)
+                    if not waktu_fire:
+                        st.error(f"Format waktu tidak dikenali: {waktu_manual}")
+
+                if waktu_fire:
+                    job = penjelasan_engine.tambah_job(
+                        paket_id      = paket_id,
+                        nama_paket    = nama,
+                        jenis         = jenis_key,
+                        waktu_fire    = waktu_fire,
+                        teks_override = teks_ov,
+                    )
+                    from datetime import datetime
+                    from penjelasan_engine import TZ_WIB
+                    now = datetime.now(TZ_WIB)
+                    delta = waktu_fire - now
+                    total_seconds = int(delta.total_seconds())
+                    if total_seconds > 0:
+                        jam   = total_seconds // 3600
+                        menit = (total_seconds % 3600) // 60
+                        detik = total_seconds % 60
+                        st.info(
+                            f"✅ Paket **{paket_id}** dijadwalkan pukul "
+                            f"**{waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB** "
+                            f"(dalam {jam}j {menit}m {detik}d)"
+                        )
+                    else:
+                        st.warning(f"⚠️ Paket {paket_id}: waktu sudah lewat! Pertimbangkan submit manual.")
+
+    # ── Daftar jobs terjadwal ─────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Jobs Terjadwal")
+
+    jobs = penjelasan_engine.get_jobs()
+    if not jobs:
+        st.info("Belum ada job terdaftar.")
+    else:
+        from datetime import datetime
+        from penjelasan_engine import TZ_WIB
+        now = datetime.now(TZ_WIB)
+
+        for job in sorted(jobs, key=lambda j: j["waktu_fire"]):
+            waktu_fire = datetime.fromisoformat(job["waktu_fire"])
+            delta      = waktu_fire - now
+            sisa_secs  = int(delta.total_seconds())
+
+            status = job["status"]
+            if status == "fired":
+                icon = "✅"
+            elif status == "gagal":
+                icon = "❌"
+            elif sisa_secs <= 0:
+                icon = "⏰"
+            else:
+                jam   = sisa_secs // 3600
+                menit = (sisa_secs % 3600) // 60
+                icon  = f"⏳ {jam}j {menit}m"
+
+            jenis_label = penjelasan_config.JENIS_PAKET.get(job["jenis"], job["jenis"])
+
+            col_info, col_hapus, col_test = st.columns([4, 1, 1])
+            with col_info:
+                st.markdown(
+                    f"**{icon}** `{job['paket_id']}` — {job['nama_paket'][:50]}  \n"
+                    f"  {jenis_label} | "
+                    f"  {waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB | status: `{status}`"
+                )
+                if status == "gagal" and job.get("result"):
+                    with st.expander(f"Detail error {job['paket_id']}"):
+                        st.json(job["result"])
+                if status == "fired" and job.get("result"):
+                    with st.expander(f"Detail result {job['paket_id']}"):
+                        st.json(job["result"])
+
+            with col_hapus:
+                if st.button("🗑️", key=f"hapus_{job['paket_id']}_{job['jenis']}", help="Hapus job"):
+                    penjelasan_engine.hapus_job(job["paket_id"], job["jenis"])
+                    st.rerun()
+
+            with col_test:
+                if st.button("🧪", key=f"test_{job['paket_id']}_{job['jenis']}", help="Test submit sekarang"):
+                    with st.spinner(f"Test submit paket {job['paket_id']}..."):
+                        try:
+                            result = penjelasan_engine.submit_penjelasan(
+                                paket_id      = job["paket_id"],
+                                jenis         = job["jenis"],
+                                teks_override = job.get("teks_override"),
+                            )
+                            if result["ok"]:
+                                st.success(f"✅ HTTP {result['status']}")
+                            else:
+                                st.error(f"❌ HTTP {result['status']}")
+                            with st.expander("Response"):
+                                st.code(result["body"][:2000])
+                        except Exception as e:
+                            st.error(str(e))
+
+    # ── Preview template ──────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Preview Template Teks")
+    prev_jenis = st.selectbox(
+        "Pilih template:",
+        options=list(penjelasan_config.JENIS_PAKET.keys()),
+        format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
+        key="prev_template_jenis",
+    )
+    st.text_area("Isi template:", value=penjelasan_config.TEMPLATE[prev_jenis], height=300, disabled=True)
+
+    # ── Log scheduler ─────────────────────────────────────────────────────────
+    st.divider()
+    with st.expander("📋 Log Scheduler"):
+        log_lines = penjelasan_engine.get_log()
+        if log_lines:
+            st.code("\n".join(reversed(log_lines[-50:])))
+        else:
+            st.info("Log kosong.")
+        if st.button("🔄 Refresh Log"):
+            st.rerun()
