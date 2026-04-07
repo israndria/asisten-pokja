@@ -13,6 +13,7 @@ from config import SPSE_BASE_URL, DOWNLOAD_DIR
 import spse_browser
 import ldk_engine
 import ldk_config
+import checklist_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -96,8 +97,9 @@ with st.sidebar:
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen", "📋 LDK Auto-fill"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen",
+    "📋 LDK Auto-fill", "☑️ Checklist Penawaran"
 ])
 
 
@@ -476,3 +478,144 @@ with tab4:
 
                 with st.expander("Response body"):
                     st.code(result["body"][:3000])
+
+
+# ============================================================
+# Tab 5: Checklist Dokumen Penawaran
+# ============================================================
+
+with tab5:
+    st.subheader("Checklist Dokumen Penawaran")
+    st.markdown(
+        "Bot otomatis mencentang dokumen penawaran sesuai template "
+        "konstruksi Usaha Kecil (Administrasi + Teknis + Harga)."
+    )
+
+    # ── Deteksi ID paket dari URL aktif ──────────────────────────────────────
+    ck_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
+    ck_url_auto = (
+        f"{SPSE_BASE_URL}dokumen/{ck_paket_id}/checklist" if ck_paket_id else None
+    )
+
+    if ck_url_auto:
+        st.info(f"ID Paket terdeteksi dari URL aktif: **{ck_paket_id}**")
+    else:
+        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
+
+    with st.expander("🔧 Override URL Checklist (opsional)"):
+        ck_url_manual = st.text_input(
+            "URL Halaman Checklist",
+            value=ck_url_auto or "",
+            placeholder="https://spse.inaproc.id/tapinkab/dokumen/[ID]/checklist",
+            key="ck_url_manual",
+        )
+    ck_url_final = (
+        st.session_state.get("ck_url_manual") or ck_url_auto
+    )
+
+    st.divider()
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        ck_push = st.button(
+            "🚀 Push Checklist ke SPSE",
+            type="primary",
+            use_container_width=True,
+            disabled=not bool(ck_url_final),
+        )
+    with col2:
+        ck_scan_only = st.button(
+            "🔍 Scan Saja (Preview)",
+            use_container_width=True,
+            disabled=not bool(ck_url_final),
+        )
+
+    if ck_push or ck_scan_only:
+        if not spse_browser.get_url():
+            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
+        elif not ck_url_final:
+            st.error("URL Checklist tidak diketahui. Buka halaman paket di browser atau isi URL manual.")
+        else:
+            with st.spinner(f"Membuka halaman checklist {ck_url_final} ..."):
+                try:
+                    spse_browser.navigasi_ldk(ck_url_final)
+                except Exception as e:
+                    st.error(f"Gagal membuka halaman: {e}")
+                    st.stop()
+
+            with st.spinner("Scanning form..."):
+                try:
+                    ck_form = checklist_engine.scan_checklist_form()
+                    ck_classified = checklist_engine.classify_checkboxes(ck_form)
+                except Exception as e:
+                    st.error(f"Gagal scan form: {e}")
+                    st.stop()
+
+            st.session_state["ck_form"] = ck_form
+            st.session_state["ck_classified"] = ck_classified
+
+    if "ck_classified" in st.session_state:
+        ck_classified = st.session_state["ck_classified"]
+        ck_form       = st.session_state["ck_form"]
+
+        st.caption(f"Endpoint: `{ck_form.get('action', '?')}` | Method: `{ck_form.get('method', '?')}`")
+        st.caption(f"CSRF: `{'ada ✅' if ck_form.get('csrf') else 'tidak ditemukan ⚠️'}`")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Locked",     len(ck_classified["locked"]))
+        c2.metric("Auto-check", len(ck_classified["auto_check"]))
+        c3.metric("Skip",       len(ck_classified["skip"]))
+        c4.metric("Unknown",    len(ck_classified["unknown"]))
+
+        with st.expander("✅ Auto-check"):
+            for cb in ck_classified["auto_check"]:
+                st.write(f"• {cb['label'][:120]}")
+
+        with st.expander("🔒 Locked (dikelola SPSE, tidak disentuh)"):
+            for cb in ck_classified["locked"]:
+                st.write(f"• {cb['label'][:120] or '(tanpa label)'}")
+
+        with st.expander("⬜ Skip (usaha besar / tidak relevan)"):
+            for cb in ck_classified["skip"]:
+                st.write(f"• {cb['label'][:120]}")
+
+        if ck_classified["unknown"]:
+            with st.expander("❓ Unknown (tidak dikenali — tidak di-submit)"):
+                for cb in ck_classified["unknown"]:
+                    fallback = f"name={cb['name']} value={cb['value']}"
+                    st.write(f"• {cb['label'][:120] or fallback}")
+
+        with st.expander("🔧 Preview Payload yang akan dikirim"):
+            ck_payload_preview = checklist_engine.build_payload(ck_form, ck_classified)
+            st.json(ck_payload_preview)
+
+        st.divider()
+
+        def _do_submit_checklist():
+            payload = checklist_engine.build_payload(ck_form, ck_classified)
+            with st.spinner("Mengirim ke SPSE..."):
+                try:
+                    result = checklist_engine.submit_checklist(ck_form, payload)
+                except Exception as e:
+                    st.error(f"Error saat submit: {e}")
+                    return
+            if result["ok"]:
+                st.success(
+                    f"✅ Berhasil! Status {result['status']} — "
+                    "silakan refresh halaman checklist di browser untuk verifikasi."
+                )
+            else:
+                st.error(f"❌ Gagal. Status {result['status']}")
+            with st.expander("Response body"):
+                st.code(result["body"][:3000])
+
+        if ck_push:
+            _do_submit_checklist()
+        elif ck_scan_only:
+            n_check = len(ck_classified["auto_check"])
+            if st.button(
+                f"📤 Submit {n_check} item ke SPSE",
+                type="primary",
+                key="ck_submit_manual",
+            ):
+                _do_submit_checklist()
