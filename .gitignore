@@ -1,0 +1,5 @@
+.browser_session/
+downloads/
+__pycache__/
+*.pyc
+.env
