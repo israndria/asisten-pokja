@@ -305,3 +305,68 @@ def set_input_files(selector: str, paths: list[str]):
     if not page:
         raise RuntimeError("Browser belum terbuka.")
     _run(_set_input_files_async(page, selector, paths))
+
+
+# ============================================================
+# LDK Auto-fill
+# ============================================================
+
+def navigasi_ldk(ldk_url: str):
+    """Navigate ke halaman LDK dan tunggu sampai fully loaded."""
+    page = halaman_aktif()
+    if not page:
+        raise RuntimeError("Browser belum terbuka.")
+    _run(page.goto(ldk_url, wait_until="networkidle", timeout=30000))
+
+
+def get_paket_id() -> str | None:
+    """
+    Extract ID paket dari URL aktif di browser.
+    Pattern: /dokumen/[ID]/ atau /lelang/[ID]/
+    """
+    import re
+    url = get_url()
+    if not url:
+        return None
+    match = re.search(r'/(?:dokumen|lelang)/(\d+)', url)
+    return match.group(1) if match else None
+
+
+_FETCH_JS = """
+async ([url, method, payload, contentType, formEncoded]) => {
+    const body = formEncoded
+        ? new URLSearchParams(payload).toString()
+        : JSON.stringify(payload);
+    const resp = await fetch(url, {
+        method:      method,
+        credentials: 'include',
+        headers: {
+            'Content-Type':     contentType,
+            'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: body,
+    });
+    return { status: resp.status, ok: resp.ok, body: await resp.text() };
+}
+"""
+
+
+def submit_via_fetch(endpoint_url: str, payload: dict, method: str = "POST") -> dict:
+    """
+    Submit ke API dari dalam browser context — cookie/session otomatis ikut.
+    Coba JSON dulu; jika response 400/415/422 fallback ke form-encoded.
+    """
+    page = halaman_aktif()
+    if not page:
+        raise RuntimeError("Browser belum terbuka.")
+
+    async def _fetch(content_type: str, form_encoded: bool) -> dict:
+        return await page.evaluate(
+            _FETCH_JS,
+            [endpoint_url, method, payload, content_type, form_encoded],
+        )
+
+    result = _run(_fetch("application/json", False))
+    if not result["ok"] and result["status"] in (400, 415, 422):
+        result = _run(_fetch("application/x-www-form-urlencoded", True))
+    return result

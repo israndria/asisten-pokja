@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import SPSE_BASE_URL, DOWNLOAD_DIR
 import spse_browser
+import ldk_engine
+import ldk_config
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -94,7 +96,9 @@ with st.sidebar:
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3 = st.tabs(["⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen", "📋 LDK Auto-fill"
+])
 
 
 # ============================================================
@@ -288,3 +292,187 @@ with tab3:
                         st.info("Jangan lupa klik tombol Submit/Kirim di browser untuk mengirim.")
                     except Exception as e:
                         st.error(f"Gagal upload: {e}")
+
+
+# ============================================================
+# Tab 4: LDK Auto-fill
+# ============================================================
+
+with tab4:
+    st.subheader("LDK Auto-fill — Persyaratan Kualifikasi")
+    st.markdown(
+        "Bot otomatis mencentang dan mengisi persyaratan kualifikasi "
+        "sesuai template konstruksi Usaha Kecil."
+    )
+
+    # ── Deteksi ID paket dari URL aktif ──────────────────────────────────────
+    paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
+    ldk_url_auto = (
+        f"{SPSE_BASE_URL}dokumen/{paket_id}/ldk" if paket_id else None
+    )
+
+    if ldk_url_auto:
+        st.info(f"ID Paket terdeteksi dari URL aktif: **{paket_id}**")
+    else:
+        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
+
+    # Input manual sebagai fallback / override
+    with st.expander("🔧 Override URL LDK (opsional)"):
+        ldk_url_manual = st.text_input(
+            "URL Halaman LDK",
+            value=ldk_url_auto or "",
+            placeholder="https://spse.inaproc.id/tapinkab/dokumen/[ID]/ldk",
+            key="ldk_url_manual",
+        )
+        ldk_url_final = ldk_url_manual or ldk_url_auto
+    ldk_url_final = ldk_url_manual if "ldk_url_manual" in st.session_state and st.session_state["ldk_url_manual"] else ldk_url_auto
+
+    # ── Konfigurasi teks kinerja (bisa diedit di UI) ─────────────────────────
+    with st.expander("⚙️ Teks Kinerja Penyedia (konfirmasi sekali saja)"):
+        kinerja_text = st.text_area(
+            "Teks yang diisi pada field kinerja:",
+            value=ldk_config.CHECK_AND_FILL[0]["text"],
+            height=100,
+            key="kinerja_text_override",
+        )
+        st.caption("Teks ini disimpan dalam sesi — edit jika perlu penyesuaian.")
+
+    st.divider()
+
+    # ── Tombol utama: Push LDK ────────────────────────────────────────────────
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        push_clicked = st.button(
+            "🚀 Push LDK ke SPSE",
+            type="primary",
+            use_container_width=True,
+            disabled=not bool(ldk_url_final),
+        )
+    with col2:
+        scan_only = st.button(
+            "🔍 Scan Saja (Preview)",
+            use_container_width=True,
+            disabled=not bool(ldk_url_final),
+        )
+
+    # ── Scan / Push ───────────────────────────────────────────────────────────
+    if push_clicked or scan_only:
+        if not spse_browser.get_url():
+            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
+        elif not ldk_url_final:
+            st.error("URL LDK tidak diketahui. Buka halaman paket di browser atau isi URL manual.")
+        else:
+            # Override teks kinerja dari UI jika ada
+            ldk_config.CHECK_AND_FILL[0]["text"] = kinerja_text
+
+            with st.spinner(f"Membuka halaman LDK {ldk_url_final} ..."):
+                try:
+                    spse_browser.navigasi_ldk(ldk_url_final)
+                except Exception as e:
+                    st.error(f"Gagal membuka halaman LDK: {e}")
+                    st.stop()
+
+            with st.spinner("Scanning form..."):
+                try:
+                    form_info = ldk_engine.scan_ldk_form()
+                    classified = ldk_engine.classify_checkboxes(form_info)
+                except Exception as e:
+                    st.error(f"Gagal scan form: {e}")
+                    st.stop()
+
+            st.session_state["ldk_form"] = form_info
+            st.session_state["ldk_classified"] = classified
+
+    # ── Preview hasil scan ────────────────────────────────────────────────────
+    if "ldk_classified" in st.session_state:
+        classified = st.session_state["ldk_classified"]
+        form_info  = st.session_state["ldk_form"]
+
+        st.caption(f"Endpoint: `{form_info.get('action', '?')}` | Method: `{form_info.get('method', '?')}`")
+        st.caption(f"CSRF: `{'ada ✅' if form_info.get('csrf') else 'tidak ditemukan ⚠️'}`")
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Locked",      len(classified["locked"]))
+        c2.metric("Auto-check",  len(classified["auto_check"]))
+        c3.metric("Check+Fill",  len(classified["check_and_fill"]))
+        c4.metric("Skip",        len(classified["skip"]))
+        c5.metric("Unknown",     len(classified["unknown"]))
+
+        with st.expander("✅ Auto-check"):
+            for cb in classified["auto_check"]:
+                st.write(f"• {cb['label'][:120]}")
+
+        with st.expander("✅ Check + Fill"):
+            for cb, cfg in classified["check_and_fill"]:
+                st.write(f"• {cb['label'][:100]}")
+                st.caption(f"  → Teks: {cfg['text'][:100]}…")
+
+        with st.expander("🔒 Locked (dikelola SPSE, tidak disentuh)"):
+            for cb in classified["locked"]:
+                st.write(f"• {cb['label'][:120] or '(tanpa label)'}")
+
+        with st.expander("⬜ Skip"):
+            for cb in classified["skip"]:
+                st.write(f"• {cb['label'][:120]}")
+
+        if classified["unknown"]:
+            with st.expander("❓ Unknown (tidak dikenali — tidak di-submit)"):
+                for cb in classified["unknown"]:
+                    fallback = f"name={cb['name']} value={cb['value']}"
+                    st.write(f"• {cb['label'][:120] or fallback}")
+
+        # Payload preview
+        with st.expander("🔧 Preview Payload yang akan dikirim"):
+            payload_preview = ldk_engine.build_payload(form_info, classified)
+            st.json(payload_preview)
+
+        st.divider()
+
+        # Tombol submit (muncul setelah scan)
+        if push_clicked:
+            # Sudah navigate + scan → langsung submit
+            payload = ldk_engine.build_payload(form_info, classified)
+            with st.spinner("Mengirim ke SPSE..."):
+                try:
+                    result = ldk_engine.submit_ldk(form_info, payload)
+                except Exception as e:
+                    st.error(f"Error saat submit: {e}")
+                    st.stop()
+
+            if result["ok"]:
+                st.success(
+                    f"✅ Berhasil! Status {result['status']} — "
+                    "silakan refresh halaman LDK di browser untuk verifikasi."
+                )
+            else:
+                st.error(f"❌ Gagal. Status {result['status']}")
+
+            with st.expander("Response body"):
+                st.code(result["body"][:3000])
+
+        elif scan_only:
+            # Hanya preview — tombol submit manual
+            n_check = len(classified["auto_check"]) + len(classified["check_and_fill"])
+            if st.button(
+                f"📤 Submit {n_check} item ke SPSE",
+                type="primary",
+                key="ldk_submit_manual",
+            ):
+                payload = ldk_engine.build_payload(form_info, classified)
+                with st.spinner("Mengirim ke SPSE..."):
+                    try:
+                        result = ldk_engine.submit_ldk(form_info, payload)
+                    except Exception as e:
+                        st.error(f"Error saat submit: {e}")
+                        st.stop()
+
+                if result["ok"]:
+                    st.success(
+                        f"✅ Berhasil! Status {result['status']} — "
+                        "silakan refresh halaman LDK di browser untuk verifikasi."
+                    )
+                else:
+                    st.error(f"❌ Gagal. Status {result['status']}")
+
+                with st.expander("Response body"):
+                    st.code(result["body"][:3000])
