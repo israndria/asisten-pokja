@@ -204,9 +204,13 @@ def format_spse_datetime(dt: datetime) -> str:
 
 def scrap_hidden_fields(paket_id: str) -> dict | None:
     """
-    Auto-navigate ke /jadwal/[ID]/list, scrap semua hidden fields.
-    Return: {csrf, id, jamAwal, jamAkhir, rows: [{akt_id, dtj_id, thp_id}]}
-    atau None jika gagal.
+    Scrap hidden fields DARI TAB BACKGROUND — user tidak lihat navigasi apapun.
+
+    Flow:
+    1. Buat tab baru di background
+    2. Navigate ke /jadwal/[ID]/list
+    3. Scrap CSRF + hidden fields
+    4. Tutup tab background — halaman user tidak berubah!
     """
     page = spse_browser.halaman_aktif()
     if not page:
@@ -214,52 +218,59 @@ def scrap_hidden_fields(paket_id: str) -> dict | None:
 
     url = f"https://spse.inaproc.id/tapinkab/jadwal/{paket_id}/list"
 
-    # Navigate
-    spse_browser._run(page.goto(url, wait_until="domcontentloaded", timeout=30000))
-    spse_browser._run(page.wait_for_timeout(3000))
+    # Buat tab background — async via _run
+    bg_page = spse_browser._run(spse_browser._context.new_page())
 
-    # Scrap
-    result = spse_browser._run(page.evaluate("""() => {
-        const form = document.getElementById('jadwalEdit');
-        if (!form) return null;
+    try:
+        # Navigate di background tab
+        spse_browser._run(bg_page.goto(url, wait_until="domcontentloaded", timeout=30000))
+        spse_browser._run(bg_page.wait_for_timeout(3000))
 
-        const csrfInput = form.querySelector('input[name="authenticityToken"]');
-        const idInput = form.querySelector('input[name="id"]');
-        const jamAwal = document.getElementById('jamAwal');
-        const jamAkhir = document.getElementById('jamAkhir');
+        # Scrap
+        result = spse_browser._run(bg_page.evaluate("""() => {
+            const form = document.getElementById('jadwalEdit');
+            if (!form) return null;
 
-        const result = {
-            csrf: csrfInput ? csrfInput.value : null,
-            id: idInput ? idInput.value : null,
-            jamAwal: jamAwal ? jamAwal.value : '00:00',
-            jamAkhir: jamAkhir ? jamAkhir.value : '23:59',
-            rows: []
-        };
+            const csrfInput = form.querySelector('input[name="authenticityToken"]');
+            const idInput = form.querySelector('input[name="id"]');
+            const jamAwal = document.getElementById('jamAwal');
+            const jamAkhir = document.getElementById('jamAkhir');
 
-        const rows = form.querySelectorAll('#tblJadwal tbody tr');
-        rows.forEach((tr, idx) => {
-            const hidden = {};
-            tr.querySelectorAll('input[type="hidden"]').forEach(h => {
-                hidden[h.name] = h.value;
+            const result = {
+                csrf: csrfInput ? csrfInput.value : null,
+                id: idInput ? idInput.value : null,
+                jamAwal: jamAwal ? jamAwal.value : '00:00',
+                jamAkhir: jamAkhir ? jamAkhir.value : '23:59',
+                rows: []
+            };
+
+            const rows = form.querySelectorAll('#tblJadwal tbody tr');
+            rows.forEach((tr, idx) => {
+                const hidden = {};
+                tr.querySelectorAll('input[type="hidden"]').forEach(h => {
+                    hidden[h.name] = h.value;
+                });
+
+                const mulaiInput = tr.querySelector('input[name$="dtj_tglawal"]');
+                const selesaiInput = tr.querySelector('input[name$="dtj_tglakhir"]');
+                const namaCell = tr.querySelector('td:nth-child(2)');
+
+                result.rows.push({
+                    index: idx,
+                    nama: namaCell ? namaCell.innerText.trim().split('\\n')[0].trim() : `Tahap ${idx+1}`,
+                    hidden: hidden,
+                    name_mulai: mulaiInput ? mulaiInput.name : null,
+                    name_selesai: selesaiInput ? selesaiInput.name : null,
+                });
             });
 
-            const mulaiInput = tr.querySelector('input[name$="dtj_tglawal"]');
-            const selesaiInput = tr.querySelector('input[name$="dtj_tglakhir"]');
-            const namaCell = tr.querySelector('td:nth-child(2)');
+            return result;
+        }"""))
 
-            result.rows.push({
-                index: idx,
-                nama: namaCell ? namaCell.innerText.trim().split('\\n')[0].trim() : `Tahap ${idx+1}`,
-                hidden: hidden,
-                name_mulai: mulaiInput ? mulaiInput.name : null,
-                name_selesai: selesaiInput ? selesaiInput.name : null,
-            });
-        });
-
-        return result;
-    }"""))
-
-    return result
+        return result
+    finally:
+        # TUTUP tab background — user tidak tahu apa-apa
+        spse_browser._run(bg_page.close())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
