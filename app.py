@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 
 import streamlit as st
 
@@ -17,6 +18,8 @@ import checklist_engine
 import masa_berlaku_engine
 import penjelasan_engine
 import penjelasan_config
+import jadwal_engine
+import jadwal_config
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -62,11 +65,7 @@ with st.sidebar:
                 st.rerun()
     else:
         st.info("Chrome SPSE belum terhubung")
-        st.markdown(
-            "**Langkah 1:** Buka file ini dulu:\n\n"
-            "`Asisten_Pokja/Buka Chrome SPSE.bat`\n\n"
-            "*(Chrome baru akan terbuka khusus SPSE — jangan tutup)*"
-        )
+
         if st.button("🌐 Hubungkan ke Chrome SPSE", type="primary", use_container_width=True):
             try:
                 with st.spinner("Menghubungkan..."):
@@ -76,15 +75,32 @@ with st.sidebar:
             except RuntimeError as e:
                 st.error(str(e))
 
+        st.divider()
+        st.caption("💡 **Opsi otomatis:** Chrome akan diluncurkan langsung dari sini")
+
+        if st.button("🚀 Launch Chrome Otomatis", type="secondary", use_container_width=True):
+            try:
+                with st.spinner("Meluncurkan Chrome SPSE..."):
+                    spse_browser.launch_chrome_dengan_cdp()
+                    # Tunggu Chrome siap
+                    time.sleep(3)
+                # Auto-connect setelah Chrome launch
+                with st.spinner("Menghubungkan ke Chrome..."):
+                    spse_browser.buka_browser(SPSE_BASE_URL)
+                st.success("Chrome SPSE berhasil diluncurkan & terhubung!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Gagal launch Chrome: {e}")
+
     st.divider()
 
-    url_custom = st.text_input("Navigasi ke URL", placeholder="https://spse.tapinkab.go.id/...")
-    if st.button("Pergi", use_container_width=True):
+    url_custom = st.text_input("Navigasi ke URL", placeholder="https://spse.tapinkab.go.id/...", key="nav_url")
+    if st.button("Pergi", use_container_width=True, key="nav_pergi"):
         if url_custom:
             spse_browser.navigasi(url_custom)
             st.rerun()
 
-    if st.button("📸 Screenshot", use_container_width=True):
+    if st.button("📸 Screenshot", use_container_width=True, key="sidebar_screenshot"):
         try:
             img_bytes = spse_browser.screenshot()
             st.session_state["last_screenshot"] = img_bytes
@@ -100,10 +116,10 @@ with st.sidebar:
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen",
     "📋 LDK Auto-fill", "☑️ Checklist Penawaran", "⏳ Masa Berlaku",
-    "💬 Penjelasan",
+    "💬 Penjelasan", "📅 Auto-Fill Jadwal",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -131,10 +147,10 @@ with tab1:
     with col2:
         st.write("")
         st.write("")
-        pindah_dan_scan = st.button("🔍 Scan & Download", type="primary", use_container_width=True)
+        pindah_dan_scan = st.button("🔍 Scan & Download", type="primary", use_container_width=True, key="tab1_scan_download")
 
     with st.expander("🔧 Debug — Lihat Semua Link di Halaman"):
-        if st.button("Ambil Semua Link (max 60)"):
+        if st.button("Ambil Semua Link (max 60)", key="tab1_get_links"):
             page = spse_browser.halaman_aktif()
             if not page:
                 st.error("Browser belum terhubung.")
@@ -201,7 +217,7 @@ with tab2:
         "di browser, gunakan tombol di bawah untuk inspeksi form dan isi otomatis."
     )
 
-    if st.button("🔍 Inspeksi Form (Scan Input Fields)"):
+    if st.button("🔍 Inspeksi Form (Scan Input Fields)", key="tab2_scan_form"):
         if not spse_browser.get_url():
             st.error("Browser belum terbuka.")
         else:
@@ -226,7 +242,7 @@ with tab2:
                 if nilai:
                     fill_data[selector] = nilai
 
-        if st.button("✏️ Isi Form Otomatis", type="primary"):
+        if st.button("✏️ Isi Form Otomatis", type="primary", key="tab2_fill_form"):
             if not fill_data:
                 st.warning("Tidak ada nilai yang diisi.")
             else:
@@ -241,7 +257,7 @@ with tab2:
                 else:
                     st.success(f"{len(fill_data)} field berhasil diisi!")
 
-        if st.button("📸 Screenshot Setelah Isi"):
+        if st.button("📸 Screenshot Setelah Isi", key="tab2_screenshot"):
             img = spse_browser.screenshot()
             st.image(img, caption="Form setelah diisi")
 
@@ -257,7 +273,7 @@ with tab3:
         "scan input file yang tersedia, lalu pilih file untuk diupload."
     )
 
-    if st.button("🔍 Scan Input File Upload"):
+    if st.button("🔍 Scan Input File Upload", key="tab3_scan_files"):
         if not spse_browser.get_url():
             st.error("Browser belum terbuka.")
         else:
@@ -356,12 +372,14 @@ with tab4:
             type="primary",
             use_container_width=True,
             disabled=not bool(ldk_url_final),
+            key="ldk_push",
         )
     with col2:
         scan_only = st.button(
             "🔍 Scan Saja (Preview)",
             use_container_width=True,
             disabled=not bool(ldk_url_final),
+            key="ldk_scan",
         )
 
     # ── Scan / Push ───────────────────────────────────────────────────────────
@@ -529,12 +547,14 @@ with tab5:
             type="primary",
             use_container_width=True,
             disabled=not bool(ck_url_final),
+            key="ck_push",
         )
     with col2:
         ck_scan_only = st.button(
             "🔍 Scan Saja (Preview)",
             use_container_width=True,
             disabled=not bool(ck_url_final),
+            key="ck_scan",
         )
 
     if ck_push or ck_scan_only:
@@ -681,12 +701,14 @@ with tab6:
             type="primary",
             use_container_width=True,
             disabled=not bool(mb_url_final),
+            key="mb_push",
         )
     with col2:
         mb_scan_only = st.button(
             "🔍 Scan Saja (Inspect Form)",
             use_container_width=True,
             disabled=not bool(mb_url_final),
+            key="mb_scan",
         )
 
     if mb_push or mb_scan_only:
@@ -1043,3 +1065,204 @@ with tab7:
             st.info("Log kosong.")
         if st.button("🔄 Refresh Log"):
             st.rerun()
+
+
+# ============================================================
+# Tab 8: Auto-Fill Jadwal
+# ============================================================
+
+with tab8:
+    st.subheader("📅 Auto-Fill Jadwal Tender")
+    st.markdown(
+        "Buat **12 tahapan jadwal tender** secara otomatis sesuai peraturan. "
+        "Cukup masukkan **Kode Paket** + **Tanggal Mulai**, sistem akan menghitung "
+        "semua tanggal dan submit langsung ke SPSE (tanpa perlu buka halaman edit manual)."
+    )
+
+    # ── Info aturan ───────────────────────────────────────────────────────────
+    with st.expander("📖 Lihat Aturan 12 Tahapan"):
+        for t in jadwal_config.TAHAPAN:
+            st.write(f"**{t['id']}. {t['nama']}**")
+            st.caption(t["aturan"])
+            st.write("")
+
+    st.divider()
+
+    # ── Input ─────────────────────────────────────────────────────────────────
+    col_kode, col_date, col_time = st.columns([3, 2, 2])
+    with col_kode:
+        paket_id = st.text_input(
+            "🔢 Kode Tender",
+            placeholder="Contoh: 4618177",
+            help="Kode tender dari SPSE",
+        )
+    with col_date:
+        default_date = datetime.now().date() + timedelta(days=1)
+        tgl_input = st.date_input(
+            "📆 Tanggal Mulai",
+            value=default_date,
+            help="Tanggal mulai Pengumuman Pascakualifikasi",
+        )
+    with col_time:
+        jam_input = st.time_input(
+            "🕐 Jam Mulai",
+            value=datetime.strptime("08:00", "%H:%M").time(),
+            help="Jam mulai (default 08:00)",
+        )
+
+    # ── Tombol ────────────────────────────────────────────────────────────────
+    col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
+    with col_btn1:
+        jd_preview = st.button(
+            "🔍 Hitung & Preview (Dry Run)",
+            use_container_width=True,
+            disabled=not bool(paket_id),
+            help="Hitung jadwal + simpan payload ke file JSON, TIDAK submit ke SPSE",
+        )
+    with col_btn2:
+        jd_submit = st.button(
+            "🚀 Set Jadwal ke SPSE",
+            type="primary",
+            use_container_width=True,
+            disabled=not bool(paket_id),
+        )
+    with col_btn3:
+        jd_save_file = st.button(
+            "💾 Simpan JSON",
+            use_container_width=True,
+            disabled=not bool(paket_id),
+            help="Simpan payload ke file JSON untuk inspeksi manual",
+        )
+
+    # ── Proses ────────────────────────────────────────────────────────────────
+    if jd_preview or jd_submit or jd_save_file:
+        tgl_mulai = datetime.combine(tgl_input, jam_input)
+
+        with st.spinner(f"Scrap hidden fields + hitung jadwal untuk paket {paket_id}..."):
+            try:
+                result = jadwal_engine.auto_fill_jadwal(paket_id, tgl_mulai)
+            except Exception as e:
+                st.error(f"❌ Gagal: {e}")
+                st.stop()
+
+        st.session_state["jadwal_result"] = result
+        st.session_state["jadwal_tgl_mulai"] = tgl_mulai
+        st.session_state["jadwal_paket_id"] = paket_id
+
+    # ── Save to JSON file (dry run only) ──────────────────────────────────────
+    if jd_save_file and "jadwal_result" in st.session_state:
+        result = st.session_state["jadwal_result"]
+        paket_id = st.session_state["jadwal_paket_id"]
+        payload = result["payload"]
+
+        import json
+        from pathlib import Path
+        save_dir = Path(__file__).parent / "jadwal_output"
+        save_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = save_dir / f"jadwal_{paket_id}_{timestamp}.json"
+
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "paket_id": paket_id,
+                "tanggal_mulai": st.session_state["jadwal_tgl_mulai"].strftime("%d/%m/%Y %H:%M"),
+                "jadwal_list": [
+                    {
+                        "nama": j["nama"],
+                        "mulai": j["mulai"].strftime("%d/%m/%Y %H:%M"),
+                        "selesai": j["selesai"].strftime("%d/%m/%Y %H:%M"),
+                    }
+                    for j in result["jadwal_list"]
+                ],
+                "payload": payload,
+                "mode": "DRY_RUN — belum disubmit ke SPSE",
+            }, f, indent=2, ensure_ascii=False)
+
+        st.success(f"✅ Payload disimpan ke: `{save_path}`")
+        st.info("📝 File JSON ini berisi semua data yang AKAN disubmit — bisa diinspeksi manual sebelum submit sungguhan.")
+
+    if "jadwal_result" in st.session_state:
+        result = st.session_state["jadwal_result"]
+        tgl_mulai = st.session_state["jadwal_tgl_mulai"]
+        paket_id = st.session_state["jadwal_paket_id"]
+        jadwal_list = result["jadwal_list"]
+        scraped = result["scraped"]
+        payload = result["payload"]
+
+        st.divider()
+        st.success(f"✅ Jadwal dihitung dari: **{tgl_mulai.strftime('%d/%m/%Y %H:%M')}**")
+
+        # ── Tabel preview ────────────────────────────────────────────────────
+        st.markdown("### Preview Jadwal")
+
+        df_data = []
+        for j in jadwal_list:
+            df_data.append({
+                "Tahap": j["nama"][:50],
+                "Mulai": j["mulai"].strftime("%d/%m/%Y %H:%M"),
+                "Selesai": j["selesai"].strftime("%d/%m/%Y %H:%M"),
+                "Selisih": str(j["selesai"] - j["mulai"]),
+            })
+
+        st.dataframe(
+            df_data,
+            use_container_width=True,
+            column_config={
+                "Tahap": st.column_config.TextColumn("Tahap", width="large"),
+                "Mulai": st.column_config.TextColumn("Mulai"),
+                "Selesai": st.column_config.TextColumn("Selesai"),
+                "Selisih": st.column_config.TextColumn("Durasi"),
+            },
+            hide_index=True,
+        )
+
+        # ── Info ─────────────────────────────────────────────────────────────
+        st.caption(
+            f"CSRF: {'✅ ada' if scraped.get('csrf') else '⚠️ tidak ada'} | "
+            f"Rows: {len(scraped.get('rows', []))} | "
+            f"Paket: `{scraped.get('id', '?')}`"
+        )
+
+        # ── Submit ───────────────────────────────────────────────────────────
+        if jd_submit:
+            if not spse_browser.get_url():
+                st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
+            elif not scraped.get("csrf"):
+                st.error("CSRF token tidak ditemukan. Pastikan Chrome sudah login SPSE.")
+            else:
+                with st.spinner("Submitting jadwal ke SPSE..."):
+                    try:
+                        submit_result = jadwal_engine.submit_jadwal(paket_id, payload)
+                        if submit_result.get("ok"):
+                            st.success(
+                                f"✅ Jadwal berhasil disubmit! Status: {submit_result['status']}"
+                            )
+                            with st.expander("Response body"):
+                                st.code(submit_result["body"][:2000])
+                        else:
+                            st.error(
+                                f"❌ Gagal submit. Status: {submit_result['status']}"
+                            )
+                            with st.expander("Response body"):
+                                st.code(submit_result["body"][:2000])
+                    except Exception as e:
+                        st.error(f"❌ Error submit: {e}")
+
+    # ── Libur nasional info ──────────────────────────────────────────────────
+    st.divider()
+    with st.expander("ℹ️ Info Libur Nasional"):
+        tahun = datetime.now().year
+        try:
+            liburs = jadwal_engine._fetch_libur_nasional(tahun)
+            if liburs:
+                st.success(f"✅ {len(liburs)} hari libur nasional {tahun} berhasil di-fetch")
+                for l in sorted(liburs)[:10]:
+                    hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+                    st.write(f"• {l.strftime('%d/%m/%Y')} ({hari[l.weekday()]})")
+                if len(liburs) > 10:
+                    st.write(f"... dan {len(liburs) - 10} lainnya")
+            else:
+                st.warning(f"⚠️ Tidak ada data libur nasional {tahun}")
+        except Exception as e:
+            st.error(f"❌ Gagal fetch libur nasional: {e}")
+            st.info("Perhitungan tetap jalan tanpa filter libur.")
