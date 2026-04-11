@@ -10,6 +10,9 @@ AUTO_CHECK_KEYWORDS = [
     "Memiliki pengalaman paling kurang 1 Pekerjaan Konstruksi",
     "Memperhitungkan Sisa Kemampuan Paket",
     "Untuk kualifikasi Usaha Kecil yang baru berdiri kurang dari 3",
+    "pengalaman paling kurang 1 Pekerjaan",      # fallback keyword
+    "Sisa Kemampuan Paket",                       # fallback keyword
+    "Usaha Kecil yang baru berdiri",              # fallback keyword
 ]
 
 # ── Item yang HARUS di-check + diisi teks ────────────────────────────────────
@@ -35,3 +38,10 @@ SKIP_KEYWORDS = [
     "Usaha Menengah atau Usaha Besar",
     "Leadfirm",
 ]
+
+# ── Izin Usaha (WAJIB diisi agar submit berhasil) ────────────────────────────
+# Default values untuk field Izin Usaha — bisa di-override di UI
+IJIN_USAHA_DEFAULT = {
+    "nama": "Izin Usaha",
+    "klasifikasi": "41001 - Konstruksi Umum",
+}

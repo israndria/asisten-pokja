@@ -362,6 +362,23 @@ with tab4:
         )
         st.caption("Teks ini disimpan dalam sesi — edit jika perlu penyesuaian.")
 
+    # ── Konfigurasi Izin Usaha (WAJIB) ───────────────────────────────────────
+    with st.expander("📋 Izin Usaha (wajib diisi)", expanded=True):
+        col_i1, col_i2 = st.columns(2)
+        with col_i1:
+            ijin_nama = st.text_input(
+                "Jenis Izin *",
+                value=ldk_config.IJIN_USAHA_DEFAULT["nama"],
+                key="ijin_nama",
+            )
+        with col_i2:
+            ijin_klas = st.text_input(
+                "Bidang Usaha / Klasifikasi *",
+                value=ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"],
+                key="ijin_klas",
+            )
+        st.caption("Contoh: 'Izin Usaha' + '41001 - Konstruksi Umum'")
+
     st.divider()
 
     # ── Tombol utama: Push LDK ────────────────────────────────────────────────
@@ -450,7 +467,8 @@ with tab4:
 
         # Payload preview
         with st.expander("🔧 Preview Payload yang akan dikirim"):
-            payload_preview = ldk_engine.build_payload(form_info, classified)
+            ijin_usaha_cfg = {"nama": ijin_nama, "klasifikasi": ijin_klas}
+            payload_preview = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
             st.json(payload_preview)
 
         st.divider()
@@ -458,10 +476,11 @@ with tab4:
         # Tombol submit (muncul setelah scan)
         if push_clicked:
             # Sudah navigate + scan → langsung submit
-            payload = ldk_engine.build_payload(form_info, classified)
+            ijin_usaha_cfg = {"nama": ijin_nama, "klasifikasi": ijin_klas}
+            payload = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
             with st.spinner("Mengirim ke SPSE..."):
                 try:
-                    result = ldk_engine.submit_ldk(form_info, payload)
+                    result = ldk_engine.submit_ldk(form_info, payload, ijin_usaha_cfg)
                 except Exception as e:
                     st.error(f"Error saat submit: {e}")
                     st.stop()

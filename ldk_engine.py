@@ -4,7 +4,7 @@ LDK Engine — scan form HTML, klasifikasi checkbox, build payload, submit.
 Dipanggil dari app.py (Tab LDK Auto-fill).
 """
 
-from ldk_config import AUTO_CHECK_KEYWORDS, CHECK_AND_FILL, SKIP_KEYWORDS
+from ldk_config import AUTO_CHECK_KEYWORDS, CHECK_AND_FILL, SKIP_KEYWORDS, IJIN_USAHA_DEFAULT
 import spse_browser
 
 
@@ -14,8 +14,10 @@ import spse_browser
 
 _SCAN_JS = """() => {
     const form = document.querySelector('form');
+    // CSRF: coba berbagai kemungkinan
     const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
-    const csrfInput = document.querySelector('input[name="_token"]');
+    const csrfInput = document.querySelector('input[name="_token"]') ||
+                      document.querySelector('input[name="authenticityToken"]');
     const csrf = csrfMeta  ? csrfMeta.content
                : csrfInput ? csrfInput.value
                : '';
@@ -54,6 +56,14 @@ _SCAN_JS = """() => {
             if (txt) textInputName = txt.name || txt.id || null;
         }
 
+        // ── Hidden fields di row yang sama ────────────────────────────────
+        const hiddenFields = {};
+        if (container) {
+            container.querySelectorAll('input[type="hidden"]').forEach(h => {
+                hiddenFields[h.name] = h.value;
+            });
+        }
+
         checkboxes.push({
             name:          cb.name    || '',
             value:         cb.value   || '',
@@ -61,6 +71,7 @@ _SCAN_JS = """() => {
             disabled:      cb.disabled,
             label:         label,
             textInputName: textInputName,
+            hiddenFields:  hiddenFields,
         });
     });
 
@@ -119,7 +130,9 @@ def classify_checkboxes(form_info: dict) -> dict:
 
     for cb in form_info.get("checkboxes", []):
         # 1. Disabled (locked oleh SPSE) → skip
-        if cb["disabled"]:
+        # Juga cek class 'kso' (konsorsium) dan keyword tertentu
+        is_kso = cb.get("className", "") == "kso"
+        if cb["disabled"] or is_kso:
             result["locked"].append(cb)
             continue
 
@@ -153,12 +166,13 @@ def classify_checkboxes(form_info: dict) -> dict:
 # Build Payload
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_payload(form_info: dict, classified: dict) -> dict:
+def build_payload(form_info: dict, classified: dict, ijin_usaha: dict | None = None) -> dict:
     """
     Konstruksi POST payload dari hasil klasifikasi.
     - CSRF token selalu disertakan
     - Hanya checkbox auto_check + check_and_fill yang di-include
     - Checkbox dengan name sama (multi-value) digabung jadi list
+    - Izin Usaha fields selalu di-include (wajib)
     """
     payload = {}
 
@@ -187,6 +201,11 @@ def build_payload(form_info: dict, classified: dict) -> dict:
         if cb["textInputName"]:
             payload[cb["textInputName"]] = cfg["text"]
 
+    # Izin Usaha (wajib)
+    ijin = ijin_usaha or IJIN_USAHA_DEFAULT
+    payload["ijin[0].chk_nama"] = ijin.get("nama", IJIN_USAHA_DEFAULT["nama"])
+    payload["ijin[0].chk_klasifikasi"] = ijin.get("klasifikasi", IJIN_USAHA_DEFAULT["klasifikasi"])
+
     return payload
 
 
@@ -194,10 +213,59 @@ def build_payload(form_info: dict, classified: dict) -> dict:
 # Submit
 # ─────────────────────────────────────────────────────────────────────────────
 
-def submit_ldk(form_info: dict, payload: dict) -> dict:
-    """Submit payload ke SPSE via API (dari dalam browser context)."""
-    return spse_browser.submit_via_fetch(
-        endpoint_url=form_info["action"],
-        payload=payload,
-        method=form_info.get("method", "POST"),
-    )
+def submit_ldk(form_info: dict, payload: dict, ijin_usaha: dict | None = None) -> dict:
+    """
+    Submit LDK dengan 2 langkah:
+    1. Klik checkbox + isi Izin Usaha DI browser (client-side)
+    2. Submit form secara native (bukan fetch) agar SPSE proses dengan benar
+    """
+    page = spse_browser.halaman_aktif()
+    if not page:
+        raise RuntimeError("Browser belum terbuka.")
+
+    # Step 1: Klik checkbox yang harus dicentang
+    checkbox_items = []
+    for name, val in payload.items():
+        if name.startswith("syaratAdmin") or name.startswith("syaratTeknis"):
+            if not isinstance(val, list):
+                checkbox_items.append({"name": name, "value": str(val)})
+
+    if checkbox_items:
+        spse_browser._run(page.evaluate("""(items) => {
+            const clicked = [];
+            items.forEach(item => {
+                document.querySelectorAll(`input[type="checkbox"][name="${item.name}"][value="${item.value}"]`).forEach(cb => {
+                    if (!cb.checked && !cb.disabled) {
+                        cb.checked = true;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                        clicked.push(item.name);
+                    }
+                });
+            });
+            return clicked;
+        }""", checkbox_items))
+
+    # Step 1b: Isi Izin Usaha fields
+    ijin = ijin_usaha or IJIN_USAHA_DEFAULT
+    spse_browser._run(page.evaluate("""(ijin) => {
+        const namaInput = document.querySelector('input[name="ijin[0].chk_nama"]');
+        const klasInput = document.querySelector('input[name="ijin[0].chk_klasifikasi"]');
+        if (namaInput) { namaInput.value = ijin.nama; namaInput.dispatchEvent(new Event('input', {bubbles:true})); }
+        if (klasInput) { klasInput.value = ijin.klasifikasi; klasInput.dispatchEvent(new Event('input', {bubbles:true})); }
+    }""", ijin))
+
+    # Step 2: Submit form secara native (bukan fetch)
+    spse_browser._run(page.evaluate("""() => {
+        const form = document.querySelector('form');
+        if (!form) return { ok: false, error: 'Form tidak ditemukan' };
+        form.submit();
+    }"""))
+
+    # Tunggu halaman berubah
+    spse_browser._run(page.wait_for_timeout(3000))
+
+    return {
+        "ok": True,
+        "status": 200,
+        "url": spse_browser._run(page.evaluate("() => window.location.href")),
+    }
