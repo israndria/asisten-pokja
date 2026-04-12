@@ -1336,14 +1336,16 @@ with tab8:
 
         # ── Submit ───────────────────────────────────────────────────────────
         if jd_submit:
-            if not spse_browser.get_url():
-                st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
-            elif not scraped.get("csrf"):
+            if not scraped.get("csrf"):
                 st.error("CSRF token tidak ditemukan. Pastikan Chrome sudah login SPSE.")
+            elif not scraped.get("cookie"):
+                st.error("Cookie SPSE tidak ditemukan. Hubungkan browser di sidebar dulu.")
             else:
                 with st.spinner("Submitting jadwal ke SPSE..."):
                     try:
-                        submit_result = jadwal_engine.submit_jadwal(paket_id, payload)
+                        submit_result = jadwal_engine.submit_jadwal(
+                            paket_id, payload, cookie_str=scraped.get("cookie")
+                        )
                         if submit_result.get("ok"):
                             st.success(
                                 f"✅ Jadwal berhasil disubmit! Status: {submit_result['status']}"

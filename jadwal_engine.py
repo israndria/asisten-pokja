@@ -14,8 +14,19 @@ import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import requests
+from bs4 import BeautifulSoup
+
 import spse_browser
 from jadwal_config import TAHAPAN, JAM_KERJA_MULAI, JAM_KERJA_SELESAI, LIBUR_API_URLS
+
+BASE_URL = "https://spse.inaproc.id/tapinkab"
+HEADERS_BASE = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+    "Referer": BASE_URL + "/",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Konstanta
@@ -204,73 +215,76 @@ def format_spse_datetime(dt: datetime) -> str:
 
 def scrap_hidden_fields(paket_id: str) -> dict | None:
     """
-    Scrap hidden fields DARI TAB BACKGROUND — user tidak lihat navigasi apapun.
-
-    Flow:
-    1. Buat tab baru di background
-    2. Navigate ke /jadwal/[ID]/list
-    3. Scrap CSRF + hidden fields
-    4. Tutup tab background — halaman user tidak berubah!
+    Scrap hidden fields via pure HTTP GET (tanpa navigasi browser).
+    Ambil cookie dari CDP, GET /jadwal/[ID]/list, parse HTML.
     """
-    page = spse_browser.halaman_aktif()
-    if not page:
-        raise RuntimeError("Browser belum terhubung.")
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        raise RuntimeError("Cookie SPSE tidak ditemukan. Pastikan Chrome sudah login SPSE.")
 
-    url = f"https://spse.inaproc.id/tapinkab/jadwal/{paket_id}/list"
+    url = f"{BASE_URL}/jadwal/{paket_id}/list"
+    resp = requests.get(url, headers={**HEADERS_BASE, "Cookie": cookie_str}, timeout=20)
 
-    # Buat tab background — async via _run
-    bg_page = spse_browser._run(spse_browser._context.new_page())
+    if resp.status_code == 302 or "login" in resp.url.lower():
+        raise RuntimeError("Session SPSE expired. Silakan login ulang di Chrome.")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gagal akses halaman jadwal: HTTP {resp.status_code}")
 
-    try:
-        # Navigate di background tab
-        spse_browser._run(bg_page.goto(url, wait_until="domcontentloaded", timeout=30000))
-        spse_browser._run(bg_page.wait_for_timeout(3000))
+    soup = BeautifulSoup(resp.text, "html.parser")
+    form = soup.find("form", {"id": "jadwalEdit"})
+    if not form:
+        raise RuntimeError("Form jadwalEdit tidak ditemukan. Pastikan kode paket benar dan sudah login.")
 
-        # Scrap
-        result = spse_browser._run(bg_page.evaluate("""() => {
-            const form = document.getElementById('jadwalEdit');
-            if (!form) return null;
+    # CSRF token
+    csrf_input = form.find("input", {"name": "authenticityToken"})
+    csrf = csrf_input["value"] if csrf_input else None
 
-            const csrfInput = form.querySelector('input[name="authenticityToken"]');
-            const idInput = form.querySelector('input[name="id"]');
-            const jamAwal = document.getElementById('jamAwal');
-            const jamAkhir = document.getElementById('jamAkhir');
+    # id paket (hidden)
+    id_input = form.find("input", {"name": "id"})
+    paket_id_val = id_input["value"] if id_input else paket_id
 
-            const result = {
-                csrf: csrfInput ? csrfInput.value : null,
-                id: idInput ? idInput.value : null,
-                jamAwal: jamAwal ? jamAwal.value : '00:00',
-                jamAkhir: jamAkhir ? jamAkhir.value : '23:59',
-                rows: []
-            };
+    # jamAwal / jamAkhir (id-based, bukan name)
+    jam_awal_input = soup.find(id="jamAwal")
+    jam_akhir_input = soup.find(id="jamAkhir")
+    jam_awal = jam_awal_input["value"] if jam_awal_input else "00:00"
+    jam_akhir = jam_akhir_input["value"] if jam_akhir_input else "23:59"
 
-            const rows = form.querySelectorAll('#tblJadwal tbody tr');
-            rows.forEach((tr, idx) => {
-                const hidden = {};
-                tr.querySelectorAll('input[type="hidden"]').forEach(h => {
-                    hidden[h.name] = h.value;
-                });
+    # Rows: tiap baris jadwal
+    rows = []
+    tbl = form.find("tbody")
+    if tbl:
+        for idx, tr in enumerate(tbl.find_all("tr")):
+            hidden = {}
+            for h in tr.find_all("input", type="hidden"):
+                if h.get("name"):
+                    hidden[h["name"]] = h.get("value", "")
 
-                const mulaiInput = tr.querySelector('input[name$="dtj_tglawal"]');
-                const selesaiInput = tr.querySelector('input[name$="dtj_tglakhir"]');
-                const namaCell = tr.querySelector('td:nth-child(2)');
+            mulai_input = tr.find("input", {"name": lambda n: n and n.endswith("dtj_tglawal")})
+            selesai_input = tr.find("input", {"name": lambda n: n and n.endswith("dtj_tglakhir")})
 
-                result.rows.push({
-                    index: idx,
-                    nama: namaCell ? namaCell.innerText.trim().split('\\n')[0].trim() : `Tahap ${idx+1}`,
-                    hidden: hidden,
-                    name_mulai: mulaiInput ? mulaiInput.name : null,
-                    name_selesai: selesaiInput ? selesaiInput.name : null,
-                });
-            });
+            # Nama tahap: ambil dari teks td ke-2, potong di newline/spasi berlebih
+            nama = f"Tahap {idx + 1}"
+            tds = tr.find_all("td")
+            if len(tds) >= 2:
+                nama_raw = tds[1].get_text(separator="\n").strip()
+                nama = nama_raw.split("\n")[0].strip()
 
-            return result;
-        }"""))
+            rows.append({
+                "index": idx,
+                "nama": nama,
+                "hidden": hidden,
+                "name_mulai": mulai_input["name"] if mulai_input else f"jadwalList[{idx}].dtj_tglawal",
+                "name_selesai": selesai_input["name"] if selesai_input else f"jadwalList[{idx}].dtj_tglakhir",
+            })
 
-        return result
-    finally:
-        # TUTUP tab background — user tidak tahu apa-apa
-        spse_browser._run(bg_page.close())
+    return {
+        "csrf": csrf,
+        "id": paket_id_val,
+        "jamAwal": jam_awal,
+        "jamAkhir": jam_akhir,
+        "rows": rows,
+        "cookie": cookie_str,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,34 +321,35 @@ def build_payload(scraped: dict, jadwal_list: list[dict]) -> dict:
     return payload
 
 
-def submit_jadwal(paket_id: str, payload: dict) -> dict:
-    """POST langsung ke /jadwal/[ID]/simpan via browser context."""
-    page = spse_browser.halaman_aktif()
-    if not page:
-        raise RuntimeError("Browser belum terhubung.")
+def submit_jadwal(paket_id: str, payload: dict, cookie_str: str = None) -> dict:
+    """POST langsung ke /jadwal/[ID]/simpan via pure HTTP requests."""
+    if not cookie_str:
+        cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        raise RuntimeError("Cookie SPSE tidak ditemukan.")
 
-    url = f"/tapinkab/jadwal/{paket_id}/simpan"
+    url = f"{BASE_URL}/jadwal/{paket_id}/simpan"
+    headers = {
+        **HEADERS_BASE,
+        "Cookie": cookie_str,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": "https://spse.inaproc.id",
+        "Referer": f"{BASE_URL}/jadwal/{paket_id}/list",
+    }
 
-    result = spse_browser._run(page.evaluate("""([url, payload]) => {
-        const params = new URLSearchParams();
-        for (const [key, val] of Object.entries(payload)) {
-            params.append(key, String(val));
-        }
-        return fetch(url, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: params.toString(),
-        }).then(r => r.text().then(body => ({
-            status: r.status,
-            ok: r.ok,
-            body: body.substring(0, 2000)
-        })));
-    }""", [url, payload]))
+    resp = requests.post(url, data=payload, headers=headers, allow_redirects=False, timeout=30)
+    body = ""
+    try:
+        body = resp.text[:2000]
+    except Exception:
+        pass
 
-    return result
+    return {
+        "ok": resp.status_code in (200, 302),
+        "status": resp.status_code,
+        "body": body,
+        "redirect": resp.headers.get("Location", ""),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +383,8 @@ def submit_full(paket_id: str, tgl_mulai: datetime) -> dict:
     Return: {scraped, jadwal_list, payload, submit_result}
     """
     result = auto_fill_jadwal(paket_id, tgl_mulai)
-    submit_result = submit_jadwal(paket_id, result["payload"])
+    # Gunakan cookie yang sudah disimpan saat scrap (biar konsisten)
+    cookie_str = result["scraped"].get("cookie")
+    submit_result = submit_jadwal(paket_id, result["payload"], cookie_str=cookie_str)
     result["submit_result"] = submit_result
     return result
