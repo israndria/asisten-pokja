@@ -1,168 +1,201 @@
 """
-Checklist Engine — scan form HTML, klasifikasi checkbox, build payload, submit.
+Checklist Dokumen Penawaran Engine — via pure requests.
 
-URL target: /dokumen/[ID]/checklist
-Dipanggil dari app.py (Tab Checklist Dokumen Penawaran).
+Endpoint GET : /dokumen/[ID]/checklist
+Endpoint POST: /dokumen/[ID]/checklistsubmit
 
-Sama dengan LDK engine, tapi tanpa CHECK_AND_FILL (checklist ini hanya centang).
+Struktur form (dari hasil inspect):
+- syaratAdmin[N] : Administrasi
+- syarat[N]      : Teknis
+- syaratHarga[N] : Harga
+
+Yang di-CHECK (sesuai kebiasaan pokja):
+  Teknis:
+    - syarat[2] : Personel manajerial
+    - syarat[4] : RKK (Elemen SMKK + Pakta Komitmen)
+  Harga:
+    - syaratHarga[0] : Daftar Kuantitas dan Harga
+    - syaratHarga[1] : Kewajaran harga <80% HPS
+
+Yang di-SKIP (tidak di-check):
+  Administrasi:
+    - syaratAdmin[2] : KSO
+  Teknis:
+    - syarat[0] : Metode pelaksanaan usaha besar
+    - syarat[1] : Peralatan utama
+    - syarat[3] : Subkontrak
+    - syarat[5] : TKDN
+    - syarat[6] : Daftar barang impor
+
+Yang LOCKED oleh sistem (disabled, tidak perlu dikirim):
+  - syaratAdmin[0] : Masa Berlaku Penawaran
+  - syaratAdmin[1] : Surat Penawaran
 """
 
-from checklist_config import AUTO_CHECK_KEYWORDS, SKIP_KEYWORDS
+import requests
+from bs4 import BeautifulSoup
+from config import SPSE_BASE_URL
 import spse_browser
 
+# 5 item yang WAJIB di-check (hardcode sesuai kebiasaan pokja konstruksi usaha kecil)
+# Dicocokkan dengan startswith/contains pada label checkbox
+_AUTO_CHECK_KEYWORDS = [
+    "daftar isian peralatan utama",
+    "daftar isian personel manajerial",
+    "rencana keselamatan konstruksi",
+    "daftar kuantitas dan harga",
+    "khusus apabila ada evaluasi kewajaran harga",
+]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Scan Form HTML (sama persis dengan ldk_engine)
-# ─────────────────────────────────────────────────────────────────────────────
 
-_SCAN_JS = """() => {
-    const form = document.querySelector('form');
-    const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
-    const csrfInput = document.querySelector('input[name="_token"]');
-    const csrf = csrfMeta  ? csrfMeta.content
-               : csrfInput ? csrfInput.value
-               : '';
+def _get_url(paket_id: str) -> str:
+    return f"{SPSE_BASE_URL}dokumen/{paket_id}/checklist"
 
-    const checkboxes = [];
-    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        let label = '';
 
-        if (cb.id) {
-            const lbl = document.querySelector('label[for="' + cb.id + '"]');
-            if (lbl) label = lbl.innerText.trim();
-        }
-        if (!label) {
-            const tr = cb.closest('tr');
-            if (tr) {
-                const tds = tr.querySelectorAll('td');
-                for (const td of tds) {
-                    if (!td.contains(cb)) { label = td.innerText.trim(); break; }
-                }
-            }
-        }
-        if (!label) {
-            const pl = cb.closest('label');
-            if (pl) label = pl.innerText.replace(/\\s+/g, ' ').trim();
-        }
+def _submit_url(paket_id: str) -> str:
+    return f"{SPSE_BASE_URL}dokumen/{paket_id}/checklistsubmit"
 
-        checkboxes.push({
-            name:    cb.name    || '',
-            value:   cb.value   || '',
-            checked: cb.checked,
-            disabled: cb.disabled,
-            label:   label,
-        });
-    });
+
+def scrap_checklist(paket_id: str, cookie_str: str) -> dict:
+    """
+    GET halaman checklist, parse semua checkbox + hidden inputs.
+    Return: {
+        "authenticityToken": str,
+        "checkboxes": [{"name", "value", "label", "checked", "disabled"}],
+        "hidden_inputs": {name: value},
+    }
+    """
+    resp = requests.get(
+        _get_url(paket_id),
+        headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"},
+        timeout=15,
+        allow_redirects=True,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"GET checklist gagal: HTTP {resp.status_code}")
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    token_el = soup.find("input", {"name": "authenticityToken"})
+    if not token_el:
+        raise RuntimeError("authenticityToken tidak ditemukan di halaman checklist")
+
+    # Semua hidden inputs (kecuali authenticityToken)
+    hidden_inputs = {}
+    for el in soup.find_all("input", type="hidden"):
+        name = el.get("name")
+        if name and name != "authenticityToken":
+            hidden_inputs[name] = el.get("value", "")
+
+    # Semua checkboxes
+    checkboxes = []
+    for el in soup.find_all("input", type="checkbox"):
+        row = el.find_parent("tr")
+        label = row.get_text(separator=" ", strip=True) if row else ""
+        checkboxes.append({
+            "name": el.get("name", ""),
+            "value": el.get("value", ""),
+            "label": label,
+            "checked": el.get("checked") is not None,
+            "disabled": el.get("disabled") is not None,
+        })
 
     return {
-        action:     form ? form.action               : window.location.href,
-        method:     form ? form.method.toUpperCase() : 'POST',
-        csrf:       csrf,
-        checkboxes: checkboxes,
-    };
-}"""
-
-
-def scan_checklist_form() -> dict:
-    """
-    Scan halaman checklist yang aktif di browser.
-    Return: {action, method, csrf, checkboxes: [...]}
-    """
-    page = spse_browser.halaman_aktif()
-    if not page:
-        raise RuntimeError("Browser belum terbuka / halaman tidak aktif.")
-
-    async def _do():
-        return await page.evaluate(_SCAN_JS)
-
-    return spse_browser._run(_do())
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Klasifikasi Checkbox
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _matches(label: str, keywords: list[str]) -> bool:
-    label_lower = label.lower()
-    return any(kw.lower() in label_lower for kw in keywords)
-
-
-def classify_checkboxes(form_info: dict) -> dict:
-    """
-    Klasifikasikan semua checkbox berdasarkan checklist_config.
-    Return:
-    {
-        "locked":      [cb, ...],   # disabled oleh SPSE
-        "auto_check":  [cb, ...],   # centang saja
-        "skip":        [cb, ...],   # tidak disentuh (usaha besar, dll)
-        "unknown":     [cb, ...],   # tidak cocok keyword manapun
-    }
-    """
-    result = {
-        "locked":     [],
-        "auto_check": [],
-        "skip":       [],
-        "unknown":    [],
+        "authenticityToken": token_el.get("value", ""),
+        "checkboxes": checkboxes,
+        "hidden_inputs": hidden_inputs,
     }
 
-    for cb in form_info.get("checkboxes", []):
+
+def klasifikasi_checkbox(checkboxes: list[dict]) -> dict:
+    """
+    Klasifikasikan setiap checkbox: AUTO_CHECK / SKIP / LOCKED.
+    Return: {"auto_check": [...], "skip": [...], "locked": [...]}
+    """
+    auto_check = []
+    skip = []
+    locked = []
+
+    for cb in checkboxes:
         if cb["disabled"]:
-            result["locked"].append(cb)
+            locked.append(cb)
             continue
-
-        if _matches(cb["label"], SKIP_KEYWORDS):
-            result["skip"].append(cb)
-            continue
-
-        if _matches(cb["label"], AUTO_CHECK_KEYWORDS):
-            result["auto_check"].append(cb)
-            continue
-
-        result["unknown"].append(cb)
-
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Build Payload
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_payload(form_info: dict, classified: dict) -> dict:
-    """
-    Konstruksi POST payload dari hasil klasifikasi.
-    Hanya checkbox auto_check yang di-include.
-    """
-    payload = {}
-
-    if form_info.get("csrf"):
-        payload["_token"] = form_info["csrf"]
-
-    def _add(name: str, value: str):
-        if not name:
-            return
-        if name in payload:
-            existing = payload[name]
-            if isinstance(existing, list):
-                existing.append(value)
-            else:
-                payload[name] = [existing, value]
+        label_lower = cb["label"].lower()
+        if any(label_lower.startswith(kw) or kw in label_lower for kw in _AUTO_CHECK_KEYWORDS):
+            auto_check.append(cb)
         else:
-            payload[name] = value
+            skip.append(cb)
 
-    for cb in classified["auto_check"]:
-        _add(cb["name"], cb["value"])
+    return {"auto_check": auto_check, "skip": skip, "locked": locked}
+
+
+def build_payload(scraped: dict, klasifikasi: dict) -> dict:
+    """Build form-encoded payload untuk POST checklistsubmit."""
+    payload = {"authenticityToken": scraped["authenticityToken"]}
+
+    # Sertakan semua hidden inputs
+    payload.update(scraped["hidden_inputs"])
+
+    # Checkbox yang di-check: sertakan name=value
+    for cb in klasifikasi["auto_check"]:
+        payload[cb["name"]] = cb["value"]
 
     return payload
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Submit
-# ─────────────────────────────────────────────────────────────────────────────
+def submit_checklist(paket_id: str) -> dict:
+    """
+    Auto-fill checklist dokumen penawaran via pure requests.
+    Return: {"sukses": bool, "status_code": int, "pesan": str, "detail": dict}
+    """
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return {"sukses": False, "pesan": "Browser belum terhubung atau cookie kosong"}
 
-def submit_checklist(form_info: dict, payload: dict) -> dict:
-    """Submit payload ke SPSE via API (dari dalam browser context)."""
-    return spse_browser.submit_via_fetch(
-        endpoint_url=form_info["action"],
-        payload=payload,
-        method=form_info.get("method", "POST"),
+    try:
+        scraped = scrap_checklist(paket_id, cookie_str)
+    except RuntimeError as e:
+        return {"sukses": False, "pesan": str(e)}
+
+    klasifikasi = klasifikasi_checkbox(scraped["checkboxes"])
+    payload = build_payload(scraped, klasifikasi)
+
+    resp = requests.post(
+        _submit_url(paket_id),
+        data=payload,
+        headers={
+            "Cookie": cookie_str,
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": _get_url(paket_id),
+        },
+        timeout=15,
+        allow_redirects=False,
     )
+
+    sukses = resp.status_code in (200, 302)
+    return {
+        "sukses": sukses,
+        "status_code": resp.status_code,
+        "pesan": "Checklist berhasil disubmit" if sukses else f"Gagal: HTTP {resp.status_code}",
+        "detail": {
+            "auto_check": [cb["label"][:80] for cb in klasifikasi["auto_check"]],
+            "skip": [cb["label"][:80] for cb in klasifikasi["skip"]],
+            "locked": [cb["label"][:80] for cb in klasifikasi["locked"]],
+        },
+    }
+
+
+def scan_saja(paket_id: str) -> dict:
+    """Scan + klasifikasi tanpa submit. Untuk preview di UI."""
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return {"sukses": False, "pesan": "Browser belum terhubung"}
+
+    try:
+        scraped = scrap_checklist(paket_id, cookie_str)
+    except RuntimeError as e:
+        return {"sukses": False, "pesan": str(e)}
+
+    klasifikasi = klasifikasi_checkbox(scraped["checkboxes"])
+    return {"sukses": True, "scraped": scraped, "klasifikasi": klasifikasi}

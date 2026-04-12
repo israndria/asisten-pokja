@@ -40,6 +40,13 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 with st.sidebar:
     st.header("Browser SPSE")
 
+    # Auto-reconnect: kalau CDP aktif tapi context belum ada, connect otomatis
+    if spse_browser._cek_cdp_aktif() and spse_browser._context is None:
+        try:
+            spse_browser.buka_browser(SPSE_BASE_URL)
+        except Exception:
+            pass
+
     url_aktif = spse_browser.get_url()
     if url_aktif:
         st.success("Browser terhubung")
@@ -621,33 +628,26 @@ with tab4:
 # ============================================================
 
 with tab5:
-    st.subheader("Checklist Dokumen Penawaran")
+    st.subheader("☑️ Checklist Dokumen Penawaran")
     st.markdown(
         "Bot otomatis mencentang dokumen penawaran sesuai template "
-        "konstruksi Usaha Kecil (Administrasi + Teknis + Harga)."
+        "konstruksi Usaha Kecil (Teknis + Harga). Administrasi dikelola sistem."
     )
 
-    # ── Deteksi ID paket dari URL aktif ──────────────────────────────────────
+    # ── Auto-detect paket ID ──────────────────────────────────────────────────
     ck_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    ck_url_auto = (
-        f"{SPSE_BASE_URL}dokumen/{ck_paket_id}/checklist" if ck_paket_id else None
-    )
-
-    if ck_url_auto:
-        st.info(f"ID Paket terdeteksi dari URL aktif: **{ck_paket_id}**")
+    if ck_paket_id:
+        st.info(f"🔗 ID Paket terdeteksi: **{ck_paket_id}**")
     else:
         st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
 
-    with st.expander("🔧 Override URL Checklist (opsional)"):
-        ck_url_manual = st.text_input(
-            "URL Halaman Checklist",
-            value=ck_url_auto or "",
-            placeholder="https://spse.inaproc.id/tapinkab/dokumen/[ID]/checklist",
-            key="ck_url_manual",
-        )
-    ck_url_final = (
-        st.session_state.get("ck_url_manual") or ck_url_auto
+    ck_id_input = st.text_input(
+        "Kode Tender (override)",
+        value=ck_paket_id or "",
+        placeholder="Contoh: 4618177",
+        key="ck_id_input",
     )
+    ck_id_final = ck_id_input or ck_paket_id
 
     st.divider()
 
@@ -657,106 +657,64 @@ with tab5:
             "🚀 Push Checklist ke SPSE",
             type="primary",
             use_container_width=True,
-            disabled=not bool(ck_url_final),
+            disabled=not bool(ck_id_final),
             key="ck_push",
         )
     with col2:
         ck_scan_only = st.button(
             "🔍 Scan Saja (Preview)",
             use_container_width=True,
-            disabled=not bool(ck_url_final),
+            disabled=not bool(ck_id_final),
             key="ck_scan",
         )
 
-    if ck_push or ck_scan_only:
-        if not spse_browser.get_url():
-            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
-        elif not ck_url_final:
-            st.error("URL Checklist tidak diketahui. Buka halaman paket di browser atau isi URL manual.")
+    if ck_scan_only and ck_id_final:
+        with st.spinner("Scanning checklist..."):
+            result = checklist_engine.scan_saja(ck_id_final)
+        if not result["sukses"]:
+            st.error(result["pesan"])
         else:
-            with st.spinner(f"Membuka halaman checklist {ck_url_final} ..."):
-                try:
-                    spse_browser.navigasi_ldk(ck_url_final)
-                except Exception as e:
-                    st.error(f"Gagal membuka halaman: {e}")
-                    st.stop()
+            klas = result["klasifikasi"]
+            st.session_state["ck_klasifikasi"] = klas
+            st.session_state["ck_scraped"] = result["scraped"]
+            st.session_state["ck_id"] = ck_id_final
 
-            with st.spinner("Scanning form..."):
-                try:
-                    ck_form = checklist_engine.scan_checklist_form()
-                    ck_classified = checklist_engine.classify_checkboxes(ck_form)
-                except Exception as e:
-                    st.error(f"Gagal scan form: {e}")
-                    st.stop()
+    if ck_push and ck_id_final:
+        with st.spinner("Submit checklist ke SPSE..."):
+            result = checklist_engine.submit_checklist(ck_id_final)
+        if result["sukses"]:
+            st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
+            klas_detail = result["detail"]
+            st.caption(f"Di-check: {len(klas_detail['auto_check'])} item | Skip: {len(klas_detail['skip'])} | Locked: {len(klas_detail['locked'])}")
+        else:
+            st.error(f"❌ {result['pesan']}")
 
-            st.session_state["ck_form"] = ck_form
-            st.session_state["ck_classified"] = ck_classified
+    if "ck_klasifikasi" in st.session_state and st.session_state.get("ck_id") == ck_id_final:
+        klas = st.session_state["ck_klasifikasi"]
 
-    if "ck_classified" in st.session_state:
-        ck_classified = st.session_state["ck_classified"]
-        ck_form       = st.session_state["ck_form"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("✅ Auto-check", len(klas["auto_check"]))
+        c2.metric("⬜ Skip", len(klas["skip"]))
+        c3.metric("🔒 Locked", len(klas["locked"]))
 
-        st.caption(f"Endpoint: `{ck_form.get('action', '?')}` | Method: `{ck_form.get('method', '?')}`")
-        st.caption(f"CSRF: `{'ada ✅' if ck_form.get('csrf') else 'tidak ditemukan ⚠️'}`")
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Locked",     len(ck_classified["locked"]))
-        c2.metric("Auto-check", len(ck_classified["auto_check"]))
-        c3.metric("Skip",       len(ck_classified["skip"]))
-        c4.metric("Unknown",    len(ck_classified["unknown"]))
-
-        with st.expander("✅ Auto-check"):
-            for cb in ck_classified["auto_check"]:
+        with st.expander("✅ Yang akan di-check"):
+            for cb in klas["auto_check"]:
                 st.write(f"• {cb['label'][:120]}")
-
-        with st.expander("🔒 Locked (dikelola SPSE, tidak disentuh)"):
-            for cb in ck_classified["locked"]:
-                st.write(f"• {cb['label'][:120] or '(tanpa label)'}")
-
-        with st.expander("⬜ Skip (usaha besar / tidak relevan)"):
-            for cb in ck_classified["skip"]:
+        with st.expander("🔒 Locked (dikelola sistem)"):
+            for cb in klas["locked"]:
+                st.write(f"• {cb['label'][:80] or '(tanpa label)'}")
+        with st.expander("⬜ Skip"):
+            for cb in klas["skip"]:
                 st.write(f"• {cb['label'][:120]}")
-
-        if ck_classified["unknown"]:
-            with st.expander("❓ Unknown (tidak dikenali — tidak di-submit)"):
-                for cb in ck_classified["unknown"]:
-                    fallback = f"name={cb['name']} value={cb['value']}"
-                    st.write(f"• {cb['label'][:120] or fallback}")
-
-        with st.expander("🔧 Preview Payload yang akan dikirim"):
-            ck_payload_preview = checklist_engine.build_payload(ck_form, ck_classified)
-            st.json(ck_payload_preview)
 
         st.divider()
-
-        def _do_submit_checklist():
-            payload = checklist_engine.build_payload(ck_form, ck_classified)
-            with st.spinner("Mengirim ke SPSE..."):
-                try:
-                    result = checklist_engine.submit_checklist(ck_form, payload)
-                except Exception as e:
-                    st.error(f"Error saat submit: {e}")
-                    return
-            if result["ok"]:
-                st.success(
-                    f"✅ Berhasil! Status {result['status']} — "
-                    "silakan refresh halaman checklist di browser untuk verifikasi."
-                )
+        if st.button("📤 Submit Sekarang", type="primary", key="ck_submit_manual"):
+            with st.spinner("Submit checklist ke SPSE..."):
+                result = checklist_engine.submit_checklist(ck_id_final)
+            if result["sukses"]:
+                st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
             else:
-                st.error(f"❌ Gagal. Status {result['status']}")
-            with st.expander("Response body"):
-                st.code(result["body"][:3000])
-
-        if ck_push:
-            _do_submit_checklist()
-        elif ck_scan_only:
-            n_check = len(ck_classified["auto_check"])
-            if st.button(
-                f"📤 Submit {n_check} item ke SPSE",
-                type="primary",
-                key="ck_submit_manual",
-            ):
-                _do_submit_checklist()
+                st.error(f"❌ {result['pesan']}")
 
 
 # ============================================================
@@ -764,39 +722,27 @@ with tab5:
 # ============================================================
 
 with tab6:
-    st.subheader("Masa Berlaku Penawaran — Auto-fill Edit Lelang")
+    st.subheader("⏳ Masa Berlaku Penawaran")
     st.markdown(
-        "Navigasikan browser ke halaman **edit lelang** (`/lelang/[ID]/edit`), "
-        "lalu scan form untuk deteksi otomatis field masa berlaku. "
-        "Bot akan set **40 hari** sejak batas akhir pemasukan dokumen."
+        "Set masa berlaku penawaran ke **40 hari** secara otomatis via API. "
+        "Endpoint: `/dokumen/[ID]/masaberlakupenawaransubmit`"
     )
 
-    # ── Deteksi URL edit dari URL aktif ──────────────────────────────────────
+    # ── Auto-detect paket ID ──────────────────────────────────────────────────
     mb_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    mb_url_auto = (
-        f"{SPSE_BASE_URL}lelang/{mb_paket_id}/edit" if mb_paket_id else None
-    )
-
-    mb_url_aktif = spse_browser.get_url() if spse_browser.get_url() else ""
-    is_edit_page = "/edit" in mb_url_aktif
-
-    if is_edit_page:
-        st.success(f"Browser sudah di halaman edit: `{mb_url_aktif[:80]}`")
-    elif mb_url_auto:
-        st.info(f"ID Paket terdeteksi: **{mb_paket_id}** — belum di halaman edit")
+    if mb_paket_id:
+        st.info(f"🔗 ID Paket terdeteksi: **{mb_paket_id}**")
     else:
-        st.warning("Buka halaman paket di browser agar ID terdeteksi otomatis.")
+        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
 
-    with st.expander("🔧 Override URL Edit Lelang (opsional)"):
-        mb_url_manual = st.text_input(
-            "URL Halaman Edit",
-            value=mb_url_aktif if is_edit_page else (mb_url_auto or ""),
-            placeholder="https://spse.inaproc.id/tapinkab/lelang/[ID]/edit",
-            key="mb_url_manual",
-        )
-    mb_url_final = st.session_state.get("mb_url_manual") or mb_url_auto
+    mb_id_input = st.text_input(
+        "Kode Tender (override)",
+        value=mb_paket_id or "",
+        placeholder="Contoh: 4618177",
+        key="mb_id_input",
+    )
+    mb_id_final = mb_id_input or mb_paket_id
 
-    # Nilai hari (bisa diubah user)
     mb_nilai_hari = st.number_input(
         "Nilai Masa Berlaku (hari)",
         min_value=1, max_value=365, value=40, step=1,
@@ -811,145 +757,35 @@ with tab6:
             "🚀 Set Masa Berlaku ke SPSE",
             type="primary",
             use_container_width=True,
-            disabled=not bool(mb_url_final),
+            disabled=not bool(mb_id_final),
             key="mb_push",
         )
     with col2:
         mb_scan_only = st.button(
-            "🔍 Scan Saja (Inspect Form)",
+            "🔍 Cek Nilai Saat Ini",
             use_container_width=True,
-            disabled=not bool(mb_url_final),
+            disabled=not bool(mb_id_final),
             key="mb_scan",
         )
 
-    if mb_push or mb_scan_only:
-        if not spse_browser.get_url():
-            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
-            st.stop()
-        if not mb_url_final:
-            st.error("URL edit lelang tidak diketahui.")
-            st.stop()
-
-        if not is_edit_page:
-            with st.spinner(f"Membuka halaman edit {mb_url_final} ..."):
-                try:
-                    spse_browser.navigasi(mb_url_final)
-                    import time; time.sleep(1)  # beri waktu render
-                except Exception as e:
-                    st.error(f"Gagal membuka halaman: {e}")
-                    st.stop()
-
-        with st.spinner("Scanning form..."):
+    if mb_scan_only and mb_id_final:
+        with st.spinner("Mengambil data dari SPSE..."):
+            cookie = spse_browser.get_spse_cookies()
             try:
-                mb_form = masa_berlaku_engine.scan_edit_form()
-                mb_detected = masa_berlaku_engine.auto_detect_fields(mb_form)
+                scraped = masa_berlaku_engine.scrap_token(mb_id_final, cookie)
+                st.success(f"Nilai masa berlaku saat ini: **{scraped['masaberlaku_saat_ini']} hari**")
             except Exception as e:
-                st.error(f"Gagal scan form: {e}")
-                st.stop()
+                st.error(str(e))
 
-        st.session_state["mb_form"]     = mb_form
-        st.session_state["mb_detected"] = mb_detected
-
-    # ── Preview hasil scan ────────────────────────────────────────────────────
-    if "mb_detected" in st.session_state:
-        mb_form     = st.session_state["mb_form"]
-        mb_detected = st.session_state["mb_detected"]
-
-        st.caption(f"Endpoint: `{mb_form.get('action', '?')}` | Method: `{mb_form.get('method', '?')}`")
-        st.caption(f"CSRF: `{'ada ✅' if mb_form.get('csrf') else 'tidak ditemukan ⚠️'}`")
-
-        if mb_detected["confident"]:
-            st.success("Field masa berlaku berhasil terdeteksi otomatis!")
+    if mb_push and mb_id_final:
+        with st.spinner(f"Setting masa berlaku {int(mb_nilai_hari)} hari ke SPSE..."):
+            result = masa_berlaku_engine.submit_masa_berlaku(mb_id_final, int(mb_nilai_hari))
+        if result["sukses"]:
+            st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
+            if result.get("sebelumnya"):
+                st.caption(f"Sebelumnya: {result['sebelumnya']} hari")
         else:
-            st.warning("Tidak terdeteksi otomatis — cek manual di bawah dan gunakan override.")
-
-        # Deteksi otomatis
-        col_r, col_n = st.columns(2)
-        with col_r:
-            st.markdown("**Radio Field:**")
-            if mb_detected["radio_name"]:
-                st.code(f"name = {mb_detected['radio_name']}\nvalue = {mb_detected['radio_value_40']}")
-            else:
-                st.info("Tidak ada radio group terdeteksi")
-
-        with col_n:
-            st.markdown("**Number Field:**")
-            if mb_detected["number_name"]:
-                st.code(f"name = {mb_detected['number_name']}")
-            else:
-                st.info("Tidak ada number field terdeteksi")
-
-        # Semua radio groups — untuk inspeksi manual
-        with st.expander("🔍 Semua Radio Buttons di Form"):
-            for grp_name, options in mb_detected["radio_groups"].items():
-                st.markdown(f"**Group: `{grp_name}`**")
-                for opt in options:
-                    check_icon = "🔵" if opt["checked"] else "⚪"
-                    dis_icon   = " 🔒" if opt["disabled"] else ""
-                    st.write(f"  {check_icon}{dis_icon} value=`{opt['value']}` — {opt['label'][:100]}")
-
-        # Semua field lainnya
-        with st.expander("🔍 Semua Input Fields di Form"):
-            for f in mb_form.get("fields", []):
-                if f["type"] not in ("radio",):
-                    st.write(f"[{f['type']}] `{f['name']}` = `{f['value'][:60] if f.get('value') else ''}` — {f.get('label','')[:80]}")
-
-        # Override manual
-        with st.expander("⚙️ Override Manual (jika auto-detect salah)"):
-            st.caption("Isi hanya jika deteksi otomatis keliru. Kosongkan untuk pakai auto-detect.")
-            mb_radio_override  = st.text_input("Radio name (override)", key="mb_radio_name_override")
-            mb_rval_override   = st.text_input("Radio value untuk 40 hari (override)", key="mb_radio_val_override")
-            mb_number_override = st.text_input("Number field name (override)", key="mb_number_name_override")
-
-        # Payload preview
-        with st.expander("🔧 Preview Payload yang akan dikirim"):
-            payload_preview = masa_berlaku_engine.build_payload(
-                form_info   = mb_form,
-                detected    = mb_detected,
-                nilai_hari  = int(mb_nilai_hari),
-                radio_name  = st.session_state.get("mb_radio_name_override") or None,
-                radio_value = st.session_state.get("mb_radio_val_override")  or None,
-                number_name = st.session_state.get("mb_number_name_override") or None,
-            )
-            st.json(payload_preview)
-
-        st.divider()
-
-        def _do_submit_masa_berlaku():
-            payload = masa_berlaku_engine.build_payload(
-                form_info   = mb_form,
-                detected    = mb_detected,
-                nilai_hari  = int(mb_nilai_hari),
-                radio_name  = st.session_state.get("mb_radio_name_override") or None,
-                radio_value = st.session_state.get("mb_radio_val_override")  or None,
-                number_name = st.session_state.get("mb_number_name_override") or None,
-            )
-            with st.spinner("Mengirim ke SPSE..."):
-                try:
-                    result = masa_berlaku_engine.submit_masa_berlaku(mb_form, payload)
-                except Exception as e:
-                    st.error(f"Error saat submit: {e}")
-                    return
-            if result["ok"]:
-                st.success(
-                    f"✅ Berhasil! Status {result['status']} — "
-                    "silakan verifikasi di browser bahwa masa berlaku sudah tersimpan."
-                )
-            else:
-                st.error(f"❌ Gagal. Status {result['status']}")
-            with st.expander("Response body"):
-                st.code(result["body"][:3000])
-
-        if mb_push:
-            _do_submit_masa_berlaku()
-        elif mb_scan_only:
-            if st.button(
-                f"📤 Submit Masa Berlaku {int(mb_nilai_hari)} Hari ke SPSE",
-                type="primary",
-                key="mb_submit_manual",
-                disabled=not mb_detected["confident"],
-            ):
-                _do_submit_masa_berlaku()
+            st.error(f"❌ {result['pesan']}")
 
 
 # ============================================================
@@ -1199,13 +1035,36 @@ with tab8:
 
     st.divider()
 
+    # ── Auto-detect dari browser ───────────────────────────────────────────────
+    jd_auto_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
+    jd_auto_nama = spse_browser.get_nama_paket() if jd_auto_id else None
+    if jd_auto_id and "jd_paket_id" not in st.session_state:
+        st.session_state["jd_paket_id"] = jd_auto_id
+    if jd_auto_id:
+        nama_info = f" — **{jd_auto_nama}**" if jd_auto_nama else ""
+        st.info(f"🔗 Terdeteksi dari browser: `{jd_auto_id}`{nama_info}")
+
+    col_detect = st.columns([1])[0]
+    with col_detect:
+        if st.button("🔄 Ambil Kode dari Browser", key="jd_ambil_browser"):
+            detected = spse_browser.get_paket_id() if spse_browser.get_url() else None
+            detected_nama = spse_browser.get_nama_paket() if detected else None
+            if detected:
+                st.session_state["jd_paket_id"] = detected
+                nama_msg = f" — {detected_nama}" if detected_nama else ""
+                st.success(f"Kode tender **{detected}**{nama_msg} berhasil diambil dari browser.")
+            else:
+                st.warning("Browser belum terhubung atau tidak ada paket aktif di URL.")
+
     # ── Input ─────────────────────────────────────────────────────────────────
     col_kode, col_date, col_time = st.columns([3, 2, 2])
     with col_kode:
         paket_id = st.text_input(
             "🔢 Kode Tender",
+            value=st.session_state.get("jd_paket_id", ""),
             placeholder="Contoh: 4618177",
             help="Kode tender dari SPSE",
+            key="jd_paket_id_input",
         )
     with col_date:
         default_date = datetime.now().date() + timedelta(days=1)

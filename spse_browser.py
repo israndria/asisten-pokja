@@ -332,6 +332,51 @@ def get_paket_id() -> str | None:
     return match.group(1) if match else None
 
 
+def get_nama_paket(paket_id: str | None = None) -> str | None:
+    """
+    Ambil nama paket dari SPSE via pure requests ke /lelang/[ID]/view.
+    Scrape <h3> pertama di dalam .panel-body (judul paket).
+    Jika paket_id tidak diberikan, otomatis ambil dari URL aktif.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    pid = paket_id or get_paket_id()
+    if not pid:
+        return None
+    cookie_str = get_spse_cookies()
+    if not cookie_str:
+        return None
+    try:
+        url = f"{SPSE_BASE_URL}lelang/{pid}/view"
+        resp = requests.get(
+            url,
+            headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"},
+            timeout=10,
+            allow_redirects=True,
+        )
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Nama paket ada di <title>: "LPSE ... - Informasi Tender Nama Paket"
+        if soup.title:
+            import re
+            title_text = soup.title.string or ""
+            # Strip prefix hingga "- Informasi Tender " atau "- Edit Tender "
+            match = re.search(r'-\s*(?:Informasi|Edit)\s+Tender\s+(.+)', title_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+            # Fallback: ambil bagian setelah " - " terakhir
+            parts = title_text.split(" - ")
+            if len(parts) > 1:
+                kandidat = parts[-1].strip()
+                if len(kandidat) > 10:
+                    return kandidat
+        return None
+    except Exception:
+        return None
+
+
 _FETCH_JS = """
 async ([url, method, payload, contentType, formEncoded]) => {
     const body = formEncoded
