@@ -153,7 +153,10 @@ def pilih_tab(index: int):
 def get_url() -> str:
     page = halaman_aktif()
     if page:
-        return _run(page.evaluate("() => window.location.href"))
+        try:
+            return _run(page.evaluate("() => window.location.href"))
+        except Exception:
+            return ""
     return ""
 
 
