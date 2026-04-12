@@ -18,7 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import spse_browser
-from jadwal_config import TAHAPAN, JAM_KERJA_MULAI, JAM_KERJA_SELESAI, LIBUR_API_URLS
+from jadwal_config import TAHAPAN, JAM_KERJA_MULAI, JAM_KERJA_SELESAI, LIBUR_API_URLS, LIBUR_HARDCODE
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 HEADERS_BASE = {
@@ -43,30 +43,41 @@ _libur_cache: dict[int, list[datetime]] = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_libur_nasional(tahun: int) -> list[datetime]:
-    """Fetch libur nasional dari API."""
+    """
+    Ambil libur nasional dari 2 sumber:
+    1. date.nager.at — 8 hari resmi non-Islam (gratis, reliable)
+    2. LIBUR_HARDCODE — hari libur Islam + cuti bersama per tahun
+    """
     if tahun in _libur_cache:
         return _libur_cache[tahun]
 
     libur_list = []
-    for bulan in range(1, 13):
-        for url_template in LIBUR_API_URLS:
-            url = url_template.format(month=bulan, year=tahun)
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read())
-                    if isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict) and "tanggal" in item:
-                                try:
-                                    tgl = datetime.strptime(item["tanggal"], "%Y-%m-%d")
-                                    if tgl not in libur_list:
-                                        libur_list.append(tgl)
-                                except ValueError:
-                                    pass
-                    break
-            except Exception:
-                continue
+
+    # Sumber 1: nager.at (format: list of {date: "YYYY-MM-DD", ...})
+    try:
+        url = f"https://date.nager.at/api/v3/PublicHolidays/{tahun}/ID"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            for item in data:
+                if isinstance(item, dict) and "date" in item:
+                    try:
+                        tgl = datetime.strptime(item["date"], "%Y-%m-%d")
+                        if tgl not in libur_list:
+                            libur_list.append(tgl)
+                    except ValueError:
+                        pass
+    except Exception:
+        pass  # fallback ke hardcode saja
+
+    # Sumber 2: hardcode hari libur Islam + cuti bersama
+    for tgl_str in LIBUR_HARDCODE.get(tahun, []):
+        try:
+            tgl = datetime.strptime(tgl_str, "%Y-%m-%d")
+            if tgl not in libur_list:
+                libur_list.append(tgl)
+        except ValueError:
+            pass
 
     _libur_cache[tahun] = libur_list
     return libur_list
@@ -146,17 +157,23 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
     )
     t3_selesai = t3_mulai + timedelta(hours=2)
 
+    # ── T4 mulai = T3 selesai + 1 jam (pola dari data real) ──────────────────
+    t4_mulai = geser_ke_jam_kerja(t3_selesai + timedelta(hours=1))
+
     # ── T4 selesai = T1 mulai + 6 hari kalender → hari kerja ─────────────────
     # Pola dari 8 paket: T4 selesai hampir selalu T1 mulai +6 hari (hari kerja).
+    # Jam T4 selesai: ikut jam T3 selesai. Pastikan >= T4 mulai.
     t4_hari = t1_mulai + timedelta(days=6)
     t4_selesai = geser_ke_hari_kerja(t4_hari)
-    # Jam T4 selesai: ikut jam T3 selesai (10:00 jika T3 mulai 08:00, dst).
     t4_selesai = t4_selesai.replace(
         hour=t3_selesai.hour, minute=t3_selesai.minute, second=0, microsecond=0
     )
-
-    # ── T4 mulai = T3 selesai + 1 jam (pola dari data real) ──────────────────
-    t4_mulai = geser_ke_jam_kerja(t3_selesai + timedelta(hours=1))
+    # Fallback: jika T4 selesai <= T4 mulai (bisa terjadi jika T3 molor karena libur)
+    if t4_selesai <= t4_mulai:
+        t4_selesai = geser_ke_hari_kerja(t4_mulai + timedelta(days=1))
+        t4_selesai = t4_selesai.replace(
+            hour=t3_selesai.hour, minute=t3_selesai.minute, second=0, microsecond=0
+        )
 
     # ── Tahap 2: Download Dokumen Pemilihan ───────────────────────────────────
     # Mulai: T1 mulai + 1 menit. Selesai: SAMA dengan T4 selesai (100% konsisten).
@@ -178,10 +195,9 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
 
     # ── Tahap 6: Evaluasi ─────────────────────────────────────────────────────
     # Mulai: T5 mulai + 1 menit.
-    # Selesai: T1 mulai + ~11 hari hari kerja, jam 16:00.
-    # Dari data: T6 selesai hari ke-8 s/d 11 dari T1. Pakai +5 hari dari T6 mulai.
+    # Selesai: +3 hari kalender, diakhiri hari kerja jam 16:00.
     t6_mulai = t5_mulai + timedelta(minutes=1)
-    t6_selesai_kandidat = t6_mulai + timedelta(days=5)
+    t6_selesai_kandidat = t6_mulai + timedelta(days=3)
     t6_selesai = geser_ke_hari_kerja(t6_selesai_kandidat)
     t6_selesai = t6_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[5]["nama"], "mulai": t6_mulai, "selesai": t6_selesai})

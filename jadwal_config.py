@@ -129,7 +129,51 @@ TAHAPAN = [
 # ─────────────────────────────────────────────────────────────────────────────
 # API Libur Nasional
 # ─────────────────────────────────────────────────────────────────────────────
-# Sumber: API yang sama dengan Govem aktivitas
+# Primer: date.nager.at (gratis, 8 hari resmi non-Islam)
+# Fallback: hardcode hari libur Islam + cuti bersama per tahun
 LIBUR_API_URLS = [
-    "https://dayoffapi.vercel.app/api?month={month}&year={year}",
+    "https://date.nager.at/api/v3/PublicHolidays/{year}/ID",  # format berbeda, diparse di engine
 ]
+
+# Hardcode libur nasional Islam + cuti bersama yang tidak ada di nager.at
+# Update setiap tahun (berdasarkan SKB 3 Menteri)
+LIBUR_HARDCODE = {
+    2025: [
+        "2025-01-27",  # Isra Mi'raj
+        "2025-01-28",  # Cuti bersama Isra Mi'raj
+        "2025-01-29",  # Tahun Baru Imlek
+        "2025-03-28",  # Hari Raya Nyepi
+        "2025-03-28",  # Cuti bersama Nyepi
+        "2025-03-29",  # Cuti bersama Nyepi
+        "2025-03-31",  # Idul Fitri 1
+        "2025-04-01",  # Idul Fitri 2
+        "2025-04-02",  # Cuti bersama Idul Fitri
+        "2025-04-03",  # Cuti bersama Idul Fitri
+        "2025-04-04",  # Cuti bersama Idul Fitri
+        "2025-04-07",  # Cuti bersama Idul Fitri
+        "2025-05-12",  # Waisak
+        "2025-06-06",  # Idul Adha
+        "2025-06-09",  # Cuti bersama Idul Adha
+        "2025-06-27",  # Tahun Baru Islam 1447H
+        "2025-09-05",  # Maulid Nabi
+        "2025-12-26",  # Cuti bersama Natal
+    ],
+    2026: [
+        "2026-01-16",  # Isra Mi'raj (perkiraan)
+        "2026-01-17",  # Tahun Baru Imlek
+        "2026-02-19",  # Hari Raya Nyepi (perkiraan)
+        "2026-03-20",  # Idul Fitri 1 (perkiraan)
+        "2026-03-21",  # Idul Fitri 2
+        "2026-03-23",  # Cuti bersama Idul Fitri
+        "2026-03-24",  # Cuti bersama Idul Fitri
+        "2026-03-25",  # Cuti bersama Idul Fitri
+        "2026-03-26",  # Cuti bersama Idul Fitri
+        "2026-03-27",  # Cuti bersama Idul Fitri
+        "2026-05-27",  # Waisak (perkiraan)
+        "2026-05-28",  # Idul Adha (perkiraan)
+        "2026-05-29",  # Cuti bersama Idul Adha
+        "2026-06-17",  # Tahun Baru Islam 1448H (perkiraan)
+        "2026-08-25",  # Maulid Nabi (perkiraan)
+        "2026-12-26",  # Cuti bersama Natal
+    ],
+}
