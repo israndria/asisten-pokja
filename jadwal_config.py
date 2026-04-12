@@ -159,21 +159,31 @@ LIBUR_HARDCODE = {
         "2025-12-26",  # Cuti bersama Natal
     ],
     2026: [
-        "2026-01-16",  # Isra Mi'raj (perkiraan)
-        "2026-01-17",  # Tahun Baru Imlek
-        "2026-02-19",  # Hari Raya Nyepi (perkiraan)
-        "2026-03-20",  # Idul Fitri 1 (perkiraan)
-        "2026-03-21",  # Idul Fitri 2
+        # === LIBUR NASIONAL (SKB 3 Menteri) ===
+        "2026-01-16",  # Isra Mi'raj
+        "2026-02-17",  # Tahun Baru Imlek
+        "2026-03-19",  # Hari Raya Nyepi
+        "2026-03-21",  # Idul Fitri 1446H hari ke-1
+        "2026-03-22",  # Idul Fitri 1446H hari ke-2
+        "2026-04-03",  # Wafat Yesus Kristus
+        "2026-04-05",  # Paskah
+        "2026-05-01",  # Hari Buruh Internasional
+        "2026-05-14",  # Kenaikan Yesus Kristus
+        "2026-05-27",  # Idul Adha 1447H
+        "2026-05-31",  # Waisak 2570 BE
+        "2026-06-01",  # Hari Lahir Pancasila
+        "2026-06-16",  # Tahun Baru Islam 1448H
+        "2026-08-17",  # Hari Kemerdekaan RI
+        "2026-08-25",  # Maulid Nabi Muhammad SAW
+        "2026-12-25",  # Natal
+        # === CUTI BERSAMA (SKB 3 Menteri) ===
+        "2026-02-16",  # Cuti bersama Imlek
+        "2026-03-18",  # Cuti bersama Nyepi
+        "2026-03-20",  # Cuti bersama Idul Fitri
         "2026-03-23",  # Cuti bersama Idul Fitri
         "2026-03-24",  # Cuti bersama Idul Fitri
-        "2026-03-25",  # Cuti bersama Idul Fitri
-        "2026-03-26",  # Cuti bersama Idul Fitri
-        "2026-03-27",  # Cuti bersama Idul Fitri
-        "2026-05-27",  # Waisak (perkiraan)
-        "2026-05-28",  # Idul Adha (perkiraan)
-        "2026-05-29",  # Cuti bersama Idul Adha
-        "2026-06-17",  # Tahun Baru Islam 1448H (perkiraan)
-        "2026-08-25",  # Maulid Nabi (perkiraan)
-        "2026-12-26",  # Cuti bersama Natal
+        "2026-05-15",  # Cuti bersama Kenaikan Yesus
+        "2026-05-28",  # Cuti bersama Idul Adha
+        "2026-12-24",  # Cuti bersama Natal
     ],
 }
