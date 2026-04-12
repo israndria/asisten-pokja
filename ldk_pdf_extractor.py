@@ -82,6 +82,20 @@ def _clean_trailing(text: str) -> str:
     return re.sub(r'\s*\d+\.\s*$', '', text.strip()).strip()
 
 
+def _fix_ocr(text: str) -> str:
+    """Koreksi OCR artifact umum dari PDF SPSE."""
+    fixes = [
+        # l kecil yang seharusnya I kapital di singkatan
+        (r'\bNlB\b', 'NIB'),
+        (r'\blnduk\b', 'Induk'),
+        (r'\bB erusaha\b', 'Berusaha'),
+        (r'\blnaproc\b', 'Inaproc'),
+    ]
+    for pattern, replacement in fixes:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
 def parse_ldk_content(ldk_pages: list[tuple[int, str]]) -> LDKData:
     result = LDKData()
 
@@ -104,7 +118,7 @@ def parse_ldk_content(ldk_pages: list[tuple[int, str]]) -> LDKData:
     )
 
     if izin_match:
-        klasifikasi_izin = _clean_trailing(izin_match.group(1))
+        klasifikasi_izin = _fix_ocr(_clean_trailing(izin_match.group(1)))
         result.izin_usaha_rows.append(IzinUsahaRow(
             jenis_izin="Izin Usaha di bidang Jasa Konstruksi",
             klasifikasi=klasifikasi_izin,
@@ -121,7 +135,7 @@ def parse_ldk_content(ldk_pages: list[tuple[int, str]]) -> LDKData:
     )
 
     if sbu_match:
-        teks_sbu = _clean_trailing(sbu_match.group(1))
+        teks_sbu = _fix_ocr(_clean_trailing(sbu_match.group(1)))
 
         # Extract kualifikasi dan kode SBU untuk metadata
         kual_match = re.search(r'Kualifikasi\s+(Usaha\s+\w+)', teks_sbu, re.IGNORECASE)
@@ -143,12 +157,14 @@ def parse_ldk_content(ldk_pages: list[tuple[int, str]]) -> LDKData:
     # ═══════════════════════════════════════════════════════════════
     kinerja_match = re.search(
         r'(Memiliki\s+kinerja\s+penyedia\s+dengan\s+nilai\s+baik.*?)'
-        r'(?=\s*5\.\s*Memperhitungkan|\s*Memperhitungkan\s+Sisa\s+Kemampuan)',
+        r'(?=\s*;?\s*a\.\s*pengecualian|\s*5\.\s*Memperhitungkan|\s*Memperhitungkan\s+Sisa\s+Kemampuan)',
         clean, re.IGNORECASE
     )
 
     if kinerja_match:
-        result.kinerja_penyedia = _clean_trailing(kinerja_match.group(1))
+        teks = _fix_ocr(_clean_trailing(kinerja_match.group(1)))
+        teks = teks.rstrip('; ').strip()
+        result.kinerja_penyedia = teks
         result.kinerja_required = True
 
     # ═══════════════════════════════════════════════════════════════
