@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
+import tempfile
 
 import streamlit as st
 
@@ -14,6 +15,7 @@ from config import SPSE_BASE_URL, DOWNLOAD_DIR
 import spse_browser
 import ldk_engine
 import ldk_config
+import ldk_pdf_extractor
 import checklist_engine
 import masa_berlaku_engine
 import penjelasan_engine
@@ -362,22 +364,86 @@ with tab4:
         )
         st.caption("Teks ini disimpan dalam sesi — edit jika perlu penyesuaian.")
 
+    # ── Upload PDF DOKPIL + Extract ─────────────────────────────────────────
+    st.subheader("📄 Upload DOKPIL (Opsional)")
+    st.caption("Upload PDF Dokumen Pemilihan untuk auto-extract persyaratan LDK")
+    
+    uploaded_file = st.file_uploader(
+        "Pilih file PDF DOKPIL:",
+        type=["pdf"],
+        key="dokpil_uploader",
+    )
+    
+    if uploaded_file:
+        # Simpan ke temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+        
+        if st.button("🔍 Extract Persyaratan dari PDF", type="primary", key="extract_pdf"):
+            with st.spinner("Extracting LDK dari PDF..."):
+                try:
+                    ldk_data = ldk_pdf_extractor.extract_ldk_from_pdf(tmp_path)
+                    st.session_state["ldk_pdf_data"] = ldk_data
+                    
+                    if ldk_data.extracted:
+                        st.success(f"✅ Extract berhasil! Ditemukan {len(ldk_data.izin_usaha)} Izin Usaha, {len(ldk_data.sbu)} SBU")
+                        
+                        # Auto-fill dari PDF
+                        ijin_cfg = ldk_pdf_extractor.generate_ijin_config(ldk_data)
+                        st.session_state["ijin_nama"] = ijin_cfg["nama"]
+                        st.session_state["ijin_klas"] = ijin_cfg["klasifikasi"]
+                    else:
+                        st.warning(f"⚠️ Extract tidak menemukan data LDK: {ldk_data.errors}")
+                except Exception as e:
+                    st.error(f"❌ Error extract PDF: {e}")
+                
+                # Cleanup temp file
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        
+        # Display hasil extract jika ada
+        if "ldk_pdf_data" in st.session_state:
+            ldk_data = st.session_state["ldk_pdf_data"]
+            if ldk_data.extracted:
+                with st.expander("📋 Hasil Extract LDK dari PDF", expanded=True):
+                    # Izin Usaha
+                    if ldk_data.izin_usaha:
+                        st.write("**Izin Usaha:**")
+                        for izin in ldk_data.izin_usaha:
+                            st.write(f"  • {izin.jenis_izin}")
+                    
+                    # SBU
+                    if ldk_data.sbu:
+                        st.write("**Sertifikat Badan Usaha (SBU):**")
+                        for sbu in ldk_data.sbu:
+                            st.write(f"  • {sbu.kode_sbu} (KBLI {sbu.tahun_kbli}) — {sbu.subklasifikasi}")
+                    
+                    # Persyaratan lain
+                    st.write("**Persyaratan Lain:**")
+                    st.write(f"  • Pengalaman minimal: {ldk_data.pengalaman_min} Pekerjaan Konstruksi")
+                    st.write(f"  • Kemampuan Paket (KP): {ldk_data.skp_kp} paket")
+                    
+                    st.caption(f"Diekstrak dari halaman {ldk_data.halaman_ldk} DOKPIL")
+
     # ── Konfigurasi Izin Usaha (WAJIB) ───────────────────────────────────────
     with st.expander("📋 Izin Usaha (wajib diisi)", expanded=True):
         col_i1, col_i2 = st.columns(2)
         with col_i1:
             ijin_nama = st.text_input(
                 "Jenis Izin *",
-                value=ldk_config.IJIN_USAHA_DEFAULT["nama"],
-                key="ijin_nama",
+                value=st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
+                key="ijin_nama_input",
             )
         with col_i2:
             ijin_klas = st.text_input(
                 "Bidang Usaha / Klasifikasi *",
-                value=ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"],
-                key="ijin_klas",
+                value=st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
+                key="ijin_klas_input",
             )
-        st.caption("Contoh: 'Izin Usaha' + '41001 - Konstruksi Umum'")
+        st.caption("Contoh: 'Izin Usaha' + 'BS001 (KBLI 2020) Konstruksi Bangunan Sipil Jalan'")
 
     st.divider()
 
@@ -467,7 +533,10 @@ with tab4:
 
         # Payload preview
         with st.expander("🔧 Preview Payload yang akan dikirim"):
-            ijin_usaha_cfg = {"nama": ijin_nama, "klasifikasi": ijin_klas}
+            ijin_usaha_cfg = {
+                "nama": st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
+                "klasifikasi": st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
+            }
             payload_preview = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
             st.json(payload_preview)
 
@@ -476,7 +545,10 @@ with tab4:
         # Tombol submit (muncul setelah scan)
         if push_clicked:
             # Sudah navigate + scan → langsung submit
-            ijin_usaha_cfg = {"nama": ijin_nama, "klasifikasi": ijin_klas}
+            ijin_usaha_cfg = {
+                "nama": st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
+                "klasifikasi": st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
+            }
             payload = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
             with st.spinner("Mengirim ke SPSE..."):
                 try:
