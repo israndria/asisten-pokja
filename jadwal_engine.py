@@ -124,79 +124,117 @@ def geser_ke_jam_kerja(dt: datetime) -> datetime:
 def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung semua tanggal berdasarkan 1 tanggal mulai.
-    Return: list of dict {nama, mulai, selesai, aturan}
+    Return: list of dict {nama, mulai, selesai}
+
+    Pola diverifikasi dari 8 paket real (Sep–Nov 2025).
     """
     hasil = []
 
-    # Tahap 1: Pengumuman Pascakualifikasi (5 hari persis)
+    # ── Tahap 1: Pengumuman Pascakualifikasi ──────────────────────────────────
+    # Durasi: min 5 hari kalender. Selesai = mulai + 5 hari (jam sama).
     t1_mulai = tgl_mulai
     t1_selesai = t1_mulai + timedelta(days=5)
     hasil.append({"nama": TAHAPAN[0]["nama"], "mulai": t1_mulai, "selesai": t1_selesai})
 
-    # Tahap 2: Download Dokumen Pemilihan (6 hari persis)
-    t2_mulai = tgl_mulai
-    t2_selesai = t2_mulai + timedelta(days=6)
+    # ── Hitung T3 mulai (dibutuhkan untuk T4) ────────────────────────────────
+    # T3 mulai = T1 mulai + 3 hari kalender → hari kerja jam 08:00.
+    # (7/8 paket = +3 hari, 1 paket = +2 hari karena berbeda hari input)
+    t3_hari = t1_mulai + timedelta(days=3)
+    t3_mulai = geser_ke_hari_kerja(
+        t3_hari.replace(hour=JAM_KERJA_MULAI, minute=0, second=0, microsecond=0),
+        jam_mulai=JAM_KERJA_MULAI
+    )
+    t3_selesai = t3_mulai + timedelta(hours=2)
+
+    # ── T4 selesai = T1 mulai + 6 hari kalender → hari kerja ─────────────────
+    # Pola dari 8 paket: T4 selesai hampir selalu T1 mulai +6 hari (hari kerja).
+    t4_hari = t1_mulai + timedelta(days=6)
+    t4_selesai = geser_ke_hari_kerja(t4_hari)
+    # Jam T4 selesai: ikut jam T3 selesai (10:00 jika T3 mulai 08:00, dst).
+    t4_selesai = t4_selesai.replace(
+        hour=t3_selesai.hour, minute=t3_selesai.minute, second=0, microsecond=0
+    )
+
+    # ── T4 mulai = T3 selesai + 1 jam (pola dari data real) ──────────────────
+    t4_mulai = geser_ke_jam_kerja(t3_selesai + timedelta(hours=1))
+
+    # ── Tahap 2: Download Dokumen Pemilihan ───────────────────────────────────
+    # Mulai: T1 mulai + 1 menit. Selesai: SAMA dengan T4 selesai (100% konsisten).
+    t2_mulai = t1_mulai + timedelta(minutes=1)
+    t2_selesai = t4_selesai
     hasil.append({"nama": TAHAPAN[1]["nama"], "mulai": t2_mulai, "selesai": t2_selesai})
 
-    # Tahap 3: Pemberian Penjelasan (3 hari setelah Tahap 1, hari kerja, 2 jam)
-    t3_kandidat = t1_mulai + timedelta(days=3)
-    t3_mulai = geser_ke_hari_kerja(t3_kandidat)
-    t3_selesai = t3_mulai + timedelta(hours=2)
+    # Simpan T3 dan T4 (urutan array 0-11)
     hasil.append({"nama": TAHAPAN[2]["nama"], "mulai": t3_mulai, "selesai": t3_selesai})
-
-    # Tahap 4: Upload Dokumen Penawaran (2 jam setelah Tahap 3 selesai, 3 hari kalender)
-    t4_mulai = t3_selesai + timedelta(hours=2)
-    t4_mulai = geser_ke_hari_kerja(t4_mulai)
-    t4_selesai_kandidat = t4_mulai + timedelta(days=3)
-    t4_selesai = geser_ke_hari_kerja(t4_selesai_kandidat)
     hasil.append({"nama": TAHAPAN[3]["nama"], "mulai": t4_mulai, "selesai": t4_selesai})
 
-    # Tahap 5: Pembukaan Dokumen (1 menit setelah Tahap 4 selesai, 24 jam)
+    # ── Tahap 5: Pembukaan Dokumen Penawaran ──────────────────────────────────
+    # Mulai: T4 selesai + 1 menit.
+    # Selesai: 23:59 hari yang sama (dari 5/8 paket), atau hari berikutnya 09:00.
+    # Pakai 23:59 hari yang sama sebagai default (lebih sering).
     t5_mulai = t4_selesai + timedelta(minutes=1)
-    t5_selesai = t5_mulai + timedelta(hours=24)
+    t5_selesai = t5_mulai.replace(hour=23, minute=59, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[4]["nama"], "mulai": t5_mulai, "selesai": t5_selesai})
 
-    # Tahap 6: Evaluasi (1 menit setelah Tahap 5 dimulai, 4 hari, skip weekend/libur di akhir)
+    # ── Tahap 6: Evaluasi ─────────────────────────────────────────────────────
+    # Mulai: T5 mulai + 1 menit.
+    # Selesai: T1 mulai + ~11 hari hari kerja, jam 16:00.
+    # Dari data: T6 selesai hari ke-8 s/d 11 dari T1. Pakai +5 hari dari T6 mulai.
     t6_mulai = t5_mulai + timedelta(minutes=1)
-    t6_selesai_kandidat = t6_mulai + timedelta(days=4)
+    t6_selesai_kandidat = t6_mulai + timedelta(days=5)
     t6_selesai = geser_ke_hari_kerja(t6_selesai_kandidat)
+    t6_selesai = t6_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[5]["nama"], "mulai": t6_mulai, "selesai": t6_selesai})
 
-    # Tahap 7: Pembuktian Kualifikasi (hari sama akhir Tahap 6, 09:00-15:30)
+    # ── Tahap 7: Pembuktian Kualifikasi ───────────────────────────────────────
+    # Mulai: hari SAMA dengan T6 selesai, jam 09:00 (7/8 paket konsisten).
+    # T7 overlap T6 adalah normal (T6 selesai 16:00, T7 09:00 hari yang sama).
     t7_mulai = t6_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
-    t7_selesai = t6_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
-    if t7_mulai.hour >= 15 or (t7_mulai.hour == 15 and t7_mulai.minute >= 30):
-        t7_mulai = geser_ke_hari_kerja(t6_selesai + timedelta(days=1), jam_mulai=9)
-        t7_selesai = t7_mulai.replace(hour=15, minute=30)
+    if not is_hari_kerja(t7_mulai):
+        t7_mulai = geser_ke_hari_kerja(t7_mulai, jam_mulai=9)
+    t7_selesai = t7_mulai.replace(hour=15, minute=30, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[6]["nama"], "mulai": t7_mulai, "selesai": t7_selesai})
 
-    # Tahap 8: Penetapan Pemenang (setelah Tahap 7, durasi 2 jam)
-    t8_mulai = t7_selesai
-    t8_selesai = t8_mulai + timedelta(hours=2)
+    # ── Tahap 8: Penetapan Pemenang ───────────────────────────────────────────
+    # Mulai: T7 selesai + 1 menit. Selesai: +1 jam.
+    t8_mulai = t7_selesai + timedelta(minutes=1)
+    t8_selesai = t8_mulai + timedelta(hours=1)
     hasil.append({"nama": TAHAPAN[7]["nama"], "mulai": t8_mulai, "selesai": t8_selesai})
 
-    # Tahap 9: Pengumuman Pemenang (setelah Tahap 8, durasi 4 jam)
-    t9_mulai = t8_selesai
+    # ── Tahap 9: Pengumuman Pemenang ──────────────────────────────────────────
+    # Mulai: T8 selesai + 1 menit. Selesai: +4 jam.
+    t9_mulai = t8_selesai + timedelta(minutes=1)
     t9_selesai = t9_mulai + timedelta(hours=4)
     hasil.append({"nama": TAHAPAN[8]["nama"], "mulai": t9_mulai, "selesai": t9_selesai})
 
-    # Tahap 10: Masa Sanggah (5 hari kalender setelah Tahap 9, kelonggaran jam kerja)
-    t10_kandidat = t9_selesai + timedelta(days=5)
-    t10_mulai = geser_ke_jam_kerja(t10_kandidat)
-    t10_selesai = t10_mulai + timedelta(days=5)
-    t10_selesai = geser_ke_hari_kerja(t10_selesai)
+    # ── Tahap 10: Masa Sanggah ────────────────────────────────────────────────
+    # Mulai: T9 selesai + 1 menit — boleh malam hari, HANYA geser jika weekend/libur.
+    # Durasi: 5 hari kalender. Selesai geser ke hari kerja, jam sama dengan T10 mulai.
+    t10_mulai = t9_selesai + timedelta(minutes=1)
+    if not is_hari_kerja(t10_mulai):
+        t10_mulai = geser_ke_hari_kerja(
+            t10_mulai.replace(hour=8, minute=0, second=0, microsecond=0),
+            jam_mulai=8
+        )
+    t10_selesai_kandidat = t10_mulai + timedelta(days=5)
+    t10_selesai = geser_ke_hari_kerja(t10_selesai_kandidat)
+    # Jam selesai T10: selalu 08:00 dari data real (terlepas jam mulai berapa)
+    t10_selesai = t10_selesai.replace(hour=8, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[9]["nama"], "mulai": t10_mulai, "selesai": t10_selesai})
 
-    # Tahap 11: SPPBJ (1 jam setelah Tahap 10, durasi 5 hari, skip weekend/libur)
-    t11_kandidat = t10_selesai + timedelta(hours=1)
-    t11_mulai = geser_ke_hari_kerja(t11_kandidat)
-    t11_selesai = t11_mulai + timedelta(days=5)
-    t11_selesai = geser_ke_hari_kerja(t11_selesai)
+    # ── Tahap 11: SPPBJ ───────────────────────────────────────────────────────
+    # Mulai: T10 selesai + 1 menit → geser ke jam kerja.
+    # Selesai: fleksibel — set 5 hari kalender, hari kerja jam 16:00.
+    t11_mulai = geser_ke_jam_kerja(t10_selesai + timedelta(minutes=1))
+    t11_selesai_kandidat = t11_mulai + timedelta(days=5)
+    t11_selesai = geser_ke_hari_kerja(t11_selesai_kandidat)
+    t11_selesai = t11_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[10]["nama"], "mulai": t11_mulai, "selesai": t11_selesai})
 
-    # Tahap 12: Kontrak (1 hari setelah Tahap 11 dimulai, pola sama)
-    t12_kandidat = t11_mulai + timedelta(days=1)
-    t12_mulai = geser_ke_hari_kerja(t12_kandidat)
+    # ── Tahap 12: Penandatanganan Kontrak ─────────────────────────────────────
+    # Mulai: T11 mulai + 1 hari kerja, jam 09:00 (dari data: hampir selalu +1 hari dari T11 mulai).
+    t12_kandidat = geser_ke_hari_kerja(t11_mulai + timedelta(days=1), jam_mulai=9)
+    t12_mulai = t12_kandidat.replace(hour=9, minute=0, second=0, microsecond=0)
     t12_selesai = t12_mulai + timedelta(days=5)
     t12_selesai = geser_ke_hari_kerja(t12_selesai)
     hasil.append({"nama": TAHAPAN[11]["nama"], "mulai": t12_mulai, "selesai": t12_selesai})
@@ -205,8 +243,8 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
 
 
 def format_spse_datetime(dt: datetime) -> str:
-    """Format datetime sesuai input SPSE: DD/MM/YYYY HH:mm"""
-    return dt.strftime("%d/%m/%Y %H:%M")
+    """Format datetime sesuai input SPSE: DD-MM-YYYY HH:mm"""
+    return dt.strftime("%d-%m-%Y %H:%M")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
