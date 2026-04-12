@@ -22,6 +22,7 @@ import penjelasan_engine
 import penjelasan_config
 import jadwal_engine
 import jadwal_config
+import kirimpesan_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -125,10 +126,10 @@ with st.sidebar:
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen",
     "📋 LDK Auto-fill", "☑️ Checklist Penawaran", "⏳ Masa Berlaku",
-    "💬 Penjelasan", "📅 Auto-Fill Jadwal",
+    "💬 Penjelasan", "📅 Auto-Fill Jadwal", "📨 Kirim Undangan",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -1238,3 +1239,162 @@ with tab8:
         except Exception as e:
             st.error(f"❌ Gagal fetch libur nasional: {e}")
             st.info("Perhitungan tetap jalan tanpa filter libur.")
+
+
+# ============================================================
+# Tab 9: Kirim Undangan
+# ============================================================
+
+with tab9:
+    st.subheader("📨 Kirim Undangan / Pesan ke PPK")
+    st.markdown(
+        "Kirim undangan **Reviu Dokumen Persiapan Pemilihan** ke PPK secara otomatis. "
+        "Sistem akan mengisi dan mengirim form undangan langsung ke SPSE."
+    )
+
+    st.divider()
+
+    # ── Auto-detect kode dari browser ────────────────────────────────────────
+    kp_auto_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
+    if kp_auto_id and "kp_paket_id" not in st.session_state:
+        st.session_state["kp_paket_id"] = kp_auto_id
+    if kp_auto_id:
+        st.info(f"🔗 Terdeteksi dari browser: `{kp_auto_id}`")
+
+    col_kp_btn = st.columns([1])[0]
+    with col_kp_btn:
+        if st.button("🔄 Ambil Kode dari Browser", key="kp_ambil_browser"):
+            detected = spse_browser.get_paket_id() if spse_browser.get_url() else None
+            if detected:
+                st.session_state["kp_paket_id"] = detected
+                st.success(f"Kode tender **{detected}** berhasil diambil dari browser.")
+            else:
+                st.warning("Browser belum terhubung atau tidak ada paket aktif di URL.")
+
+    # ── Input kode paket ─────────────────────────────────────────────────────
+    col_kp_id, col_kp_preview = st.columns([3, 1])
+    with col_kp_id:
+        kp_paket_id = st.text_input(
+            "🔢 Kode Tender",
+            value=st.session_state.get("kp_paket_id", ""),
+            placeholder="Contoh: 4618177",
+            key="kp_paket_id_input",
+        )
+    with col_kp_preview:
+        st.write("")
+        st.write("")
+        kp_preview_btn = st.button(
+            "🔍 Preview Penerima",
+            key="kp_preview",
+            use_container_width=True,
+            disabled=not bool(kp_paket_id),
+        )
+
+    if kp_preview_btn and kp_paket_id:
+        with st.spinner("Mengambil info penerima..."):
+            info = kirimpesan_engine.preview_undangan(kp_paket_id)
+        if info["sukses"]:
+            st.success(
+                f"✅ Penerima: **{info.get('penerima', '-')}** | "
+                f"Paket: {info.get('nama_tender', '-')}"
+            )
+        else:
+            st.error(f"❌ {info['pesan']}")
+
+    st.divider()
+
+    # ── Isi form undangan ────────────────────────────────────────────────────
+    st.markdown("**Detail Undangan**")
+
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+        kp_tgl = st.date_input(
+            "📆 Tanggal Undangan",
+            value=datetime.now().date() + timedelta(days=3),
+            key="kp_tgl",
+        )
+        kp_jam_mulai = st.time_input(
+            "🕐 Jam Mulai",
+            value=datetime.strptime("09:00", "%H:%M").time(),
+            key="kp_jam_mulai",
+            step=1800,
+        )
+    with col_w2:
+        st.write("")  # spacer
+        kp_jam_selesai = st.time_input(
+            "🕑 Jam Selesai",
+            value=datetime.strptime("11:00", "%H:%M").time(),
+            key="kp_jam_selesai",
+            step=1800,
+        )
+
+    kp_tempat = st.text_area(
+        "📍 Tempat",
+        value="Ruang Rapat DPUPR Kabupaten Tapin",
+        key="kp_tempat",
+        height=80,
+    )
+
+    kp_is_online = st.selectbox(
+        "🌐 Mekanisme",
+        options=["Offline", "Online"],
+        index=0,
+        key="kp_is_online",
+    )
+
+    if kp_is_online == "Online":
+        kp_link = st.text_input(
+            "🔗 Link Undangan (Google Meet / Zoom)",
+            placeholder="https://meet.google.com/...",
+            key="kp_link",
+        )
+    else:
+        kp_link = ""
+
+    kp_dibawa = st.text_area(
+        "📁 Yang Harus Dibawa",
+        value="Dokumen Persiapan Pengadaan (DPP)",
+        key="kp_dibawa",
+        height=80,
+    )
+
+    kp_hadir = st.text_area(
+        "👤 Yang Harus Hadir",
+        value="PPK",
+        key="kp_hadir",
+        height=60,
+    )
+
+    st.divider()
+
+    # ── Tombol kirim ─────────────────────────────────────────────────────────
+    if st.button("📨 Kirim Undangan", key="kp_kirim", type="primary", disabled=not bool(kp_paket_id)):
+        if not kp_tempat.strip():
+            st.error("❌ Tempat wajib diisi.")
+        elif kp_is_online == "Online" and not kp_link.strip():
+            st.error("❌ Link undangan wajib diisi untuk mekanisme Online.")
+        else:
+            waktu_str = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d/%m/%Y %H:%M")
+            sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d/%m/%Y %H:%M")
+
+            with st.spinner(f"Mengirim undangan untuk paket {kp_paket_id}..."):
+                hasil = kirimpesan_engine.kirim_undangan(
+                    paket_id=kp_paket_id,
+                    waktu=waktu_str,
+                    sampai=sampai_str,
+                    tempat=kp_tempat.strip(),
+                    dibawa=kp_dibawa.strip(),
+                    hadir=kp_hadir.strip(),
+                    is_online=(kp_is_online == "Online"),
+                    link_pembuktian=kp_link.strip(),
+                )
+
+            if hasil["sukses"]:
+                penerima_info = f" kepada **{hasil['penerima']}**" if hasil.get("penerima") else ""
+                st.success(
+                    f"✅ {hasil['pesan']}{penerima_info}  \n"
+                    f"Waktu: {waktu_str} s.d. {sampai_str}  \n"
+                    f"Tempat: {kp_tempat.strip()}"
+                )
+            else:
+                st.error(f"❌ {hasil['pesan']} (HTTP {hasil.get('status_code', '?')})")
