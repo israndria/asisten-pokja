@@ -1362,7 +1362,7 @@ with tab9:
         "👤 Yang Harus Hadir",
         value="PPK",
         key="kp_hadir",
-        height=60,
+        height=68,
     )
 
     st.divider()
