@@ -199,16 +199,26 @@ def submit_ldk(
 ) -> dict:
     """
     Submit LDK dengan langkah:
-    1. Klik checkbox yang harus dicentang
-    2. Isi multi-row Izin Usaha
-    3. Jika add_kinerja: klik "Tambah Syarat Teknis" + isi Kinerja Penyedia
+    1. Klik "Tambah Izin Usaha" jika row > 1
+    2. Klik checkbox + isi field
+    3. Jika add_kinerja: klik "Tambah Syarat Teknis" + isi Kinerja
     4. Submit form secara native
     """
     page = spse_browser.halaman_aktif()
     if not page:
         raise RuntimeError("Browser belum terbuka.")
 
-    # Step 1: Klik checkbox
+    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
+
+    # Step 0: Klik "Tambah Izin Usaha" jika perlu multi-row
+    if len(rows) > 1:
+        tambah_btn = spse_browser._run(page.query_selector('button#tambahIjin'))
+        if tambah_btn:
+            for _ in range(len(rows) - 1):
+                tambah_btn.click()
+                spse_browser._run(page.wait_for_timeout(1500))
+
+    # Step 1: Klik checkbox syaratAdmin/syaratTeknis
     checkbox_items = []
     for name, val in payload.items():
         if name.startswith("syaratAdmin") or name.startswith("syaratTeknis"):
@@ -228,60 +238,70 @@ def submit_ldk(
         }""", checkbox_items))
 
     # Step 2: Isi multi-row Izin Usaha
-    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
     for i, row in enumerate(rows):
         spse_browser._run(page.evaluate("""(i, row) => {
             const namaInput = document.querySelector(`input[name="ijin[${i}].chk_nama"]`);
             const klasInput = document.querySelector(`input[name="ijin[${i}].chk_klasifikasi"]`);
-            if (namaInput) { namaInput.value = row.jenis_izin || ''; namaInput.dispatchEvent(new Event('input', {bubbles:true})); }
-            if (klasInput) { klasInput.value = row.klasifikasi || ''; klasInput.dispatchEvent(new Event('input', {bubbles:true})); }
-        }""", i, row))
+            if (namaInput) {
+                namaInput.value = row.jenis_izin || '';
+                namaInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            if (klasInput) {
+                klasInput.value = row.klasifikasi || '';
+                klasInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }""", i, {"jenis_izin": row.get("jenis_izin", ""), "klasifikasi": row.get("klasifikasi", "")}))
 
     # Step 3: Jika perlu tambah Kinerja Penyedia
     if add_kinerja and kinerja_text:
         # Klik "Tambah Syarat Teknis"
-        tambah_btn = page.query_selector('button#tambahSyaratTeknis, button:has-text("Tambah Syarat Teknis")')
-        if tambah_btn:
-            tambah_btn.click()
+        tambah_teknis_btn = page.query_selector('button#tambahSyaratTeknis')
+        if tambah_teknis_btn:
+            tambah_teknis_btn.click()
             spse_browser._run(page.wait_for_timeout(2000))
-        
-        # Isi checkbox + text Kinerja Penyedia
-        spse_browser._run(page.evaluate("""(text) => {
-            // Cari checkbox kinerja penyedia yang baru ditambahkan
-            const allCbs = document.querySelectorAll('input[type="checkbox"]');
-            let targetCb = null;
-            allCbs.forEach(cb => {
-                if (cb.name.includes('syaratTeknis') && !cb.checked && !cb.disabled) {
-                    // Cek apakah label mengandung "kinerja"
-                    let label = '';
-                    const tr = cb.closest('tr');
-                    if (tr) {
-                        const tds = tr.querySelectorAll('td');
-                        for (const td of tds) {
-                            if (!td.contains(cb)) { label = td.innerText.trim(); break; }
+
+            # Isi checkbox + text Kinerja Penyedia
+            spse_browser._run(page.evaluate("""(text) => {
+                // Cari checkbox kinerja yang BARU DITAMBAHKAN (unchecked)
+                const allCbs = Array.from(document.querySelectorAll('input[name*="syaratTeknis"][type="checkbox"]'));
+                let targetCb = null;
+                
+                // Cari checkbox unchecked yang paling terakhir
+                for (let i = allCbs.length - 1; i >= 0; i--) {
+                    const cb = allCbs[i];
+                    if (!cb.checked && !cb.disabled) {
+                        // Cek apakah label mengandung "kinerja"
+                        let label = '';
+                        const tr = cb.closest('tr');
+                        if (tr) {
+                            const tds = tr.querySelectorAll('td');
+                            for (const td of tds) {
+                                if (!td.contains(cb)) { label = td.innerText.trim(); break; }
+                            }
+                        }
+                        if (label.toLowerCase().includes('kinerja')) {
+                            targetCb = cb;
+                            break;
                         }
                     }
-                    if (label.toLowerCase().includes('kinerja')) {
-                        targetCb = cb;
-                    }
                 }
-            });
-            
-            if (targetCb) {
-                targetCb.checked = true;
-                targetCb.dispatchEvent(new Event('change', { bubbles: true }));
                 
-                // Isi text jika ada textarea/input
-                const container = targetCb.closest('tr') || targetCb.parentElement;
-                if (container) {
-                    const txt = container.querySelector('input[type="text"], textarea');
-                    if (txt) {
-                        txt.value = text;
-                        txt.dispatchEvent(new Event('input', { bubbles: true }));
+                if (targetCb) {
+                    // Centang checkbox
+                    targetCb.checked = true;
+                    targetCb.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    // Isi text jika ada textarea/input
+                    const container = targetCb.closest('tr') || targetCb.parentElement;
+                    if (container) {
+                        const txt = container.querySelector('input[type="text"], textarea');
+                        if (txt) {
+                            txt.value = text;
+                            txt.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
                     }
                 }
-            }
-        }""", kinerja_text))
+            }""", kinerja_text))
 
     # Step 4: Submit form native
     spse_browser._run(page.evaluate("""() => {
