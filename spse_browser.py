@@ -137,36 +137,65 @@ def halaman_aktif() -> Page | None:
     return None
 
 
+_cdp_tabs_cache: list[dict] = []
+_cdp_tabs_cache_ts: float = 0.0
+_CDP_CACHE_TTL = 5.0  # detik — cache tab list selama 5 detik antar rerun
+
+
+def _cdp_tabs(force: bool = False) -> list[dict]:
+    """Ambil daftar tab via CDP HTTP API dengan cache 5 detik.
+    force=True untuk paksa refresh (misal setelah user klik Refresh).
+    """
+    import requests as _req
+    import time as _time
+    global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    now = _time.time()
+    if not force and _cdp_tabs_cache and (now - _cdp_tabs_cache_ts) < _CDP_CACHE_TTL:
+        return _cdp_tabs_cache
+    try:
+        tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
+        _cdp_tabs_cache = [t for t in tabs if t.get("type") == "page"]
+        _cdp_tabs_cache_ts = now
+        return _cdp_tabs_cache
+    except Exception:
+        return _cdp_tabs_cache  # kembalikan cache lama jika gagal
+
+
 def daftar_tab() -> list[dict]:
     """Return semua tab yang terbuka: [{'index': int, 'title': str, 'url': str}]"""
-    if not _context:
-        return []
-    result = []
-    for i, p in enumerate(_context.pages):
-        try:
-            url = _run(p.evaluate("() => window.location.href"))
-            title = _run(p.evaluate("() => document.title"))
-        except Exception:
-            url, title = "", ""
-        result.append({"index": i, "title": title, "url": url})
-    return result
+    tabs = _cdp_tabs()
+    return [
+        {"index": i, "title": t.get("title", ""), "url": t.get("url", "")}
+        for i, t in enumerate(tabs)
+    ]
 
 
 def pilih_tab(index: int):
-    """Set halaman aktif ke tab berdasarkan index."""
+    """Set halaman aktif ke tab berdasarkan index (berdasarkan CDP tab list)."""
     global _page
-    if _context and 0 <= index < len(_context.pages):
+    if not _context:
+        return
+    tabs = _cdp_tabs()
+    if 0 <= index < len(tabs):
+        target_url = tabs[index].get("url", "")
+        if target_url:
+            matched = next((p for p in _context.pages if p.url == target_url), None)
+            if matched:
+                _page = matched
+                return
+    # fallback ke index Playwright
+    if 0 <= index < len(_context.pages):
         _page = _context.pages[index]
 
 
 def get_url() -> str:
-    page = halaman_aktif()
-    if page:
-        try:
-            return _run(page.evaluate("() => window.location.href"))
-        except Exception:
-            return ""
-    return ""
+    """Ambil URL tab aktif via CDP HTTP API — instant."""
+    tabs = _cdp_tabs()
+    if not tabs:
+        return ""
+    # Cari tab yang sedang aktif (focused) atau pakai tab pertama
+    active = next((t for t in tabs if t.get("url", "").startswith("http")), None)
+    return active.get("url", "") if active else ""
 
 
 # ============================================================
@@ -433,25 +462,40 @@ def submit_via_fetch(endpoint_url: str, payload: dict, method: str = "POST") -> 
 # Cookie extraction — untuk direct HTTP requests tanpa browser
 # ============================================================
 
-async def _get_cookies_async() -> list[dict]:
-    """Ambil cookies dari Chrome CDP — cari context yang ada halaman SPSE."""
-    async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp("http://localhost:9222")
-        for ctx in browser.contexts:
-            for pg in ctx.pages:
-                if "spse.inaproc.id" in pg.url:
-                    return await ctx.cookies()
-        # Fallback: ambil dari context pertama
-        if browser.contexts:
-            return await browser.contexts[0].cookies()
-        return []
+_cookie_cache: str = ""
+_cookie_cache_ts: float = 0.0
+_COOKIE_CACHE_TTL = 30.0  # cookie valid 30 detik
 
 
 def get_spse_cookies() -> str:
     """
-    Ambil cookies dari Chrome CDP dan kembalikan sebagai Cookie header string.
-    Digunakan untuk direct HTTP POST tanpa Playwright click.
+    Ambil cookies SPSE via Playwright context yang sudah ada.
+    Di-cache 30 detik agar tidak connect ulang tiap kali dipanggil.
     """
-    cookies = _run(_get_cookies_async(), timeout=15)
-    spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
-    return "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+    import time as _time
+    global _cookie_cache, _cookie_cache_ts
+
+    now = _time.time()
+    if _cookie_cache and (now - _cookie_cache_ts) < _COOKIE_CACHE_TTL:
+        return _cookie_cache
+
+    # Pastikan context tersedia — connect tanpa navigasi kalau belum
+    if _context is None:
+        try:
+            buka_browser(navigate=False)
+        except Exception:
+            return ""
+
+    if _context is None:
+        return ""
+
+    try:
+        cookies = _run(_context.cookies(), timeout=10)
+        spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
+        result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+        if result:
+            _cookie_cache = result
+            _cookie_cache_ts = now
+        return result
+    except Exception:
+        return _cookie_cache  # kembalikan cache lama jika gagal

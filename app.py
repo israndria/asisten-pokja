@@ -41,12 +41,8 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 with st.sidebar:
     st.header("Browser SPSE")
 
-    # Auto-reconnect: kalau CDP aktif tapi context belum ada, connect otomatis (tanpa navigasi)
-    if spse_browser._cek_cdp_aktif() and spse_browser._context is None:
-        try:
-            spse_browser.buka_browser(navigate=False)
-        except Exception:
-            pass
+    # Auto-reconnect Playwright hanya saat dibutuhkan (lazy) — sidebar info pakai CDP HTTP saja
+    # buka_browser() dipanggil oleh engine saat submit, bukan di sini setiap refresh
 
     url_aktif = spse_browser.get_url()
     if url_aktif:
@@ -65,10 +61,14 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Refresh", use_container_width=True):
+                spse_browser._cdp_tabs(force=True)  # invalidate cache
                 page = spse_browser.halaman_aktif()
                 if page:
-                    page.reload()
-                    st.rerun()
+                    try:
+                        page.reload()
+                    except Exception:
+                        pass
+                st.rerun()
         with col2:
             if st.button("❌ Tutup", use_container_width=True):
                 spse_browser.tutup_browser()
@@ -1246,65 +1246,65 @@ with tab8:
 # ============================================================
 
 with tab9:
-    st.subheader("📨 Kirim Undangan / Pesan ke PPK")
+    st.subheader("📨 Kirim Undangan Serempak ke PPK")
     st.markdown(
-        "Kirim undangan **Reviu Dokumen Persiapan Pemilihan** ke PPK secara otomatis. "
-        "Sistem akan mengisi dan mengirim form undangan langsung ke SPSE."
+        "Kirim undangan **Reviu Dokumen Persiapan Pemilihan** ke PPK untuk semua paket "
+        "berstatus **Draft** sekaligus. Isi detail undangan sekali, kirim ke banyak paket."
     )
 
     st.divider()
 
-    # ── Auto-detect kode dari browser ────────────────────────────────────────
-    kp_auto_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    if kp_auto_id and "kp_paket_id" not in st.session_state:
-        st.session_state["kp_paket_id"] = kp_auto_id
-    if kp_auto_id:
-        st.info(f"🔗 Terdeteksi dari browser: `{kp_auto_id}`")
+    # ── Step 1: Ambil daftar paket Draft ────────────────────────────────────
+    st.markdown("### 1. Pilih Paket")
 
-    col_kp_btn = st.columns([1])[0]
-    with col_kp_btn:
-        if st.button("🔄 Ambil Kode dari Browser", key="kp_ambil_browser"):
-            detected = spse_browser.get_paket_id() if spse_browser.get_url() else None
-            if detected:
-                st.session_state["kp_paket_id"] = detected
-                st.success(f"Kode tender **{detected}** berhasil diambil dari browser.")
+    col_fetch, col_info = st.columns([2, 3])
+    with col_fetch:
+        if st.button("🔍 Ambil Daftar Paket Draft dari SPSE", key="kp_fetch_draft", use_container_width=True):
+            with st.spinner("Mengambil daftar paket..."):
+                result = kirimpesan_engine.fetch_paket_draft()
+            st.session_state["kp_paket_draft"] = result
+
+    with col_info:
+        if "kp_paket_draft" in st.session_state:
+            r = st.session_state["kp_paket_draft"]
+            if r["sukses"]:
+                n = len(r["paket"])
+                if n > 0:
+                    st.success(f"✅ {r['pesan']}")
+                else:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft saat ini.")
             else:
-                st.warning("Browser belum terhubung atau tidak ada paket aktif di URL.")
+                st.error(f"❌ {r['pesan']}")
 
-    # ── Input kode paket ─────────────────────────────────────────────────────
-    col_kp_id, col_kp_preview = st.columns([3, 1])
-    with col_kp_id:
-        kp_paket_id = st.text_input(
-            "🔢 Kode Tender",
-            value=st.session_state.get("kp_paket_id", ""),
-            placeholder="Contoh: 4618177",
-            key="kp_paket_id_input",
-        )
-    with col_kp_preview:
-        st.write("")
-        st.write("")
-        kp_preview_btn = st.button(
-            "🔍 Preview Penerima",
-            key="kp_preview",
-            use_container_width=True,
-            disabled=not bool(kp_paket_id),
-        )
-
-    if kp_preview_btn and kp_paket_id:
-        with st.spinner("Mengambil info penerima..."):
-            info = kirimpesan_engine.preview_undangan(kp_paket_id)
-        if info["sukses"]:
-            st.success(
-                f"✅ Penerima: **{info.get('penerima', '-')}** | "
-                f"Paket: {info.get('nama_tender', '-')}"
+    # ── Daftar paket + multiselect ───────────────────────────────────────────
+    kp_selected_ids = []
+    if "kp_paket_draft" in st.session_state:
+        paket_list = st.session_state["kp_paket_draft"].get("paket", [])
+        if paket_list:
+            # Tampilkan sebagai multiselect
+            paket_options = {
+                f"{p['kode']} — {p['nama'][:60]}": p
+                for p in paket_list
+            }
+            selected_labels = st.multiselect(
+                "Pilih paket yang akan dikirimi undangan:",
+                options=list(paket_options.keys()),
+                default=list(paket_options.keys()),  # default semua terpilih
+                key="kp_multiselect",
             )
+            kp_selected = [paket_options[lbl] for lbl in selected_labels]
+            st.caption(f"{len(kp_selected)} dari {len(paket_list)} paket dipilih")
         else:
-            st.error(f"❌ {info['pesan']}")
+            kp_selected = []
+    else:
+        kp_selected = []
+        st.info("Klik tombol di atas untuk mengambil daftar paket Draft dari SPSE.")
 
     st.divider()
 
-    # ── Isi form undangan ────────────────────────────────────────────────────
-    st.markdown("**Detail Undangan**")
+    # ── Step 2: Isi detail undangan ──────────────────────────────────────────
+    st.markdown("### 2. Detail Undangan")
+    st.caption("Diisi sekali, akan dikirim ke semua paket yang dipilih.")
 
     col_w1, col_w2 = st.columns(2)
     with col_w1:
@@ -1320,7 +1320,7 @@ with tab9:
             step=1800,
         )
     with col_w2:
-        st.write("")  # spacer
+        st.write("")
         kp_jam_selesai = st.time_input(
             "🕑 Jam Selesai",
             value=datetime.strptime("11:00", "%H:%M").time(),
@@ -1330,9 +1330,9 @@ with tab9:
 
     kp_tempat = st.text_area(
         "📍 Tempat",
-        value="Ruang Rapat DPUPR Kabupaten Tapin",
+        value="Ruang Aula Rapat Lantai 2 Kantor UKPBJ Kabupaten Tapin, Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, Kecamatan Tapin Utara, Rantau, Kabupaten Tapin. Kode Pos : 71111",
         key="kp_tempat",
-        height=80,
+        height=100,
     )
 
     kp_is_online = st.selectbox(
@@ -1342,59 +1342,122 @@ with tab9:
         key="kp_is_online",
     )
 
+    kp_link = ""
     if kp_is_online == "Online":
         kp_link = st.text_input(
             "🔗 Link Undangan (Google Meet / Zoom)",
             placeholder="https://meet.google.com/...",
             key="kp_link",
         )
-    else:
-        kp_link = ""
 
     kp_dibawa = st.text_area(
         "📁 Yang Harus Dibawa",
-        value="Dokumen Persiapan Pengadaan (DPP)",
+        value="Dokumen Persiapan Pengadaan yang tidak terbatas pada :\n1. Spesifikasi Teknis 2. Dokumen HPS. 3. Rancangan Kontrak. 4. Dokumen Anggaran Belanja",
         key="kp_dibawa",
-        height=80,
+        height=100,
     )
 
     kp_hadir = st.text_area(
         "👤 Yang Harus Hadir",
-        value="PPK",
+        value="Pejabat Pembuat Komitmen (PPK), Tim Teknis PPK, dan Konsultan Perancang/Konsultan Perencana",
         key="kp_hadir",
-        height=68,
+        height=80,
     )
 
     st.divider()
 
-    # ── Tombol kirim ─────────────────────────────────────────────────────────
-    if st.button("📨 Kirim Undangan", key="kp_kirim", type="primary", disabled=not bool(kp_paket_id)):
+    # ── Step 3: Kirim ────────────────────────────────────────────────────────
+    st.markdown("### 3. Kirim")
+    st.caption("⚠️ Undangan yang sudah terkirim **tidak bisa dihapus** dari sistem SPSE.")
+
+    kirim_disabled = len(kp_selected) == 0
+
+    # Validasi dulu sebelum konfirmasi
+    def _validasi_kirim():
         if not kp_tempat.strip():
             st.error("❌ Tempat wajib diisi.")
-        elif kp_is_online == "Online" and not kp_link.strip():
+            return False
+        if kp_is_online == "Online" and not kp_link.strip():
             st.error("❌ Link undangan wajib diisi untuk mekanisme Online.")
-        else:
-            waktu_str = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d/%m/%Y %H:%M")
-            sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d/%m/%Y %H:%M")
+            return False
+        return True
 
-            with st.spinner(f"Mengirim undangan untuk paket {kp_paket_id}..."):
-                hasil = kirimpesan_engine.kirim_undangan(
-                    paket_id=kp_paket_id,
-                    waktu=waktu_str,
-                    sampai=sampai_str,
-                    tempat=kp_tempat.strip(),
-                    dibawa=kp_dibawa.strip(),
-                    hadir=kp_hadir.strip(),
-                    is_online=(kp_is_online == "Online"),
-                    link_pembuktian=kp_link.strip(),
+    if not st.session_state.get("kp_konfirmasi"):
+        if st.button(
+            f"📨 Kirim Undangan ke {len(kp_selected)} Paket",
+            key="kp_kirim",
+            type="primary",
+            disabled=kirim_disabled,
+        ):
+            if _validasi_kirim():
+                st.session_state["kp_konfirmasi"] = True
+                st.rerun()
+    else:
+        # Tampilkan ringkasan + konfirmasi
+        waktu_str = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
+        sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
+
+        st.warning(
+            f"**Konfirmasi Pengiriman**\n\n"
+            f"Undangan akan dikirim ke **{len(kp_selected)} paket** dengan detail:\n"
+            f"- Waktu: {waktu_str} s.d. {sampai_str}\n"
+            f"- Tempat: {kp_tempat.strip()[:80]}\n"
+            f"- Mekanisme: {kp_is_online}\n\n"
+            f"**Tindakan ini tidak bisa dibatalkan setelah dikirim.**"
+        )
+
+        col_ya, col_batal = st.columns(2)
+        with col_ya:
+            if st.button("✅ Ya, Kirim Sekarang", key="kp_ya", type="primary", use_container_width=True):
+                st.session_state["kp_konfirmasi"] = False
+
+                progress = st.progress(0, text="Memulai pengiriman...")
+                hasil_list = []
+
+                for i, paket in enumerate(kp_selected):
+                    progress.progress(
+                        (i + 1) / len(kp_selected),
+                        text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
+                    )
+                    res = kirimpesan_engine.kirim_undangan(
+                        paket_id=paket["id_lelang"],
+                        waktu=waktu_str,
+                        sampai=sampai_str,
+                        tempat=kp_tempat.strip(),
+                        dibawa=kp_dibawa.strip(),
+                        hadir=kp_hadir.strip(),
+                        is_online=(kp_is_online == "Online"),
+                        link_pembuktian=kp_link.strip(),
+                    )
+                    hasil_list.append({
+                        "kode": paket["kode"],
+                        "nama": paket["nama"][:50],
+                        "sukses": res["sukses"],
+                        "pesan": res["pesan"],
+                    })
+
+                progress.empty()
+
+                sukses_n = sum(1 for h in hasil_list if h["sukses"])
+                gagal_n = len(hasil_list) - sukses_n
+                if gagal_n == 0:
+                    st.success(f"✅ Semua {sukses_n} undangan berhasil dikirim!")
+                else:
+                    st.warning(f"⚠️ {sukses_n} berhasil, {gagal_n} gagal.")
+
+                st.dataframe(
+                    hasil_list,
+                    use_container_width=True,
+                    column_config={
+                        "kode": st.column_config.TextColumn("Kode", width="small"),
+                        "nama": st.column_config.TextColumn("Nama Paket", width="large"),
+                        "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
+                        "pesan": st.column_config.TextColumn("Pesan"),
+                    },
+                    hide_index=True,
                 )
 
-            if hasil["sukses"]:
-                penerima_info = f" kepada **{hasil['penerima']}**" if hasil.get("penerima") else ""
-                st.success(
-                    f"✅ {hasil['pesan']}{penerima_info}  \n"
-                    f"Waktu: {waktu_str} s.d. {sampai_str}  \n"
-                    f"Tempat: {kp_tempat.strip()}"
-                )
-            else:
-                st.error(f"❌ {hasil['pesan']} (HTTP {hasil.get('status_code', '?')})")
+        with col_batal:
+            if st.button("❌ Batal", key="kp_batal", use_container_width=True):
+                st.session_state["kp_konfirmasi"] = False
+                st.rerun()
