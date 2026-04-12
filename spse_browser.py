@@ -50,8 +50,10 @@ CHROME_PROFILE = r"C:\Users\MSI\AppData\Local\Google\Chrome\User Data"
 CDP_PORT = 9222
 
 
-async def _connect_cdp_async(url: str):
-    """Connect ke Chrome yang sudah jalan via CDP, buka tab baru."""
+async def _connect_cdp_async(url: str = "", navigate: bool = True):
+    """Connect ke Chrome yang sudah jalan via CDP.
+    Jika navigate=False, hanya connect tanpa membuka tab baru (cepat, untuk auto-reconnect).
+    """
     global _pw, _context, _page
     if _pw is None:
         _pw = await async_playwright().start()
@@ -61,8 +63,13 @@ async def _connect_cdp_async(url: str):
         _context = browser.contexts[0]
     else:
         _context = await browser.new_context()
-    _page = await _context.new_page()
-    await _page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    # Pakai tab yang sudah ada (tab pertama/aktif), jangan buka tab baru saat reconnect
+    if _context.pages:
+        _page = _context.pages[0]
+    else:
+        _page = await _context.new_page()
+    if navigate and url:
+        await _page.goto(url, wait_until="domcontentloaded", timeout=30000)
     return _page
 
 
@@ -77,8 +84,10 @@ def _cek_cdp_aktif() -> bool:
         return False
 
 
-def buka_browser(url: str = SPSE_BASE_URL):
-    """Connect ke Chrome SPSE via CDP dan buka tab baru.
+def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
+    """Connect ke Chrome SPSE via CDP.
+    navigate=True  : buka tab baru dan navigasi ke url (untuk koneksi manual)
+    navigate=False : hanya connect, pakai tab yang sudah ada (untuk auto-reconnect cepat)
     Chrome harus sudah dibuka via 'Buka Chrome SPSE.bat' terlebih dahulu.
     """
     if not _cek_cdp_aktif():
@@ -86,7 +95,7 @@ def buka_browser(url: str = SPSE_BASE_URL):
             "Chrome SPSE belum terbuka. "
             "Jalankan dulu file 'Buka Chrome SPSE.bat' di folder Asisten_Pokja."
         )
-    return _run(_connect_cdp_async(url))
+    return _run(_connect_cdp_async(url, navigate=navigate))
 
 
 def launch_chrome_dengan_cdp():

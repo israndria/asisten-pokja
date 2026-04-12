@@ -41,10 +41,10 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 with st.sidebar:
     st.header("Browser SPSE")
 
-    # Auto-reconnect: kalau CDP aktif tapi context belum ada, connect otomatis
+    # Auto-reconnect: kalau CDP aktif tapi context belum ada, connect otomatis (tanpa navigasi)
     if spse_browser._cek_cdp_aktif() and spse_browser._context is None:
         try:
-            spse_browser.buka_browser(SPSE_BASE_URL)
+            spse_browser.buka_browser(navigate=False)
         except Exception:
             pass
 
