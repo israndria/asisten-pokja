@@ -37,6 +37,8 @@ SKIP_KEYWORDS = [
     "Sertifikat Manajemen Mutu",
     "Usaha Menengah atau Usaha Besar",
     "Leadfirm",
+    "Persyaratan kepemilikan Sertifikat Badan Usaha",
+    "mensyaratkan lebih dari satu SBU",
 ]
 
 # ── Izin Usaha (WAJIB diisi agar submit berhasil) ────────────────────────────
@@ -44,12 +46,12 @@ SKIP_KEYWORDS = [
 IJIN_USAHA_DEFAULT = {
     "rows": [
         {
-            "jenis_izin": "Sertifikat Badan Usaha SBU",
-            "klasifikasi": "Memiliki Sertifikat Badan Usaha SBU dengan Kualifikasi Usaha Kecil serta disyaratkan Subklasifikasi BS001 KBLI 2020 Konstruksi Bangunan Sipil Jalan atau Subklasifikasi SI003 KBLI 2015 Jasa Pelaksana Konstruksi Jalan Raya Kecuali Jalan Layang, Jalan, Rel Kereta Api, dan Landasan Pacu Bandara",
-        },
-        {
             "jenis_izin": "Izin Usaha di bidang Jasa Konstruksi",
             "klasifikasi": "Memiliki perizinan berusaha di bidang Jasa Konstruksi yaitu a. Memiliki Nomor lnduk Berusaha NlB dan Sertifikat Standar terverifikasi untuk Badan Usaha yang memiliki SBU KBLI 2020 b. Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a belum terverifikasi, peserta menyampaikan NlB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi atau c. Memiliki Nomor lnduk Berusaha NlB dan SBU yang masih berlaku untuk Badan Usaha yang memiliki SBU KBLI 2015",
+        },
+        {
+            "jenis_izin": "Sertifikat Badan Usaha SBU",
+            "klasifikasi": "Memiliki Sertifikat Badan Usaha SBU dengan Kualifikasi Usaha Kecil serta disyaratkan Subklasifikasi BS001 KBLI 2020 Konstruksi Bangunan Sipil Jalan atau Subklasifikasi SI003 KBLI 2015 Jasa Pelaksana Konstruksi Jalan Raya Kecuali Jalan Layang, Jalan, Rel Kereta Api, dan Landasan Pacu Bandara",
         },
     ]
 }

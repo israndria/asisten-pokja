@@ -370,3 +370,31 @@ def submit_via_fetch(endpoint_url: str, payload: dict, method: str = "POST") -> 
     if not result["ok"] and result["status"] in (400, 415, 422):
         result = _run(_fetch("application/x-www-form-urlencoded", True))
     return result
+
+
+# ============================================================
+# Cookie extraction — untuk direct HTTP requests tanpa browser
+# ============================================================
+
+async def _get_cookies_async() -> list[dict]:
+    """Ambil cookies dari Chrome CDP — cari context yang ada halaman SPSE."""
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+        for ctx in browser.contexts:
+            for pg in ctx.pages:
+                if "spse.inaproc.id" in pg.url:
+                    return await ctx.cookies()
+        # Fallback: ambil dari context pertama
+        if browser.contexts:
+            return await browser.contexts[0].cookies()
+        return []
+
+
+def get_spse_cookies() -> str:
+    """
+    Ambil cookies dari Chrome CDP dan kembalikan sebagai Cookie header string.
+    Digunakan untuk direct HTTP POST tanpa Playwright click.
+    """
+    cookies = _run(_get_cookies_async(), timeout=15)
+    spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
+    return "; ".join(f'{c["name"]}={c["value"]}' for c in spse)

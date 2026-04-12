@@ -1,92 +1,103 @@
 """
-LDK Engine v3 — Multi-row Izin Usaha + Kinerja Penyedia.
+LDK Engine v4 — Pure requests, tanpa Playwright click.
 
-Dipanggil dari app.py (Tab LDK Auto-fill).
+Flow:
+1. GET /dokumen/[ID]/ldk  → ambil authenticityToken + hidden IDs
+2. Build payload (checkbox + izin usaha + kinerja)
+3. POST /dokumen/[ID]/ldksubmitbaru  → 302 = sukses
 """
 
+import re
+import requests
+from bs4 import BeautifulSoup
 from ldk_config import AUTO_CHECK_KEYWORDS, CHECK_AND_FILL, SKIP_KEYWORDS, IJIN_USAHA_DEFAULT
 import spse_browser
 
+BASE_URL = "https://spse.inaproc.id/tapinkab"
+HEADERS_BASE = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+    "Origin": "https://spse.inaproc.id",
+    "Content-Type": "application/x-www-form-urlencoded",
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Scan Form HTML
+# Scrape halaman LDK via requests
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SCAN_JS = """() => {
-    const form = document.querySelector('form');
-    const csrfInput = document.querySelector('input[name="_token"]') ||
-                      document.querySelector('input[name="authenticityToken"]');
-    const csrf = csrfInput ? csrfInput.value : '';
+def scrape_ldk_page(paket_id: str) -> dict:
+    """
+    GET halaman LDK dan parse semua data yang diperlukan untuk submit.
+    Return dict berisi: token, hidden_ids, checkboxes, action_url.
+    """
+    cookie_str = spse_browser.get_spse_cookies()
+    url = f"{BASE_URL}/dokumen/{paket_id}/ldk"
+    resp = requests.get(url, headers={**HEADERS_BASE, "Cookie": cookie_str}, timeout=20)
+    if resp.status_code != 200:
+        raise RuntimeError(f"GET halaman LDK gagal: status {resp.status_code}")
 
-    const checkboxes = [];
-    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        let label = '';
-        if (cb.id) {
-            const lbl = document.querySelector('label[for="' + cb.id + '"]');
-            if (lbl) label = lbl.innerText.trim();
-        }
-        if (!label) {
-            const tr = cb.closest('tr');
-            if (tr) {
-                const tds = tr.querySelectorAll('td');
-                for (const td of tds) {
-                    if (!td.contains(cb)) { label = td.innerText.trim(); break; }
-                }
-            }
-        }
-        if (!label) {
-            const pl = cb.closest('label');
-            if (pl) label = pl.innerText.replace(/\\s+/g, ' ').trim();
-        }
+    html = resp.text
+    soup = BeautifulSoup(html, "html.parser")
 
-        let textInputName = null;
-        const container = cb.closest('tr') || cb.closest('div') || cb.parentElement;
-        if (container) {
-            const txt = container.querySelector('input[type="text"], textarea');
-            if (txt) textInputName = txt.name || txt.id || null;
-        }
+    # authenticityToken
+    token_input = soup.find("input", {"name": "authenticityToken"})
+    token = token_input["value"] if token_input else ""
 
-        const hiddenFields = {};
-        if (container) {
-            container.querySelectorAll('input[type="hidden"]').forEach(h => {
-                hiddenFields[h.name] = h.value;
-            });
-        }
+    # Hidden IDs: ijin, syaratAdmin, syaratTeknis + ckm_id
+    hidden = {}
+    for inp in soup.find_all("input", type="hidden"):
+        name = inp.get("name", "")
+        if name and any(x in name for x in ["chk_id", "ckm_id", "checklist_kualifikasi", "syarat_ijin"]):
+            hidden[name] = inp.get("value", "")
 
-        checkboxes.push({
-            name:          cb.name    || '',
-            value:         cb.value   || '',
-            checked:       cb.checked,
-            disabled:      cb.disabled,
-            label:         label,
-            textInputName: textInputName,
-            hiddenFields:  hiddenFields,
-            className:     cb.className || '',
-        });
-    });
+    # Checkbox info: name, value, label, disabled
+    checkboxes = []
+    for cb in soup.find_all("input", type="checkbox"):
+        cb_name  = cb.get("name", "")
+        cb_value = cb.get("value", "")
+        disabled = cb.has_attr("disabled")
+        checked  = cb.has_attr("checked")
+        is_kso   = "kso" in cb.get("class", [])
+
+        # Label: cari <td> saudara berikutnya di <tr> yang sama
+        label = ""
+        tr = cb.find_parent("tr")
+        if tr:
+            tds = tr.find_all("td")
+            for td in tds:
+                if not td.find("input", {"name": cb_name}):
+                    label = td.get_text(separator=" ").strip()
+                    label = re.sub(r'\s+', ' ', label)
+                    break
+
+        checkboxes.append({
+            "name":     cb_name,
+            "value":    cb_value,
+            "disabled": disabled,
+            "checked":  checked,
+            "label":    label,
+            "is_kso":   is_kso,
+        })
+
+    # Hitung index syaratTeknis berikutnya untuk row kinerja baru
+    teknis_count = len([
+        cb for cb in soup.find_all("input", type="checkbox")
+        if cb.get("name", "").startswith("syaratTeknis[")
+    ])
 
     return {
-        action:    form ? form.action              : window.location.href,
-        method:    form ? form.method.toUpperCase(): 'POST',
-        csrf:      csrf,
-        checkboxes: checkboxes,
-    };
-}"""
-
-
-def scan_ldk_form() -> dict:
-    page = spse_browser.halaman_aktif()
-    if not page:
-        raise RuntimeError("Browser belum terbuka / halaman tidak aktif.")
-
-    async def _do():
-        return await page.evaluate(_SCAN_JS)
-
-    return spse_browser._run(_do())
+        "token": token,
+        "hidden": hidden,
+        "checkboxes": checkboxes,
+        "teknis_count": teknis_count,
+        "action_url": f"{BASE_URL}/dokumen/{paket_id}/ldksubmitbaru",
+        "referer_url": url,
+        "cookie": cookie_str,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Klasifikasi Checkbox
+# Klasifikasi checkbox
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _matches(label: str, keywords: list[str]) -> bool:
@@ -94,25 +105,16 @@ def _matches(label: str, keywords: list[str]) -> bool:
     return any(kw.lower() in label_lower for kw in keywords)
 
 
-def classify_checkboxes(form_info: dict) -> dict:
-    result = {
-        "locked": [],
-        "auto_check": [],
-        "check_and_fill": [],
-        "skip": [],
-        "unknown": [],
-    }
+def classify_checkboxes(checkboxes: list[dict]) -> dict:
+    result = {"locked": [], "auto_check": [], "check_and_fill": [], "skip": [], "unknown": []}
 
-    for cb in form_info.get("checkboxes", []):
-        is_kso = cb.get("className", "") == "kso"
-        if cb["disabled"] or is_kso:
+    for cb in checkboxes:
+        if cb["disabled"] or cb.get("is_kso", False):
             result["locked"].append(cb)
             continue
-
         if _matches(cb["label"], SKIP_KEYWORDS):
             result["skip"].append(cb)
             continue
-
         matched_fill = False
         for cfg in CHECK_AND_FILL:
             if cfg["keyword"].lower() in cb["label"].lower():
@@ -121,67 +123,56 @@ def classify_checkboxes(form_info: dict) -> dict:
                 break
         if matched_fill:
             continue
-
         if _matches(cb["label"], AUTO_CHECK_KEYWORDS):
             result["auto_check"].append(cb)
             continue
-
         result["unknown"].append(cb)
 
     return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Build Payload
+# Build payload
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_payload(
-    form_info: dict,
+    scraped: dict,
     classified: dict,
     ijin_usaha_rows: list[dict] | None = None,
     kinerja_text: str = "",
 ) -> dict:
-    """
-    Konstruksi POST payload.
-    - Multi-row Izin Usaha
-    - Kinerja Penyedia (check + fill text)
-    """
     payload = {}
+    hidden = scraped["hidden"]
 
-    if form_info.get("csrf"):
-        payload["_token"] = form_info["csrf"]
+    # Token
+    if scraped["token"]:
+        payload["authenticityToken"] = scraped["token"]
 
-    def _add(name: str, value: str):
-        if not name:
-            return
-        if name in payload:
-            existing = payload[name]
-            if isinstance(existing, list):
-                existing.append(value)
-            else:
-                payload[name] = [existing, value]
-        else:
-            payload[name] = value
+    # Semua hidden fields (chk_id, ckm_id, dll) — wajib disertakan
+    payload.update(hidden)
 
-    # Auto-check
+    # Auto-check: tambahkan nilai checkbox ke payload
     for cb in classified["auto_check"]:
-        _add(cb["name"], cb["value"])
+        payload[cb["name"]] = cb["value"]
 
     # Check + fill
     for cb, cfg in classified["check_and_fill"]:
-        _add(cb["name"], cb["value"])
-        if cb["textInputName"]:
-            payload[cb["textInputName"]] = cfg["text"]
+        payload[cb["name"]] = cb["value"]
 
     # Multi-row Izin Usaha
-    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
+    rows = ijin_usaha_rows or IJIN_USAHA_DEFAULT["rows"]
     for i, row in enumerate(rows):
         payload[f"ijin[{i}].chk_nama"] = row.get("jenis_izin", "")
         payload[f"ijin[{i}].chk_klasifikasi"] = row.get("klasifikasi", "")
 
-    # Kinerja Penyedia text (jika ada)
+    # Kinerja Penyedia — tambah row baru syaratTeknis dengan ckm_id=996
+    # Row ini dibuat client-side saat klik "Tambah Syarat Teknis",
+    # cukup sertakan di payload dengan index berikutnya
     if kinerja_text:
-        payload["kinerja_text"] = kinerja_text
+        n = scraped.get("teknis_count", 5)
+        payload[f"syaratTeknis[{n}].ckm_id"] = "996"
+        payload[f"checklist_kualifikasi_teknis_ckm_id[{n}]"] = "996"
+        payload[f"syaratTeknis[{n}].chk_nama"] = kinerja_text
 
     return payload
 
@@ -191,129 +182,54 @@ def build_payload(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def submit_ldk(
-    form_info: dict,
-    payload: dict,
+    paket_id: str,
     ijin_usaha_rows: list[dict] | None = None,
     kinerja_text: str = "",
-    add_kinerja: bool = False,
 ) -> dict:
     """
-    Submit LDK dengan langkah:
-    1. Klik "Tambah Izin Usaha" jika row > 1
-    2. Klik checkbox + isi field
-    3. Jika add_kinerja: klik "Tambah Syarat Teknis" + isi Kinerja
-    4. Submit form secara native
+    Submit LDK via direct HTTP POST.
+    1. GET halaman LDK → ambil token + hidden IDs
+    2. Build payload
+    3. POST → 302 = sukses
     """
-    page = spse_browser.halaman_aktif()
-    if not page:
-        raise RuntimeError("Browser belum terbuka.")
+    # Step 1: Scrape
+    scraped = scrape_ldk_page(paket_id)
+    if not scraped["token"]:
+        raise RuntimeError("authenticityToken tidak ditemukan di halaman LDK.")
 
-    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
+    # Step 2: Classify & build
+    classified = classify_checkboxes(scraped["checkboxes"])
+    payload = build_payload(scraped, classified, ijin_usaha_rows, kinerja_text)
 
-    # Step 0: Klik "Tambah Izin Usaha" jika perlu multi-row
-    if len(rows) > 1:
-        tambah_btn = spse_browser._run(page.query_selector('button#tambahIjin'))
-        if tambah_btn:
-            for _ in range(len(rows) - 1):
-                tambah_btn.click()
-                spse_browser._run(page.wait_for_timeout(1500))
-
-    # Step 1: Klik checkbox syaratAdmin/syaratTeknis
-    checkbox_items = []
-    for name, val in payload.items():
-        if name.startswith("syaratAdmin") or name.startswith("syaratTeknis"):
-            if not isinstance(val, list):
-                checkbox_items.append({"name": name, "value": str(val)})
-
-    if checkbox_items:
-        spse_browser._run(page.evaluate("""(items) => {
-            items.forEach(item => {
-                document.querySelectorAll(`input[type="checkbox"][name="${item.name}"][value="${item.value}"]`).forEach(cb => {
-                    if (!cb.checked && !cb.disabled) {
-                        cb.checked = true;
-                        cb.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                });
-            });
-        }""", checkbox_items))
-
-    # Step 2: Isi multi-row Izin Usaha
-    for i, row in enumerate(rows):
-        spse_browser._run(page.evaluate("""(i, row) => {
-            const namaInput = document.querySelector(`input[name="ijin[${i}].chk_nama"]`);
-            const klasInput = document.querySelector(`input[name="ijin[${i}].chk_klasifikasi"]`);
-            if (namaInput) {
-                namaInput.value = row.jenis_izin || '';
-                namaInput.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            if (klasInput) {
-                klasInput.value = row.klasifikasi || '';
-                klasInput.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        }""", i, {"jenis_izin": row.get("jenis_izin", ""), "klasifikasi": row.get("klasifikasi", "")}))
-
-    # Step 3: Jika perlu tambah Kinerja Penyedia
-    if add_kinerja and kinerja_text:
-        # Klik "Tambah Syarat Teknis"
-        tambah_teknis_btn = page.query_selector('button#tambahSyaratTeknis')
-        if tambah_teknis_btn:
-            tambah_teknis_btn.click()
-            spse_browser._run(page.wait_for_timeout(2000))
-
-            # Isi checkbox + text Kinerja Penyedia
-            spse_browser._run(page.evaluate("""(text) => {
-                // Cari checkbox kinerja yang BARU DITAMBAHKAN (unchecked)
-                const allCbs = Array.from(document.querySelectorAll('input[name*="syaratTeknis"][type="checkbox"]'));
-                let targetCb = null;
-                
-                // Cari checkbox unchecked yang paling terakhir
-                for (let i = allCbs.length - 1; i >= 0; i--) {
-                    const cb = allCbs[i];
-                    if (!cb.checked && !cb.disabled) {
-                        // Cek apakah label mengandung "kinerja"
-                        let label = '';
-                        const tr = cb.closest('tr');
-                        if (tr) {
-                            const tds = tr.querySelectorAll('td');
-                            for (const td of tds) {
-                                if (!td.contains(cb)) { label = td.innerText.trim(); break; }
-                            }
-                        }
-                        if (label.toLowerCase().includes('kinerja')) {
-                            targetCb = cb;
-                            break;
-                        }
-                    }
-                }
-                
-                if (targetCb) {
-                    // Centang checkbox
-                    targetCb.checked = true;
-                    targetCb.dispatchEvent(new Event('change', { bubbles: true }));
-                    
-                    // Isi text jika ada textarea/input
-                    const container = targetCb.closest('tr') || targetCb.parentElement;
-                    if (container) {
-                        const txt = container.querySelector('input[type="text"], textarea');
-                        if (txt) {
-                            txt.value = text;
-                            txt.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                    }
-                }
-            }""", kinerja_text))
-
-    # Step 4: Submit form native
-    spse_browser._run(page.evaluate("""() => {
-        const form = document.querySelector('form');
-        if (!form) return { ok: false, error: 'Form tidak ditemukan' };
-        form.submit();
-    }"""))
-
-    spse_browser._run(page.wait_for_timeout(3000))
-
-    return {
-        "ok": True,
-        "status": 200,
-        "url": spse_browser._run(page.evaluate("() => window.location.href")),
+    # Step 3: POST
+    headers = {
+        **HEADERS_BASE,
+        "Cookie": scraped["cookie"],
+        "Referer": scraped["referer_url"],
     }
+    resp = requests.post(
+        scraped["action_url"],
+        data=payload,
+        headers=headers,
+        allow_redirects=False,
+        timeout=20,
+    )
+
+    ok = resp.status_code in (200, 302)
+    return {
+        "ok": ok,
+        "status": resp.status_code,
+        "url": resp.headers.get("Location", scraped["referer_url"]),
+        "classified": classified,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Preview (dry-run tanpa submit)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def preview_ldk(paket_id: str) -> dict:
+    """Scrape + classify saja, tanpa submit. Untuk preview di UI."""
+    scraped = scrape_ldk_page(paket_id)
+    classified = classify_checkboxes(scraped["checkboxes"])
+    return {"scraped": scraped, "classified": classified}

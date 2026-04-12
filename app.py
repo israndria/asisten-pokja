@@ -440,8 +440,7 @@ with tab4:
         # Init session state untuk multi-row
         if "ijin_rows" not in st.session_state:
             st.session_state["ijin_rows"] = [
-                {"jenis_izin": "Sertifikat Badan Usaha SBU", "klasifikasi": ldk_config.IJIN_USAHA_DEFAULT.get("klasifikasi_sbu", "")},
-                {"jenis_izin": "Izin Usaha di bidang Jasa Konstruksi", "klasifikasi": ldk_config.IJIN_USAHA_DEFAULT.get("klasifikasi_izin", "")},
+                dict(row) for row in ldk_config.IJIN_USAHA_DEFAULT["rows"]
             ]
         
         # Display rows
@@ -477,10 +476,10 @@ with tab4:
         st.caption("Row 1: SBU + deskripsi | Row 2: Izin Usaha + deskripsi")
 
     # ── Kinerja Penyedia ─────────────────────────────────────────────────────
-    with st.expander("🏆 Kinerja Penyedia (opsional)", expanded=False):
+    with st.expander("🏆 Kinerja Penyedia (wajib)", expanded=True):
         add_kinerja = st.checkbox(
             "Tambahkan persyaratan Kinerja Penyedia",
-            value=st.session_state.get("add_kinerja", False),
+            value=st.session_state.get("add_kinerja", True),
             key="add_kinerja_checkbox",
         )
         
@@ -518,39 +517,31 @@ with tab4:
 
     # ── Scan / Push ───────────────────────────────────────────────────────────
     if push_clicked or scan_only:
-        if not spse_browser.get_url():
-            st.error("Browser belum terhubung. Hubungkan di sidebar dulu.")
-        elif not ldk_url_final:
-            st.error("URL LDK tidak diketahui. Buka halaman paket di browser atau isi URL manual.")
+        if not paket_id:
+            st.error("ID paket tidak diketahui. Isi kode tender atau buka halaman paket di browser.")
         else:
-            # Override teks kinerja dari UI jika ada
-            ldk_config.CHECK_AND_FILL[0]["text"] = kinerja_text
+            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
 
-            with st.spinner(f"Membuka halaman LDK {ldk_url_final} ..."):
+            with st.spinner("Scraping form LDK..."):
                 try:
-                    spse_browser.navigasi_ldk(ldk_url_final)
+                    preview = ldk_engine.preview_ldk(paket_id)
                 except Exception as e:
-                    st.error(f"Gagal membuka halaman LDK: {e}")
+                    st.error(f"Gagal scrape halaman LDK: {e}")
                     st.stop()
 
-            with st.spinner("Scanning form..."):
-                try:
-                    form_info = ldk_engine.scan_ldk_form()
-                    classified = ldk_engine.classify_checkboxes(form_info)
-                except Exception as e:
-                    st.error(f"Gagal scan form: {e}")
-                    st.stop()
-
-            st.session_state["ldk_form"] = form_info
+            classified = preview["classified"]
+            scraped    = preview["scraped"]
             st.session_state["ldk_classified"] = classified
+            st.session_state["ldk_scraped"]    = scraped
 
     # ── Preview hasil scan ────────────────────────────────────────────────────
     if "ldk_classified" in st.session_state:
         classified = st.session_state["ldk_classified"]
-        form_info  = st.session_state["ldk_form"]
+        scraped    = st.session_state["ldk_scraped"]
 
-        st.caption(f"Endpoint: `{form_info.get('action', '?')}` | Method: `{form_info.get('method', '?')}`")
-        st.caption(f"CSRF: `{'ada ✅' if form_info.get('csrf') else 'tidak ditemukan ⚠️'}`")
+        st.caption(f"Endpoint: `{scraped['action_url']}`")
+        st.caption(f"Token: `{'ada' if scraped['token'] else 'tidak ditemukan ⚠️'}`")
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Locked",      len(classified["locked"]))
@@ -579,83 +570,50 @@ with tab4:
         if classified["unknown"]:
             with st.expander("❓ Unknown (tidak dikenali — tidak di-submit)"):
                 for cb in classified["unknown"]:
-                    fallback = f"name={cb['name']} value={cb['value']}"
-                    st.write(f"• {cb['label'][:120] or fallback}")
-
-        # Payload preview
-        with st.expander("🔧 Preview Payload yang akan dikirim"):
-            ijin_rows = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT.get("rows", []))
-            kinerja_text = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja") else ""
-            payload_preview = ldk_engine.build_payload(
-                form_info, classified,
-                ijin_usaha_rows=ijin_rows,
-                kinerja_text=kinerja_text,
-            )
-            st.json(payload_preview)
+                    st.write(f"• {cb['label'][:120] or cb['name']}")
 
         st.divider()
 
-        # Tombol submit (muncul setelah scan)
+        # Submit langsung jika tombol Push yang diklik
         if push_clicked:
-            # Sudah navigate + scan → langsung submit
-            ijin_rows = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT.get("rows", []))
-            kinerja_text = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja") else ""
-            add_kinerja = st.session_state.get("add_kinerja", False)
-            
-            payload = ldk_engine.build_payload(
-                form_info, classified,
-                ijin_usaha_rows=ijin_rows,
-                kinerja_text=kinerja_text,
-            )
+            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
             with st.spinner("Mengirim ke SPSE..."):
                 try:
                     result = ldk_engine.submit_ldk(
-                        form_info, payload,
+                        paket_id,
                         ijin_usaha_rows=ijin_rows,
-                        kinerja_text=kinerja_text,
-                        add_kinerja=add_kinerja,
+                        kinerja_text=kinerja_txt,
                     )
                 except Exception as e:
                     st.error(f"Error saat submit: {e}")
                     st.stop()
 
             if result["ok"]:
-                st.success(
-                    f"✅ Berhasil! Status {result['status']} — "
-                    "silakan refresh halaman LDK di browser untuk verifikasi."
-                )
+                st.success(f"Berhasil! Status {result['status']} — silakan cek halaman LDK di browser.")
             else:
-                st.error(f"❌ Gagal. Status {result['status']}")
-
-            with st.expander("Response body"):
-                st.code(result["body"][:3000])
+                st.error(f"Gagal. Status {result['status']}")
 
         elif scan_only:
-            # Hanya preview — tombol submit manual
+            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
             n_check = len(classified["auto_check"]) + len(classified["check_and_fill"])
-            if st.button(
-                f"📤 Submit {n_check} item ke SPSE",
-                type="primary",
-                key="ldk_submit_manual",
-            ):
-                payload = ldk_engine.build_payload(form_info, classified)
+            if st.button(f"📤 Submit {n_check} item ke SPSE", type="primary", key="ldk_submit_manual"):
                 with st.spinner("Mengirim ke SPSE..."):
                     try:
-                        result = ldk_engine.submit_ldk(form_info, payload)
+                        result = ldk_engine.submit_ldk(
+                            paket_id,
+                            ijin_usaha_rows=ijin_rows,
+                            kinerja_text=kinerja_txt,
+                        )
                     except Exception as e:
                         st.error(f"Error saat submit: {e}")
                         st.stop()
 
                 if result["ok"]:
-                    st.success(
-                        f"✅ Berhasil! Status {result['status']} — "
-                        "silakan refresh halaman LDK di browser untuk verifikasi."
-                    )
+                    st.success(f"Berhasil! Status {result['status']} — silakan cek halaman LDK di browser.")
                 else:
-                    st.error(f"❌ Gagal. Status {result['status']}")
-
-                with st.expander("Response body"):
-                    st.code(result["body"][:3000])
+                    st.error(f"Gagal. Status {result['status']}")
 
 
 # ============================================================
