@@ -387,12 +387,19 @@ with tab4:
                     st.session_state["ldk_pdf_data"] = ldk_data
                     
                     if ldk_data.extracted:
-                        st.success(f"✅ Extract berhasil! Ditemukan {len(ldk_data.izin_usaha)} Izin Usaha, {len(ldk_data.sbu)} SBU")
+                        st.success(f"✅ Extract berhasil! Ditemukan {len(ldk_data.izin_usaha_rows)} row Izin Usaha")
                         
-                        # Auto-fill dari PDF
-                        ijin_cfg = ldk_pdf_extractor.generate_ijin_config(ldk_data)
-                        st.session_state["ijin_nama"] = ijin_cfg["nama"]
-                        st.session_state["ijin_klas"] = ijin_cfg["klasifikasi"]
+                        # Auto-fill multi-row dari PDF
+                        if ldk_data.izin_usaha_rows:
+                            st.session_state["ijin_rows"] = [
+                                {"jenis_izin": row.jenis_izin, "klasifikasi": row.klasifikasi}
+                                for row in ldk_data.izin_usaha_rows
+                            ]
+                        
+                        # Auto-check Kinerja Penyedia jika ada
+                        if ldk_data.kinerja_required:
+                            st.session_state["add_kinerja"] = True
+                            st.session_state["kinerja_textarea"] = ldk_data.kinerja_penyedia
                     else:
                         st.warning(f"⚠️ Extract tidak menemukan data LDK: {ldk_data.errors}")
                 except Exception as e:
@@ -409,17 +416,17 @@ with tab4:
             ldk_data = st.session_state["ldk_pdf_data"]
             if ldk_data.extracted:
                 with st.expander("📋 Hasil Extract LDK dari PDF", expanded=True):
-                    # Izin Usaha
-                    if ldk_data.izin_usaha:
-                        st.write("**Izin Usaha:**")
-                        for izin in ldk_data.izin_usaha:
-                            st.write(f"  • {izin.jenis_izin}")
+                    # Multi-row Izin Usaha
+                    if ldk_data.izin_usaha_rows:
+                        st.write(f"**Izin Usaha ({len(ldk_data.izin_usaha_rows)} rows):**")
+                        for i, row in enumerate(ldk_data.izin_usaha_rows):
+                            st.write(f"  {i+1}. **{row.jenis_izin}**")
+                            st.caption(f"     {row.klasifikasi[:150]}...")
                     
-                    # SBU
-                    if ldk_data.sbu:
-                        st.write("**Sertifikat Badan Usaha (SBU):**")
-                        for sbu in ldk_data.sbu:
-                            st.write(f"  • {sbu.kode_sbu} (KBLI {sbu.tahun_kbli}) — {sbu.subklasifikasi}")
+                    # Kinerja Penyedia
+                    if ldk_data.kinerja_required:
+                        st.write("**🏆 Kinerja Penyedia:** ✅ Ditemukan")
+                        st.caption(f"     {ldk_data.kinerja_penyedia[:200]}...")
                     
                     # Persyaratan lain
                     st.write("**Persyaratan Lain:**")
@@ -428,22 +435,66 @@ with tab4:
                     
                     st.caption(f"Diekstrak dari halaman {ldk_data.halaman_ldk} DOKPIL")
 
-    # ── Konfigurasi Izin Usaha (WAJIB) ───────────────────────────────────────
+    # ── Multi-row Izin Usaha (WAJIB) ─────────────────────────────────────────
     with st.expander("📋 Izin Usaha (wajib diisi)", expanded=True):
-        col_i1, col_i2 = st.columns(2)
-        with col_i1:
-            ijin_nama = st.text_input(
-                "Jenis Izin *",
-                value=st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
-                key="ijin_nama_input",
+        # Init session state untuk multi-row
+        if "ijin_rows" not in st.session_state:
+            st.session_state["ijin_rows"] = [
+                {"jenis_izin": "Sertifikat Badan Usaha SBU", "klasifikasi": ldk_config.IJIN_USAHA_DEFAULT.get("klasifikasi_sbu", "")},
+                {"jenis_izin": "Izin Usaha di bidang Jasa Konstruksi", "klasifikasi": ldk_config.IJIN_USAHA_DEFAULT.get("klasifikasi_izin", "")},
+            ]
+        
+        # Display rows
+        for i, row in enumerate(st.session_state["ijin_rows"]):
+            st.markdown(f"**Row {i+1}:**")
+            col_r1, col_r2, col_r3 = st.columns([2, 5, 1])
+            with col_r1:
+                st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
+                    "Jenis Izin",
+                    value=row["jenis_izin"],
+                    key=f"ijin_nama_{i}",
+                    label_visibility="collapsed",
+                )
+            with col_r2:
+                st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
+                    "Bidang Usaha / Klasifikasi",
+                    value=row["klasifikasi"],
+                    key=f"ijin_klas_{i}",
+                    label_visibility="collapsed",
+                    height=80,
+                )
+            with col_r3:
+                if len(st.session_state["ijin_rows"]) > 1:
+                    if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
+                        st.session_state["ijin_rows"].pop(i)
+                        st.rerun()
+        
+        # Tombol tambah row
+        if st.button("➕ Tambah Row Izin Usaha", key="tambah_row_ijin"):
+            st.session_state["ijin_rows"].append({"jenis_izin": "", "klasifikasi": ""})
+            st.rerun()
+        
+        st.caption("Row 1: SBU + deskripsi | Row 2: Izin Usaha + deskripsi")
+
+    # ── Kinerja Penyedia ─────────────────────────────────────────────────────
+    with st.expander("🏆 Kinerja Penyedia (opsional)", expanded=False):
+        add_kinerja = st.checkbox(
+            "Tambahkan persyaratan Kinerja Penyedia",
+            value=st.session_state.get("add_kinerja", False),
+            key="add_kinerja_checkbox",
+        )
+        
+        if add_kinerja:
+            st.session_state["add_kinerja"] = True
+            st.text_area(
+                "Teks Kinerja Penyedia:",
+                value=ldk_config.KINERJA_PENYEDIA_DEFAULT,
+                height=120,
+                key="kinerja_textarea",
             )
-        with col_i2:
-            ijin_klas = st.text_input(
-                "Bidang Usaha / Klasifikasi *",
-                value=st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
-                key="ijin_klas_input",
-            )
-        st.caption("Contoh: 'Izin Usaha' + 'BS001 (KBLI 2020) Konstruksi Bangunan Sipil Jalan'")
+            st.caption("Akan otomatis klik 'Tambah Syarat Teknis' + checklist + isi teks")
+        else:
+            st.session_state["add_kinerja"] = False
 
     st.divider()
 
@@ -533,11 +584,13 @@ with tab4:
 
         # Payload preview
         with st.expander("🔧 Preview Payload yang akan dikirim"):
-            ijin_usaha_cfg = {
-                "nama": st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
-                "klasifikasi": st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
-            }
-            payload_preview = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
+            ijin_rows = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT.get("rows", []))
+            kinerja_text = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja") else ""
+            payload_preview = ldk_engine.build_payload(
+                form_info, classified,
+                ijin_usaha_rows=ijin_rows,
+                kinerja_text=kinerja_text,
+            )
             st.json(payload_preview)
 
         st.divider()
@@ -545,14 +598,23 @@ with tab4:
         # Tombol submit (muncul setelah scan)
         if push_clicked:
             # Sudah navigate + scan → langsung submit
-            ijin_usaha_cfg = {
-                "nama": st.session_state.get("ijin_nama", ldk_config.IJIN_USAHA_DEFAULT["nama"]),
-                "klasifikasi": st.session_state.get("ijin_klas", ldk_config.IJIN_USAHA_DEFAULT["klasifikasi"]),
-            }
-            payload = ldk_engine.build_payload(form_info, classified, ijin_usaha_cfg)
+            ijin_rows = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT.get("rows", []))
+            kinerja_text = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja") else ""
+            add_kinerja = st.session_state.get("add_kinerja", False)
+            
+            payload = ldk_engine.build_payload(
+                form_info, classified,
+                ijin_usaha_rows=ijin_rows,
+                kinerja_text=kinerja_text,
+            )
             with st.spinner("Mengirim ke SPSE..."):
                 try:
-                    result = ldk_engine.submit_ldk(form_info, payload, ijin_usaha_cfg)
+                    result = ldk_engine.submit_ldk(
+                        form_info, payload,
+                        ijin_usaha_rows=ijin_rows,
+                        kinerja_text=kinerja_text,
+                        add_kinerja=add_kinerja,
+                    )
                 except Exception as e:
                     st.error(f"Error saat submit: {e}")
                     st.stop()

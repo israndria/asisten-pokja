@@ -1,5 +1,5 @@
 """
-LDK Engine — scan form HTML, klasifikasi checkbox, build payload, submit.
+LDK Engine v3 — Multi-row Izin Usaha + Kinerja Penyedia.
 
 Dipanggil dari app.py (Tab LDK Auto-fill).
 """
@@ -14,25 +14,17 @@ import spse_browser
 
 _SCAN_JS = """() => {
     const form = document.querySelector('form');
-    // CSRF: coba berbagai kemungkinan
-    const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
     const csrfInput = document.querySelector('input[name="_token"]') ||
                       document.querySelector('input[name="authenticityToken"]');
-    const csrf = csrfMeta  ? csrfMeta.content
-               : csrfInput ? csrfInput.value
-               : '';
+    const csrf = csrfInput ? csrfInput.value : '';
 
     const checkboxes = [];
     document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        // ── Ambil label teks ──────────────────────────────────────────────
         let label = '';
-
-        // 1. <label for="id">
         if (cb.id) {
             const lbl = document.querySelector('label[for="' + cb.id + '"]');
             if (lbl) label = lbl.innerText.trim();
         }
-        // 2. Saudara <td> dalam <tr> yang sama
         if (!label) {
             const tr = cb.closest('tr');
             if (tr) {
@@ -42,13 +34,11 @@ _SCAN_JS = """() => {
                 }
             }
         }
-        // 3. <label> ancestor
         if (!label) {
             const pl = cb.closest('label');
             if (pl) label = pl.innerText.replace(/\\s+/g, ' ').trim();
         }
 
-        // ── Cari text input / textarea terkait (dalam row yang sama) ─────
         let textInputName = null;
         const container = cb.closest('tr') || cb.closest('div') || cb.parentElement;
         if (container) {
@@ -56,7 +46,6 @@ _SCAN_JS = """() => {
             if (txt) textInputName = txt.name || txt.id || null;
         }
 
-        // ── Hidden fields di row yang sama ────────────────────────────────
         const hiddenFields = {};
         if (container) {
             container.querySelectorAll('input[type="hidden"]').forEach(h => {
@@ -72,6 +61,7 @@ _SCAN_JS = """() => {
             label:         label,
             textInputName: textInputName,
             hiddenFields:  hiddenFields,
+            className:     cb.className || '',
         });
     });
 
@@ -85,10 +75,6 @@ _SCAN_JS = """() => {
 
 
 def scan_ldk_form() -> dict:
-    """
-    Scan halaman LDK yang aktif di browser.
-    Return: {action, method, csrf, checkboxes: [...]}
-    """
     page = spse_browser.halaman_aktif()
     if not page:
         raise RuntimeError("Browser belum terbuka / halaman tidak aktif.")
@@ -109,17 +95,6 @@ def _matches(label: str, keywords: list[str]) -> bool:
 
 
 def classify_checkboxes(form_info: dict) -> dict:
-    """
-    Klasifikasikan semua checkbox berdasarkan ldk_config.
-    Return:
-    {
-        "locked":         [cb, ...],        # disabled oleh SPSE
-        "auto_check":     [cb, ...],        # centang saja
-        "check_and_fill": [(cb, cfg), ...], # centang + isi teks
-        "skip":           [cb, ...],        # tidak disentuh
-        "unknown":        [cb, ...],        # tidak cocok keyword manapun → skip aman
-    }
-    """
     result = {
         "locked": [],
         "auto_check": [],
@@ -129,19 +104,15 @@ def classify_checkboxes(form_info: dict) -> dict:
     }
 
     for cb in form_info.get("checkboxes", []):
-        # 1. Disabled (locked oleh SPSE) → skip
-        # Juga cek class 'kso' (konsorsium) dan keyword tertentu
         is_kso = cb.get("className", "") == "kso"
         if cb["disabled"] or is_kso:
             result["locked"].append(cb)
             continue
 
-        # 2. Keyword skip → tidak disentuh
         if _matches(cb["label"], SKIP_KEYWORDS):
             result["skip"].append(cb)
             continue
 
-        # 3. Check + fill
         matched_fill = False
         for cfg in CHECK_AND_FILL:
             if cfg["keyword"].lower() in cb["label"].lower():
@@ -151,12 +122,10 @@ def classify_checkboxes(form_info: dict) -> dict:
         if matched_fill:
             continue
 
-        # 4. Auto check
         if _matches(cb["label"], AUTO_CHECK_KEYWORDS):
             result["auto_check"].append(cb)
             continue
 
-        # 5. Tidak cocok → unknown (skip aman, jangan submit sembarangan)
         result["unknown"].append(cb)
 
     return result
@@ -166,13 +135,16 @@ def classify_checkboxes(form_info: dict) -> dict:
 # Build Payload
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_payload(form_info: dict, classified: dict, ijin_usaha: dict | None = None) -> dict:
+def build_payload(
+    form_info: dict,
+    classified: dict,
+    ijin_usaha_rows: list[dict] | None = None,
+    kinerja_text: str = "",
+) -> dict:
     """
-    Konstruksi POST payload dari hasil klasifikasi.
-    - CSRF token selalu disertakan
-    - Hanya checkbox auto_check + check_and_fill yang di-include
-    - Checkbox dengan name sama (multi-value) digabung jadi list
-    - Izin Usaha fields selalu di-include (wajib)
+    Konstruksi POST payload.
+    - Multi-row Izin Usaha
+    - Kinerja Penyedia (check + fill text)
     """
     payload = {}
 
@@ -201,10 +173,15 @@ def build_payload(form_info: dict, classified: dict, ijin_usaha: dict | None = N
         if cb["textInputName"]:
             payload[cb["textInputName"]] = cfg["text"]
 
-    # Izin Usaha (wajib)
-    ijin = ijin_usaha or IJIN_USAHA_DEFAULT
-    payload["ijin[0].chk_nama"] = ijin.get("nama", IJIN_USAHA_DEFAULT["nama"])
-    payload["ijin[0].chk_klasifikasi"] = ijin.get("klasifikasi", IJIN_USAHA_DEFAULT["klasifikasi"])
+    # Multi-row Izin Usaha
+    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
+    for i, row in enumerate(rows):
+        payload[f"ijin[{i}].chk_nama"] = row.get("jenis_izin", "")
+        payload[f"ijin[{i}].chk_klasifikasi"] = row.get("klasifikasi", "")
+
+    # Kinerja Penyedia text (jika ada)
+    if kinerja_text:
+        payload["kinerja_text"] = kinerja_text
 
     return payload
 
@@ -213,17 +190,25 @@ def build_payload(form_info: dict, classified: dict, ijin_usaha: dict | None = N
 # Submit
 # ─────────────────────────────────────────────────────────────────────────────
 
-def submit_ldk(form_info: dict, payload: dict, ijin_usaha: dict | None = None) -> dict:
+def submit_ldk(
+    form_info: dict,
+    payload: dict,
+    ijin_usaha_rows: list[dict] | None = None,
+    kinerja_text: str = "",
+    add_kinerja: bool = False,
+) -> dict:
     """
-    Submit LDK dengan 2 langkah:
-    1. Klik checkbox + isi Izin Usaha DI browser (client-side)
-    2. Submit form secara native (bukan fetch) agar SPSE proses dengan benar
+    Submit LDK dengan langkah:
+    1. Klik checkbox yang harus dicentang
+    2. Isi multi-row Izin Usaha
+    3. Jika add_kinerja: klik "Tambah Syarat Teknis" + isi Kinerja Penyedia
+    4. Submit form secara native
     """
     page = spse_browser.halaman_aktif()
     if not page:
         raise RuntimeError("Browser belum terbuka.")
 
-    # Step 1: Klik checkbox yang harus dicentang
+    # Step 1: Klik checkbox
     checkbox_items = []
     for name, val in payload.items():
         if name.startswith("syaratAdmin") or name.startswith("syaratTeknis"):
@@ -232,36 +217,79 @@ def submit_ldk(form_info: dict, payload: dict, ijin_usaha: dict | None = None) -
 
     if checkbox_items:
         spse_browser._run(page.evaluate("""(items) => {
-            const clicked = [];
             items.forEach(item => {
                 document.querySelectorAll(`input[type="checkbox"][name="${item.name}"][value="${item.value}"]`).forEach(cb => {
                     if (!cb.checked && !cb.disabled) {
                         cb.checked = true;
                         cb.dispatchEvent(new Event('change', { bubbles: true }));
-                        clicked.push(item.name);
                     }
                 });
             });
-            return clicked;
         }""", checkbox_items))
 
-    # Step 1b: Isi Izin Usaha fields
-    ijin = ijin_usaha or IJIN_USAHA_DEFAULT
-    spse_browser._run(page.evaluate("""(ijin) => {
-        const namaInput = document.querySelector('input[name="ijin[0].chk_nama"]');
-        const klasInput = document.querySelector('input[name="ijin[0].chk_klasifikasi"]');
-        if (namaInput) { namaInput.value = ijin.nama; namaInput.dispatchEvent(new Event('input', {bubbles:true})); }
-        if (klasInput) { klasInput.value = ijin.klasifikasi; klasInput.dispatchEvent(new Event('input', {bubbles:true})); }
-    }""", ijin))
+    # Step 2: Isi multi-row Izin Usaha
+    rows = ijin_usaha_rows or [IJIN_USAHA_DEFAULT]
+    for i, row in enumerate(rows):
+        spse_browser._run(page.evaluate("""(i, row) => {
+            const namaInput = document.querySelector(`input[name="ijin[${i}].chk_nama"]`);
+            const klasInput = document.querySelector(`input[name="ijin[${i}].chk_klasifikasi"]`);
+            if (namaInput) { namaInput.value = row.jenis_izin || ''; namaInput.dispatchEvent(new Event('input', {bubbles:true})); }
+            if (klasInput) { klasInput.value = row.klasifikasi || ''; klasInput.dispatchEvent(new Event('input', {bubbles:true})); }
+        }""", i, row))
 
-    # Step 2: Submit form secara native (bukan fetch)
+    # Step 3: Jika perlu tambah Kinerja Penyedia
+    if add_kinerja and kinerja_text:
+        # Klik "Tambah Syarat Teknis"
+        tambah_btn = page.query_selector('button#tambahSyaratTeknis, button:has-text("Tambah Syarat Teknis")')
+        if tambah_btn:
+            tambah_btn.click()
+            spse_browser._run(page.wait_for_timeout(2000))
+        
+        # Isi checkbox + text Kinerja Penyedia
+        spse_browser._run(page.evaluate("""(text) => {
+            // Cari checkbox kinerja penyedia yang baru ditambahkan
+            const allCbs = document.querySelectorAll('input[type="checkbox"]');
+            let targetCb = null;
+            allCbs.forEach(cb => {
+                if (cb.name.includes('syaratTeknis') && !cb.checked && !cb.disabled) {
+                    // Cek apakah label mengandung "kinerja"
+                    let label = '';
+                    const tr = cb.closest('tr');
+                    if (tr) {
+                        const tds = tr.querySelectorAll('td');
+                        for (const td of tds) {
+                            if (!td.contains(cb)) { label = td.innerText.trim(); break; }
+                        }
+                    }
+                    if (label.toLowerCase().includes('kinerja')) {
+                        targetCb = cb;
+                    }
+                }
+            });
+            
+            if (targetCb) {
+                targetCb.checked = true;
+                targetCb.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Isi text jika ada textarea/input
+                const container = targetCb.closest('tr') || targetCb.parentElement;
+                if (container) {
+                    const txt = container.querySelector('input[type="text"], textarea');
+                    if (txt) {
+                        txt.value = text;
+                        txt.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }
+            }
+        }""", kinerja_text))
+
+    # Step 4: Submit form native
     spse_browser._run(page.evaluate("""() => {
         const form = document.querySelector('form');
         if (!form) return { ok: false, error: 'Form tidak ditemukan' };
         form.submit();
     }"""))
 
-    # Tunggu halaman berubah
     spse_browser._run(page.wait_for_timeout(3000))
 
     return {
