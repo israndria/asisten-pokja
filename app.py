@@ -4,7 +4,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1249,7 +1249,7 @@ with tab_ba:
 
         with col_bafetch:
 
-            if st.button("🔍 Ambil Paket Draft", key="ba_fetch_draft", use_container_width=True):
+            if st.button("🔍 Ambil Paket Draft", key="ba5_fetch_draft", use_container_width=True):
 
                 with st.spinner("Mengambil daftar paket..."):
 
@@ -1339,7 +1339,7 @@ with tab_ba:
 
             if f"ba_tgl_{jenis_key}" not in st.session_state:
 
-                st.session_state[f"ba_tgl_{jenis_key}"] = date.today().strftime("%d-%m-%Y")
+                st.session_state[f"ba_tgl_{jenis_key}"] = datetime.today().strftime("%d-%m-%Y")
 
             if f"ba_info_{jenis_key}" not in st.session_state:
 
@@ -1347,7 +1347,7 @@ with tab_ba:
 
         for jenis_key in ba_config.JENIS_KEYS:
 
-            st.markdown(f"#### 📋“„ {ba_config.JENIS_BA[jenis_key]}")
+            st.markdown(f"#### 📋 {ba_config.JENIS_BA[jenis_key]}")
 
             col_no, col_tgl = st.columns(2)
 
@@ -1375,7 +1375,7 @@ with tab_ba:
 
         ba_n = len(ba_selected)
 
-        if st.button(f"🚀 Upload {ba_n} Paket × 5 BA", key="ba_upload", type="primary", disabled=ba_n == 0, use_container_width=True):
+        if st.button(f"🚀 Upload {ba_n} Paket × 5 BA", key="ba5_upload", type="primary", disabled=ba_n == 0, use_container_width=True):
 
             progress = st.progress(0, text="Memulai...")
 
