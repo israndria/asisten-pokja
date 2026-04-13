@@ -214,11 +214,6 @@ def klik(selector: str):
     _run(page.click(selector, timeout=10000))
 
 
-def isi(selector: str, nilai: str):
-    page = halaman_aktif()
-    _run(page.fill(selector, nilai))
-
-
 def screenshot(path: str | None = None) -> bytes:
     page = halaman_aktif()
     if not page:
@@ -290,32 +285,6 @@ def download_semua_dari_halaman(progress_callback=None) -> list[dict]:
     if progress_callback:
         progress_callback(1.0, "Selesai")
     return hasil
-
-
-# ============================================================
-# Form inspection
-# ============================================================
-
-async def _scan_fields_async(page: Page) -> list[dict]:
-    return await page.evaluate("""() => {
-        return Array.from(document.querySelectorAll('input, textarea, select'))
-            .filter(el => el.type !== 'hidden' && el.type !== 'submit' && el.type !== 'button')
-            .map(el => ({
-                tag: el.tagName,
-                type: el.type || '',
-                name: el.name || '',
-                id: el.id || '',
-                placeholder: el.placeholder || '',
-                value: el.value || ''
-            }));
-    }""")
-
-
-def scan_form_fields() -> list[dict]:
-    page = halaman_aktif()
-    if not page:
-        return []
-    return _run(_scan_fields_async(page))
 
 
 async def _scan_file_inputs_async(page: Page) -> list[dict]:

@@ -97,6 +97,85 @@ def scrap_token(paket_id: str, cookie_str: str) -> dict:
     }
 
 
+def upload_lampiran(paket_id: str, file_bytes: bytes, file_name: str, cookie_str: str) -> dict:
+    """
+    Upload lampiran PDF ke GCS via SPSE signed URL.
+
+    Flow:
+      1. POST /lelang/[ID]/getSignedUrl  → dapat signedUrl (GCS) + fileId + path
+      2. PUT signedUrl                   → upload file ke GCS
+      3. POST /uploadCheckStatus         → tunggu status UPLOAD_SUCCESS
+
+    Return:
+        {"sukses": bool, "path": str, "fileId": str, "pesan": str}
+    """
+    base = f"{SPSE_BASE_URL}lelang/{paket_id}"
+    headers = {
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": _get_url(paket_id),
+    }
+
+    # Step 1: getSignedUrl
+    try:
+        r1 = requests.post(
+            f"{base}/getSignedUrl",
+            data={
+                "input[uploadSignedUrlReq][0][contentType]": "application/pdf",
+                "input[uploadSignedUrlReq][0][identifier]": "",
+                "input[uploadSignedUrlReq][0][fileName]": file_name,
+                "input[uploadSignedUrlReq][0][isPublic]": "false",
+                "isArchieve": "true",
+            },
+            headers=headers,
+            timeout=15,
+        )
+        r1.raise_for_status()
+        data = r1.json()
+        file_id = data["result"]["data"]["fileId"]
+        signed_url = data["result"]["data"]["signedUrl"]
+        path = data["path"]
+    except Exception as e:
+        return {"sukses": False, "path": "", "fileId": "", "pesan": f"getSignedUrl gagal: {e}"}
+
+    # Step 2: PUT ke GCS
+    try:
+        r2 = requests.put(
+            signed_url,
+            data=file_bytes,
+            headers={"Content-Type": "multipart/formdata; charset=UTF-8"},
+            timeout=60,
+        )
+        r2.raise_for_status()
+    except Exception as e:
+        return {"sukses": False, "path": "", "fileId": "", "pesan": f"Upload GCS gagal: {e}"}
+
+    # Step 3: uploadCheckStatus (polling max 5x)
+    import time as _time
+    for _ in range(5):
+        try:
+            r3 = requests.post(
+                f"{SPSE_BASE_URL}uploadCheckStatus",
+                data={"input": file_id},
+                headers=headers,
+                timeout=10,
+            )
+            status_data = r3.json()
+            if status_data.get("errors"):
+                return {"sukses": False, "path": "", "fileId": "", "pesan": "Upload check error"}
+            st = (status_data.get("data") or {}).get("status", "UPLOAD_SUCCESS")
+            if st == "UPLOAD_SUCCESS" or status_data.get("data") is None:
+                break
+            if st == "UPLOAD_FAILED":
+                return {"sukses": False, "path": "", "fileId": "", "pesan": "Upload gagal di server"}
+        except Exception:
+            pass
+        _time.sleep(2)
+
+    return {"sukses": True, "path": path, "fileId": file_id, "pesan": "Upload berhasil"}
+
+
 def kirim_undangan(
     paket_id: str,
     waktu: str,
@@ -106,6 +185,8 @@ def kirim_undangan(
     hadir: str,
     is_online: bool = False,
     link_pembuktian: str = "",
+    lampiran_bytes: bytes | None = None,
+    lampiran_nama: str = "",
 ) -> dict:
     """
     Kirim undangan/pesan ke PPK via pure requests.
@@ -119,6 +200,8 @@ def kirim_undangan(
         hadir          : yang harus hadir
         is_online      : True jika Online, False jika Offline
         link_pembuktian: URL meeting (wajib jika is_online=True)
+        lampiran_bytes : bytes PDF lampiran (opsional)
+        lampiran_nama  : nama file lampiran (opsional)
 
     Return:
         {"sukses": bool, "status_code": int, "pesan": str, "penerima": str}
@@ -132,6 +215,16 @@ def kirim_undangan(
     except RuntimeError as e:
         return {"sukses": False, "pesan": str(e)}
 
+    # Upload lampiran jika ada
+    lamp_path = ""
+    lamp_file_id = ""
+    if lampiran_bytes:
+        up = upload_lampiran(paket_id, lampiran_bytes, lampiran_nama or "undangan.pdf", cookie_str)
+        if not up["sukses"]:
+            return {"sukses": False, "pesan": f"Upload lampiran gagal: {up['pesan']}"}
+        lamp_path = up["path"]
+        lamp_file_id = up["fileId"]
+
     payload = {
         "authenticityToken": scraped["authenticityToken"],
         "waktu": waktu,
@@ -141,8 +234,8 @@ def kirim_undangan(
         "link_pembuktian": link_pembuktian if is_online else "",
         "dibawa": dibawa,
         "hadir": hadir,
-        "path": "",
-        "fileId": "",
+        "path": lamp_path,
+        "fileId": lamp_file_id,
     }
 
     resp = requests.post(

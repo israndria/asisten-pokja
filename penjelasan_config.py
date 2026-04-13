@@ -1,10 +1,12 @@
 """
 Template teks pemberian penjelasan per jenis paket.
 Dipilih user saat mendaftarkan jadwal.
+
+Template ini akurat berdasarkan penjelasan real yang ter-post di SPSE (paket 10094083000).
 """
 
 JENIS_PAKET = {
-    "tender":              "Tender (1x penjelasan)",
+    "tender":              "Tender",
     "seleksi_kualifikasi": "Seleksi — Penjelasan Kualifikasi",
     "seleksi_seleksi":     "Seleksi — Penjelasan Seleksi",
 }
@@ -41,3 +43,8 @@ Selamat pagi, mohon untuk memperhatikan bagian penting dari dokumen pemilihan ya
 4.Rancangan kontrak, SSUK dan SSKK sebagaimana diupload PPK pada SPSE.
 Demikian informasi kami sampaikan, diharapkan peserta dapat memanfaatkan jadwal penjelasan ini, untuk menanyakan atau menyampaikan hal-hal yang dirasa kurang jelas, terimakasih.""",
 }
+
+
+def get_template(jenis: str) -> str:
+    """Return template berdasarkan jenis paket."""
+    return TEMPLATE.get(jenis, TEMPLATE["tender"])

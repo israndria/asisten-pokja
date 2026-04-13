@@ -502,216 +502,174 @@ with tab_setup:
 
 
 # ============================================================
-# Tab 7: Jadwal Penjelasan
+# Tab 4: Pemberian Penjelasan (v2 — auto-post sapaan via GCal)
 # ============================================================
 
 with tab7:
-    sched_running = penjelasan_engine.is_scheduler_running()
-    if sched_running:
-        st.success("🟢 Scheduler aktif")
-    else:
-        st.error("🔴 Scheduler tidak aktif")
-        if st.button("▶️ Aktifkan Scheduler"):
-            penjelasan_engine.start_scheduler()
-            st.rerun()
+    # ── Layout 2 kolom: kiri = pilih paket, kanan = isi pembukaan ───────
+    _pj_col_kiri, _pj_col_kanan = st.columns([2, 3])
 
-    _pj_col_jobs, _pj_col_form = st.columns([3, 2])
+    with _pj_col_kiri:
+        st.markdown("### 1. Pilih Paket")
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+        col_pjfetch, col_pjall, col_pjnone = st.columns([3, 1, 1])
+        with col_pjfetch:
+            if st.button("🔍 Ambil Paket Draft", key="pj_fetch_draft", use_container_width=True):
+                with st.spinner("Mengambil daftar paket..."):
+                    result = kirimpesan_engine.fetch_paket_draft()
+                st.session_state["pj_paket_draft"] = result
+                for key in list(st.session_state.keys()):
+                    if key.startswith("pj_chk_"):
+                        del st.session_state[key]
 
-    with _pj_col_form:
-        st.markdown("### Daftarkan Paket")
+        pj_selected = []
+        if "pj_paket_draft" in st.session_state:
+            r = st.session_state["pj_paket_draft"]
+            if not r["sukses"]:
+                st.error(f"❌ {r['pesan']}")
+            else:
+                paket_list_pj = r.get("paket", [])
+                if not paket_list_pj:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                else:
+                    with col_pjall:
+                        if st.button("✅ Semua", key="pj_sel_all", use_container_width=True):
+                            for p in paket_list_pj:
+                                st.session_state[f"pj_chk_{p['id_lelang']}"] = True
+                            st.rerun()
+                    with col_pjnone:
+                        if st.button("⬜ Kosong", key="pj_sel_none", use_container_width=True):
+                            for p in paket_list_pj:
+                                st.session_state[f"pj_chk_{p['id_lelang']}"] = False
+                            st.rerun()
 
-    with st.form("form_tambah_penjelasan"):
-        col_id, col_nama = st.columns([1, 2])
-        with col_id:
-            input_paket_ids = st.text_area(
-                "ID Paket (satu per baris, bisa banyak)",
-                placeholder="10096884000\n10096884001\n10096884002",
-                height=120,
-                help="Salin dari URL: /lelang/[ID]/jadwal",
-            )
-        with col_nama:
-            input_nama = st.text_input(
-                "Nama / Keterangan Paket (opsional)",
-                placeholder="Paket Jalan Kabupaten, dll.",
-            )
+                    for p in paket_list_pj:
+                        key_chk = f"pj_chk_{p['id_lelang']}"
+                        checked = st.checkbox(
+                            f"**{p['kode']}** — {p['nama']}",
+                            value=st.session_state.get(key_chk, True),
+                            key=key_chk,
+                        )
+                        if checked:
+                            pj_selected.append(p)
 
-        jenis_options = {v: k for k, v in penjelasan_config.JENIS_PAKET.items()}
-        jenis_label = st.selectbox(
+                    st.caption(f"**{len(pj_selected)}** dari **{len(paket_list_pj)}** paket dipilih")
+        else:
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+    with _pj_col_kanan:
+        st.markdown("### 2. Isi Pembukaan")
+        st.caption("Template sapaan akan otomatis di-post saat masa penjelasan tiba.")
+
+        pj_jenis = st.selectbox(
             "Jenis Penjelasan",
-            options=list(jenis_options.keys()),
+            options=list(penjelasan_config.JENIS_PAKET.keys()),
+            format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
+            key="pj_jenis",
         )
-        jenis_key = jenis_options[jenis_label]
 
-        col_dt1, col_dt2 = st.columns(2)
-        with col_dt1:
-            waktu_scan = st.checkbox(
-                "Scan jadwal otomatis dari SPSE",
-                value=True,
-                help="Navigasi ke /lelang/[ID]/jadwal untuk ambil datetime penjelasan",
-            )
-        with col_dt2:
-            waktu_manual = st.text_input(
-                "Atau isi waktu manual (dd/mm/yyyy HH:MM)",
-                placeholder="10/04/2026 10:00",
-                disabled=waktu_scan,
-            )
-
-        with st.expander("✏️ Override teks penjelasan (opsional — default pakai template)"):
-            teks_override_input = st.text_area(
-                "Teks penjelasan custom",
-                value="",
-                height=200,
+        with st.expander("✏️ Override teks pembukaan (opsional)"):
+            pj_teks_override = st.text_area(
+                "Teks custom", value="", height=120,
                 placeholder="Kosongkan untuk pakai template bawaan",
             )
 
-        submitted = st.form_submit_button("➕ Daftarkan", type="primary")
+        # ── Countdown timer per paket terpilih ─────────────────────────────
+        if pj_selected:
+            st.markdown("### ⏰ Countdown Penjelasan")
+            st.caption("Waktu mundur dari Google Calendar.")
 
-    if submitted:
-        paket_ids_raw = [x.strip() for x in input_paket_ids.strip().splitlines() if x.strip()]
-        if not paket_ids_raw:
-            st.error("Isi minimal satu ID paket.")
-        elif not waktu_scan and not waktu_manual:
-            st.error("Isi waktu manual atau centang scan otomatis.")
-        elif not spse_browser.get_url() and waktu_scan:
-            st.error("Browser belum terhubung — tidak bisa scan jadwal.")
-        else:
-            teks_ov = teks_override_input.strip() or None
-            nama    = input_nama.strip() or f"Paket {', '.join(paket_ids_raw)}"
+            with st.spinner("Baca jadwal dari Google Calendar..."):
+                jadwal_gcal = penjelasan_engine.get_jadwal_dari_gcalendar()
 
-            for paket_id in paket_ids_raw:
-                waktu_fire = None
-
-                if waktu_scan:
-                    with st.spinner(f"Scan jadwal paket {paket_id}..."):
-                        try:
-                            jadwal_list = penjelasan_engine.parse_jadwal(paket_id)
-                            if jadwal_list:
-                                # Untuk seleksi_kualifikasi → ambil baris pertama
-                                # Untuk seleksi_seleksi → baris kedua (jika ada)
-                                idx = 1 if (jenis_key == "seleksi_seleksi" and len(jadwal_list) >= 2) else 0
-                                waktu_fire = jadwal_list[idx]["mulai_dt"]
-                                st.success(
-                                    f"Paket {paket_id}: jadwal ditemukan → "
-                                    f"{waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB"
-                                )
-                            else:
-                                st.warning(f"Paket {paket_id}: jadwal pemberian penjelasan tidak ditemukan di halaman jadwal.")
-                        except Exception as e:
-                            st.error(f"Paket {paket_id}: gagal scan jadwal — {e}")
-                else:
-                    from penjelasan_engine import _parse_datetime_str
-                    waktu_fire = _parse_datetime_str(waktu_manual)
-                    if not waktu_fire:
-                        st.error(f"Format waktu tidak dikenali: {waktu_manual}")
-
-                if waktu_fire:
-                    job = penjelasan_engine.tambah_job(
-                        paket_id      = paket_id,
-                        nama_paket    = nama,
-                        jenis         = jenis_key,
-                        waktu_fire    = waktu_fire,
-                        teks_override = teks_ov,
-                    )
-                    from datetime import datetime
-                    from penjelasan_engine import TZ_WIB
-                    now = datetime.now(TZ_WIB)
-                    delta = waktu_fire - now
-                    total_seconds = int(delta.total_seconds())
-                    if total_seconds > 0:
-                        jam   = total_seconds // 3600
-                        menit = (total_seconds % 3600) // 60
-                        detik = total_seconds % 60
-                        st.info(
-                            f"✅ Paket **{paket_id}** dijadwalkan pukul "
-                            f"**{waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB** "
-                            f"(dalam {jam}j {menit}m {detik}d)"
-                        )
-                    else:
-                        st.warning(f"⚠️ Paket {paket_id}: waktu sudah lewat! Pertimbangkan submit manual.")
-
-    with _pj_col_jobs:
-        st.markdown("### Jobs Terjadwal")
-        jobs = penjelasan_engine.get_jobs()
-        if not jobs:
-            st.info("Belum ada job terdaftar.")
-        else:
-            from datetime import datetime as _dt
             from penjelasan_engine import TZ_WIB
-            now = _dt.now(TZ_WIB)
+            now = datetime.now(TZ_WIB)
 
-            for job in sorted(jobs, key=lambda j: j["waktu_fire"]):
-                waktu_fire = _dt.fromisoformat(job["waktu_fire"])
-                delta      = waktu_fire - now
-                sisa_secs  = int(delta.total_seconds())
+            for p in pj_selected:
+                pid = p["id_lelang"]
+                tgl_mulai = jadwal_gcal.get(pid)
 
-                status = job["status"]
-                if status == "fired":
-                    icon = "✅"
-                elif status == "gagal":
-                    icon = "❌"
-                elif sisa_secs <= 0:
-                    icon = "⏰"
-                else:
-                    jam   = sisa_secs // 3600
-                    menit = (sisa_secs % 3600) // 60
-                    icon  = f"⏳ {jam}j {menit}m"
+                if tgl_mulai:
+                    delta = tgl_mulai - now
+                    total_secs = int(delta.total_seconds())
 
-                jenis_label = penjelasan_config.JENIS_PAKET.get(job["jenis"], job["jenis"])
+                    if total_secs > 0:
+                        hari = total_secs // 86400
+                        jam  = (total_secs % 86400) // 3600
+                        menit = (total_secs % 3600) // 60
+                        detik = total_secs % 60
+                        status_icon = "⏳"
+                        status_teks = f"{hari}h {jam}j {menit}m {detik}d"
+                    elif total_secs > -10800:  # masih dalam window 3 jam setelah mulai
+                        status_icon = "🔴"
+                        status_teks = "MASA PENJELASAN AKTIF"
+                    else:
+                        status_icon = "✅"
+                        status_teks = "Sudah lewat"
 
-                col_info, col_hapus, col_test = st.columns([4, 1, 1])
-                with col_info:
                     st.markdown(
-                        f"**{icon}** `{job['paket_id']}` — {job['nama_paket'][:40]}  \n"
-                        f"{jenis_label} | {waktu_fire.strftime('%d/%m/%Y %H:%M')} | `{status}`"
+                        f"**{status_icon} {p['kode']}** — {p['nama'][:50]}  \n"
+                        f"Mulai: `{tgl_mulai.strftime('%d/%m/%Y %H:%M')}` | {status_teks}"
                     )
-                    if status == "gagal" and job.get("result"):
-                        with st.expander(f"Error {job['paket_id']}"):
-                            st.json(job["result"])
-                    if status == "fired" and job.get("result"):
-                        with st.expander(f"Result {job['paket_id']}"):
-                            st.json(job["result"])
-
-                with col_hapus:
-                    if st.button("🗑️", key=f"hapus_{job['paket_id']}_{job['jenis']}", help="Hapus"):
-                        penjelasan_engine.hapus_job(job["paket_id"], job["jenis"])
-                        st.rerun()
-
-                with col_test:
-                    if st.button("🧪", key=f"test_{job['paket_id']}_{job['jenis']}", help="Test submit"):
-                        with st.spinner(f"Test {job['paket_id']}..."):
-                            try:
-                                result = penjelasan_engine.submit_penjelasan(
-                                    paket_id=job["paket_id"],
-                                    jenis=job["jenis"],
-                                    teks_override=job.get("teks_override"),
-                                )
-                                if result["ok"]:
-                                    st.success(f"✅ HTTP {result['status']}")
-                                else:
-                                    st.error(f"❌ HTTP {result['status']}")
-                                with st.expander("Response"):
-                                    st.code(result["body"][:2000])
-                            except Exception as e:
-                                st.error(str(e))
+                else:
+                    st.markdown(f"⚠️ **{p['kode']}** — Tidak ada event penjelasan di GCal")
 
         st.divider()
-        with st.expander("📋 Log Scheduler"):
-            log_lines = penjelasan_engine.get_log()
-            if log_lines:
-                st.code("\n".join(reversed(log_lines[-50:])))
+
+        # ── Tombol Post Manual ─────────────────────────────────────────────
+        pj_n = len(pj_selected)
+        if st.button(
+            f"🚀 Post Pembukaan ke {pj_n} Paket",
+            key="pj_post",
+            type="primary",
+            disabled=pj_n == 0,
+            use_container_width=True,
+        ):
+            progress = st.progress(0, text="Memulai...")
+            hasil_pj = []
+            for i, p in enumerate(pj_selected):
+                progress.progress((i + 1) / len(pj_selected), text=f"Post ke {p['kode']} ({i+1}/{len(pj_selected)})...")
+                try:
+                    teks_ov = pj_teks_override.strip() or None
+                    result = penjelasan_engine.auto_post_sapaan(p["id_lelang"], pj_jenis, teks_ov)
+                    hasil_pj.append({
+                        "kode": p["kode"],
+                        "nama": p["nama"][:50],
+                        "total": result["total"],
+                        "sukses": result["sukses"],
+                        "gagal": result["gagal"],
+                        "pesan": result.get("pesan", ""),
+                    })
+                except Exception as e:
+                    hasil_pj.append({
+                        "kode": p["kode"],
+                        "nama": p["nama"][:50],
+                        "total": 0,
+                        "sukses": 0,
+                        "gagal": 1,
+                        "pesan": str(e),
+                    })
+            progress.empty()
+
+            sukses_n = sum(1 for h in hasil_pj if h["gagal"] == 0 and h["total"] > 0)
+            if sukses_n == len(hasil_pj):
+                st.success(f"✅ {sukses_n}/{len(hasil_pj)} paket berhasil.")
             else:
-                st.info("Log kosong.")
-            if st.button("🔄 Refresh Log"):
-                st.rerun()
+                st.warning(f"⚠️ {sukses_n}/{len(hasil_pj)} paket berhasil.")
+            st.dataframe(
+                hasil_pj,
+                use_container_width=True,
+                column_config={
+                    "kode":  st.column_config.TextColumn("Kode", width="small"),
+                    "nama":  st.column_config.TextColumn("Nama Paket", width="large"),
+                    "total": st.column_config.NumberColumn("Total", width="small"),
+                    "sukses": st.column_config.NumberColumn("Sukses", width="small"),
+                    "gagal": st.column_config.NumberColumn("Gagal", width="small"),
+                    "pesan": st.column_config.TextColumn("Pesan"),
+                },
+                hide_index=True,
+            )
 
-        st.divider()
-        prev_jenis = st.selectbox(
-            "Preview template:",
-            options=list(penjelasan_config.JENIS_PAKET.keys()),
-            format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
-            key="prev_template_jenis",
-        )
-        st.text_area("Isi template:", value=penjelasan_config.TEMPLATE[prev_jenis], height=200, disabled=True)
 
 
 # ============================================================
