@@ -21,6 +21,8 @@ import jadwal_engine
 import jadwal_config
 import kirimpesan_engine
 import bareviu_engine
+import ba_engine
+import ba_config
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -30,7 +32,6 @@ st.set_page_config(
 
 st.title("🤖 Asisten Pokja")
 st.caption("Otomasi SPSE — spse.tapinkab.go.id")
-
 
 # ============================================================
 # Sidebar — Browser Control
@@ -91,8 +92,6 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Gagal launch Chrome: {e}")
 
-
-
 # ============================================================
 # Tabs
 # ============================================================
@@ -101,14 +100,14 @@ _HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 _BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
                "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
-tab9, tab8, tab_setup, tab7 = st.tabs([
+tab9, tab8, tab_setup, tab7, tab_ba = st.tabs([
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
+    "5️⃣ Upload 5 BA",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
 penjelasan_engine.start_scheduler()
-
 
 # ============================================================
 # Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
@@ -500,7 +499,6 @@ with tab_setup:
                 hide_index=True,
             )
 
-
 # ============================================================
 # Tab 4: Pemberian Penjelasan (v2 — auto-post sapaan via GCal)
 # ============================================================
@@ -669,8 +667,6 @@ with tab7:
                 },
                 hide_index=True,
             )
-
-
 
 # ============================================================
 # Tab 8: Auto-Fill Jadwal
@@ -894,7 +890,6 @@ with tab8:
                 },
                 hide_index=True,
             )
-
 
 # ============================================================
 # Tab 9: Kirim Undangan
@@ -1235,3 +1230,212 @@ with tab9:
                 },
                 hide_index=True,
             )
+
+# Tab 5: Upload 5 BA
+
+# ============================================================
+
+with tab_ba:
+
+    _ba_col_kiri, _ba_col_kanan = st.columns([2, 3])
+
+    with _ba_col_kiri:
+
+        st.markdown("### 1. Pilih Paket")
+
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+
+        col_bafetch, col_baall, col_banone = st.columns([3, 1, 1])
+
+        with col_bafetch:
+
+            if st.button("🔍 Ambil Paket Draft", key="ba_fetch_draft", use_container_width=True):
+
+                with st.spinner("Mengambil daftar paket..."):
+
+                    result = kirimpesan_engine.fetch_paket_draft()
+
+                st.session_state["ba_paket_draft"] = result
+
+                for key in list(st.session_state.keys()):
+
+                    if key.startswith("ba_chk_"):
+
+                        del st.session_state[key]
+
+        ba_selected = []
+
+        if "ba_paket_draft" in st.session_state:
+
+            r = st.session_state["ba_paket_draft"]
+
+            if not r["sukses"]:
+
+                st.error(f"❌ {r['pesan']}")
+
+            else:
+
+                paket_list_ba = r.get("paket", [])
+
+                if not paket_list_ba:
+
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+
+                else:
+
+                    with col_baall:
+
+                        if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
+
+                            for p in paket_list_ba:
+
+                                st.session_state[f"ba_chk_{p['id_lelang']}"] = True
+
+                            st.rerun()
+
+                    with col_banone:
+
+                        if st.button("⬜ Kosong", key="ba_sel_none", use_container_width=True):
+
+                            for p in paket_list_ba:
+
+                                st.session_state[f"ba_chk_{p['id_lelang']}"] = False
+
+                            st.rerun()
+
+                    for p in paket_list_ba:
+
+                        key_chk = f"ba_chk_{p['id_lelang']}"
+
+                        checked = st.checkbox(
+
+                            f"**{p['kode']}** —  {p['nama']}",
+
+                            value=st.session_state.get(key_chk, True), key=key_chk,
+
+                        )
+
+                        if checked:
+
+                            ba_selected.append(p)
+
+                    st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
+
+        else:
+
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+    with _ba_col_kanan:
+
+        st.markdown("### 2. Konfigurasi 5 BA")
+
+        st.caption("Isi nomor, tanggal, dan upload file PDF untuk setiap BA.")
+
+        for jenis_key in ba_config.JENIS_KEYS:
+
+            if f"ba_no_{jenis_key}" not in st.session_state:
+
+                st.session_state[f"ba_no_{jenis_key}"] = ""
+
+            if f"ba_tgl_{jenis_key}" not in st.session_state:
+
+                st.session_state[f"ba_tgl_{jenis_key}"] = date.today().strftime("%d-%m-%Y")
+
+            if f"ba_info_{jenis_key}" not in st.session_state:
+
+                st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
+
+        for jenis_key in ba_config.JENIS_KEYS:
+
+            st.markdown(f"#### 📋“„ {ba_config.JENIS_BA[jenis_key]}")
+
+            col_no, col_tgl = st.columns(2)
+
+            with col_no:
+
+                st.text_input("Nomor BA", key=f"ba_no_{jenis_key}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
+
+            with col_tgl:
+
+                st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
+
+                _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
+
+                if isinstance(_dt, date):
+
+                    st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
+
+            st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
+
+            st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
+
+            st.divider()
+
+        st.divider()
+
+        ba_n = len(ba_selected)
+
+        if st.button(f"🚀 Upload {ba_n} Paket × 5 BA", key="ba_upload", type="primary", disabled=ba_n == 0, use_container_width=True):
+
+            progress = st.progress(0, text="Memulai...")
+
+            hasil_ba = []
+
+            for i, p in enumerate(ba_selected):
+
+                pid = p["id_lelang"]
+
+                progress.progress((i + 0.5) / len(ba_selected), text=f"Upload BA untuk {p['kode']} ({i+1}/{len(ba_selected)})...")
+
+                paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
+
+                for jenis_key in ba_config.JENIS_KEYS:
+
+                    file_up = st.session_state.get(f"ba_file_{jenis_key}")
+
+                    nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
+
+                    tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
+
+                    info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
+
+                    ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati"}
+
+                    if file_up and nomor and tanggal:
+
+                        try:
+
+                            r = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=file_up.getvalue(), file_name=file_up.name, info=info)
+
+                            ba_result["status"] = "✅" if r["ok"] else f"❌ HTTP {r['status']}"
+
+                            ba_result["detail"] = r
+
+                        except Exception as e:
+
+                            ba_result["status"] = f"❌ {e}"
+
+                    elif file_up:
+
+                        ba_result["status"] = "⚠️ Nomor/tanggal belum diisi"
+
+                    paket_hasil["ba"].append(ba_result)
+
+                hasil_ba.append(paket_hasil)
+
+            progress.empty()
+
+            sukses_n = sum(1 for h in hasil_ba for b in h["ba"] if b["status"] == "✅")
+
+            st.success(f"✅ Selesai! {sukses_n} BA berhasil di-upload.")
+
+            for h in hasil_ba:
+
+                st.markdown(f"**{h['kode']}** —  {h['nama']}")
+
+                for b in h["ba"]:
+
+                    st.caption(f"{b['status']} {b['jenis']}")
+
+                st.divider()
+
