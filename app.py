@@ -5,17 +5,14 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
-import tempfile
-
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import SPSE_BASE_URL, DOWNLOAD_DIR
+from config import SPSE_BASE_URL
 import spse_browser
 import ldk_engine
 import ldk_config
-import ldk_pdf_extractor
 import checklist_engine
 import masa_berlaku_engine
 import penjelasan_engine
@@ -23,6 +20,7 @@ import penjelasan_config
 import jadwal_engine
 import jadwal_config
 import kirimpesan_engine
+import bareviu_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -47,15 +45,6 @@ with st.sidebar:
     url_aktif = spse_browser.get_url()
     if url_aktif:
         st.success("Browser terhubung")
-
-        # Pilih tab aktif
-        tabs = spse_browser.daftar_tab()
-        if tabs:
-            tab_labels = [f"[{t['index']}] {t['title'][:40] or t['url'][:40]}" for t in tabs]
-            selected = st.selectbox("Tab target:", tab_labels, key="tab_selector")
-            selected_idx = tab_labels.index(selected)
-            spse_browser.pilih_tab(selected_idx)
-
         st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
 
         col1, col2 = st.columns(2)
@@ -102,34 +91,19 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Gagal launch Chrome: {e}")
 
-    st.divider()
-
-    url_custom = st.text_input("Navigasi ke URL", placeholder="https://spse.tapinkab.go.id/...", key="nav_url")
-    if st.button("Pergi", use_container_width=True, key="nav_pergi"):
-        if url_custom:
-            spse_browser.navigasi(url_custom)
-            st.rerun()
-
-    if st.button("📸 Screenshot", use_container_width=True, key="sidebar_screenshot"):
-        try:
-            img_bytes = spse_browser.screenshot()
-            st.session_state["last_screenshot"] = img_bytes
-            st.rerun()
-        except Exception as e:
-            st.error(str(e))
-
-    if "last_screenshot" in st.session_state:
-        st.image(st.session_state["last_screenshot"], caption="Screenshot terakhir")
 
 
 # ============================================================
 # Tabs
 # ============================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
-    "⬇️ Download File", "✏️ Auto-Fill Form", "⬆️ Upload Dokumen",
-    "📋 LDK Auto-fill", "☑️ Checklist Penawaran", "⏳ Masa Berlaku",
-    "💬 Penjelasan", "📅 Auto-Fill Jadwal", "📨 Kirim Undangan",
+_HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+_BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
+               "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+
+tab9, tab8, tab_setup, tab7 = st.tabs([
+    "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
+    "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -137,656 +111,394 @@ penjelasan_engine.start_scheduler()
 
 
 # ============================================================
-# Tab 1: Download File
+# Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
 # ============================================================
 
-with tab1:
-    st.subheader("Download File dari Halaman SPSE")
-    st.markdown(
-        "Navigasikan browser ke halaman paket yang diinginkan (via sidebar), "
-        "lalu klik **Scan & Download** untuk mengambil semua file di halaman tersebut."
-    )
+with tab_setup:
+    # ── Layout 2 kolom: kiri = pilih paket + konfigurasi, kanan = upload dokpil ─
+    _sp_col_kiri, _sp_col_kanan = st.columns([2, 3])
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        url_paket = st.text_input(
-            "URL Halaman Paket (opsional)",
-            placeholder="https://spse.tapinkab.go.id/266/lelang/...",
-            help="Jika diisi, browser akan navigasi ke URL ini sebelum scan. Kosongkan untuk pakai halaman aktif.",
-        )
-    with col2:
-        st.write("")
-        st.write("")
-        pindah_dan_scan = st.button("🔍 Scan & Download", type="primary", use_container_width=True, key="tab1_scan_download")
+    with _sp_col_kiri:
+        st.markdown("### 1. Pilih Paket")
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+        col_spfetch, col_spall, col_spnone = st.columns([3, 1, 1])
+        with col_spfetch:
+            if st.button("🔍 Ambil Paket Draft", key="sp_fetch_draft", use_container_width=True):
+                with st.spinner("Mengambil daftar paket..."):
+                    result = kirimpesan_engine.fetch_paket_draft()
+                st.session_state["sp_paket_draft"] = result
+                for key in list(st.session_state.keys()):
+                    if key.startswith("sp_chk_"):
+                        del st.session_state[key]
 
-    with st.expander("🔧 Debug — Lihat Semua Link di Halaman"):
-        if st.button("Ambil Semua Link (max 60)", key="tab1_get_links"):
-            page = spse_browser.halaman_aktif()
-            if not page:
-                st.error("Browser belum terhubung.")
+        sp_selected = []
+        if "sp_paket_draft" in st.session_state:
+            r = st.session_state["sp_paket_draft"]
+            if not r["sukses"]:
+                st.error(f"❌ {r['pesan']}")
             else:
-                data = spse_browser._run(page.evaluate("""() => ({
-                    url: window.location.href,
-                    links: Array.from(document.querySelectorAll('a[href]'))
-                        .slice(0, 60)
-                        .map(a => ({ text: a.innerText.trim().substring(0,80), href: a.href }))
-                })"""))
-                st.write(f"**URL:** {data['url']}")
-                for lnk in data["links"]:
-                    st.write(f"- `{lnk['href']}` → {lnk['text']}")
-
-    if pindah_dan_scan:
-        if not spse_browser.get_url():
-            st.error("Browser belum terbuka. Buka browser di sidebar dulu.")
-        else:
-            if url_paket:
-                with st.spinner(f"Navigasi ke {url_paket}..."):
-                    spse_browser.navigasi(url_paket)
-
-            # Scan link
-            with st.spinner("Scanning link file..."):
-                links = spse_browser.scan_link_file()
-
-            if not links:
-                st.warning("Tidak ada link file ditemukan di halaman ini.")
-                st.info("Tip: Pastikan sudah login dan berada di halaman yang benar.")
-            else:
-                st.write(f"**{len(links)} file ditemukan:**")
-                for lnk in links:
-                    st.write(f"- {lnk['text'] or '(tanpa nama)'} → `{lnk['href'][:80]}`")
-
-                if st.button("⬇️ Download Semua", type="primary"):
-                    progress = st.progress(0, "Memulai download...")
-                    def cb(pct, txt): progress.progress(pct, txt)
-
-                    hasil = spse_browser.download_semua_dari_halaman(progress_callback=cb)
-                    progress.empty()
-
-                    st.session_state["hasil_download"] = hasil
-                    st.rerun()
-
-    if "hasil_download" in st.session_state:
-        st.subheader("Hasil Download")
-        hasil = st.session_state["hasil_download"]
-        for item in hasil:
-            icon = "✅" if item["status"] == "OK" else "❌"
-            st.write(f"{icon} **{item['nama']}** — {item['status']}")
-
-        if st.button("📂 Buka Folder Download"):
-            os.startfile(DOWNLOAD_DIR)
-
-
-# ============================================================
-# Tab 2: Auto-Fill Form
-# ============================================================
-
-with tab2:
-    st.subheader("Auto-Fill Form SPSE")
-    st.markdown(
-        "Fitur ini dibangun **bertahap** — setelah kamu navigasi ke form yang diinginkan "
-        "di browser, gunakan tombol di bawah untuk inspeksi form dan isi otomatis."
-    )
-
-    if st.button("🔍 Inspeksi Form (Scan Input Fields)", key="tab2_scan_form"):
-        if not spse_browser.get_url():
-            st.error("Browser belum terbuka.")
-        else:
-            fields = spse_browser.scan_form_fields()
-            if fields:
-                st.write(f"**{len(fields)} input field ditemukan:**")
-                st.json(fields)
-                st.session_state["form_fields"] = fields
-            else:
-                st.warning("Tidak ada input field ditemukan di halaman ini.")
-
-    if "form_fields" in st.session_state:
-        st.divider()
-        st.markdown("**Isi nilai untuk tiap field:**")
-
-        fill_data = {}
-        for f in st.session_state["form_fields"]:
-            label = f.get("name") or f.get("id") or f.get("placeholder") or "(tanpa nama)"
-            selector = f"[name='{f['name']}']" if f["name"] else f"#{f['id']}" if f["id"] else None
-            if selector:
-                nilai = st.text_input(f"{label} ({f['tag']})", value=f.get("value", ""), key=f"fill_{label}")
-                if nilai:
-                    fill_data[selector] = nilai
-
-        if st.button("✏️ Isi Form Otomatis", type="primary", key="tab2_fill_form"):
-            if not fill_data:
-                st.warning("Tidak ada nilai yang diisi.")
-            else:
-                errors = []
-                for selector, nilai in fill_data.items():
-                    try:
-                        spse_browser.isi(selector, nilai)
-                    except Exception as e:
-                        errors.append(f"{selector}: {e}")
-                if errors:
-                    st.error("Beberapa field gagal diisi:\n" + "\n".join(errors))
+                paket_list_sp = r.get("paket", [])
+                if not paket_list_sp:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
                 else:
-                    st.success(f"{len(fill_data)} field berhasil diisi!")
+                    with col_spall:
+                        if st.button("✅ Semua", key="sp_sel_all", use_container_width=True):
+                            for p in paket_list_sp:
+                                st.session_state[f"sp_chk_{p['id_lelang']}"] = True
+                            st.rerun()
+                    with col_spnone:
+                        if st.button("⬜ Kosong", key="sp_sel_none", use_container_width=True):
+                            for p in paket_list_sp:
+                                st.session_state[f"sp_chk_{p['id_lelang']}"] = False
+                            st.rerun()
 
-        if st.button("📸 Screenshot Setelah Isi", key="tab2_screenshot"):
-            img = spse_browser.screenshot()
-            st.image(img, caption="Form setelah diisi")
+                    for p in paket_list_sp:
+                        key_chk  = f"sp_chk_{p['id_lelang']}"
+                        key_dokpil = f"sp_dokpil_{p['id_lelang']}"
+                        col_chk, col_dokpil = st.columns([3, 2])
+                        with col_chk:
+                            checked = st.checkbox(
+                                f"**{p['kode']}** — {p['nama']}",
+                                value=st.session_state.get(key_chk, True),
+                                key=key_chk,
+                            )
+                        with col_dokpil:
+                            up_dokpil = st.file_uploader(
+                                "DOKPIL",
+                                type=["pdf"],
+                                key=key_dokpil,
+                                label_visibility="collapsed",
+                            )
+                            if up_dokpil:
+                                st.caption(f"📄 {up_dokpil.name}")
+                        if checked:
+                            sp_selected.append({**p, "_dokpil": up_dokpil})
 
-
-# ============================================================
-# Tab 3: Upload Dokumen
-# ============================================================
-
-with tab3:
-    st.subheader("Upload Dokumen ke SPSE")
-    st.markdown(
-        "Navigasikan browser ke halaman upload, "
-        "scan input file yang tersedia, lalu pilih file untuk diupload."
-    )
-
-    if st.button("🔍 Scan Input File Upload", key="tab3_scan_files"):
-        if not spse_browser.get_url():
-            st.error("Browser belum terbuka.")
+                    st.caption(f"**{len(sp_selected)}** dari **{len(paket_list_sp)}** paket dipilih")
         else:
-            file_inputs = spse_browser.scan_file_inputs()
-            if file_inputs:
-                st.write(f"**{len(file_inputs)} file input ditemukan:**")
-                st.json(file_inputs)
-                st.session_state["file_inputs"] = file_inputs
-            else:
-                st.warning("Tidak ada input file ditemukan. Pastikan berada di halaman upload.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
 
-    if "file_inputs" in st.session_state:
+        # ── Section 3: Upload Dokumen Pemilihan (di bawah checklist) ─────────
         st.divider()
-        file_inputs = st.session_state["file_inputs"]
+        st.markdown("### 3. Upload Dokumen Pemilihan")
+        st.caption("Menggunakan file DOKPIL yang sudah diupload di atas. Isi nomor BA dan tanggal, lalu klik Upload.")
 
-        for fi in file_inputs:
-            label = fi.get("name") or fi.get("id") or "(tanpa nama)"
-            selector = f"[name='{fi['name']}']" if fi["name"] else f"#{fi['id']}" if fi["id"] else None
-            accept = fi.get("accept", "")
+        _dp_dengan_file = [p for p in sp_selected if p.get("_dokpil")]
+        _dp_tanpa_file  = [p for p in sp_selected if not p.get("_dokpil")]
+        dp_selected     = _dp_dengan_file
 
-            uploaded = st.file_uploader(
-                f"File untuk: **{label}** {('('+accept+')') if accept else ''}",
-                key=f"upload_{label}",
-                accept_multiple_files=fi.get("multiple", False),
+        if not sp_selected:
+            st.info("Pilih paket dan upload DOKPIL di atas terlebih dahulu.")
+        else:
+            if _dp_dengan_file:
+                st.caption(f"✅ **{len(_dp_dengan_file)} paket** siap diupload:")
+                for _p in _dp_dengan_file:
+                    st.markdown(f"- **{_p['kode']}** — {_p['nama'][:60]}  \n  📄 `{_p['_dokpil'].name}`")
+            if _dp_tanpa_file:
+                st.caption(f"⚠️ **{len(_dp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
+                for _p in _dp_tanpa_file:
+                    st.markdown(f"- **{_p['kode']}** — {_p['nama'][:60]}")
+
+        dp_nomor_ba = st.text_input(
+            "Nomor BA",
+            placeholder="Contoh: 001/BA-DPP/POKJA/2026",
+            key="dp_nomor_ba",
+        )
+        _dp_col_tgl, _dp_col_btn = st.columns([2, 3])
+        with _dp_col_tgl:
+            dp_tgl = st.date_input(
+                "Tanggal Dokumen",
+                value=datetime.now().date(),
+                key="dp_tgl",
+                format="DD/MM/YYYY",
+                label_visibility="collapsed",
             )
+            st.caption(f"{_HARI_NAMA[dp_tgl.weekday()]}, {dp_tgl.day} {_BULAN_NAMA[dp_tgl.month-1]} {dp_tgl.year}")
+        with _dp_col_btn:
+            _dp_n_file = len(dp_selected)
+            if st.button(
+                f"📤 Upload Dokumen Pemilihan ({_dp_n_file} file)",
+                key="dp_upload",
+                type="primary",
+                disabled=_dp_n_file == 0,
+                use_container_width=True,
+            ):
+                st.warning(
+                    "⚠️ **Fitur ini belum aktif.** Endpoint upload Dokumen Pemilihan di SPSE "
+                    "baru bisa dibedah setelah ada paket yang sudah upload BA Reviu dan semua syarat terpenuhi."
+                )
+                st.info(
+                    f"**Siap diupload:** {_dp_n_file} file  \n"
+                    f"**Nomor BA:** {dp_nomor_ba or '(belum diisi)'}  \n"
+                    f"**Tanggal:** {dp_tgl.strftime('%d-%m-%Y')}"
+                )
 
-            if uploaded and selector:
-                if st.button(f"⬆️ Upload ke '{label}'", key=f"btn_upload_{label}"):
-                    # Simpan file sementara
-                    files_to_upload = uploaded if isinstance(uploaded, list) else [uploaded]
-                    paths = []
-                    for uf in files_to_upload:
-                        tmp_path = os.path.join(DOWNLOAD_DIR, uf.name)
-                        with open(tmp_path, "wb") as f:
-                            f.write(uf.getbuffer())
-                        paths.append(tmp_path)
+    with _sp_col_kanan:
+        st.markdown("### 2. Konfigurasi")
+        st.caption("Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push.")
 
-                    try:
-                        spse_browser.set_input_files(selector, paths)
-                        st.success(f"{len(paths)} file berhasil di-set ke input '{label}'!")
-                        st.info("Jangan lupa klik tombol Submit/Kirim di browser untuk mengirim.")
-                    except Exception as e:
-                        st.error(f"Gagal upload: {e}")
+        st.divider()
 
-
-# ============================================================
-# Tab 4: LDK Auto-fill
-# ============================================================
-
-with tab4:
-    st.subheader("LDK Auto-fill — Persyaratan Kualifikasi")
-    st.markdown(
-        "Bot otomatis mencentang dan mengisi persyaratan kualifikasi "
-        "sesuai template konstruksi Usaha Kecil."
-    )
-
-    # ── Deteksi ID paket dari URL aktif ──────────────────────────────────────
-    paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    ldk_url_auto = (
-        f"{SPSE_BASE_URL}dokumen/{paket_id}/ldk" if paket_id else None
-    )
-
-    if ldk_url_auto:
-        st.info(f"ID Paket terdeteksi dari URL aktif: **{paket_id}**")
-    else:
-        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
-
-    # Input manual sebagai fallback / override
-    with st.expander("🔧 Override URL LDK (opsional)"):
-        ldk_url_manual = st.text_input(
-            "URL Halaman LDK",
-            value=ldk_url_auto or "",
-            placeholder="https://spse.inaproc.id/tapinkab/dokumen/[ID]/ldk",
-            key="ldk_url_manual",
-        )
-        ldk_url_final = ldk_url_manual or ldk_url_auto
-    ldk_url_final = ldk_url_manual if "ldk_url_manual" in st.session_state and st.session_state["ldk_url_manual"] else ldk_url_auto
-
-    # ── Konfigurasi teks kinerja (bisa diedit di UI) ─────────────────────────
-    with st.expander("⚙️ Teks Kinerja Penyedia (konfirmasi sekali saja)"):
-        kinerja_text = st.text_area(
-            "Teks yang diisi pada field kinerja:",
-            value=ldk_config.CHECK_AND_FILL[0]["text"],
-            height=100,
-            key="kinerja_text_override",
-        )
-        st.caption("Teks ini disimpan dalam sesi — edit jika perlu penyesuaian.")
-
-    # ── Upload PDF DOKPIL + Extract ─────────────────────────────────────────
-    st.subheader("📄 Upload DOKPIL (Opsional)")
-    st.caption("Upload PDF Dokumen Pemilihan untuk auto-extract persyaratan LDK")
-    
-    uploaded_file = st.file_uploader(
-        "Pilih file PDF DOKPIL:",
-        type=["pdf"],
-        key="dokpil_uploader",
-    )
-    
-    if uploaded_file:
-        # Simpan ke temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = tmp.name
-        
-        if st.button("🔍 Extract Persyaratan dari PDF", type="primary", key="extract_pdf"):
-            with st.spinner("Extracting LDK dari PDF..."):
-                try:
-                    ldk_data = ldk_pdf_extractor.extract_ldk_from_pdf(tmp_path)
-                    st.session_state["ldk_pdf_data"] = ldk_data
-                    
-                    if ldk_data.extracted:
-                        st.success(f"✅ Extract berhasil! Ditemukan {len(ldk_data.izin_usaha_rows)} row Izin Usaha")
-                        
-                        # Auto-fill multi-row dari PDF
-                        if ldk_data.izin_usaha_rows:
-                            st.session_state["ijin_rows"] = [
-                                {"jenis_izin": row.jenis_izin, "klasifikasi": row.klasifikasi}
-                                for row in ldk_data.izin_usaha_rows
-                            ]
-                        
-                        # Auto-check Kinerja Penyedia jika ada
-                        if ldk_data.kinerja_required:
-                            st.session_state["add_kinerja"] = True
-                            st.session_state["kinerja_textarea"] = ldk_data.kinerja_penyedia
-                    else:
-                        st.warning(f"⚠️ Extract tidak menemukan data LDK: {ldk_data.errors}")
-                except Exception as e:
-                    st.error(f"❌ Error extract PDF: {e}")
-                
-                # Cleanup temp file
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-        
-        # Display hasil extract jika ada
-        if "ldk_pdf_data" in st.session_state:
-            ldk_data = st.session_state["ldk_pdf_data"]
-            if ldk_data.extracted:
-                with st.expander("📋 Hasil Extract LDK dari PDF", expanded=True):
-                    # Multi-row Izin Usaha
-                    if ldk_data.izin_usaha_rows:
-                        st.write(f"**Izin Usaha ({len(ldk_data.izin_usaha_rows)} rows):**")
-                        for i, row in enumerate(ldk_data.izin_usaha_rows):
-                            st.write(f"  {i+1}. **{row.jenis_izin}**")
-                            st.caption(f"     {row.klasifikasi[:150]}...")
-                    
-                    # Kinerja Penyedia
-                    if ldk_data.kinerja_required:
-                        st.write("**🏆 Kinerja Penyedia:** ✅ Ditemukan")
-                        st.caption(f"     {ldk_data.kinerja_penyedia[:200]}...")
-                    
-                    # Persyaratan lain
-                    st.write("**Persyaratan Lain:**")
-                    st.write(f"  • Pengalaman minimal: {ldk_data.pengalaman_min} Pekerjaan Konstruksi")
-                    st.write(f"  • Kemampuan Paket (KP): {ldk_data.skp_kp} paket")
-                    
-                    st.caption(f"Diekstrak dari halaman {ldk_data.halaman_ldk} DOKPIL")
-
-    # ── Multi-row Izin Usaha (WAJIB) ─────────────────────────────────────────
-    with st.expander("📋 Izin Usaha (wajib diisi)", expanded=True):
-        # Init session state untuk multi-row
+        # ── Izin Usaha rows (fallback jika DOKPIL tidak diupload) ────────────
+        st.markdown("**Izin Usaha** *(default — ditimpa oleh DOKPIL jika diupload)*")
         if "ijin_rows" not in st.session_state:
-            st.session_state["ijin_rows"] = [
-                dict(row) for row in ldk_config.IJIN_USAHA_DEFAULT["rows"]
-            ]
-        
-        # Display rows
+            st.session_state["ijin_rows"] = [dict(r) for r in ldk_config.IJIN_USAHA_DEFAULT["rows"]]
+
+        # ── Load/save SBU terakhir ke file ───────────────────────────────────
+        import json as _json
+        _SBU_LAST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_last.json")
+
+        def _load_sbu_last():
+            try:
+                with open(_SBU_LAST_FILE, "r", encoding="utf-8") as f:
+                    return _json.load(f)
+            except Exception:
+                return {"sbu_2020": "", "sbu_2015": ""}
+
+        def _save_sbu_last(sbu_2020, sbu_2015):
+            try:
+                with open(_SBU_LAST_FILE, "w", encoding="utf-8") as f:
+                    _json.dump({"sbu_2020": sbu_2020, "sbu_2015": sbu_2015}, f)
+            except Exception:
+                pass
+
+        # Inisialisasi default SBU dari file — hanya sekali per session, SEBELUM widget dirender
+        if "sbu_last_loaded" not in st.session_state:
+            _last = _load_sbu_last()
+            # Hanya set jika key belum ada (jangan overwrite pilihan user saat ini)
+            if "sbu_2020_1" not in st.session_state:
+                st.session_state["sbu_2020_1"] = _last["sbu_2020"]
+            if "sbu_2015_1" not in st.session_state:
+                st.session_state["sbu_2015_1"] = _last["sbu_2015"]
+            st.session_state["sbu_last_loaded"] = True
+
+        # Opsi SBU dropdown — tambah kosong di awal
+        _sbu_opts_2020 = [""] + ldk_config.SBU_KBLI_2020
+        _sbu_opts_2015 = [""] + ldk_config.SBU_KBLI_2015
+
         for i, row in enumerate(st.session_state["ijin_rows"]):
-            st.markdown(f"**Row {i+1}:**")
-            col_r1, col_r2, col_r3 = st.columns([2, 5, 1])
-            with col_r1:
-                st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
-                    "Jenis Izin",
-                    value=row["jenis_izin"],
-                    key=f"ijin_nama_{i}",
-                    label_visibility="collapsed",
-                )
-            with col_r2:
-                st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
-                    "Bidang Usaha / Klasifikasi",
-                    value=row["klasifikasi"],
-                    key=f"ijin_klas_{i}",
-                    label_visibility="collapsed",
-                    height=80,
-                )
-            with col_r3:
-                if len(st.session_state["ijin_rows"]) > 1:
-                    if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
-                        st.session_state["ijin_rows"].pop(i)
-                        st.rerun()
-        
-        # Tombol tambah row
-        if st.button("➕ Tambah Row Izin Usaha", key="tambah_row_ijin"):
+            st.caption(f"Row {i+1}")
+
+            # Row 2 = SBU → tampilkan 2 dropdown
+            if i == 1:
+                col_jn, col_del = st.columns([6, 1])
+                with col_jn:
+                    st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
+                        "Jenis Izin", value=row["jenis_izin"],
+                        key=f"ijin_nama_{i}", label_visibility="collapsed",
+                    )
+                with col_del:
+                    if len(st.session_state["ijin_rows"]) > 1:
+                        if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
+                            st.session_state["ijin_rows"].pop(i)
+                            st.rerun()
+
+                col_2020, col_2015 = st.columns(2)
+                with col_2020:
+                    sbu_2020 = st.selectbox(
+                        "SBU KBLI 2020",
+                        options=_sbu_opts_2020,
+                        key="sbu_2020_1",
+                        label_visibility="collapsed",
+                    )
+                with col_2015:
+                    sbu_2015 = st.selectbox(
+                        "SBU KBLI 2015",
+                        options=_sbu_opts_2015,
+                        key="sbu_2015_1",
+                        label_visibility="collapsed",
+                    )
+
+                # Auto-generate teks klasifikasi dari pilihan dropdown
+                _gen = ldk_config.build_sbu_klasifikasi(sbu_2020, sbu_2015)
+                if _gen:
+                    st.session_state["ijin_rows"][i]["klasifikasi"] = _gen
+                    st.text_area(
+                        "Preview teks SBU",
+                        value=_gen,
+                        key=f"ijin_klas_{i}_preview",
+                        label_visibility="collapsed",
+                        height=100,
+                        disabled=True,
+                    )
+                else:
+                    # Fallback: edit manual jika belum pilih SBU
+                    st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
+                        "Klasifikasi manual",
+                        value=row["klasifikasi"],
+                        key=f"ijin_klas_{i}",
+                        label_visibility="collapsed",
+                        height=80,
+                    )
+            else:
+                col_r1, col_r2, col_r3 = st.columns([2, 5, 1])
+                with col_r1:
+                    st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
+                        "Jenis Izin", value=row["jenis_izin"],
+                        key=f"ijin_nama_{i}", label_visibility="collapsed",
+                    )
+                with col_r2:
+                    st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
+                        "Klasifikasi", value=row["klasifikasi"],
+                        key=f"ijin_klas_{i}", label_visibility="collapsed", height=80,
+                    )
+                with col_r3:
+                    if len(st.session_state["ijin_rows"]) > 1:
+                        if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
+                            st.session_state["ijin_rows"].pop(i)
+                            st.rerun()
+
+        if st.button("➕ Tambah Row Izin", key="tambah_row_ijin"):
             st.session_state["ijin_rows"].append({"jenis_izin": "", "klasifikasi": ""})
             st.rerun()
-        
-        st.caption("Row 1: SBU + deskripsi | Row 2: Izin Usaha + deskripsi")
 
-    # ── Kinerja Penyedia ─────────────────────────────────────────────────────
-    with st.expander("🏆 Kinerja Penyedia (wajib)", expanded=True):
-        add_kinerja = st.checkbox(
-            "Tambahkan persyaratan Kinerja Penyedia",
-            value=st.session_state.get("add_kinerja", True),
-            key="add_kinerja_checkbox",
+        st.divider()
+
+        # ── Syarat Teknis (Kinerja Penyedia + rows tambahan) ─────────────────
+        st.markdown("**Syarat Teknis**")
+        if "sp_syarat_teknis_rows" not in st.session_state:
+            st.session_state["sp_syarat_teknis_rows"] = [
+                {"label": "Kinerja Penyedia", "teks": ldk_config.KINERJA_PENYEDIA_DEFAULT}
+            ]
+
+        _st_rows = st.session_state["sp_syarat_teknis_rows"]
+        for i, st_row in enumerate(_st_rows):
+            col_lbl, col_del = st.columns([5, 1])
+            with col_lbl:
+                chk = st.checkbox(
+                    st_row["label"],
+                    value=st.session_state.get(f"sp_st_chk_{i}", True),
+                    key=f"sp_st_chk_{i}",
+                )
+            with col_del:
+                if len(_st_rows) > 1 and st.button("🗑️", key=f"sp_st_del_{i}", use_container_width=True):
+                    _st_rows.pop(i)
+                    st.rerun()
+            if chk:
+                _st_rows[i]["teks"] = st.text_area(
+                    "Teks",
+                    value=st_row["teks"],
+                    key=f"sp_st_teks_{i}",
+                    height=80,
+                    label_visibility="collapsed",
+                )
+
+        if st.button("➕ Tambah Syarat Teknis", key="sp_tambah_syarat"):
+            _st_rows.append({"label": "Syarat Teknis Baru", "teks": ""})
+            st.rerun()
+
+        st.divider()
+
+        # ── Masa Berlaku ──────────────────────────────────────────────────────
+        st.markdown("**Masa Berlaku Penawaran**")
+        mb_nilai_hari = st.number_input(
+            "Hari",
+            min_value=1, max_value=365, value=40, step=1,
+            help="Default 40 hari — standar konstruksi usaha kecil",
+            label_visibility="collapsed",
         )
-        
-        if add_kinerja:
-            st.session_state["add_kinerja"] = True
-            st.text_area(
-                "Teks Kinerja Penyedia:",
-                value=ldk_config.KINERJA_PENYEDIA_DEFAULT,
-                height=120,
-                key="kinerja_textarea",
+        st.caption(f"{int(mb_nilai_hari)} hari")
+
+        st.divider()
+
+        sp_push = st.button(
+            f"🚀 Push Setup ke SPSE ({len(sp_selected)} paket)",
+            type="primary",
+            use_container_width=True,
+            disabled=len(sp_selected) == 0,
+            key="sp_push_all",
+        )
+
+        if sp_push:
+            import tempfile, ldk_pdf_extractor as _ldk_ext
+
+            # Simpan pilihan SBU terakhir (persisten lintas restart Streamlit)
+            _save_sbu_last(
+                st.session_state.get("sbu_2020_1", ""),
+                st.session_state.get("sbu_2015_1", ""),
             )
-            st.caption("Akan otomatis klik 'Tambah Syarat Teknis' + checklist + isi teks")
-        else:
-            st.session_state["add_kinerja"] = False
 
-    st.divider()
+            # Default dari form (dipakai jika paket tidak punya DOKPIL)
+            _default_ijin = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            _default_kinerja = "\n".join(
+                r["teks"] for i, r in enumerate(st.session_state.get("sp_syarat_teknis_rows", []))
+                if st.session_state.get(f"sp_st_chk_{i}", True) and r["teks"].strip()
+            )
+            mb_hari = int(mb_nilai_hari)
 
-    # ── Tombol utama: Push LDK ────────────────────────────────────────────────
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        push_clicked = st.button(
-            "🚀 Push LDK ke SPSE",
-            type="primary",
-            use_container_width=True,
-            disabled=not bool(ldk_url_final),
-            key="ldk_push",
-        )
-    with col2:
-        scan_only = st.button(
-            "🔍 Scan Saja (Preview)",
-            use_container_width=True,
-            disabled=not bool(ldk_url_final),
-            key="ldk_scan",
-        )
+            progress = st.progress(0, text="Memulai...")
+            hasil_sp = []
 
-    # ── Scan / Push ───────────────────────────────────────────────────────────
-    if push_clicked or scan_only:
-        if not paket_id:
-            st.error("ID paket tidak diketahui. Isi kode tender atau buka halaman paket di browser.")
-        else:
-            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
-            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
+            for i, p in enumerate(sp_selected):
+                pid = p["id_lelang"]
+                progress.progress((i + 1) / len(sp_selected), text=f"Setup {p['kode']} ({i+1}/{len(sp_selected)})...")
 
-            with st.spinner("Scraping form LDK..."):
-                try:
-                    preview = ldk_engine.preview_ldk(paket_id)
-                except Exception as e:
-                    st.error(f"Gagal scrape halaman LDK: {e}")
-                    st.stop()
+                row_result = {"kode": p["kode"], "nama": p["nama"][:50], "ldk": "—", "checklist": "—", "masa_berlaku": "—"}
 
-            classified = preview["classified"]
-            scraped    = preview["scraped"]
-            st.session_state["ldk_classified"] = classified
-            st.session_state["ldk_scraped"]    = scraped
-
-    # ── Preview hasil scan ────────────────────────────────────────────────────
-    if "ldk_classified" in st.session_state:
-        classified = st.session_state["ldk_classified"]
-        scraped    = st.session_state["ldk_scraped"]
-
-        st.caption(f"Endpoint: `{scraped['action_url']}`")
-        st.caption(f"Token: `{'ada' if scraped['token'] else 'tidak ditemukan ⚠️'}`")
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Locked",      len(classified["locked"]))
-        c2.metric("Auto-check",  len(classified["auto_check"]))
-        c3.metric("Check+Fill",  len(classified["check_and_fill"]))
-        c4.metric("Skip",        len(classified["skip"]))
-        c5.metric("Unknown",     len(classified["unknown"]))
-
-        with st.expander("✅ Auto-check"):
-            for cb in classified["auto_check"]:
-                st.write(f"• {cb['label'][:120]}")
-
-        with st.expander("✅ Check + Fill"):
-            for cb, cfg in classified["check_and_fill"]:
-                st.write(f"• {cb['label'][:100]}")
-                st.caption(f"  → Teks: {cfg['text'][:100]}…")
-
-        with st.expander("🔒 Locked (dikelola SPSE, tidak disentuh)"):
-            for cb in classified["locked"]:
-                st.write(f"• {cb['label'][:120] or '(tanpa label)'}")
-
-        with st.expander("⬜ Skip"):
-            for cb in classified["skip"]:
-                st.write(f"• {cb['label'][:120]}")
-
-        if classified["unknown"]:
-            with st.expander("❓ Unknown (tidak dikenali — tidak di-submit)"):
-                for cb in classified["unknown"]:
-                    st.write(f"• {cb['label'][:120] or cb['name']}")
-
-        st.divider()
-
-        # Submit langsung jika tombol Push yang diklik
-        if push_clicked:
-            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
-            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
-            with st.spinner("Mengirim ke SPSE..."):
-                try:
-                    result = ldk_engine.submit_ldk(
-                        paket_id,
-                        ijin_usaha_rows=ijin_rows,
-                        kinerja_text=kinerja_txt,
-                    )
-                except Exception as e:
-                    st.error(f"Error saat submit: {e}")
-                    st.stop()
-
-            if result["ok"]:
-                st.success(f"Berhasil! Status {result['status']} — silakan cek halaman LDK di browser.")
-            else:
-                st.error(f"Gagal. Status {result['status']}")
-
-        elif scan_only:
-            ijin_rows   = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
-            kinerja_txt = st.session_state.get("kinerja_textarea", ldk_config.KINERJA_PENYEDIA_DEFAULT) if st.session_state.get("add_kinerja", True) else ""
-            n_check = len(classified["auto_check"]) + len(classified["check_and_fill"])
-            if st.button(f"📤 Submit {n_check} item ke SPSE", type="primary", key="ldk_submit_manual"):
-                with st.spinner("Mengirim ke SPSE..."):
+                # Extract DOKPIL per paket jika diupload
+                ijin_rows   = _default_ijin
+                kinerja_txt = _default_kinerja
+                dokpil_file = p.get("_dokpil")
+                if dokpil_file:
                     try:
-                        result = ldk_engine.submit_ldk(
-                            paket_id,
-                            ijin_usaha_rows=ijin_rows,
-                            kinerja_text=kinerja_txt,
-                        )
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                            tmp.write(dokpil_file.getvalue())
+                            tmp_path = tmp.name
+                        ldk_data = _ldk_ext.extract_ldk_from_pdf(tmp_path)
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+                        if ldk_data.extracted:
+                            if ldk_data.izin_usaha_rows:
+                                ijin_rows = [
+                                    {"jenis_izin": r.jenis_izin, "klasifikasi": r.klasifikasi}
+                                    for r in ldk_data.izin_usaha_rows
+                                ]
+                            if ldk_data.kinerja_required and ldk_data.kinerja_penyedia:
+                                kinerja_txt = ldk_data.kinerja_penyedia
+                        row_result["ldk"] = row_result["ldk"]  # akan diisi di bawah
                     except Exception as e:
-                        st.error(f"Error saat submit: {e}")
-                        st.stop()
+                        row_result["ldk"] = f"❌ Extract DOKPIL gagal: {e}"
+                        hasil_sp.append(row_result)
+                        continue
 
-                if result["ok"]:
-                    st.success(f"Berhasil! Status {result['status']} — silakan cek halaman LDK di browser.")
-                else:
-                    st.error(f"Gagal. Status {result['status']}")
+                try:
+                    r_ldk = ldk_engine.submit_ldk(pid, ijin_usaha_rows=ijin_rows, kinerja_text=kinerja_txt)
+                    row_result["ldk"] = "✅" if r_ldk["ok"] else f"❌ {r_ldk['status']}"
+                except Exception as e:
+                    row_result["ldk"] = f"❌ {e}"
 
+                try:
+                    r_ck = checklist_engine.submit_checklist(pid)
+                    row_result["checklist"] = "✅" if r_ck["sukses"] else f"❌ {r_ck['pesan']}"
+                except Exception as e:
+                    row_result["checklist"] = f"❌ {e}"
 
-# ============================================================
-# Tab 5: Checklist Dokumen Penawaran
-# ============================================================
+                try:
+                    r_mb = masa_berlaku_engine.submit_masa_berlaku(pid, mb_hari)
+                    row_result["masa_berlaku"] = "✅" if r_mb["sukses"] else f"❌ {r_mb['pesan']}"
+                except Exception as e:
+                    row_result["masa_berlaku"] = f"❌ {e}"
 
-with tab5:
-    st.subheader("☑️ Checklist Dokumen Penawaran")
-    st.markdown(
-        "Bot otomatis mencentang dokumen penawaran sesuai template "
-        "konstruksi Usaha Kecil (Teknis + Harga). Administrasi dikelola sistem."
-    )
+                hasil_sp.append(row_result)
 
-    # ── Auto-detect paket ID ──────────────────────────────────────────────────
-    ck_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    if ck_paket_id:
-        st.info(f"🔗 ID Paket terdeteksi: **{ck_paket_id}**")
-    else:
-        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
+            progress.empty()
 
-    ck_id_input = st.text_input(
-        "Kode Tender (override)",
-        value=ck_paket_id or "",
-        placeholder="Contoh: 4618177",
-        key="ck_id_input",
-    )
-    ck_id_final = ck_id_input or ck_paket_id
-
-    st.divider()
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        ck_push = st.button(
-            "🚀 Push Checklist ke SPSE",
-            type="primary",
-            use_container_width=True,
-            disabled=not bool(ck_id_final),
-            key="ck_push",
-        )
-    with col2:
-        ck_scan_only = st.button(
-            "🔍 Scan Saja (Preview)",
-            use_container_width=True,
-            disabled=not bool(ck_id_final),
-            key="ck_scan",
-        )
-
-    if ck_scan_only and ck_id_final:
-        with st.spinner("Scanning checklist..."):
-            result = checklist_engine.scan_saja(ck_id_final)
-        if not result["sukses"]:
-            st.error(result["pesan"])
-        else:
-            klas = result["klasifikasi"]
-            st.session_state["ck_klasifikasi"] = klas
-            st.session_state["ck_scraped"] = result["scraped"]
-            st.session_state["ck_id"] = ck_id_final
-
-    if ck_push and ck_id_final:
-        with st.spinner("Submit checklist ke SPSE..."):
-            result = checklist_engine.submit_checklist(ck_id_final)
-        if result["sukses"]:
-            st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
-            klas_detail = result["detail"]
-            st.caption(f"Di-check: {len(klas_detail['auto_check'])} item | Skip: {len(klas_detail['skip'])} | Locked: {len(klas_detail['locked'])}")
-        else:
-            st.error(f"❌ {result['pesan']}")
-
-    if "ck_klasifikasi" in st.session_state and st.session_state.get("ck_id") == ck_id_final:
-        klas = st.session_state["ck_klasifikasi"]
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("✅ Auto-check", len(klas["auto_check"]))
-        c2.metric("⬜ Skip", len(klas["skip"]))
-        c3.metric("🔒 Locked", len(klas["locked"]))
-
-        with st.expander("✅ Yang akan di-check"):
-            for cb in klas["auto_check"]:
-                st.write(f"• {cb['label'][:120]}")
-        with st.expander("🔒 Locked (dikelola sistem)"):
-            for cb in klas["locked"]:
-                st.write(f"• {cb['label'][:80] or '(tanpa label)'}")
-        with st.expander("⬜ Skip"):
-            for cb in klas["skip"]:
-                st.write(f"• {cb['label'][:120]}")
-
-        st.divider()
-        if st.button("📤 Submit Sekarang", type="primary", key="ck_submit_manual"):
-            with st.spinner("Submit checklist ke SPSE..."):
-                result = checklist_engine.submit_checklist(ck_id_final)
-            if result["sukses"]:
-                st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
-            else:
-                st.error(f"❌ {result['pesan']}")
-
-
-# ============================================================
-# Tab 6: Masa Berlaku Penawaran
-# ============================================================
-
-with tab6:
-    st.subheader("⏳ Masa Berlaku Penawaran")
-    st.markdown(
-        "Set masa berlaku penawaran ke **40 hari** secara otomatis via API. "
-        "Endpoint: `/dokumen/[ID]/masaberlakupenawaransubmit`"
-    )
-
-    # ── Auto-detect paket ID ──────────────────────────────────────────────────
-    mb_paket_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    if mb_paket_id:
-        st.info(f"🔗 ID Paket terdeteksi: **{mb_paket_id}**")
-    else:
-        st.warning("Buka halaman paket di browser terlebih dahulu agar ID terdeteksi otomatis.")
-
-    mb_id_input = st.text_input(
-        "Kode Tender (override)",
-        value=mb_paket_id or "",
-        placeholder="Contoh: 4618177",
-        key="mb_id_input",
-    )
-    mb_id_final = mb_id_input or mb_paket_id
-
-    mb_nilai_hari = st.number_input(
-        "Nilai Masa Berlaku (hari)",
-        min_value=1, max_value=365, value=40, step=1,
-        help="Default 40 hari — standar konstruksi usaha kecil",
-    )
-
-    st.divider()
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        mb_push = st.button(
-            "🚀 Set Masa Berlaku ke SPSE",
-            type="primary",
-            use_container_width=True,
-            disabled=not bool(mb_id_final),
-            key="mb_push",
-        )
-    with col2:
-        mb_scan_only = st.button(
-            "🔍 Cek Nilai Saat Ini",
-            use_container_width=True,
-            disabled=not bool(mb_id_final),
-            key="mb_scan",
-        )
-
-    if mb_scan_only and mb_id_final:
-        with st.spinner("Mengambil data dari SPSE..."):
-            cookie = spse_browser.get_spse_cookies()
-            try:
-                scraped = masa_berlaku_engine.scrap_token(mb_id_final, cookie)
-                st.success(f"Nilai masa berlaku saat ini: **{scraped['masaberlaku_saat_ini']} hari**")
-            except Exception as e:
-                st.error(str(e))
-
-    if mb_push and mb_id_final:
-        with st.spinner(f"Setting masa berlaku {int(mb_nilai_hari)} hari ke SPSE..."):
-            result = masa_berlaku_engine.submit_masa_berlaku(mb_id_final, int(mb_nilai_hari))
-        if result["sukses"]:
-            st.success(f"✅ {result['pesan']} (HTTP {result['status_code']})")
-            if result.get("sebelumnya"):
-                st.caption(f"Sebelumnya: {result['sebelumnya']} hari")
-        else:
-            st.error(f"❌ {result['pesan']}")
+            sukses_n = sum(1 for h in hasil_sp if all(v == "✅" for k, v in h.items() if k not in ("kode", "nama")))
+            st.success(f"✅ Selesai! {sukses_n}/{len(hasil_sp)} paket berhasil.")
+            st.dataframe(
+                hasil_sp,
+                use_container_width=True,
+                column_config={
+                    "kode":         st.column_config.TextColumn("Kode", width="small"),
+                    "nama":         st.column_config.TextColumn("Nama Paket", width="large"),
+                    "ldk":          st.column_config.TextColumn("LDK", width="small"),
+                    "checklist":    st.column_config.TextColumn("Checklist", width="small"),
+                    "masa_berlaku": st.column_config.TextColumn("Masa Berlaku", width="small"),
+                },
+                hide_index=True,
+            )
 
 
 # ============================================================
@@ -794,26 +506,19 @@ with tab6:
 # ============================================================
 
 with tab7:
-    st.subheader("Jadwal Pemberian Penjelasan — Auto POST")
-    st.markdown(
-        "Bot akan **POST penjelasan otomatis** tepat saat jadwal pemberian penjelasan dimulai. "
-        "Pastikan Chrome SPSE dan Streamlit ini tetap terbuka saat jadwal tiba."
-    )
-
-    # ── Status scheduler ──────────────────────────────────────────────────────
     sched_running = penjelasan_engine.is_scheduler_running()
     if sched_running:
-        st.success("🟢 Scheduler aktif — monitoring setiap 15 detik")
+        st.success("🟢 Scheduler aktif")
     else:
         st.error("🔴 Scheduler tidak aktif")
         if st.button("▶️ Aktifkan Scheduler"):
             penjelasan_engine.start_scheduler()
             st.rerun()
 
-    st.divider()
+    _pj_col_jobs, _pj_col_form = st.columns([3, 2])
 
-    # ── Form tambah paket ─────────────────────────────────────────────────────
-    st.markdown("### Daftarkan Paket")
+    with _pj_col_form:
+        st.markdown("### Daftarkan Paket")
 
     with st.form("form_tambah_penjelasan"):
         col_id, col_nama = st.columns([1, 2])
@@ -924,95 +629,89 @@ with tab7:
                     else:
                         st.warning(f"⚠️ Paket {paket_id}: waktu sudah lewat! Pertimbangkan submit manual.")
 
-    # ── Daftar jobs terjadwal ─────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Jobs Terjadwal")
-
-    jobs = penjelasan_engine.get_jobs()
-    if not jobs:
-        st.info("Belum ada job terdaftar.")
-    else:
-        from datetime import datetime
-        from penjelasan_engine import TZ_WIB
-        now = datetime.now(TZ_WIB)
-
-        for job in sorted(jobs, key=lambda j: j["waktu_fire"]):
-            waktu_fire = datetime.fromisoformat(job["waktu_fire"])
-            delta      = waktu_fire - now
-            sisa_secs  = int(delta.total_seconds())
-
-            status = job["status"]
-            if status == "fired":
-                icon = "✅"
-            elif status == "gagal":
-                icon = "❌"
-            elif sisa_secs <= 0:
-                icon = "⏰"
-            else:
-                jam   = sisa_secs // 3600
-                menit = (sisa_secs % 3600) // 60
-                icon  = f"⏳ {jam}j {menit}m"
-
-            jenis_label = penjelasan_config.JENIS_PAKET.get(job["jenis"], job["jenis"])
-
-            col_info, col_hapus, col_test = st.columns([4, 1, 1])
-            with col_info:
-                st.markdown(
-                    f"**{icon}** `{job['paket_id']}` — {job['nama_paket'][:50]}  \n"
-                    f"  {jenis_label} | "
-                    f"  {waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB | status: `{status}`"
-                )
-                if status == "gagal" and job.get("result"):
-                    with st.expander(f"Detail error {job['paket_id']}"):
-                        st.json(job["result"])
-                if status == "fired" and job.get("result"):
-                    with st.expander(f"Detail result {job['paket_id']}"):
-                        st.json(job["result"])
-
-            with col_hapus:
-                if st.button("🗑️", key=f"hapus_{job['paket_id']}_{job['jenis']}", help="Hapus job"):
-                    penjelasan_engine.hapus_job(job["paket_id"], job["jenis"])
-                    st.rerun()
-
-            with col_test:
-                if st.button("🧪", key=f"test_{job['paket_id']}_{job['jenis']}", help="Test submit sekarang"):
-                    with st.spinner(f"Test submit paket {job['paket_id']}..."):
-                        try:
-                            result = penjelasan_engine.submit_penjelasan(
-                                paket_id      = job["paket_id"],
-                                jenis         = job["jenis"],
-                                teks_override = job.get("teks_override"),
-                            )
-                            if result["ok"]:
-                                st.success(f"✅ HTTP {result['status']}")
-                            else:
-                                st.error(f"❌ HTTP {result['status']}")
-                            with st.expander("Response"):
-                                st.code(result["body"][:2000])
-                        except Exception as e:
-                            st.error(str(e))
-
-    # ── Preview template ──────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### Preview Template Teks")
-    prev_jenis = st.selectbox(
-        "Pilih template:",
-        options=list(penjelasan_config.JENIS_PAKET.keys()),
-        format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
-        key="prev_template_jenis",
-    )
-    st.text_area("Isi template:", value=penjelasan_config.TEMPLATE[prev_jenis], height=300, disabled=True)
-
-    # ── Log scheduler ─────────────────────────────────────────────────────────
-    st.divider()
-    with st.expander("📋 Log Scheduler"):
-        log_lines = penjelasan_engine.get_log()
-        if log_lines:
-            st.code("\n".join(reversed(log_lines[-50:])))
+    with _pj_col_jobs:
+        st.markdown("### Jobs Terjadwal")
+        jobs = penjelasan_engine.get_jobs()
+        if not jobs:
+            st.info("Belum ada job terdaftar.")
         else:
-            st.info("Log kosong.")
-        if st.button("🔄 Refresh Log"):
-            st.rerun()
+            from datetime import datetime as _dt
+            from penjelasan_engine import TZ_WIB
+            now = _dt.now(TZ_WIB)
+
+            for job in sorted(jobs, key=lambda j: j["waktu_fire"]):
+                waktu_fire = _dt.fromisoformat(job["waktu_fire"])
+                delta      = waktu_fire - now
+                sisa_secs  = int(delta.total_seconds())
+
+                status = job["status"]
+                if status == "fired":
+                    icon = "✅"
+                elif status == "gagal":
+                    icon = "❌"
+                elif sisa_secs <= 0:
+                    icon = "⏰"
+                else:
+                    jam   = sisa_secs // 3600
+                    menit = (sisa_secs % 3600) // 60
+                    icon  = f"⏳ {jam}j {menit}m"
+
+                jenis_label = penjelasan_config.JENIS_PAKET.get(job["jenis"], job["jenis"])
+
+                col_info, col_hapus, col_test = st.columns([4, 1, 1])
+                with col_info:
+                    st.markdown(
+                        f"**{icon}** `{job['paket_id']}` — {job['nama_paket'][:40]}  \n"
+                        f"{jenis_label} | {waktu_fire.strftime('%d/%m/%Y %H:%M')} | `{status}`"
+                    )
+                    if status == "gagal" and job.get("result"):
+                        with st.expander(f"Error {job['paket_id']}"):
+                            st.json(job["result"])
+                    if status == "fired" and job.get("result"):
+                        with st.expander(f"Result {job['paket_id']}"):
+                            st.json(job["result"])
+
+                with col_hapus:
+                    if st.button("🗑️", key=f"hapus_{job['paket_id']}_{job['jenis']}", help="Hapus"):
+                        penjelasan_engine.hapus_job(job["paket_id"], job["jenis"])
+                        st.rerun()
+
+                with col_test:
+                    if st.button("🧪", key=f"test_{job['paket_id']}_{job['jenis']}", help="Test submit"):
+                        with st.spinner(f"Test {job['paket_id']}..."):
+                            try:
+                                result = penjelasan_engine.submit_penjelasan(
+                                    paket_id=job["paket_id"],
+                                    jenis=job["jenis"],
+                                    teks_override=job.get("teks_override"),
+                                )
+                                if result["ok"]:
+                                    st.success(f"✅ HTTP {result['status']}")
+                                else:
+                                    st.error(f"❌ HTTP {result['status']}")
+                                with st.expander("Response"):
+                                    st.code(result["body"][:2000])
+                            except Exception as e:
+                                st.error(str(e))
+
+        st.divider()
+        with st.expander("📋 Log Scheduler"):
+            log_lines = penjelasan_engine.get_log()
+            if log_lines:
+                st.code("\n".join(reversed(log_lines[-50:])))
+            else:
+                st.info("Log kosong.")
+            if st.button("🔄 Refresh Log"):
+                st.rerun()
+
+        st.divider()
+        prev_jenis = st.selectbox(
+            "Preview template:",
+            options=list(penjelasan_config.JENIS_PAKET.keys()),
+            format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
+            key="prev_template_jenis",
+        )
+        st.text_area("Isi template:", value=penjelasan_config.TEMPLATE[prev_jenis], height=200, disabled=True)
 
 
 # ============================================================
@@ -1020,225 +719,223 @@ with tab7:
 # ============================================================
 
 with tab8:
-    st.subheader("📅 Auto-Fill Jadwal Tender")
-    st.markdown(
-        "Buat **12 tahapan jadwal tender** secara otomatis sesuai peraturan. "
-        "Cukup masukkan **Kode Paket** + **Tanggal Mulai**, sistem akan menghitung "
-        "semua tanggal dan submit langsung ke SPSE (tanpa perlu buka halaman edit manual)."
-    )
 
-    # ── Info aturan ───────────────────────────────────────────────────────────
-    with st.expander("📖 Lihat Aturan 12 Tahapan"):
-        for t in jadwal_config.TAHAPAN:
-            st.write(f"**{t['id']}. {t['nama']}**")
-            st.caption(t["aturan"])
-            st.write("")
+    _hari_nama  = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]
+    _bulan_nama = ["Januari","Februari","Maret","April","Mei","Juni",
+                   "Juli","Agustus","September","Oktober","November","Desember"]
+    LIBUR_2026 = {
+        "2026-01-01": "Tahun Baru 2026 Masehi",
+        "2026-01-16": "Isra Mikraj Nabi Muhammad S.A.W.",
+        "2026-02-16": "Cuti Bersama Tahun Baru Imlek",
+        "2026-02-17": "Tahun Baru Imlek 2577 Kongzili",
+        "2026-03-18": "Cuti Bersama Hari Suci Nyepi",
+        "2026-03-19": "Hari Suci Nyepi (Tahun Baru Saka 1948)",
+        "2026-03-20": "Cuti Bersama Idul Fitri 1447 Hijriah",
+        "2026-03-21": "Idul Fitri 1447 Hijriah",
+        "2026-03-22": "Idul Fitri 1447 Hijriah",
+        "2026-03-23": "Cuti Bersama Idul Fitri 1447 Hijriah",
+        "2026-03-24": "Cuti Bersama Idul Fitri 1447 Hijriah",
+        "2026-04-03": "Wafat Yesus Kristus",
+        "2026-04-05": "Kebangkitan Yesus Kristus (Paskah)",
+        "2026-05-01": "Hari Buruh Internasional",
+        "2026-05-14": "Kenaikan Yesus Kristus",
+        "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus",
+        "2026-05-27": "Idul Adha 1447 Hijriah",
+        "2026-05-28": "Cuti Bersama Idul Adha 1447 Hijriah",
+        "2026-05-31": "Hari Raya Waisak 2570 BE",
+        "2026-06-01": "Hari Lahir Pancasila",
+        "2026-06-16": "1 Muharam Tahun Baru Islam 1448 Hijriah",
+        "2026-08-17": "Proklamasi Kemerdekaan",
+        "2026-08-25": "Maulid Nabi Muhammad S.A.W.",
+        "2026-12-24": "Cuti Bersama Kelahiran Yesus Kristus",
+        "2026-12-25": "Kelahiran Yesus Kristus",
+    }
+    _libur_map = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in LIBUR_2026.items()}
 
-    st.divider()
+    _jd_col_list, _jd_col_detail = st.columns([3, 2])
 
-    # ── Auto-detect dari browser ───────────────────────────────────────────────
-    jd_auto_id = spse_browser.get_paket_id() if spse_browser.get_url() else None
-    jd_auto_nama = spse_browser.get_nama_paket() if jd_auto_id else None
-    if jd_auto_id and "jd_paket_id" not in st.session_state:
-        st.session_state["jd_paket_id"] = jd_auto_id
-    if jd_auto_id:
-        nama_info = f" — **{jd_auto_nama}**" if jd_auto_nama else ""
-        st.info(f"🔗 Terdeteksi dari browser: `{jd_auto_id}`{nama_info}")
+    with _jd_col_list:
+        st.markdown("### 1. Pilih Paket")
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+        col_fetch, col_all, col_none = st.columns([3, 1, 1])
+        with col_fetch:
+            if st.button("🔍 Ambil Paket Draft", key="jd_fetch_draft", use_container_width=True):
+                with st.spinner("Mengambil daftar paket..."):
+                    result_draft = kirimpesan_engine.fetch_paket_draft()
+                st.session_state["jd_paket_draft"] = result_draft
+                for key in list(st.session_state.keys()):
+                    if key.startswith("jd_chk_") or key.startswith("jd_tgl_"):
+                        del st.session_state[key]
 
-    col_detect = st.columns([1])[0]
-    with col_detect:
-        if st.button("🔄 Ambil Kode dari Browser", key="jd_ambil_browser"):
-            detected = spse_browser.get_paket_id() if spse_browser.get_url() else None
-            detected_nama = spse_browser.get_nama_paket() if detected else None
-            if detected:
-                st.session_state["jd_paket_id"] = detected
-                nama_msg = f" — {detected_nama}" if detected_nama else ""
-                st.success(f"Kode tender **{detected}**{nama_msg} berhasil diambil dari browser.")
+        jd_selected = []
+        if "jd_paket_draft" in st.session_state:
+            r = st.session_state["jd_paket_draft"]
+            if not r["sukses"]:
+                st.error(f"❌ {r['pesan']}")
             else:
-                st.warning("Browser belum terhubung atau tidak ada paket aktif di URL.")
+                paket_list = r.get("paket", [])
+                if not paket_list:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                else:
+                    with col_all:
+                        if st.button("✅ Semua", key="jd_sel_all", use_container_width=True):
+                            for p in paket_list:
+                                st.session_state[f"jd_chk_{p['id_lelang']}"] = True
+                            st.rerun()
+                    with col_none:
+                        if st.button("⬜ Kosong", key="jd_sel_none", use_container_width=True):
+                            for p in paket_list:
+                                st.session_state[f"jd_chk_{p['id_lelang']}"] = False
+                            st.rerun()
 
-    # ── Input ─────────────────────────────────────────────────────────────────
-    col_kode, col_date, col_time = st.columns([3, 2, 2])
-    with col_kode:
-        paket_id = st.text_input(
-            "🔢 Kode Tender",
-            value=st.session_state.get("jd_paket_id", ""),
-            placeholder="Contoh: 4618177",
-            help="Kode tender dari SPSE",
-            key="jd_paket_id_input",
-        )
-    with col_date:
-        default_date = datetime.now().date() + timedelta(days=1)
-        tgl_input = st.date_input(
-            "📆 Tanggal Mulai",
-            value=default_date,
-            help="Tanggal mulai Pengumuman Pascakualifikasi",
-        )
-    with col_time:
-        jam_input = st.time_input(
-            "🕐 Jam Mulai",
-            value=datetime.strptime("08:00", "%H:%M").time(),
-            help="Jam mulai (default 08:00)",
-        )
+                    for p in paket_list:
+                        key_chk = f"jd_chk_{p['id_lelang']}"
+                        checked = st.checkbox(
+                            f"**{p['kode']}** — {p['nama']}",
+                            value=st.session_state.get(key_chk, True),
+                            key=key_chk,
+                        )
+                        if checked:
+                            jd_selected.append(p)
 
-    # ── Tombol ────────────────────────────────────────────────────────────────
-    col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
-    with col_btn1:
-        jd_preview = st.button(
-            "🔍 Hitung & Preview (Dry Run)",
-            use_container_width=True,
-            disabled=not bool(paket_id),
-            help="Hitung jadwal + simpan payload ke file JSON, TIDAK submit ke SPSE",
-        )
-    with col_btn2:
-        jd_submit = st.button(
-            "🚀 Set Jadwal ke SPSE",
-            type="primary",
-            use_container_width=True,
-            disabled=not bool(paket_id),
-        )
-    with col_btn3:
-        jd_save_file = st.button(
-            "💾 Simpan JSON",
-            use_container_width=True,
-            disabled=not bool(paket_id),
-            help="Simpan payload ke file JSON untuk inspeksi manual",
+                    st.caption(f"**{len(jd_selected)}** dari **{len(paket_list)}** paket dipilih")
+        else:
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+    with _jd_col_detail:
+        st.markdown("### 2. Tanggal Mulai")
+
+        jd_beda_jadwal = st.checkbox(
+            "Jadwal berbeda per paket",
+            value=False,
+            key="jd_beda_jadwal",
         )
 
-    # ── Proses ────────────────────────────────────────────────────────────────
-    if jd_preview or jd_submit or jd_save_file:
-        tgl_mulai = datetime.combine(tgl_input, jam_input)
+        if not jd_beda_jadwal:
+            col_date, col_time = st.columns(2)
+            with col_date:
+                jd_tgl_global = st.date_input(
+                    "Tanggal",
+                    value=datetime.now().date(),
+                    format="DD/MM/YYYY",
+                    key="jd_tgl_global",
+                )
+                st.markdown(f"**{_hari_nama[jd_tgl_global.weekday()]}, {jd_tgl_global.day} {_bulan_nama[jd_tgl_global.month-1]} {jd_tgl_global.year}**")
+            with col_time:
+                jd_jam_global = st.time_input(
+                    "Jam",
+                    value=datetime.strptime("08:00", "%H:%M").time(),
+                    key="jd_jam_global",
+                )
+            if jd_tgl_global in _libur_map:
+                st.warning(f"⚠️ **{_libur_map[jd_tgl_global]}**")
+        else:
+            if not jd_selected:
+                st.info("Pilih paket di sebelah kiri terlebih dahulu.")
+            else:
+                for p in jd_selected:
+                    key_tgl = f"jd_tgl_{p['id_lelang']}"
+                    key_jam = f"jd_jam_{p['id_lelang']}"
+                    col_nama, col_tgl, col_jam = st.columns([3, 2, 1])
+                    with col_nama:
+                        st.markdown(f"**{p['kode']}**")
+                    with col_tgl:
+                        tgl_p = st.date_input(
+                            "Tgl",
+                            value=st.session_state.get(key_tgl, datetime.now().date()),
+                            format="DD/MM/YYYY",
+                            key=key_tgl,
+                            label_visibility="collapsed",
+                        )
+                        if tgl_p in _libur_map:
+                            st.caption(f"⚠️ {_libur_map[tgl_p]}")
+                        else:
+                            st.caption(f"{_hari_nama[tgl_p.weekday()]}, {tgl_p.day} {_bulan_nama[tgl_p.month-1]} {tgl_p.year}")
+                    with col_jam:
+                        st.time_input(
+                            "Jam",
+                            value=st.session_state.get(key_jam, datetime.strptime("08:00", "%H:%M").time()),
+                            key=key_jam,
+                            label_visibility="collapsed",
+                        )
 
-        with st.spinner(f"Scrap hidden fields + hitung jadwal untuk paket {paket_id}..."):
-            try:
-                result = jadwal_engine.auto_fill_jadwal(paket_id, tgl_mulai)
-            except Exception as e:
-                st.error(f"❌ Gagal: {e}")
-                st.stop()
-
-        st.session_state["jadwal_result"] = result
-        st.session_state["jadwal_tgl_mulai"] = tgl_mulai
-        st.session_state["jadwal_paket_id"] = paket_id
-
-    # ── Save to JSON file (dry run only) ──────────────────────────────────────
-    if jd_save_file and "jadwal_result" in st.session_state:
-        result = st.session_state["jadwal_result"]
-        paket_id = st.session_state["jadwal_paket_id"]
-        payload = result["payload"]
-
-        import json
-        from pathlib import Path
-        save_dir = Path(__file__).parent / "jadwal_output"
-        save_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_path = save_dir / f"jadwal_{paket_id}_{timestamp}.json"
-
-        with open(save_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "paket_id": paket_id,
-                "tanggal_mulai": st.session_state["jadwal_tgl_mulai"].strftime("%d/%m/%Y %H:%M"),
-                "jadwal_list": [
-                    {
-                        "nama": j["nama"],
-                        "mulai": j["mulai"].strftime("%d/%m/%Y %H:%M"),
-                        "selesai": j["selesai"].strftime("%d/%m/%Y %H:%M"),
-                    }
-                    for j in result["jadwal_list"]
-                ],
-                "payload": payload,
-                "mode": "DRY_RUN — belum disubmit ke SPSE",
-            }, f, indent=2, ensure_ascii=False)
-
-        st.success(f"✅ Payload disimpan ke: `{save_path}`")
-        st.info("📝 File JSON ini berisi semua data yang AKAN disubmit — bisa diinspeksi manual sebelum submit sungguhan.")
-
-    if "jadwal_result" in st.session_state:
-        result = st.session_state["jadwal_result"]
-        tgl_mulai = st.session_state["jadwal_tgl_mulai"]
-        paket_id = st.session_state["jadwal_paket_id"]
-        jadwal_list = result["jadwal_list"]
-        scraped = result["scraped"]
-        payload = result["payload"]
+        with st.expander("ℹ️ Libur Nasional Tersisa"):
+            hari_ini = datetime.now().date()
+            sisa = sorted(d for d in _libur_map if d >= hari_ini)
+            for d in sisa:
+                st.write(f"• {_hari_nama[d.weekday()]}, {d.day} {_bulan_nama[d.month-1]} {d.year} — {_libur_map[d]}")
 
         st.divider()
-        st.success(f"✅ Jadwal dihitung dari: **{tgl_mulai.strftime('%d/%m/%Y %H:%M')}**")
+        st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
-        # ── Tabel preview ────────────────────────────────────────────────────
-        st.markdown("### Preview Jadwal")
-
-        df_data = []
-        for j in jadwal_list:
-            df_data.append({
-                "Tahap": j["nama"][:50],
-                "Mulai": j["mulai"].strftime("%d/%m/%Y %H:%M"),
-                "Selesai": j["selesai"].strftime("%d/%m/%Y %H:%M"),
-                "Selisih": str(j["selesai"] - j["mulai"]),
-            })
-
-        st.dataframe(
-            df_data,
+        jd_submit = st.button(
+            f"🚀 Set Jadwal ke SPSE ({len(jd_selected)} paket)",
+            type="primary",
             use_container_width=True,
-            column_config={
-                "Tahap": st.column_config.TextColumn("Tahap", width="large"),
-                "Mulai": st.column_config.TextColumn("Mulai"),
-                "Selesai": st.column_config.TextColumn("Selesai"),
-                "Selisih": st.column_config.TextColumn("Durasi"),
-            },
-            hide_index=True,
+            disabled=len(jd_selected) == 0,
+            key="jd_submit",
         )
 
-        # ── Info ─────────────────────────────────────────────────────────────
-        st.caption(
-            f"CSRF: {'✅ ada' if scraped.get('csrf') else '⚠️ tidak ada'} | "
-            f"Rows: {len(scraped.get('rows', []))} | "
-            f"Paket: `{scraped.get('id', '?')}`"
-        )
-
-        # ── Submit ───────────────────────────────────────────────────────────
         if jd_submit:
-            if not scraped.get("csrf"):
-                st.error("CSRF token tidak ditemukan. Pastikan Chrome sudah login SPSE.")
-            elif not scraped.get("cookie"):
-                st.error("Cookie SPSE tidak ditemukan. Hubungkan browser di sidebar dulu.")
-            else:
-                with st.spinner("Submitting jadwal ke SPSE..."):
-                    try:
-                        submit_result = jadwal_engine.submit_jadwal(
-                            paket_id, payload, cookie_str=scraped.get("cookie")
-                        )
-                        if submit_result.get("ok"):
-                            st.success(
-                                f"✅ Jadwal berhasil disubmit! Status: {submit_result['status']}"
-                            )
-                            with st.expander("Response body"):
-                                st.code(submit_result["body"][:2000])
-                        else:
-                            st.error(
-                                f"❌ Gagal submit. Status: {submit_result['status']}"
-                            )
-                            with st.expander("Response body"):
-                                st.code(submit_result["body"][:2000])
-                    except Exception as e:
-                        st.error(f"❌ Error submit: {e}")
+            hasil_list = []
+            progress = st.progress(0, text="Memulai...")
 
-    # ── Libur nasional info ──────────────────────────────────────────────────
-    st.divider()
-    with st.expander("ℹ️ Info Libur Nasional"):
-        tahun = datetime.now().year
-        try:
-            liburs = jadwal_engine._fetch_libur_nasional(tahun)
-            if liburs:
-                st.success(f"✅ {len(liburs)} hari libur nasional {tahun} berhasil di-fetch")
-                for l in sorted(liburs)[:10]:
-                    hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-                    st.write(f"• {l.strftime('%d/%m/%Y')} ({hari[l.weekday()]})")
-                if len(liburs) > 10:
-                    st.write(f"... dan {len(liburs) - 10} lainnya")
+            for i, p in enumerate(jd_selected):
+                progress.progress((i + 1) / len(jd_selected), text=f"Submit {p['kode']} ({i+1}/{len(jd_selected)})...")
+
+                if jd_beda_jadwal:
+                    tgl_p = st.session_state.get(f"jd_tgl_{p['id_lelang']}", datetime.now().date())
+                    jam_p = st.session_state.get(f"jd_jam_{p['id_lelang']}", datetime.strptime("08:00", "%H:%M").time())
+                else:
+                    tgl_p = jd_tgl_global
+                    jam_p = jd_jam_global
+
+                tgl_mulai = datetime.combine(tgl_p, jam_p)
+
+                try:
+                    result = jadwal_engine.auto_fill_jadwal(p["id_lelang"], tgl_mulai)
+                    scraped = result["scraped"]
+                    payload = result["payload"]
+
+                    if not scraped.get("csrf"):
+                        hasil_list.append({"kode": p["kode"], "nama": p["nama"][:50], "sukses": False, "pesan": "CSRF tidak ditemukan", "mulai": ""})
+                        continue
+                    if not scraped.get("cookie"):
+                        hasil_list.append({"kode": p["kode"], "nama": p["nama"][:50], "sukses": False, "pesan": "Cookie tidak ditemukan", "mulai": ""})
+                        continue
+
+                    submit_result = jadwal_engine.submit_jadwal(p["id_lelang"], payload, cookie_str=scraped.get("cookie"))
+                    hasil_list.append({
+                        "kode": p["kode"],
+                        "nama": p["nama"][:50],
+                        "sukses": submit_result.get("ok", False),
+                        "pesan": f"HTTP {submit_result['status']}",
+                        "mulai": tgl_mulai.strftime("%d/%m/%Y %H:%M"),
+                    })
+                except Exception as e:
+                    hasil_list.append({"kode": p["kode"], "nama": p["nama"][:50], "sukses": False, "pesan": str(e), "mulai": ""})
+
+            progress.empty()
+
+            sukses_n = sum(1 for h in hasil_list if h["sukses"])
+            gagal_n  = len(hasil_list) - sukses_n
+            if gagal_n == 0:
+                st.success(f"✅ Semua {sukses_n} paket berhasil dijadwalkan!")
             else:
-                st.warning(f"⚠️ Tidak ada data libur nasional {tahun}")
-        except Exception as e:
-            st.error(f"❌ Gagal fetch libur nasional: {e}")
-            st.info("Perhitungan tetap jalan tanpa filter libur.")
+                st.warning(f"⚠️ {sukses_n} berhasil, {gagal_n} gagal.")
+
+            st.dataframe(
+                hasil_list,
+                use_container_width=True,
+                column_config={
+                    "kode":   st.column_config.TextColumn("Kode", width="small"),
+                    "nama":   st.column_config.TextColumn("Nama Paket", width="large"),
+                    "mulai":  st.column_config.TextColumn("Tgl Mulai"),
+                    "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
+                    "pesan":  st.column_config.TextColumn("Pesan"),
+                },
+                hide_index=True,
+            )
 
 
 # ============================================================
@@ -1246,218 +943,337 @@ with tab8:
 # ============================================================
 
 with tab9:
-    st.subheader("📨 Kirim Undangan Serempak ke PPK")
-    st.markdown(
-        "Kirim undangan **Reviu Dokumen Persiapan Pemilihan** ke PPK untuk semua paket "
-        "berstatus **Draft** sekaligus. Isi detail undangan sekali, kirim ke banyak paket."
-    )
+    # ── Layout 2 kolom: kiri = pilih paket, kanan = detail undangan ─────────
+    _kp_col_list, _kp_col_detail = st.columns([3, 2])
 
-    st.divider()
+    with _kp_col_list:
+        st.markdown("### 1. Pilih Paket")
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+        col_fetch, col_all, col_none = st.columns([3, 1, 1])
+        with col_fetch:
+            if st.button("🔍 Ambil Paket Draft", key="kp_fetch_draft", use_container_width=True):
+                with st.spinner("Mengambil daftar paket..."):
+                    result = kirimpesan_engine.fetch_paket_draft()
+                st.session_state["kp_paket_draft"] = result
+                for key in list(st.session_state.keys()):
+                    if key.startswith("kp_chk_"):
+                        del st.session_state[key]
 
-    # ── Step 1: Ambil daftar paket Draft ────────────────────────────────────
-    st.markdown("### 1. Pilih Paket")
-
-    col_fetch, col_info = st.columns([2, 3])
-    with col_fetch:
-        if st.button("🔍 Ambil Daftar Paket Draft dari SPSE", key="kp_fetch_draft", use_container_width=True):
-            with st.spinner("Mengambil daftar paket..."):
-                result = kirimpesan_engine.fetch_paket_draft()
-            st.session_state["kp_paket_draft"] = result
-
-    with col_info:
+        kp_selected = []
         if "kp_paket_draft" in st.session_state:
             r = st.session_state["kp_paket_draft"]
-            if r["sukses"]:
-                n = len(r["paket"])
-                if n > 0:
-                    st.success(f"✅ {r['pesan']}")
-                else:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft saat ini.")
-            else:
+            if not r["sukses"]:
                 st.error(f"❌ {r['pesan']}")
-
-    # ── Daftar paket + multiselect ───────────────────────────────────────────
-    kp_selected_ids = []
-    if "kp_paket_draft" in st.session_state:
-        paket_list = st.session_state["kp_paket_draft"].get("paket", [])
-        if paket_list:
-            # Tampilkan sebagai multiselect
-            paket_options = {
-                f"{p['kode']} — {p['nama'][:60]}": p
-                for p in paket_list
-            }
-            selected_labels = st.multiselect(
-                "Pilih paket yang akan dikirimi undangan:",
-                options=list(paket_options.keys()),
-                default=list(paket_options.keys()),  # default semua terpilih
-                key="kp_multiselect",
-            )
-            kp_selected = [paket_options[lbl] for lbl in selected_labels]
-            st.caption(f"{len(kp_selected)} dari {len(paket_list)} paket dipilih")
-        else:
-            kp_selected = []
-    else:
-        kp_selected = []
-        st.info("Klik tombol di atas untuk mengambil daftar paket Draft dari SPSE.")
-
-    st.divider()
-
-    # ── Step 2: Isi detail undangan ──────────────────────────────────────────
-    st.markdown("### 2. Detail Undangan")
-    st.caption("Diisi sekali, akan dikirim ke semua paket yang dipilih.")
-
-    col_w1, col_w2 = st.columns(2)
-    with col_w1:
-        kp_tgl = st.date_input(
-            "📆 Tanggal Undangan",
-            value=datetime.now().date() + timedelta(days=3),
-            key="kp_tgl",
-        )
-        kp_jam_mulai = st.time_input(
-            "🕐 Jam Mulai",
-            value=datetime.strptime("09:00", "%H:%M").time(),
-            key="kp_jam_mulai",
-            step=1800,
-        )
-    with col_w2:
-        st.write("")
-        kp_jam_selesai = st.time_input(
-            "🕑 Jam Selesai",
-            value=datetime.strptime("11:00", "%H:%M").time(),
-            key="kp_jam_selesai",
-            step=1800,
-        )
-
-    kp_tempat = st.text_area(
-        "📍 Tempat",
-        value="Ruang Aula Rapat Lantai 2 Kantor UKPBJ Kabupaten Tapin, Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, Kecamatan Tapin Utara, Rantau, Kabupaten Tapin. Kode Pos : 71111",
-        key="kp_tempat",
-        height=100,
-    )
-
-    kp_is_online = st.selectbox(
-        "🌐 Mekanisme",
-        options=["Offline", "Online"],
-        index=0,
-        key="kp_is_online",
-    )
-
-    kp_link = ""
-    if kp_is_online == "Online":
-        kp_link = st.text_input(
-            "🔗 Link Undangan (Google Meet / Zoom)",
-            placeholder="https://meet.google.com/...",
-            key="kp_link",
-        )
-
-    kp_dibawa = st.text_area(
-        "📁 Yang Harus Dibawa",
-        value="Dokumen Persiapan Pengadaan yang tidak terbatas pada :\n1. Spesifikasi Teknis 2. Dokumen HPS. 3. Rancangan Kontrak. 4. Dokumen Anggaran Belanja",
-        key="kp_dibawa",
-        height=100,
-    )
-
-    kp_hadir = st.text_area(
-        "👤 Yang Harus Hadir",
-        value="Pejabat Pembuat Komitmen (PPK), Tim Teknis PPK, dan Konsultan Perancang/Konsultan Perencana",
-        key="kp_hadir",
-        height=80,
-    )
-
-    st.divider()
-
-    # ── Step 3: Kirim ────────────────────────────────────────────────────────
-    st.markdown("### 3. Kirim")
-    st.caption("⚠️ Undangan yang sudah terkirim **tidak bisa dihapus** dari sistem SPSE.")
-
-    kirim_disabled = len(kp_selected) == 0
-
-    # Validasi dulu sebelum konfirmasi
-    def _validasi_kirim():
-        if not kp_tempat.strip():
-            st.error("❌ Tempat wajib diisi.")
-            return False
-        if kp_is_online == "Online" and not kp_link.strip():
-            st.error("❌ Link undangan wajib diisi untuk mekanisme Online.")
-            return False
-        return True
-
-    if not st.session_state.get("kp_konfirmasi"):
-        if st.button(
-            f"📨 Kirim Undangan ke {len(kp_selected)} Paket",
-            key="kp_kirim",
-            type="primary",
-            disabled=kirim_disabled,
-        ):
-            if _validasi_kirim():
-                st.session_state["kp_konfirmasi"] = True
-                st.rerun()
-    else:
-        # Tampilkan ringkasan + konfirmasi
-        waktu_str = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
-        sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
-
-        st.warning(
-            f"**Konfirmasi Pengiriman**\n\n"
-            f"Undangan akan dikirim ke **{len(kp_selected)} paket** dengan detail:\n"
-            f"- Waktu: {waktu_str} s.d. {sampai_str}\n"
-            f"- Tempat: {kp_tempat.strip()[:80]}\n"
-            f"- Mekanisme: {kp_is_online}\n\n"
-            f"**Tindakan ini tidak bisa dibatalkan setelah dikirim.**"
-        )
-
-        col_ya, col_batal = st.columns(2)
-        with col_ya:
-            if st.button("✅ Ya, Kirim Sekarang", key="kp_ya", type="primary", use_container_width=True):
-                st.session_state["kp_konfirmasi"] = False
-
-                progress = st.progress(0, text="Memulai pengiriman...")
-                hasil_list = []
-
-                for i, paket in enumerate(kp_selected):
-                    progress.progress(
-                        (i + 1) / len(kp_selected),
-                        text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
-                    )
-                    res = kirimpesan_engine.kirim_undangan(
-                        paket_id=paket["id_lelang"],
-                        waktu=waktu_str,
-                        sampai=sampai_str,
-                        tempat=kp_tempat.strip(),
-                        dibawa=kp_dibawa.strip(),
-                        hadir=kp_hadir.strip(),
-                        is_online=(kp_is_online == "Online"),
-                        link_pembuktian=kp_link.strip(),
-                    )
-                    hasil_list.append({
-                        "kode": paket["kode"],
-                        "nama": paket["nama"][:50],
-                        "sukses": res["sukses"],
-                        "pesan": res["pesan"],
-                    })
-
-                progress.empty()
-
-                sukses_n = sum(1 for h in hasil_list if h["sukses"])
-                gagal_n = len(hasil_list) - sukses_n
-                if gagal_n == 0:
-                    st.success(f"✅ Semua {sukses_n} undangan berhasil dikirim!")
+            else:
+                paket_list = r.get("paket", [])
+                if not paket_list:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
                 else:
-                    st.warning(f"⚠️ {sukses_n} berhasil, {gagal_n} gagal.")
+                    with col_all:
+                        if st.button("✅ Semua", key="kp_sel_all", use_container_width=True):
+                            for p in paket_list:
+                                st.session_state[f"kp_chk_{p['id_lelang']}"] = True
+                            st.rerun()
+                    with col_none:
+                        if st.button("⬜ Kosong", key="kp_sel_none", use_container_width=True):
+                            for p in paket_list:
+                                st.session_state[f"kp_chk_{p['id_lelang']}"] = False
+                            st.rerun()
 
-                st.dataframe(
-                    hasil_list,
-                    use_container_width=True,
-                    column_config={
-                        "kode": st.column_config.TextColumn("Kode", width="small"),
-                        "nama": st.column_config.TextColumn("Nama Paket", width="large"),
-                        "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
-                        "pesan": st.column_config.TextColumn("Pesan"),
-                    },
-                    hide_index=True,
+                    for p in paket_list:
+                        key_chk = f"kp_chk_{p['id_lelang']}"
+                        col_chk, col_lamp = st.columns([3, 2])
+                        with col_chk:
+                            checked = st.checkbox(
+                                f"**{p['kode']}** — {p['nama']}",
+                                value=st.session_state.get(key_chk, True),
+                                key=key_chk,
+                            )
+                        with col_lamp:
+                            uploaded_lamp = st.file_uploader(
+                                "Lampiran",
+                                type=["pdf"],
+                                key=f"kp_lamp_{p['id_lelang']}",
+                                label_visibility="collapsed",
+                            )
+                            if uploaded_lamp:
+                                st.caption(f"📎 {uploaded_lamp.name}")
+                        if checked:
+                            kp_selected.append({**p, "_lampiran": uploaded_lamp})
+
+                    st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
+        else:
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+        # ── 2. Detail Undangan ────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 2. Detail Undangan")
+
+        _kp_hari_nama  = _HARI_NAMA
+        _kp_bulan_nama = _BULAN_NAMA
+        _kp_libur_map = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in {
+            "2026-01-01": "Tahun Baru 2026 Masehi",
+            "2026-01-16": "Isra Mikraj Nabi Muhammad S.A.W.",
+            "2026-02-16": "Cuti Bersama Tahun Baru Imlek",
+            "2026-02-17": "Tahun Baru Imlek 2577 Kongzili",
+            "2026-03-18": "Cuti Bersama Hari Suci Nyepi",
+            "2026-03-19": "Hari Suci Nyepi (Tahun Baru Saka 1948)",
+            "2026-03-20": "Cuti Bersama Idul Fitri 1447 Hijriah",
+            "2026-03-21": "Idul Fitri 1447 Hijriah",
+            "2026-03-22": "Idul Fitri 1447 Hijriah",
+            "2026-03-23": "Cuti Bersama Idul Fitri 1447 Hijriah",
+            "2026-03-24": "Cuti Bersama Idul Fitri 1447 Hijriah",
+            "2026-04-03": "Wafat Yesus Kristus",
+            "2026-04-05": "Kebangkitan Yesus Kristus (Paskah)",
+            "2026-05-01": "Hari Buruh Internasional",
+            "2026-05-14": "Kenaikan Yesus Kristus",
+            "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus",
+            "2026-05-27": "Idul Adha 1447 Hijriah",
+            "2026-05-28": "Cuti Bersama Idul Adha 1447 Hijriah",
+            "2026-05-31": "Hari Raya Waisak 2570 BE",
+            "2026-06-01": "Hari Lahir Pancasila",
+            "2026-06-16": "1 Muharam Tahun Baru Islam 1448 Hijriah",
+            "2026-08-17": "Proklamasi Kemerdekaan",
+            "2026-08-25": "Maulid Nabi Muhammad S.A.W.",
+            "2026-12-24": "Cuti Bersama Kelahiran Yesus Kristus",
+            "2026-12-25": "Kelahiran Yesus Kristus",
+        }.items()}
+
+        col_tgl, col_mulai, col_selesai = st.columns(3)
+        with col_tgl:
+            kp_tgl = st.date_input(
+                "Tanggal",
+                value=datetime.now().date(),
+                format="DD/MM/YYYY",
+                key="kp_tgl",
+            )
+            st.markdown(f"**{_kp_hari_nama[kp_tgl.weekday()]}, {kp_tgl.day} {_kp_bulan_nama[kp_tgl.month-1]} {kp_tgl.year}**")
+        with col_mulai:
+            kp_jam_mulai = st.time_input(
+                "Mulai",
+                value=datetime.strptime("09:00", "%H:%M").time(),
+                key="kp_jam_mulai",
+                step=1800,
+            )
+        with col_selesai:
+            kp_jam_selesai = st.time_input(
+                "Selesai",
+                value=datetime.strptime("11:00", "%H:%M").time(),
+                key="kp_jam_selesai",
+                step=1800,
+            )
+
+        if kp_tgl in _kp_libur_map:
+            st.warning(f"⚠️ **{_kp_libur_map[kp_tgl]}**")
+
+        with st.expander("ℹ️ Libur Nasional Tersisa"):
+            _kp_hari_ini = datetime.now().date()
+            _kp_sisa = sorted(d for d in _kp_libur_map if d >= _kp_hari_ini)
+            for d in _kp_sisa:
+                st.write(f"• {_kp_hari_nama[d.weekday()]}, {d.day} {_kp_bulan_nama[d.month-1]} {d.year} — {_kp_libur_map[d]}")
+
+        kp_tempat = st.text_area(
+            "Tempat",
+            value=kirimpesan_engine.DEFAULT_TEMPAT,
+            key="kp_tempat",
+            height=100,
+        )
+
+        # Hardcode: Mekanisme = Offline, Dibawa & Hadir pakai default
+        kp_is_online = False
+        kp_link = ""
+        kp_dibawa = kirimpesan_engine.DEFAULT_DIBAWA
+        kp_hadir = kirimpesan_engine.DEFAULT_HADIR
+
+        st.divider()
+        st.caption("⚠️ Undangan yang sudah terkirim **tidak bisa dihapus** dari sistem SPSE.")
+
+        kirim_disabled = len(kp_selected) == 0
+
+        if not st.session_state.get("kp_konfirmasi"):
+            if st.button(
+                f"📨 Kirim Undangan ke {len(kp_selected)} Paket",
+                key="kp_kirim",
+                type="primary",
+                disabled=kirim_disabled,
+                use_container_width=True,
+            ):
+                if not kp_tempat.strip():
+                    st.error("❌ Tempat wajib diisi.")
+                else:
+                    st.session_state["kp_konfirmasi"] = True
+                    st.rerun()
+        else:
+            waktu_str  = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
+            sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
+
+            st.warning(
+                f"Kirim ke **{len(kp_selected)} paket**\n\n"
+                f"- Waktu: {waktu_str} s.d. {sampai_str}\n"
+                f"- Tempat: {kp_tempat.strip()[:60]}...\n\n"
+                f"**Tidak bisa dibatalkan setelah dikirim.**"
+            )
+
+            col_ya, col_batal = st.columns(2)
+            with col_ya:
+                if st.button("✅ Ya, Kirim", key="kp_ya", type="primary", use_container_width=True):
+                    st.session_state["kp_konfirmasi"] = False
+
+                    progress = st.progress(0, text="Memulai pengiriman...")
+                    hasil_list = []
+
+                    for i, paket in enumerate(kp_selected):
+                        progress.progress(
+                            (i + 1) / len(kp_selected),
+                            text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
+                        )
+                        lamp = paket.get("_lampiran")
+                        res = kirimpesan_engine.kirim_undangan(
+                            paket_id=paket["id_lelang"],
+                            waktu=waktu_str,
+                            sampai=sampai_str,
+                            tempat=kp_tempat.strip(),
+                            dibawa=kp_dibawa.strip(),
+                            hadir=kp_hadir.strip(),
+                            is_online=False,
+                            link_pembuktian="",
+                            lampiran_bytes=lamp.getvalue() if lamp else None,
+                            lampiran_nama=lamp.name if lamp else "",
+                        )
+
+                        hasil_list.append({
+                            "kode": paket["kode"],
+                            "nama": paket["nama"][:50],
+                            "sukses": res["sukses"],
+                            "pesan": res["pesan"],
+                        })
+
+                    progress.empty()
+
+                    sukses_n = sum(1 for h in hasil_list if h["sukses"])
+                    gagal_n  = len(hasil_list) - sukses_n
+                    if gagal_n == 0:
+                        st.success(f"✅ Semua {sukses_n} undangan berhasil dikirim!")
+                    else:
+                        st.warning(f"⚠️ {sukses_n} berhasil, {gagal_n} gagal.")
+
+                    st.dataframe(
+                        hasil_list,
+                        use_container_width=True,
+                        column_config={
+                            "kode":   st.column_config.TextColumn("Kode", width="small"),
+                            "nama":   st.column_config.TextColumn("Nama Paket", width="large"),
+                            "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
+                            "pesan":  st.column_config.TextColumn("Pesan"),
+                        },
+                        hide_index=True,
+                    )
+
+            with col_batal:
+                if st.button("❌ Batal", key="kp_batal", use_container_width=True):
+                    st.session_state["kp_konfirmasi"] = False
+                    st.rerun()
+
+    with _kp_col_detail:
+        st.markdown("### 3. Upload BA Reviu DPP")
+        st.caption("Upload BA Hasil Reviu setelah PPK menandatangani.")
+        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
+        if st.button("🔍 Ambil Paket Draft", key="ba_fetch_draft", use_container_width=True):
+            with st.spinner("Mengambil daftar paket..."):
+                _ba_result = kirimpesan_engine.fetch_paket_draft()
+            st.session_state["ba_paket_draft"] = _ba_result
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("ba_chk_"):
+                    del st.session_state[_k]
+
+        ba_selected = []
+        if "ba_paket_draft" in st.session_state:
+            _ba_r = st.session_state["ba_paket_draft"]
+            if not _ba_r["sukses"]:
+                st.error(f"❌ {_ba_r['pesan']}")
+            else:
+                _ba_paket_list = _ba_r.get("paket", [])
+                if not _ba_paket_list:
+                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                else:
+                    for _p in _ba_paket_list:
+                        _key_chk = f"ba_chk_{_p['id_lelang']}"
+                        _col_chk, _col_file = st.columns([3, 2])
+                        with _col_chk:
+                            _checked = st.checkbox(
+                                f"**{_p['kode']}** — {_p['nama']}",
+                                value=st.session_state.get(_key_chk, False),
+                                key=_key_chk,
+                            )
+                        with _col_file:
+                            _ba_up = st.file_uploader(
+                                "BA Reviu",
+                                type=["pdf"],
+                                key=f"ba_file_{_p['id_lelang']}",
+                                label_visibility="collapsed",
+                            )
+                            if _ba_up:
+                                st.caption(f"📋 {_ba_up.name}")
+                        if _checked:
+                            ba_selected.append({**_p, "_ba_file": _ba_up})
+        else:
+            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+        st.divider()
+        ba_tgl = st.date_input(
+            "Tanggal BA Reviu",
+            value=datetime.now().date(),
+            key="ba_tgl",
+            format="DD/MM/YYYY",
+        )
+        st.caption(f"{_HARI_NAMA[ba_tgl.weekday()]}, {ba_tgl.day} {_BULAN_NAMA[ba_tgl.month-1]} {ba_tgl.year}")
+
+        _ba_upload_disabled = len(ba_selected) == 0 or all(p.get("_ba_file") is None for p in ba_selected)
+        _ba_n_file = len([p for p in ba_selected if p.get("_ba_file")])
+        if st.button(
+            f"📤 Upload BA Reviu ({_ba_n_file} file)",
+            key="ba_upload",
+            type="primary",
+            disabled=_ba_upload_disabled,
+            use_container_width=True,
+        ):
+            _ba_progress = st.progress(0, text="Memulai upload...")
+            _ba_hasil = []
+            _ba_valid = [p for p in ba_selected if p.get("_ba_file")]
+            for _i, _p in enumerate(_ba_valid):
+                _ba_progress.progress(
+                    (_i + 1) / len(_ba_valid),
+                    text=f"Upload {_p['kode']} ({_i+1}/{len(_ba_valid)})..."
                 )
+                _res = bareviu_engine.upload_ba_reviu(
+                    paket_id=_p["id_lelang"],
+                    file_bytes=_p["_ba_file"].getvalue(),
+                    file_name=_p["_ba_file"].name,
+                    tgl_dok_ba=ba_tgl.strftime("%d-%m-%Y"),
+                )
+                _ba_hasil.append({
+                    "kode": _p["kode"],
+                    "nama": _p["nama"][:50],
+                    "sukses": _res["sukses"],
+                    "pesan": _res["pesan"],
+                })
+            _ba_progress.empty()
 
-        with col_batal:
-            if st.button("❌ Batal", key="kp_batal", use_container_width=True):
-                st.session_state["kp_konfirmasi"] = False
-                st.rerun()
+            _ba_ok = sum(1 for h in _ba_hasil if h["sukses"])
+            _ba_fail = len(_ba_hasil) - _ba_ok
+            if _ba_fail == 0:
+                st.success(f"✅ {_ba_ok} BA Reviu berhasil diupload!")
+            else:
+                st.warning(f"⚠️ {_ba_ok} berhasil, {_ba_fail} gagal.")
+
+            st.dataframe(
+                _ba_hasil,
+                use_container_width=True,
+                column_config={
+                    "kode":   st.column_config.TextColumn("Kode", width="small"),
+                    "nama":   st.column_config.TextColumn("Nama Paket", width="large"),
+                    "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
+                    "pesan":  st.column_config.TextColumn("Pesan"),
+                },
+                hide_index=True,
+            )
