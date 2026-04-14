@@ -23,6 +23,7 @@ import kirimpesan_engine
 import bareviu_engine
 import ba_engine
 import ba_config
+import kualifikasi_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -100,10 +101,10 @@ _HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 _BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
                "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
-tab9, tab8, tab_setup, tab7, tab_ba = st.tabs([
+tab9, tab8, tab_setup, tab7, tab_ba, tab_kual = st.tabs([
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
-    "5️⃣ Upload 5 BA",
+    "5️⃣ Upload 5 BA", "6️⃣ Download Kualifikasi",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -1498,3 +1499,148 @@ with tab_ba:
 
                 st.divider()
 
+# ============================================================
+# Tab 6: Download Dokumen Kualifikasi
+# ============================================================
+
+with tab_kual:
+    _kl_col1, _kl_col2 = st.columns([2, 3])
+
+    with _kl_col1:
+        st.markdown("### 1. URL Penawaran")
+        url_penawaran = st.text_input(
+            "URL halaman /penawaran",
+            key="kl_url_penawaran",
+            placeholder="https://spse.inaproc.id/tapinkab/peserta/10096884000/penawaran",
+            label_visibility="collapsed",
+        )
+
+        if st.button("🔍 Fetch Peserta", key="kl_fetch", use_container_width=True):
+            if not url_penawaran.strip():
+                st.warning("Masukkan URL /penawaran terlebih dahulu.")
+            else:
+                with st.spinner("Mengambil daftar peserta..."):
+                    res = kualifikasi_engine.fetch_peserta(url_penawaran.strip())
+                st.session_state["kl_peserta"] = res
+                st.session_state["kl_cek"] = {}
+
+        kl_res = st.session_state.get("kl_peserta")
+        if kl_res:
+            if not kl_res["ok"]:
+                st.error(kl_res["pesan"])
+            else:
+                st.success(kl_res["pesan"])
+                st.markdown("### 2. Pilih Peserta")
+
+                col_all, col_none = st.columns(2)
+                with col_all:
+                    if st.button("✅ Semua", key="kl_all", use_container_width=True):
+                        for p in kl_res["peserta"]:
+                            st.session_state[f"kl_cek_{p['kualifikasi_id']}"] = True
+                        st.rerun()
+                with col_none:
+                    if st.button("⬜ Hapus", key="kl_none", use_container_width=True):
+                        for p in kl_res["peserta"]:
+                            st.session_state[f"kl_cek_{p['kualifikasi_id']}"] = False
+                        st.rerun()
+
+                for p in kl_res["peserta"]:
+                    st.checkbox(
+                        p["nama"],
+                        key=f"kl_cek_{p['kualifikasi_id']}",
+                        value=st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", False),
+                    )
+
+    with _kl_col2:
+        st.markdown("### 3. Folder Output")
+
+        # Folder picker via tkinter
+        _kl_default_dir = kualifikasi_engine.get_last_dir()
+        kl_folder = st.text_input(
+            "Folder paket tujuan",
+            key="kl_folder",
+            value=st.session_state.get("kl_folder_val", _kl_default_dir),
+            label_visibility="collapsed",
+        )
+
+        if st.button("📁 Pilih Folder", key="kl_browse", use_container_width=True):
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+                root = tk.Tk()
+                root.withdraw()
+                root.wm_attributes("-topmost", True)
+                init_dir = st.session_state.get("kl_folder_val", _kl_default_dir)
+                selected = filedialog.askdirectory(initialdir=init_dir, title="Pilih Folder Paket")
+                root.destroy()
+                if selected:
+                    st.session_state["kl_folder_val"] = selected.replace("/", "\\")
+                    st.rerun()
+            except Exception as e:
+                st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
+
+        # Preview dokumen peserta yang dipilih
+        kl_res2 = st.session_state.get("kl_peserta")
+        if kl_res2 and kl_res2["ok"]:
+            kl_selected = [
+                p for p in kl_res2["peserta"]
+                if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", False)
+            ]
+
+            if kl_selected:
+                st.markdown(f"**{len(kl_selected)} peserta dipilih:**")
+                for i, p in enumerate(kl_selected, 1):
+                    st.caption(f"{i}. {p['nama']}")
+
+                folder_val = st.session_state.get("kl_folder_val", _kl_default_dir) or kl_folder
+
+                if st.button(
+                    f"⬇️ Download {len(kl_selected)} Dokumen Kualifikasi",
+                    key="kl_download",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not folder_val,
+                ):
+                    if not folder_val or not os.path.isdir(folder_val):
+                        st.error("Folder tidak valid. Pilih folder yang sudah ada.")
+                    else:
+                        kualifikasi_engine.save_last_dir(folder_val)
+
+                        log_area = st.empty()
+                        log_lines = []
+
+                        def _log_cb(msg):
+                            log_lines.append(msg)
+                            log_area.code("\n".join(log_lines[-20:]))
+
+                        progress = st.progress(0, text="Memulai download...")
+                        hasil_kl = []
+
+                        for i, peserta in enumerate(kl_selected):
+                            progress.progress(
+                                i / len(kl_selected),
+                                text=f"Downloading {peserta['nama']} ({i+1}/{len(kl_selected)})...",
+                            )
+                            res_dl = kualifikasi_engine.download_kualifikasi_peserta(
+                                peserta=peserta,
+                                folder_output=folder_val,
+                                urutan=i + 1,
+                                progress_cb=_log_cb,
+                            )
+                            hasil_kl.append({**peserta, **res_dl})
+
+                        progress.progress(1.0, text="Selesai!")
+
+                        sukses = [h for h in hasil_kl if h["ok"]]
+                        gagal = [h for h in hasil_kl if not h["ok"]]
+
+                        if sukses:
+                            st.success(f"✅ {len(sukses)} dokumen berhasil didownload ke `{folder_val}`")
+                        if gagal:
+                            st.error(f"❌ {len(gagal)} gagal:")
+                            for h in gagal:
+                                st.caption(f"• {h['nama']}: {h['pesan']}")
+            else:
+                st.info("Pilih peserta di kolom kiri untuk mulai download.")
+        else:
+            st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
