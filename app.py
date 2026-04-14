@@ -24,6 +24,7 @@ import bareviu_engine
 import ba_engine
 import ba_config
 import kualifikasi_engine
+import apendo_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -101,10 +102,11 @@ _HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 _BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
                "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
-tab9, tab8, tab_setup, tab7, tab_ba, tab_kual = st.tabs([
+tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
     "5️⃣ Upload 5 BA", "6️⃣ Download Kualifikasi",
+    "7️⃣ Buka Penawaran",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -1653,3 +1655,126 @@ with tab_kual:
                 st.info("Pilih peserta di kolom kiri untuk mulai download.")
         else:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
+
+# ============================================================
+# Tab 7: Buka Dokumen Penawaran (Apendo Automation)
+# ============================================================
+
+with tab_apendo:
+    _ap_col1, _ap_col2 = st.columns([2, 3])
+
+    with _ap_col1:
+        st.markdown("### 1. Paket Tender")
+        ap_kode = st.text_input(
+            "Kode Tender",
+            key="ap_kode",
+            placeholder="10096653000",
+            label_visibility="collapsed",
+        )
+        st.caption("Kode tender dari URL SPSE, contoh: `/lelang/10096653000`")
+
+        if st.button("🔑 Ambil Token dari SPSE", key="ap_fetch_token", use_container_width=True):
+            if not ap_kode.strip():
+                st.warning("Masukkan kode tender terlebih dahulu.")
+            else:
+                with st.spinner("Mengambil token dari halaman SPSE..."):
+                    res_token = apendo_engine.get_token_dari_spse(ap_kode.strip())
+                st.session_state["ap_token_res"] = res_token
+
+        ap_token_res = st.session_state.get("ap_token_res")
+        if ap_token_res:
+            if not ap_token_res["ok"]:
+                st.error(ap_token_res["pesan"])
+            else:
+                st.success(f"Token ditemukan!")
+                st.caption(f"Tender: **{ap_token_res.get('nama_tender', '-')}**")
+                st.caption(f"Access token: `{ap_token_res['access_token'][:12]}...`")
+
+    with _ap_col2:
+        st.markdown("### 2. Folder Output")
+
+        _ap_default_dir = apendo_engine.get_last_apendo_dir()
+        ap_folder = st.text_input(
+            "Folder tujuan",
+            key="ap_folder",
+            value=st.session_state.get("ap_folder_val", _ap_default_dir),
+            label_visibility="collapsed",
+        )
+        st.caption("Apendo akan membuat subfolder otomatis di dalam folder ini.")
+
+        _ap_browse_col, _ap_open_col = st.columns(2)
+        with _ap_browse_col:
+            if st.button("📁 Pilih Folder", key="ap_browse", use_container_width=True):
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.wm_attributes("-topmost", True)
+                    selected = filedialog.askdirectory(
+                        initialdir=st.session_state.get("ap_folder_val", _ap_default_dir),
+                        title="Pilih Folder Output Apendo"
+                    )
+                    root.destroy()
+                    if selected:
+                        st.session_state["ap_folder_val"] = selected.replace("/", "\\")
+                        st.rerun()
+                except Exception as e:
+                    st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
+
+        with _ap_open_col:
+            _ap_folder_now = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
+            if st.button(
+                "📂 Buka Folder",
+                key="ap_open_folder",
+                use_container_width=True,
+                disabled=not (_ap_folder_now and os.path.isdir(_ap_folder_now)),
+            ):
+                os.startfile(_ap_folder_now)
+
+        st.markdown("### 3. Jalankan Apendo")
+
+        ap_token_res2 = st.session_state.get("ap_token_res")
+        folder_val2 = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
+        siap = ap_token_res2 and ap_token_res2.get("ok") and folder_val2 and os.path.isdir(folder_val2)
+
+        if not ap_token_res2 or not ap_token_res2.get("ok"):
+            st.info("Ambil token dari kolom kiri terlebih dahulu.")
+        elif not folder_val2 or not os.path.isdir(folder_val2):
+            st.warning("Pilih folder output yang valid.")
+        else:
+            if st.button(
+                "🚀 Buka Dokumen Penawaran (Apendo Otomatis)",
+                key="ap_run",
+                type="primary",
+                use_container_width=True,
+            ):
+                apendo_engine.save_last_apendo_dir(folder_val2)
+                log_area = st.empty()
+                log_lines = []
+
+                def _ap_log(msg):
+                    log_lines.append(msg)
+                    log_area.code("\n".join(log_lines[-20:]))
+
+                with st.spinner("Menjalankan Apendo di background..."):
+                    hasil_ap = apendo_engine.buka_dokumen_penawaran(
+                        token_url=ap_token_res2["token_url"],
+                        folder_output=folder_val2,
+                        progress_cb=_ap_log,
+                    )
+
+                if hasil_ap["ok"]:
+                    st.success(
+                        f"Selesai! Dokumen diunduh ke `{folder_val2}`"
+                    )
+                    files = hasil_ap.get("files", [])
+                    if files:
+                        st.markdown(f"**{len(files)} file ditemukan:**")
+                        for f in files[:30]:
+                            size_kb = f["size"] // 1024
+                            st.caption(f"• {f['rel']} ({size_kb} KB)")
+                    else:
+                        st.info("Folder output masih kosong — dokumen mungkin disimpan di subfolder Apendo.")
+                else:
+                    st.error(f"Gagal: {hasil_ap['pesan']}")
