@@ -1579,6 +1579,15 @@ with tab_kual:
             except Exception as e:
                 st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
 
+        _kl_folder_now = st.session_state.get("kl_folder_val", _kl_default_dir) or kl_folder
+        if st.button(
+            "📂 Buka Folder Paket",
+            key="kl_open_folder",
+            use_container_width=True,
+            disabled=not (_kl_folder_now and os.path.isdir(_kl_folder_now)),
+        ):
+            os.startfile(_kl_folder_now)
+
         # Preview dokumen peserta yang dipilih
         kl_res2 = st.session_state.get("kl_peserta")
         if kl_res2 and kl_res2["ok"]:
