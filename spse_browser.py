@@ -127,6 +127,14 @@ def tutup_browser():
         _run(_tutup_async())
 
 
+def diskonek():
+    """Reset koneksi Playwright tanpa menutup browser. Berguna jika CDP sudah ditutup manual."""
+    global _pw, _context, _page, _cdp_tabs_cache, _cdp_tabs_cache_ts
+    _pw = _context = _page = None
+    _cdp_tabs_cache = []
+    _cdp_tabs_cache_ts = 0.0
+
+
 def halaman_aktif() -> Page | None:
     global _page
     if _page and not _page.is_closed():

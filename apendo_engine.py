@@ -89,7 +89,7 @@ def get_token_dari_spse(kode_tender: str, progress_cb=None) -> dict:
 
 # ── Launch & Otomasi Apendo via AHK ─────────────────────────────────────────
 
-def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None) -> dict:
+def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None, jumlah_peserta: int = 3) -> dict:
     """
     Launch AHK script yang mengotomasi seluruh flow Apendo.
 
@@ -142,6 +142,7 @@ def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None)
             token_url,
             folder_output,
             log_file,
+            str(jumlah_peserta),
         ]
 
         proc = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)

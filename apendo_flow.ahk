@@ -6,13 +6,14 @@
 #SingleInstance Force
 
 ; Baca argumen via A_Args (support path dengan spasi & karakter khusus)
-apendo  := A_Args[1]
-token   := A_Args[2]
-folder  := A_Args[3]
-logfile := A_Args[4]
+apendo        := A_Args[1]
+token         := A_Args[2]
+folder        := A_Args[3]
+logfile       := A_Args[4]
+jumlah_peserta := A_Args[5] ? A_Args[5] + 0 : 3  ; default 3
 
 if (!apendo || !token || !folder || !logfile) {
-    MsgBox, Usage: apendo_flow.ahk apendo_path token_url folder_output log_file
+    MsgBox, Usage: apendo_flow.ahk apendo_path token_url folder_output log_file [jumlah_peserta]
     ExitApp, 1
 }
 
@@ -90,41 +91,38 @@ AppendLog("Menunggu Apendo load data tender...")
 Sleep, 15000
 
 ; ── STEP 8: Klik tab "Pembukaan Dokumen Penawaran" ────────────────
+; Screen 256,163 (tanpa WinMove — koordinat aktual dari cursor)
 AppendLog("STEP8: WinActivate...")
 WinActivate, Aplikasi Pengaman Dokumen
-AppendLog("STEP8: Sleep 500...")
 Sleep, 500
-AppendLog("STEP8: ControlClick tab...")
-ControlClick, x381 y185, Aplikasi Pengaman Dokumen, , LEFT, 1, NA
-AppendLog("STEP8: Sleep 3000...")
-Sleep, 3000
+AppendLog("STEP8: Send Click tab Pembukaan...")
+Send, {Click 256, 163}
+AppendLog("STEP8: Sleep 1500...")
+Sleep, 1500
 AppendLog("STEP8: Tab Pembukaan Dokumen Penawaran diklik")
 
 ; ── STEP 9: Klik tombol "Buka Dokumen Penawaran" ──────────────────
-; WinMove ke posisi tetap lalu Send Click dengan screen coords
-AppendLog("STEP9: WinMove ke 50,50...")
-WinMove, Aplikasi Pengaman Dokumen, , 50, 50
-Sleep, 500
+; Screen 343,221 (tanpa WinMove — koordinat aktual dari cursor)
 AppendLog("STEP9: WinActivate...")
 WinActivate, Aplikasi Pengaman Dokumen
-Sleep, 500
-; Window di (50,50), Window offset tombol (393,223) → screen (443,273)
-AppendLog("STEP9: Send Click screen 443,273...")
-Send, {Click 440, 238}
+Sleep, 300
+AppendLog("STEP9: Send Click Buka Dokumen Penawaran...")
+Send, {Click 343, 221}
 AppendLog("STEP9: Menunggu proses dekripsi (20 detik)...")
 Sleep, 20000
 
 ; ── STEP 10: Klik semua tombol Unduh per peserta ──────────────────
-; Koordinat client area (Window Spy): x=628
-; Baris 1: y=273, Baris 2: y=407, Baris 3: y=541 (interval 134px)
-; Maksimal 3 peserta
+; Koordinat akurat dari cursor: Peserta 1 Screen 638,368 | Peserta 2 Screen 638,456 | Interval 88px
 AppendLog("Mulai klik tombol Unduh per peserta...")
-; Client coords Unduh baris 1: x=628, y=273, interval 134px
-Loop, 3
+WinActivate, Aplikasi Pengaman Dokumen
+Sleep, 300
+
+AppendLog("Jumlah peserta: " . jumlah_peserta)
+Loop, %jumlah_peserta%
 {
-    unduh_y := 273 + (A_Index - 1) * 134
-    AppendLog("Klik Unduh peserta " . A_Index . " @ client x=628, y=" . unduh_y)
-    ControlClick, x628 y%unduh_y%, Aplikasi Pengaman Dokumen, , LEFT, 1, NA
+    unduh_screen_y := 368 + (A_Index - 1) * 88
+    AppendLog("Klik Unduh peserta " . A_Index . " @ screen x=638, y=" . unduh_screen_y)
+    Send, {Click 638, %unduh_screen_y%}
     Sleep, 12000  ; tunggu decrypt per peserta
 
     IfWinNotExist, Aplikasi Pengaman Dokumen

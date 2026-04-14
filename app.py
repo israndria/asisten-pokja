@@ -65,6 +65,9 @@ with st.sidebar:
             if st.button("❌ Tutup", use_container_width=True):
                 spse_browser.tutup_browser()
                 st.rerun()
+        if st.button("🔌 Diskonek", use_container_width=True, help="Reset status tanpa menutup browser (pakai jika CDP sudah ditutup manual)"):
+            spse_browser.diskonek()
+            st.rerun()
     else:
         st.info("Chrome SPSE belum terhubung")
 
@@ -1738,6 +1741,13 @@ with tab_apendo:
         folder_val2 = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
         siap = ap_token_res2 and ap_token_res2.get("ok") and folder_val2 and os.path.isdir(folder_val2)
 
+        ap_jumlah_peserta = st.number_input(
+            "Jumlah peserta yang diunduh",
+            min_value=1, max_value=10, value=1, step=1,
+            key="ap_jumlah_peserta",
+            help="Sesuaikan dengan jumlah peserta yang mengajukan penawaran",
+        )
+
         if not ap_token_res2 or not ap_token_res2.get("ok"):
             st.info("Ambil token dari kolom kiri terlebih dahulu.")
         elif not folder_val2 or not os.path.isdir(folder_val2):
@@ -1762,6 +1772,7 @@ with tab_apendo:
                         token_url=ap_token_res2["token_url"],
                         folder_output=folder_val2,
                         progress_cb=_ap_log,
+                        jumlah_peserta=int(ap_jumlah_peserta),
                     )
 
                 if hasil_ap["ok"]:
