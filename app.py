@@ -114,12 +114,11 @@ penjelasan_engine.start_scheduler()
 # ============================================================
 
 with tab_setup:
-    # ── Layout 2 kolom: kiri = pilih paket + konfigurasi, kanan = upload dokpil ─
+    # ── Layout 2 kolom: kiri = pilih paket + upload dokpil, kanan = konfigurasi ─
     _sp_col_kiri, _sp_col_kanan = st.columns([2, 3])
 
     with _sp_col_kiri:
         st.markdown("### 1. Pilih Paket")
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
         col_spfetch, col_spall, col_spnone = st.columns([3, 1, 1])
         with col_spfetch:
             if st.button("🔍 Ambil Paket Draft", key="sp_fetch_draft", use_container_width=True):
@@ -177,9 +176,8 @@ with tab_setup:
         else:
             st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
 
-        # ── Section 3: Upload Dokumen Pemilihan (di bawah checklist) ─────────
-        st.divider()
-        st.markdown("### 3. Upload Dokumen Pemilihan")
+    with _sp_col_kiri:
+        st.markdown("### 2. Upload Dokumen Pemilihan")
         st.caption("Menggunakan file DOKPIL yang sudah diupload di atas. Isi nomor BA dan tanggal, lalu klik Upload.")
 
         _dp_dengan_file = [p for p in sp_selected if p.get("_dokpil")]
@@ -233,7 +231,7 @@ with tab_setup:
                 )
 
     with _sp_col_kanan:
-        st.markdown("### 2. Konfigurasi")
+        st.markdown("### 3. Konfigurasi")
         st.caption("Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push.")
 
         st.divider()
@@ -509,7 +507,6 @@ with tab7:
 
     with _pj_col_kiri:
         st.markdown("### 1. Pilih Paket")
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
         col_pjfetch, col_pjall, col_pjnone = st.columns([3, 1, 1])
         with col_pjfetch:
             if st.button("🔍 Ambil Paket Draft", key="pj_fetch_draft", use_container_width=True):
@@ -555,9 +552,59 @@ with tab7:
         else:
             st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
 
+        # ── Status Antrian ─────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 2. Status Antrian")
+        col_refresh_pj, col_hapus_fired = st.columns(2)
+        with col_refresh_pj:
+            if st.button("🔄 Refresh", key="pj_refresh_queue", use_container_width=True):
+                st.rerun()
+        with col_hapus_fired:
+            if st.button("🗑️ Hapus yang Selesai", key="pj_hapus_fired", use_container_width=True):
+                jobs = penjelasan_engine.get_jobs()
+                for j in jobs:
+                    if j["status"] in ("fired", "gagal"):
+                        penjelasan_engine.hapus_job(j["paket_id"], j["jenis"])
+                st.rerun()
+
+        jobs_all = penjelasan_engine.get_jobs()
+        if not jobs_all:
+            st.info("Antrian kosong. Pilih paket dan klik Jadwalkan.")
+        else:
+            from penjelasan_engine import TZ_WIB as _TZ_WIB
+            now_q = datetime.now(_TZ_WIB)
+            rows_q = []
+            for j in jobs_all:
+                try:
+                    wf = datetime.fromisoformat(j["waktu_fire"])
+                    secs = int((wf - now_q).total_seconds())
+                    if j["status"] == "fired":
+                        countdown_q = "✅ Selesai"
+                    elif j["status"] == "gagal":
+                        countdown_q = "❌ Gagal"
+                    elif secs > 0:
+                        h, rem = divmod(secs, 3600)
+                        m = rem // 60
+                        countdown_q = f"⏳ {h//24}h {h%24}j {m}m"
+                    else:
+                        countdown_q = "🔴 Menunggu scheduler..."
+                    waktu_str = wf.strftime("%d/%m %H:%M")
+                except Exception:
+                    waktu_str = j.get("waktu_fire", "-")
+                    countdown_q = "-"
+                rows_q.append({
+                    "Paket": j.get("nama_paket", j["paket_id"])[:45],
+                    "Jenis": j.get("jenis", "-"),
+                    "Waktu": waktu_str,
+                    "Countdown": countdown_q,
+                })
+            st.dataframe(rows_q, use_container_width=True, hide_index=True)
+
     with _pj_col_kanan:
-        st.markdown("### 2. Isi Pembukaan")
-        st.caption("Template sapaan akan otomatis di-post saat masa penjelasan tiba.")
+        from penjelasan_engine import TZ_WIB
+
+        st.markdown("### 3. Jadwalkan Auto-Post")
+        st.caption("Engine cari jadwal penjelasan dari Google Calendar lalu auto-post saat waktunya tiba.")
 
         pj_jenis = st.selectbox(
             "Jenis Penjelasan",
@@ -570,103 +617,106 @@ with tab7:
             pj_teks_override = st.text_area(
                 "Teks custom", value="", height=120,
                 placeholder="Kosongkan untuk pakai template bawaan",
+                key="pj_teks_override",
             )
 
-        # ── Countdown timer per paket terpilih ─────────────────────────────
+        # ── Preview jadwal GCal per paket terpilih ─────────────────────────
         if pj_selected:
-            st.markdown("### ⏰ Countdown Penjelasan")
-            st.caption("Waktu mundur dari Google Calendar.")
-
             with st.spinner("Baca jadwal dari Google Calendar..."):
                 jadwal_gcal = penjelasan_engine.get_jadwal_dari_gcalendar()
-
-            from penjelasan_engine import TZ_WIB
-            now = datetime.now(TZ_WIB)
+            now_pj = datetime.now(TZ_WIB)
 
             for p in pj_selected:
-                pid = p["id_lelang"]
-                tgl_mulai = jadwal_gcal.get(pid)
-
+                tgl_mulai = jadwal_gcal.get(p["id_lelang"])
                 if tgl_mulai:
-                    delta = tgl_mulai - now
-                    total_secs = int(delta.total_seconds())
-
-                    if total_secs > 0:
-                        hari = total_secs // 86400
-                        jam  = (total_secs % 86400) // 3600
-                        menit = (total_secs % 3600) // 60
-                        detik = total_secs % 60
-                        status_icon = "⏳"
-                        status_teks = f"{hari}h {jam}j {menit}m {detik}d"
-                    elif total_secs > -10800:  # masih dalam window 3 jam setelah mulai
-                        status_icon = "🔴"
-                        status_teks = "MASA PENJELASAN AKTIF"
+                    secs = int((tgl_mulai - now_pj).total_seconds())
+                    if secs > 0:
+                        h, rem = divmod(secs, 3600)
+                        m = rem // 60
+                        countdown = f"⏳ {h//24}h {h%24}j {m}m lagi"
+                    elif secs > -10800:
+                        countdown = "🔴 AKTIF SEKARANG"
                     else:
-                        status_icon = "✅"
-                        status_teks = "Sudah lewat"
-
-                    st.markdown(
-                        f"**{status_icon} {p['kode']}** — {p['nama'][:50]}  \n"
-                        f"Mulai: `{tgl_mulai.strftime('%d/%m/%Y %H:%M')}` | {status_teks}"
-                    )
+                        countdown = "✅ Sudah lewat"
+                    st.caption(f"**{p['kode']}** — {tgl_mulai.strftime('%d/%m/%Y %H:%M')} WIB | {countdown}")
                 else:
-                    st.markdown(f"⚠️ **{p['kode']}** — Tidak ada event penjelasan di GCal")
+                    st.caption(f"**{p['kode']}** — ⚠️ Tidak ditemukan di GCal")
 
         st.divider()
 
-        # ── Tombol Post Manual ─────────────────────────────────────────────
+        # ── Tombol Jadwalkan ───────────────────────────────────────────────
         pj_n = len(pj_selected)
         if st.button(
-            f"🚀 Post Pembukaan ke {pj_n} Paket",
-            key="pj_post",
+            f"📅 Jadwalkan {pj_n} Paket ke Antrian",
+            key="pj_jadwalkan",
             type="primary",
             disabled=pj_n == 0,
             use_container_width=True,
         ):
-            progress = st.progress(0, text="Memulai...")
-            hasil_pj = []
-            for i, p in enumerate(pj_selected):
-                progress.progress((i + 1) / len(pj_selected), text=f"Post ke {p['kode']} ({i+1}/{len(pj_selected)})...")
-                try:
-                    teks_ov = pj_teks_override.strip() or None
-                    result = penjelasan_engine.auto_post_sapaan(p["id_lelang"], pj_jenis, teks_ov)
-                    hasil_pj.append({
-                        "kode": p["kode"],
-                        "nama": p["nama"][:50],
-                        "total": result["total"],
-                        "sukses": result["sukses"],
-                        "gagal": result["gagal"],
-                        "pesan": result.get("pesan", ""),
-                    })
-                except Exception as e:
-                    hasil_pj.append({
-                        "kode": p["kode"],
-                        "nama": p["nama"][:50],
-                        "total": 0,
-                        "sukses": 0,
-                        "gagal": 1,
-                        "pesan": str(e),
-                    })
-            progress.empty()
-
-            sukses_n = sum(1 for h in hasil_pj if h["gagal"] == 0 and h["total"] > 0)
-            if sukses_n == len(hasil_pj):
-                st.success(f"✅ {sukses_n}/{len(hasil_pj)} paket berhasil.")
+            teks_ov = st.session_state.get("pj_teks_override", "").strip() or None
+            hasil_jadwal = []
+            for p in pj_selected:
+                r = penjelasan_engine.jadwalkan_dari_gcal(
+                    paket_id=p["id_lelang"],
+                    nama_paket=p["nama"],
+                    jenis=pj_jenis,
+                    teks_override=teks_ov,
+                )
+                hasil_jadwal.append({
+                    "kode": p["kode"],
+                    "nama": p["nama"][:50],
+                    "status": "✅ Dijadwalkan" if r["ok"] else "❌ Gagal",
+                    "waktu": r["waktu_fire"].strftime("%d/%m/%Y %H:%M") if r["waktu_fire"] else "-",
+                    "pesan": r["pesan"],
+                })
+            ok_n = sum(1 for h in hasil_jadwal if h["status"].startswith("✅"))
+            if ok_n == pj_n:
+                st.success(f"✅ {ok_n} paket berhasil dijadwalkan.")
             else:
-                st.warning(f"⚠️ {sukses_n}/{len(hasil_pj)} paket berhasil.")
-            st.dataframe(
-                hasil_pj,
+                st.warning(f"⚠️ {ok_n}/{pj_n} paket dijadwalkan. Cek paket yang gagal.")
+            st.dataframe(hasil_jadwal, use_container_width=True, hide_index=True)
+
+        # ── Log Scheduler ──────────────────────────────────────────────────
+        with st.expander("📋 Log Scheduler"):
+            log_lines = penjelasan_engine.get_log()
+            if log_lines:
+                st.code("\n".join(reversed(log_lines[-30:])), language=None)
+            else:
+                st.caption("Belum ada log.")
+
+        # ── Post Manual (darurat) ──────────────────────────────────────────
+        with st.expander("⚡ Post Manual Sekarang (darurat)"):
+            st.caption("Post langsung tanpa menunggu scheduler. Gunakan jika scheduler tidak jalan.")
+            if st.button(
+                f"🚀 Post ke {pj_n} Paket Sekarang",
+                key="pj_post_manual",
+                disabled=pj_n == 0,
                 use_container_width=True,
-                column_config={
-                    "kode":  st.column_config.TextColumn("Kode", width="small"),
-                    "nama":  st.column_config.TextColumn("Nama Paket", width="large"),
-                    "total": st.column_config.NumberColumn("Total", width="small"),
-                    "sukses": st.column_config.NumberColumn("Sukses", width="small"),
-                    "gagal": st.column_config.NumberColumn("Gagal", width="small"),
-                    "pesan": st.column_config.TextColumn("Pesan"),
-                },
-                hide_index=True,
-            )
+            ):
+                teks_ov = st.session_state.get("pj_teks_override", "").strip() or None
+                progress = st.progress(0, text="Memulai...")
+                hasil_pj = []
+                for i, p in enumerate(pj_selected):
+                    progress.progress((i + 1) / len(pj_selected), text=f"Post ke {p['kode']}...")
+                    try:
+                        result = penjelasan_engine.auto_post_sapaan(p["id_lelang"], pj_jenis, teks_ov)
+                        hasil_pj.append({
+                            "kode": p["kode"], "nama": p["nama"][:45],
+                            "total": result["total"], "sukses": result["sukses"],
+                            "gagal": result["gagal"], "pesan": result.get("pesan", ""),
+                        })
+                    except Exception as e:
+                        hasil_pj.append({
+                            "kode": p["kode"], "nama": p["nama"][:45],
+                            "total": 0, "sukses": 0, "gagal": 1, "pesan": str(e),
+                        })
+                progress.empty()
+                ok_m = sum(1 for h in hasil_pj if h["gagal"] == 0 and h["total"] > 0)
+                if ok_m == len(hasil_pj):
+                    st.success(f"✅ {ok_m}/{len(hasil_pj)} paket berhasil.")
+                else:
+                    st.warning(f"⚠️ {ok_m}/{len(hasil_pj)} paket berhasil.")
+                st.dataframe(hasil_pj, use_container_width=True, hide_index=True)
 
 # ============================================================
 # Tab 8: Auto-Fill Jadwal
@@ -710,7 +760,6 @@ with tab8:
 
     with _jd_col_list:
         st.markdown("### 1. Pilih Paket")
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
             if st.button("🔍 Ambil Paket Draft", key="jd_fetch_draft", use_container_width=True):
@@ -901,7 +950,6 @@ with tab9:
 
     with _kp_col_list:
         st.markdown("### 1. Pilih Paket")
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
             if st.button("🔍 Ambil Paket Draft", key="kp_fetch_draft", use_container_width=True):
@@ -1130,7 +1178,6 @@ with tab9:
     with _kp_col_detail:
         st.markdown("### 3. Upload BA Reviu DPP")
         st.caption("Upload BA Hasil Reviu setelah PPK menandatangani.")
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
         if st.button("🔍 Ambil Paket Draft", key="ba_fetch_draft", use_container_width=True):
             with st.spinner("Mengambil daftar paket..."):
                 _ba_result = kirimpesan_engine.fetch_paket_draft()
@@ -1237,13 +1284,12 @@ with tab9:
 
 with tab_ba:
 
-    _ba_col_kiri, _ba_col_kanan = st.columns([2, 3])
+    _ba_col1, _ba_col2, _ba_col3, _ba_col4 = st.columns([2, 2, 2, 2])
 
-    with _ba_col_kiri:
+    with _ba_col1:
 
         st.markdown("### 1. Pilih Paket")
 
-        st.caption("💡 Pastikan browser sudah membuka halaman **/paket** di SPSE sebelum fetch.")
 
         col_bafetch, col_baall, col_banone = st.columns([3, 1, 1])
 
@@ -1325,52 +1371,65 @@ with tab_ba:
 
             st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
 
-    with _ba_col_kanan:
-
-        st.markdown("### 2. Konfigurasi 5 BA")
-
-        st.caption("Isi nomor, tanggal, dan upload file PDF untuk setiap BA.")
-
+        # ── Inisialisasi session state BA ─────────────────────────────────
         for jenis_key in ba_config.JENIS_KEYS:
-
             if f"ba_no_{jenis_key}" not in st.session_state:
-
                 st.session_state[f"ba_no_{jenis_key}"] = ""
-
             if f"ba_tgl_{jenis_key}" not in st.session_state:
-
                 st.session_state[f"ba_tgl_{jenis_key}"] = datetime.today().strftime("%d-%m-%Y")
-
             if f"ba_info_{jenis_key}" not in st.session_state:
-
                 st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
 
-        for jenis_key in ba_config.JENIS_KEYS:
 
+    with _ba_col2:
+
+        st.markdown("### 2. Konfigurasi BA")
+        for jenis_key in ["penjelasan", "hasil_pemilihan"]:
             st.markdown(f"#### 📋 {ba_config.JENIS_BA[jenis_key]}")
-
             col_no, col_tgl = st.columns(2)
-
             with col_no:
-
                 st.text_input("Nomor BA", key=f"ba_no_{jenis_key}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
-
             with col_tgl:
-
                 st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
-
                 _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
-
                 if isinstance(_dt, date):
-
                     st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
-
             st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
-
             st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
-
             st.divider()
 
+    with _ba_col3:
+
+        st.markdown("### &nbsp;")
+        for jenis_key in ["evaluasi", "lainnya"]:
+            st.markdown(f"#### 📋 {ba_config.JENIS_BA[jenis_key]}")
+            col_no, col_tgl = st.columns(2)
+            with col_no:
+                st.text_input("Nomor BA", key=f"ba_no_{jenis_key}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
+            with col_tgl:
+                st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
+                _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
+                if isinstance(_dt, date):
+                    st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
+            st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
+            st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
+            st.divider()
+
+    with _ba_col4:
+
+        st.markdown("### &nbsp;")
+        _jk = "negosiasi"
+        st.markdown(f"#### 📋 {ba_config.JENIS_BA[_jk]}")
+        col_no, col_tgl = st.columns(2)
+        with col_no:
+            st.text_input("Nomor BA", key=f"ba_no_{_jk}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
+        with col_tgl:
+            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{_jk}", format="DD/MM/YYYY", label_visibility="collapsed")
+            _dt = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
+            if isinstance(_dt, date):
+                st.session_state[f"ba_tgl_{_jk}"] = _dt.strftime("%d-%m-%Y")
+        st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{_jk}", label_visibility="collapsed")
+        st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{_jk}", height=68, label_visibility="collapsed")
         st.divider()
 
         ba_n = len(ba_selected)

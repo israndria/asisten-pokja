@@ -632,6 +632,33 @@ def _scheduler_loop():
     _log_append("Scheduler berhenti.")
 
 
+def jadwalkan_dari_gcal(
+    paket_id: str,
+    nama_paket: str,
+    jenis: str = "tender",
+    teks_override: str | None = None,
+    auto_post: bool = True,
+) -> dict:
+    """
+    Cari jadwal penjelasan paket_id di GCal, lalu daftarkan ke job queue.
+    Return: {ok: bool, waktu_fire: datetime|None, pesan: str}
+    """
+    jadwal = get_jadwal_dari_gcalendar(paket_id=paket_id)
+    if not jadwal:
+        return {"ok": False, "waktu_fire": None, "pesan": "Jadwal penjelasan tidak ditemukan di Google Calendar"}
+
+    waktu_fire = jadwal[paket_id]
+    job = tambah_job(
+        paket_id=paket_id,
+        nama_paket=nama_paket,
+        jenis=jenis,
+        waktu_fire=waktu_fire,
+        teks_override=teks_override if teks_override else None,
+        auto_post=auto_post,
+    )
+    return {"ok": True, "waktu_fire": waktu_fire, "pesan": f"Dijadwalkan: {waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB", "job": job}
+
+
 def start_scheduler():
     global _scheduler_thread, _scheduler_stop
     if _scheduler_thread and _scheduler_thread.is_alive():
