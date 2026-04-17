@@ -223,50 +223,74 @@ def _baca_headers_log() -> list[dict]:
 
 def tunggu_capture(timeout=120, progress_cb=None) -> dict | None:
     """
-    Tunggu sampai mitmproxy capture request download dari Apendo.
-    Return dict berisi: signature, cookie, id_dok, token, lpse_kode
+    Tunggu sampai mitmproxy capture request GET /lt17 dari Apendo (saat paste token).
+    id_dok di-parse dari HTML response /lt17 — tidak perlu klik Unduh.
     """
     def _log(msg):
         if progress_cb:
             progress_cb(msg)
 
-    _log(" Menunggu klik Unduh di Apendo...")
+    _log("Menunggu Apendo load halaman lt17 (paste token ke Apendo)...")
     deadline = time.time() + timeout
 
     while time.time() < deadline:
         entries = _baca_headers_log()
         for e in entries:
             url = e.get("url", "")
-            if "/lt17/download" not in url:
+            # Cukup dari GET /lt17? (load halaman), bukan dari /download
+            if "/lt17?" not in url and "/lt17/download" not in url:
                 continue
             req_h = e.get("req_headers", {})
-            sig = req_h.get("Apendo-Signature", "")
+            sig   = req_h.get("Apendo-Signature", "")
             cookie = req_h.get("Cookie", "")
             if not sig or not cookie:
                 continue
 
-            # Parse URL
-            m_token = re.search(r"access_token=([^&]+)", url)
-            m_id    = re.search(r"id=([^&]+)", url)
+            m_token = re.search(r"access_token=([^&\s]+)", url)
             m_lpse  = re.search(r"inaproc\.id/([^/]+)/lt17", url)
-
-            if not (m_token and m_id and m_lpse):
+            if not (m_token and m_lpse):
                 continue
 
-            _log(f"OK Capture berhasil! id={m_id.group(1)}")
+            token    = m_token.group(1)
+            lpse     = m_lpse.group(1)
+            base_url = f"https://spse.inaproc.id/{lpse}"
+
+            # Parse id_dok dari HTML /lt17
+            id_list = _ambil_id_dari_halaman(base_url, token, sig, cookie)
+
+            _log(f"OK Capture! token={token[:8]}... | {len(id_list)} id ditemukan: {id_list}")
             return {
-                "signature": sig,
-                "cookie": cookie,
-                "id_dok": m_id.group(1),
-                "access_token": m_token.group(1),
-                "lpse_kode": m_lpse.group(1),
-                "base_url": f"https://spse.inaproc.id/{m_lpse.group(1)}",
+                "signature":    sig,
+                "cookie":       cookie,
+                "id_dok":       id_list[0] if id_list else "",
+                "id_dok_list":  id_list,
+                "access_token": token,
+                "lpse_kode":    lpse,
+                "base_url":     base_url,
             }
 
         time.sleep(2)
 
-    _log("GAGAL Timeout — tidak ada capture dari Apendo")
+    _log("GAGAL Timeout — Apendo tidak load halaman lt17")
     return None
+
+
+def _ambil_id_dari_halaman(base_url: str, token: str, sig: str, cookie: str) -> list[str]:
+    """Parse semua id_dok dari HTML response /lt17."""
+    sess = requests.Session()
+    sess.proxies = {"http": None, "https": None}
+    headers = {
+        "User-Agent": APENDO_UA,
+        "Apendo-Signature": sig,
+        "Cookie": cookie,
+    }
+    try:
+        r = sess.get(f"{base_url}/lt17?access_token={token}",
+                     headers=headers, timeout=30, verify=False)
+        ids = re.findall(r'\bid\s*:\s*["\']?(10000\d+)["\']?', r.text)
+        return list(dict.fromkeys(ids))  # unik, urut
+    except Exception:
+        return []
 
 
 # ── Download engine ───────────────────────────────────────────────────────────
@@ -387,9 +411,9 @@ def buka_penawaran(
             hentikan_mitmproxy()
             return {"ok": False, "files": [], "pesan": "Apendo gagal diluncurkan"}
         _log("Apendo berjalan di background.")
-        _log("  → Login ke Apendo, buka paket, klik Unduh satu kali.")
+        _log("  → Login ke Apendo lalu paste token. Selesai — tidak perlu klik apapun lagi.")
     else:
-        _log("mitmproxy aktif. Buka Apendo → login → klik Unduh satu kali.")
+        _log("mitmproxy aktif. Buka Apendo → paste token. Tidak perlu klik Unduh.")
 
     try:
         # Step 2 — tunggu capture
