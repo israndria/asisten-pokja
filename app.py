@@ -25,6 +25,7 @@ import ba_engine
 import ba_config
 import kualifikasi_engine
 import apendo_engine
+import apendo_engine_v2
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -1741,12 +1742,49 @@ with tab_apendo:
         folder_val2 = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
         siap = ap_token_res2 and ap_token_res2.get("ok") and folder_val2 and os.path.isdir(folder_val2)
 
-        ap_jumlah_peserta = st.number_input(
-            "Jumlah peserta yang diunduh",
-            min_value=1, max_value=10, value=1, step=1,
-            key="ap_jumlah_peserta",
-            help="Sesuaikan dengan jumlah peserta yang mengajukan penawaran",
-        )
+        _ap_peserta_col, _ap_mode_col = st.columns([1, 1])
+        with _ap_peserta_col:
+            ap_jumlah_peserta = st.number_input(
+                "Jumlah peserta yang diunduh",
+                min_value=1, max_value=10, value=1, step=1,
+                key="ap_jumlah_peserta",
+                help="Sesuaikan dengan jumlah peserta yang mengajukan penawaran",
+            )
+        with _ap_mode_col:
+            ap_mode = st.selectbox(
+                "Mode otomasi",
+                options=["v2", "bg", "frida"],
+                index=0,
+                key="ap_mode",
+                help="v2 = HTTP Engine (tanpa rebut mouse) | bg = Win32 hybrid | frida = experimental",
+                format_func=lambda x: {
+                    "v2": "HTTP Engine v2 (Tanpa Mouse - RECOMMENDED)",
+                    "bg": "Win32 Hybrid (lama)",
+                    "frida": "Frida JS Inject (experimental)",
+                }.get(x, x),
+            )
+
+        if ap_mode == "v2":
+            st.info(
+                "**Mode HTTP Engine v2**: Download via requests Python murni — tidak merebut mouse sama sekali. "
+                "Apendo hanya perlu dibuka dan klik Unduh 1x, sisanya otomatis."
+            )
+            _ap_id_raw = st.text_area(
+                "ID Dokumen Peserta (1 per baris)",
+                key="ap_id_dok_raw",
+                placeholder="1000011812001\n1000011812002",
+                height=80,
+                help="ID dokumen per peserta — dari mitmproxy capture sebelumnya. Kosongkan = auto dari capture pertama.",
+            )
+            if _ap_id_raw.strip():
+                st.session_state["ap_id_dok_list"] = [x.strip() for x in _ap_id_raw.strip().splitlines() if x.strip()]
+            else:
+                st.session_state["ap_id_dok_list"] = []
+        elif ap_mode == "frida":
+            st.info(
+                "**Mode Frida (Experimental)**: Inject JS langsung ke Qt5WebKit Apendo. "
+                "Jalankan `frida_probe.py` dulu untuk verifikasi apakah Qt5WebKit hookable."
+            )
 
         if not ap_token_res2 or not ap_token_res2.get("ok"):
             st.info("Ambil token dari kolom kiri terlebih dahulu.")
@@ -1767,25 +1805,191 @@ with tab_apendo:
                     log_lines.append(msg)
                     log_area.code("\n".join(log_lines[-20:]))
 
-                with st.spinner("Menjalankan Apendo di background..."):
-                    hasil_ap = apendo_engine.buka_dokumen_penawaran(
-                        token_url=ap_token_res2["token_url"],
-                        folder_output=folder_val2,
-                        progress_cb=_ap_log,
-                        jumlah_peserta=int(ap_jumlah_peserta),
-                    )
-
-                if hasil_ap["ok"]:
-                    st.success(
-                        f"Selesai! Dokumen diunduh ke `{folder_val2}`"
-                    )
-                    files = hasil_ap.get("files", [])
-                    if files:
-                        st.markdown(f"**{len(files)} file ditemukan:**")
-                        for f in files[:30]:
-                            size_kb = f["size"] // 1024
-                            st.caption(f"• {f['rel']} ({size_kb} KB)")
+                if ap_mode == "v2":
+                    with st.spinner("Menunggu klik Unduh di Apendo (mitmproxy aktif)..."):
+                        hasil_ap = apendo_engine_v2.buka_penawaran(
+                            kode_tender=ap_kode.strip(),
+                            id_dok_list=st.session_state.get("ap_id_dok_list", [
+                                ap_token_res2.get("id_dok", "")
+                            ]),
+                            dir_output=folder_val2,
+                            progress_cb=_ap_log,
+                            timeout_capture=180,
+                        )
+                    if hasil_ap["ok"]:
+                        st.success(f"Selesai! {hasil_ap['pesan']}")
+                        cap = hasil_ap.get("capture", {})
+                        if cap:
+                            st.session_state["ap_v2_capture"] = cap
+                            st.caption(f"Token: `{cap.get('access_token','')[:12]}...` | id: `{cap.get('id_dok','')}`")
+                        for fp in hasil_ap.get("files", []):
+                            size_kb = os.path.getsize(fp) // 1024 if os.path.exists(fp) else 0
+                            st.caption(f"• {os.path.basename(fp)} ({size_kb} KB)")
                     else:
-                        st.info("Folder output masih kosong — dokumen mungkin disimpan di subfolder Apendo.")
+                        st.error(f"Gagal: {hasil_ap['pesan']}")
                 else:
-                    st.error(f"Gagal: {hasil_ap['pesan']}")
+                    with st.spinner("Menjalankan Apendo di background..."):
+                        hasil_ap = apendo_engine.buka_dokumen_penawaran(
+                            token_url=ap_token_res2["token_url"],
+                            folder_output=folder_val2,
+                            progress_cb=_ap_log,
+                            jumlah_peserta=int(ap_jumlah_peserta),
+                            mode=ap_mode,
+                        )
+
+                    if hasil_ap["ok"]:
+                        st.success(f"Selesai! Dokumen diunduh ke `{folder_val2}`")
+                        files = hasil_ap.get("files", [])
+                        if files:
+                            st.markdown(f"**{len(files)} file ditemukan:**")
+                            for f in files[:30]:
+                                size_kb = f["size"] // 1024
+                                st.caption(f"• {f['rel']} ({size_kb} KB)")
+                        else:
+                            st.info("Folder output masih kosong — dokumen mungkin disimpan di subfolder Apendo.")
+                    else:
+                        st.error(f"Gagal: {hasil_ap['pesan']}")
+
+# ── Section 4: Scan Folder Hasil Apendo ──────────────────────────────────────
+
+st.markdown("---")
+st.markdown("### 4. Scan Folder Hasil Apendo")
+
+_APENDO_BIDDINGS_BASE = r"D:\data\biddings"
+
+_sc_col1, _sc_col2 = st.columns([2, 3])
+
+with _sc_col1:
+    st.markdown("**Lokasi folder hasil**")
+    _sc_lpse_id = st.text_input(
+        "LPSE ID",
+        key="sc_lpse_id",
+        placeholder="tapinkab",
+        help="Subfolder pertama: nama LPSE (contoh: tapinkab, tanahbumbukab)",
+    )
+    _sc_kode_tender = st.text_input(
+        "Kode Tender",
+        key="sc_kode_tender",
+        placeholder="10096653000",
+        help="Subfolder kedua: kode tender dari URL SPSE",
+    )
+
+    # Tombol scan
+    _sc_folder_path = ""
+    if _sc_lpse_id.strip() and _sc_kode_tender.strip():
+        _sc_folder_path = os.path.join(
+            _APENDO_BIDDINGS_BASE,
+            _sc_lpse_id.strip(),
+            _sc_kode_tender.strip(),
+        )
+        st.caption(f"Path: `{_sc_folder_path}`")
+
+        if st.button("🔍 Scan Folder", key="sc_scan", use_container_width=True):
+            st.session_state["sc_scan_path"] = _sc_folder_path
+            st.session_state["sc_scan_result"] = apendo_engine._scan_folder_output(_sc_folder_path) if os.path.isdir(_sc_folder_path) else None
+
+    else:
+        st.info("Isi LPSE ID dan Kode Tender untuk scan.")
+
+with _sc_col2:
+    _sc_result = st.session_state.get("sc_scan_result")
+    _sc_path = st.session_state.get("sc_scan_path", "")
+
+    if _sc_result is None and _sc_path:
+        st.warning(f"Folder tidak ditemukan: `{_sc_path}`")
+    elif _sc_result is not None:
+        if len(_sc_result) == 0:
+            st.info(f"Folder ditemukan tapi kosong: `{_sc_path}`")
+        else:
+            st.success(f"**{len(_sc_result)} file** ditemukan di `{_sc_path}`")
+
+            # Tampilkan daftar file
+            _sc_df_data = []
+            for f in _sc_result[:50]:
+                _sc_df_data.append({
+                    "File": f["rel"],
+                    "Ukuran": f"{f['size'] // 1024} KB" if f['size'] >= 1024 else f"{f['size']} B",
+                })
+
+            import pandas as pd
+            st.dataframe(
+                pd.DataFrame(_sc_df_data),
+                use_container_width=True,
+                hide_index=True,
+                height=200,
+            )
+
+            if len(_sc_result) > 50:
+                st.caption(f"... dan {len(_sc_result) - 50} file lainnya")
+
+            # Tombol buka + pindahkan
+            _sc_open_col, _sc_move_col = st.columns(2)
+            with _sc_open_col:
+                if st.button("📂 Buka Folder", key="sc_open", use_container_width=True):
+                    os.startfile(_sc_path)
+
+            with _sc_move_col:
+                if st.button("📦 Pindahkan ke Folder Paket...", key="sc_move", use_container_width=True):
+                    st.session_state["sc_show_move"] = True
+
+            # Dialog pindah file
+            if st.session_state.get("sc_show_move"):
+                st.markdown("**Pilih folder tujuan:**")
+                _sc_dest = st.text_input(
+                    "Folder tujuan",
+                    key="sc_dest_folder",
+                    placeholder=r"D:\Dokumen\@ POKJA 2026\19. Pokja 091\Dokumen Penawaran",
+                )
+                _sc_dest_browse, _sc_dest_ok, _sc_dest_cancel = st.columns(3)
+                with _sc_dest_browse:
+                    if st.button("📁 Browse", key="sc_dest_browse_btn", use_container_width=True):
+                        try:
+                            import tkinter as tk
+                            from tkinter import filedialog
+                            root = tk.Tk()
+                            root.withdraw()
+                            root.wm_attributes("-topmost", True)
+                            sel = filedialog.askdirectory(title="Pilih Folder Tujuan")
+                            root.destroy()
+                            if sel:
+                                st.session_state["sc_dest_folder"] = sel.replace("/", "\\")
+                                st.rerun()
+                        except Exception as e:
+                            st.warning(f"Dialog gagal: {e}")
+
+                with _sc_dest_ok:
+                    if st.button("✅ Pindahkan", key="sc_dest_ok_btn", type="primary", use_container_width=True):
+                        dest = st.session_state.get("sc_dest_folder", "").strip()
+                        if not dest:
+                            st.warning("Pilih folder tujuan terlebih dahulu.")
+                        elif not os.path.isdir(dest):
+                            try:
+                                os.makedirs(dest, exist_ok=True)
+                            except Exception as e:
+                                st.error(f"Folder tujuan tidak bisa dibuat: {e}")
+                                dest = ""
+
+                        if dest:
+                            import shutil
+                            _sc_moved = 0
+                            _sc_errors = []
+                            for f in _sc_result:
+                                src = f["path"]
+                                dst = os.path.join(dest, os.path.basename(f["path"]))
+                                try:
+                                    shutil.copy2(src, dst)
+                                    _sc_moved += 1
+                                except Exception as e:
+                                    _sc_errors.append(f"{f['rel']}: {e}")
+
+                            if _sc_moved:
+                                st.success(f"✅ {_sc_moved} file berhasil disalin ke `{dest}`")
+                            if _sc_errors:
+                                st.error(f"{len(_sc_errors)} file gagal:\n" + "\n".join(_sc_errors[:5]))
+
+                            st.session_state["sc_show_move"] = False
+
+                with _sc_dest_cancel:
+                    if st.button("❌ Batal", key="sc_dest_cancel_btn", use_container_width=True):
+                        st.session_state["sc_show_move"] = False
+                        st.rerun()
