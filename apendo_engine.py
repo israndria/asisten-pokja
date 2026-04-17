@@ -2,15 +2,16 @@
 
 Flow:
 1. Ambil token dari halaman SPSE /lelang/{kode_tender} via CDP
-2. Launch AHK script yang mengotomasi seluruh flow Apendo:
+2. Launch apendo_bg.py (Python Win32 hybrid automation):
    - Buka Apendo
-   - Paste token → Kirim Token
-   - Handle JS Confirm "Setting folder" → OK
-   - Handle dialog Select Folder → isi path → klik Select Folder
-   - Klik tab "Daftar Penawaran Peserta"
-   - Klik "Buka Dokumen Penawaran"
-   - Klik semua tombol "Unduh" per peserta
-3. Tail log file dari AHK untuk progress reporting
+   - Physical click paste token + Kirim Token
+   - PostMessage background untuk step selanjutnya
+   - Klik Unduh per peserta via hybrid_click (cursor disimpan & dikembalikan)
+3. Tail log file untuk progress reporting
+
+Opsi mode:
+  - mode="bg"     → apendo_bg.py (default, Win32 hybrid)
+  - mode="frida"  → frida_apendo.py (experimental, inject JS ke Qt5WebKit)
 """
 
 import os
@@ -21,7 +22,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-APENDO_EXE = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
+APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
+PYTHON_SYS  = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\python.exe"
+BG_SCRIPT   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_bg.py")
+
+# Legacy AHK (tidak dipakai, dipertahankan sebagai referensi)
 AHK_EXE    = r"C:\Program Files\AutoHotkey\AutoHotkey.exe"
 AHK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_flow.ahk")
 
@@ -87,19 +92,28 @@ def get_token_dari_spse(kode_tender: str, progress_cb=None) -> dict:
         return {"ok": False, "pesan": f"Error mengambil token: {e}"}
 
 
-# ── Launch & Otomasi Apendo via AHK ─────────────────────────────────────────
+# ── Launch & Otomasi Apendo via apendo_bg.py ─────────────────────────────────
 
-def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None, jumlah_peserta: int = 3) -> dict:
+def buka_dokumen_penawaran(
+    token_url: str,
+    folder_output: str,
+    progress_cb=None,
+    jumlah_peserta: int = 3,
+    mode: str = "bg",
+) -> dict:
     """
-    Launch AHK script yang mengotomasi seluruh flow Apendo.
+    Launch automation script untuk seluruh flow Apendo.
 
     Args:
-        token_url: URL token dari SPSE (https://spse.inaproc.id/tapinkab/lt17/eyJ...)
-        folder_output: Path folder tujuan (parent folder)
-        progress_cb: Callback(str) untuk progress log
+        token_url     : URL token dari SPSE
+        folder_output : Path folder tujuan (parent folder)
+        progress_cb   : Callback(str) untuk progress log
+        jumlah_peserta: Jumlah peserta yang akan diunduh
+        mode          : "bg" (default) = apendo_bg.py Win32 hybrid
+                        "frida"        = frida_apendo.py (experimental)
 
     Returns:
-        {"ok": True, "folder": "..."}
+        {"ok": True, "folder": "...", "files": [...]}
         {"ok": False, "pesan": "..."}
     """
     def _log(msg):
@@ -109,35 +123,42 @@ def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None,
     if not os.path.exists(APENDO_EXE):
         return {"ok": False, "pesan": f"Apendo.exe tidak ditemukan di: {APENDO_EXE}"}
 
-    if not os.path.exists(AHK_EXE):
-        return {"ok": False, "pesan": f"AutoHotkey.exe tidak ditemukan di: {AHK_EXE}"}
-
-    if not os.path.exists(AHK_SCRIPT):
-        return {"ok": False, "pesan": f"AHK script tidak ditemukan di: {AHK_SCRIPT}"}
-
     if not os.path.isdir(folder_output):
         try:
             os.makedirs(folder_output, exist_ok=True)
         except Exception as e:
             return {"ok": False, "pesan": f"Folder output tidak bisa dibuat: {e}"}
 
-    # File log AHK — dibuat fresh setiap run
-    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_ahk.log")
-    if os.path.exists(log_file):
-        try:
-            os.remove(log_file)
-        except Exception:
-            pass
+    if mode == "frida":
+        return _buka_via_frida(token_url, folder_output, jumlah_peserta, _log)
+    else:
+        return _buka_via_bg(token_url, folder_output, jumlah_peserta, _log)
+
+
+def _buka_via_bg(token_url, folder_output, jumlah_peserta, _log):
+    """Jalankan apendo_bg.py (Win32 hybrid, default)."""
+    if not os.path.exists(BG_SCRIPT):
+        return {"ok": False, "pesan": f"apendo_bg.py tidak ditemukan di: {BG_SCRIPT}"}
+
+    if not os.path.exists(PYTHON_SYS):
+        return {"ok": False, "pesan": f"Python tidak ditemukan di: {PYTHON_SYS}"}
+
+    # Log file dibuat fresh setiap run
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_bg.log")
+    try:
+        open(log_file, "w").close()
+    except Exception:
+        pass
 
     try:
-        _log("Meluncurkan AHK automation script...")
-        _log(f"Token: {token_url[:60]}...")
+        _log("Meluncurkan apendo_bg.py (Win32 hybrid)...")
+        _log(f"Token : {token_url[:60]}...")
         _log(f"Folder: {folder_output}")
+        _log(f"Peserta: {jumlah_peserta}")
 
-        # Jalankan AHK dengan 4 argumen (quoted agar spasi aman)
         cmd = [
-            AHK_EXE,
-            AHK_SCRIPT,
+            PYTHON_SYS,
+            BG_SCRIPT,
             APENDO_EXE,
             token_url,
             folder_output,
@@ -145,35 +166,91 @@ def buka_dokumen_penawaran(token_url: str, folder_output: str, progress_cb=None,
             str(jumlah_peserta),
         ]
 
-        proc = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
-        _log(f"AHK PID={proc.pid}, memantau log...")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _log(f"apendo_bg.py PID={proc.pid}, memantau log...")
 
-        # Tail log AHK sampai selesai
         last_pos = 0
-        timeout = 300  # 5 menit max
+        timeout = 360  # 6 menit max (lebih panjang dari AHK karena ada tunggu lebih lama)
         start = time.time()
 
         while proc.poll() is None and (time.time() - start) < timeout:
             time.sleep(1)
             last_pos = _tail_log(log_file, last_pos, _log)
 
-        # Baca sisa log setelah proses selesai
         last_pos = _tail_log(log_file, last_pos, _log)
 
         rc = proc.returncode
         if rc == 0:
-            _log("AHK selesai. Memindai hasil unduhan...")
+            _log("apendo_bg.py selesai. Memindai hasil unduhan...")
             files = _scan_folder_output(folder_output)
             _log(f"Ditemukan {len(files)} file di folder output.")
             return {"ok": True, "folder": folder_output, "files": files}
         else:
-            # Baca log terakhir untuk pesan error
             pesan = _baca_baris_terakhir_log(log_file)
-            return {"ok": False, "pesan": f"AHK keluar dengan kode {rc}. {pesan}"}
+            return {"ok": False, "pesan": f"apendo_bg.py keluar kode {rc}. {pesan}"}
 
     except Exception as e:
         import traceback
         return {"ok": False, "pesan": f"Error: {e}\n{traceback.format_exc()}"}
+
+
+def _buka_via_frida(token_url, folder_output, jumlah_peserta, _log):
+    """
+    Experimental: Gunakan Frida untuk inject JS ke Qt5WebKit Apendo.
+    Apendo harus sudah dibuka oleh caller sebelum memanggil ini
+    (frida_apendo.py akan wait_for_apendo() sendiri).
+    """
+    try:
+        frida_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frida_apendo.py")
+        if not os.path.exists(frida_script):
+            return {"ok": False, "pesan": f"frida_apendo.py tidak ditemukan: {frida_script}"}
+
+        _log("Mode FRIDA — inject ke Qt5WebKit Apendo...")
+        _log("Meluncurkan Apendo terlebih dahulu...")
+
+        # Launch Apendo
+        apendo_dir = os.path.dirname(APENDO_EXE)
+        subprocess.Popen([APENDO_EXE], cwd=apendo_dir)
+
+        # Jalankan frida_apendo.py di proses terpisah
+        log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frida_apendo.log")
+        try:
+            open(log_file, "w").close()
+        except Exception:
+            pass
+
+        cmd = [PYTHON_SYS, frida_script, str(jumlah_peserta)]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=open(log_file, "w", encoding="utf-8"),
+            stderr=subprocess.STDOUT,
+        )
+        _log(f"frida_apendo.py PID={proc.pid}")
+
+        last_pos = 0
+        timeout = 300
+        start = time.time()
+        while proc.poll() is None and (time.time() - start) < timeout:
+            time.sleep(1)
+            last_pos = _tail_log(log_file, last_pos, _log)
+        last_pos = _tail_log(log_file, last_pos, _log)
+
+        rc = proc.returncode
+        if rc == 0:
+            _log("Frida inject selesai. Memindai hasil...")
+            files = _scan_folder_output(folder_output)
+            return {"ok": True, "folder": folder_output, "files": files, "mode": "frida"}
+        else:
+            pesan = _baca_baris_terakhir_log(log_file)
+            return {"ok": False, "pesan": f"Frida keluar kode {rc}. {pesan}"}
+
+    except Exception as e:
+        import traceback
+        return {"ok": False, "pesan": f"Frida error: {e}\n{traceback.format_exc()}"}
 
 
 def _tail_log(log_file: str, last_pos: int, log_cb) -> int:
