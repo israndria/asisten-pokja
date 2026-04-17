@@ -16,10 +16,9 @@ import re
 import json
 import time
 import subprocess
-import threading
+import ctypes
 import requests
 import urllib3
-import tempfile
 
 urllib3.disable_warnings()
 
@@ -27,6 +26,11 @@ PYTHON_SYS  = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\python.exe"
 MITM_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_log_response.py")
 MITM_OUT    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_out.txt")
 MITM_PORT   = 8892
+
+APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
+
+SW_MINIMIZE = 6
+SW_HIDE     = 0
 
 APENDO_UA   = "Apendo/5.1.5 (18 november 2021) LT17/1.1 (18 november 2021) Qt/5.14.0 LKPPRI-SPSE/4.4"
 BASE_HEADERS = {
@@ -56,6 +60,87 @@ def _kill_port(port: int):
             time.sleep(1)
     except Exception:
         pass
+
+
+# ── Apendo lifecycle ─────────────────────────────────────────────────────────
+
+def _cari_hwnd_apendo() -> int:
+    """Cari window handle Apendo yang sedang berjalan."""
+    hasil = []
+    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+
+    def callback(hwnd, _):
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+        if "Apendo" in buf.value or "Aplikasi Pengaman Dokumen" in buf.value:
+            hasil.append(hwnd)
+        return True
+
+    ctypes.windll.user32.EnumWindows(EnumWindowsProc(callback), 0)
+    return hasil[0] if hasil else 0
+
+
+def launch_apendo(progress_cb=None) -> int:
+    """
+    Launch Apendo jika belum berjalan, minimize window-nya.
+    Return PID Apendo, atau 0 jika gagal.
+    """
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    # Cek apakah sudah berjalan
+    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Apendo.exe"],
+                       capture_output=True, text=True)
+    sudah_jalan = "Apendo.exe" in r.stdout
+
+    if sudah_jalan:
+        _log("INFO Apendo sudah berjalan.")
+    else:
+        if not os.path.exists(APENDO_EXE):
+            _log(f"GAGAL Apendo.exe tidak ditemukan: {APENDO_EXE}")
+            return 0
+        _log("Meluncurkan Apendo...")
+        subprocess.Popen([APENDO_EXE], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        time.sleep(4)  # tunggu window muncul
+
+    # Minimize window Apendo
+    for _ in range(10):
+        hwnd = _cari_hwnd_apendo()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, SW_MINIMIZE)
+            _log("Apendo diminimize ke background.")
+            break
+        time.sleep(1)
+
+    # Ambil PID
+    r2 = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Apendo.exe", "/FO", "CSV"],
+                        capture_output=True, text=True)
+    for line in r2.stdout.splitlines():
+        if "Apendo.exe" in line:
+            pid = int(line.split(",")[1].strip().strip('"'))
+            return pid
+    return 0
+
+
+def tutup_apendo(pid: int = 0, progress_cb=None):
+    """Tutup Apendo secara graceful (WM_CLOSE), fallback ke taskkill."""
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    hwnd = _cari_hwnd_apendo()
+    if hwnd:
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        time.sleep(2)
+
+    # Verifikasi sudah tutup
+    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Apendo.exe"],
+                       capture_output=True, text=True)
+    if "Apendo.exe" in r.stdout:
+        subprocess.run(["taskkill", "/F", "/IM", "Apendo.exe"], capture_output=True)
+        _log("Apendo ditutup paksa.")
+    else:
+        _log("Apendo ditutup.")
 
 
 def mulai_mitmproxy(progress_cb=None):
@@ -266,6 +351,7 @@ def buka_penawaran(
     dir_output: str,
     progress_cb=None,
     timeout_capture: int = 120,
+    auto_apendo: bool = True,
 ) -> dict:
     """
     Flow lengkap buka penawaran tanpa GUI Apendo:
@@ -293,10 +379,17 @@ def buka_penawaran(
     if not mulai_mitmproxy(progress_cb=_log):
         return {"ok": False, "files": [], "pesan": "mitmproxy gagal start"}
 
-    _log("mitmproxy aktif (hanya localhost). Sekarang:")
-    _log("  1. Buka Apendo → login → buka paket")
-    _log("  2. Klik tombol Unduh satu kali")
-    _log("  Engine akan otomatis lanjutkan setelah itu.")
+    # Step 1b — launch Apendo otomatis jika diminta
+    apendo_pid = 0
+    if auto_apendo:
+        apendo_pid = launch_apendo(progress_cb=_log)
+        if not apendo_pid:
+            hentikan_mitmproxy()
+            return {"ok": False, "files": [], "pesan": "Apendo gagal diluncurkan"}
+        _log("Apendo berjalan di background.")
+        _log("  → Login ke Apendo, buka paket, klik Unduh satu kali.")
+    else:
+        _log("mitmproxy aktif. Buka Apendo → login → klik Unduh satu kali.")
 
     try:
         # Step 2 — tunggu capture
@@ -318,9 +411,11 @@ def buka_penawaran(
                 files_downloaded.append(fpath)
 
     finally:
-        # Step 4 — selalu stop mitmproxy, bahkan jika crash
+        # Step 4 — selalu stop mitmproxy + tutup Apendo
         hentikan_mitmproxy()
         _log("mitmproxy dihentikan, proxy Windows dimatikan.")
+        if auto_apendo and apendo_pid:
+            tutup_apendo(apendo_pid, progress_cb=_log)
 
     return {
         "ok": len(files_downloaded) > 0,

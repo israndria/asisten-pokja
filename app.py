@@ -1806,15 +1806,14 @@ with tab_apendo:
                     log_area.code("\n".join(log_lines[-20:]))
 
                 if ap_mode == "v2":
-                    with st.spinner("Menunggu klik Unduh di Apendo (mitmproxy aktif)..."):
+                    with st.spinner("Menjalankan Apendo di background, menunggu klik Unduh..."):
                         hasil_ap = apendo_engine_v2.buka_penawaran(
                             kode_tender=ap_kode.strip(),
-                            id_dok_list=st.session_state.get("ap_id_dok_list", [
-                                ap_token_res2.get("id_dok", "")
-                            ]),
+                            id_dok_list=st.session_state.get("ap_id_dok_list", []),
                             dir_output=folder_val2,
                             progress_cb=_ap_log,
                             timeout_capture=180,
+                            auto_apendo=True,
                         )
                     if hasil_ap["ok"]:
                         st.success(f"Selesai! {hasil_ap['pesan']}")
