@@ -87,7 +87,7 @@ def mulai_mitmproxy(progress_cb=None):
 
     mitmdump = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\Scripts\mitmdump.exe"
     _mitm_proc = subprocess.Popen(
-        [mitmdump, "-p", str(MITM_PORT), "-s", MITM_SCRIPT],
+        [mitmdump, "--mode", f"regular@127.0.0.1:{MITM_PORT}", "-s", MITM_SCRIPT],
         stdout=open(MITM_OUT, "w"),
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NO_WINDOW,
@@ -293,34 +293,34 @@ def buka_penawaran(
     if not mulai_mitmproxy(progress_cb=_log):
         return {"ok": False, "files": [], "pesan": "mitmproxy gagal start"}
 
-    _log(" mitmproxy aktif. Sekarang:")
-    _log("   1. Buka Apendo → login → buka paket")
-    _log("   2. Klik tombol Unduh satu kali")
-    _log("   Engine akan otomatis lanjutkan setelah itu.")
+    _log("mitmproxy aktif (hanya localhost). Sekarang:")
+    _log("  1. Buka Apendo → login → buka paket")
+    _log("  2. Klik tombol Unduh satu kali")
+    _log("  Engine akan otomatis lanjutkan setelah itu.")
 
-    # Step 2 — tunggu capture
-    capture = tunggu_capture(timeout=timeout_capture, progress_cb=_log)
-    if not capture:
+    try:
+        # Step 2 — tunggu capture
+        capture = tunggu_capture(timeout=timeout_capture, progress_cb=_log)
+        if not capture:
+            return {"ok": False, "files": [], "pesan": "Timeout — tidak ada capture dari Apendo"}
+
+        # Step 3 — download semua id
+        if not id_dok_list:
+            id_dok_list = [capture["id_dok"]]
+            _log(f"INFO id_dok_list kosong, pakai dari capture: {id_dok_list}")
+
+        files_downloaded = []
+        for id_dok in id_dok_list:
+            fname = f"{kode_tender}-{id_dok}.rhs"
+            fpath = os.path.join(dir_output, fname)
+            ok = download_dokumen(capture, id_dok, fpath, progress_cb=_log)
+            if ok:
+                files_downloaded.append(fpath)
+
+    finally:
+        # Step 4 — selalu stop mitmproxy, bahkan jika crash
         hentikan_mitmproxy()
-        return {"ok": False, "files": [], "pesan": "Timeout — tidak ada capture dari Apendo"}
-
-    # Step 3 — download semua id
-    # Jika id_dok_list kosong, gunakan id dari capture pertama
-    if not id_dok_list:
-        id_dok_list = [capture["id_dok"]]
-        _log(f"INFO id_dok_list kosong, pakai dari capture: {id_dok_list}")
-
-    files_downloaded = []
-    for id_dok in id_dok_list:
-        fname = f"{kode_tender}-{id_dok}.rhs"
-        fpath = os.path.join(dir_output, fname)
-        ok = download_dokumen(capture, id_dok, fpath, progress_cb=_log)
-        if ok:
-            files_downloaded.append(fpath)
-
-    # Step 4 — stop mitmproxy
-    hentikan_mitmproxy()
-    _log(" mitmproxy dihentikan, proxy Windows dimatikan.")
+        _log("mitmproxy dihentikan, proxy Windows dimatikan.")
 
     return {
         "ok": len(files_downloaded) > 0,
