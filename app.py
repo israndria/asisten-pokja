@@ -1766,8 +1766,8 @@ with tab_apendo:
 
         if ap_mode == "v2":
             st.info(
-                "**Mode HTTP Engine v2**: Download via requests Python murni — tidak merebut mouse sama sekali. "
-                "Apendo hanya perlu dibuka dan klik Unduh 1x, sisanya otomatis."
+                "**Mode HTTP Engine v2**: Download otomatis via mitmproxy — tidak merebut mouse sama sekali. "
+                "Setelah klik tombol, **drag token dari SPSE ke Apendo** 1x. Sisanya otomatis."
             )
             _ap_id_raw = st.text_area(
                 "ID Dokumen Peserta (1 per baris)",
