@@ -625,9 +625,16 @@ def _ambil_token_dari_tab(kode_tender: str, lpse_kode: str = "tapinkab",
             m = re.search(r"lt17/(.+)", href)
             if m:
                 try:
-                    data = json.loads(_b64.b64decode(m.group(1) + "=="))
+                    raw = m.group(1)
+                    pad = len(raw) % 4
+                    if pad:
+                        raw += "=" * (4 - pad)
+                    data = json.loads(_b64.b64decode(raw))
                     access_token = data.get("access_token", "")
-                    lpse_kode = re.search(r"inaproc\.id/([^/]+)/lt17", href).group(1)
+                    root_url = data.get("root_url", href)
+                    m2 = re.search(r"inaproc\.id/([^/]+)/lt17", root_url)
+                    if m2:
+                        lpse_kode = m2.group(1)
                 except Exception:
                     pass
 
