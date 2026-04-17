@@ -1753,46 +1753,35 @@ with tab_apendo:
         with _ap_mode_col:
             ap_mode = st.selectbox(
                 "Mode otomasi",
-                options=["v2", "bg", "frida"],
+                options=["v3", "v2", "bg"],
                 index=0,
                 key="ap_mode",
-                help="v2 = HTTP Engine (tanpa rebut mouse) | bg = Win32 hybrid | frida = experimental",
+                help="v3 = CDP otomatis (RECOMMENDED) | v2 = mitmproxy+drag | bg = Win32 hybrid",
                 format_func=lambda x: {
-                    "v2": "HTTP Engine v2 (Tanpa Mouse - RECOMMENDED)",
+                    "v3": "HTTP Engine v3 — Otomatis via CDP (RECOMMENDED)",
+                    "v2": "HTTP Engine v2 — drag token ke Apendo",
                     "bg": "Win32 Hybrid (lama)",
-                    "frida": "Frida JS Inject (experimental)",
                 }.get(x, x),
             )
 
-        if ap_mode == "v2":
+        if ap_mode == "v3":
             st.info(
-                "**Mode HTTP Engine v2**: Download otomatis via mitmproxy — tidak merebut mouse sama sekali. "
-                "Setelah klik tombol, **drag token dari SPSE ke Apendo** 1x. Sisanya otomatis."
+                "**Mode v3 (Fully Otomatis)**: Cukup masukkan kode tender — engine ambil token "
+                "dari browser CDP, generate signature, dan download semua dokumen. "
+                "**Tidak perlu Apendo, tidak perlu drag apapun.**"
             )
-            _ap_id_raw = st.text_area(
-                "ID Dokumen Peserta (1 per baris)",
-                key="ap_id_dok_raw",
-                placeholder="1000011812001\n1000011812002",
-                height=80,
-                help="ID dokumen per peserta — dari mitmproxy capture sebelumnya. Kosongkan = auto dari capture pertama.",
-            )
-            if _ap_id_raw.strip():
-                st.session_state["ap_id_dok_list"] = [x.strip() for x in _ap_id_raw.strip().splitlines() if x.strip()]
-            else:
-                st.session_state["ap_id_dok_list"] = []
-        elif ap_mode == "frida":
+        elif ap_mode == "v2":
             st.info(
-                "**Mode Frida (Experimental)**: Inject JS langsung ke Qt5WebKit Apendo. "
-                "Jalankan `frida_probe.py` dulu untuk verifikasi apakah Qt5WebKit hookable."
+                "**Mode v2**: mitmproxy + drag token ke Apendo 1x. Sisanya otomatis."
             )
 
-        if not ap_token_res2 or not ap_token_res2.get("ok"):
-            st.info("Ambil token dari kolom kiri terlebih dahulu.")
-        elif not folder_val2 or not os.path.isdir(folder_val2):
+        if not folder_val2 or not os.path.isdir(folder_val2):
             st.warning("Pilih folder output yang valid.")
+        elif not ap_kode.strip():
+            st.info("Masukkan kode tender terlebih dahulu.")
         else:
             if st.button(
-                "🚀 Buka Dokumen Penawaran (Apendo Otomatis)",
+                "Unduh Dokumen Penawaran",
                 key="ap_run",
                 type="primary",
                 use_container_width=True,
@@ -1805,11 +1794,26 @@ with tab_apendo:
                     log_lines.append(msg)
                     log_area.code("\n".join(log_lines[-20:]))
 
-                if ap_mode == "v2":
-                    with st.spinner("Menjalankan Apendo di background, menunggu klik Unduh..."):
+                if ap_mode == "v3":
+                    with st.spinner("Mengunduh dokumen penawaran via CDP..."):
+                        hasil_ap = apendo_engine_v2.buka_penawaran_v3(
+                            kode_tender=ap_kode.strip(),
+                            dir_output=folder_val2,
+                            lpse_kode="tapinkab",
+                            progress_cb=_ap_log,
+                        )
+                    if hasil_ap["ok"]:
+                        st.success(f"Selesai! {hasil_ap['pesan']}")
+                        for fp in hasil_ap.get("files", []):
+                            size_kb = os.path.getsize(fp) // 1024 if os.path.exists(fp) else 0
+                            st.caption(f"• {os.path.basename(fp)} ({size_kb} KB)")
+                    else:
+                        st.error(f"Gagal: {hasil_ap['pesan']}")
+                elif ap_mode == "v2":
+                    with st.spinner("mitmproxy aktif — drag token dari SPSE ke Apendo..."):
                         hasil_ap = apendo_engine_v2.buka_penawaran(
                             kode_tender=ap_kode.strip(),
-                            id_dok_list=st.session_state.get("ap_id_dok_list", []),
+                            id_dok_list=[],
                             dir_output=folder_val2,
                             progress_cb=_ap_log,
                             timeout_capture=180,
@@ -1817,10 +1821,6 @@ with tab_apendo:
                         )
                     if hasil_ap["ok"]:
                         st.success(f"Selesai! {hasil_ap['pesan']}")
-                        cap = hasil_ap.get("capture", {})
-                        if cap:
-                            st.session_state["ap_v2_capture"] = cap
-                            st.caption(f"Token: `{cap.get('access_token','')[:12]}...` | id: `{cap.get('id_dok','')}`")
                         for fp in hasil_ap.get("files", []):
                             size_kb = os.path.getsize(fp) // 1024 if os.path.exists(fp) else 0
                             st.caption(f"• {os.path.basename(fp)} ({size_kb} KB)")

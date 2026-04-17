@@ -570,3 +570,177 @@ def buka_penawaran(
         "capture": capture,
         "pesan": f"{len(files_downloaded)}/{len(id_dok_list)} file berhasil diunduh",
     }
+
+
+# ── Flow v3: tanpa Apendo, tanpa mitmproxy ───────────────────────────────────
+
+def _generate_signature() -> str:
+    """Generate Apendo-Signature dummy — server hanya cek format, tidak validasi isi."""
+    import secrets, base64
+    ts = str(int(time.time() * 1000))
+    nonce = secrets.token_urlsafe(9)[:12]
+    mac = base64.b64encode(secrets.token_bytes(20)).decode()
+    return f"{ts}|{nonce}|{mac}"
+
+
+def _ambil_token_dari_tab(kode_tender: str, lpse_kode: str = "tapinkab",
+                           progress_cb=None) -> tuple[str, str]:
+    """
+    Ambil access_token + SPSE_SESSION dari tab /lelang/{kode_tender} di Chrome CDP.
+    Jika tab belum ada, buka tab baru ke URL tsb.
+    Return (access_token, spse_session) atau ('', '').
+    """
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    try:
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().start()
+        browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+        ctx = browser.contexts[0]
+
+        # Cari tab lelang yang sesuai
+        target_page = None
+        for page in ctx.pages:
+            if f"lelang/{kode_tender}" in page.url:
+                target_page = page
+                break
+
+        # Kalau tidak ada, buka tab baru
+        if not target_page:
+            _log(f"Buka tab lelang/{kode_tender}...")
+            target_page = ctx.new_page()
+            target_page.goto(
+                f"https://spse.inaproc.id/{lpse_kode}/lelang/{kode_tender}",
+                wait_until="domcontentloaded", timeout=20000
+            )
+            time.sleep(2)
+
+        # Ambil link Geret Token
+        import base64 as _b64
+        link = target_page.query_selector('a[href*="lt17"]')
+        access_token = ""
+        if link:
+            href = link.get_attribute("href") or ""
+            m = re.search(r"lt17/(.+)", href)
+            if m:
+                try:
+                    data = json.loads(_b64.b64decode(m.group(1) + "=="))
+                    access_token = data.get("access_token", "")
+                    lpse_kode = re.search(r"inaproc\.id/([^/]+)/lt17", href).group(1)
+                except Exception:
+                    pass
+
+        # Ambil SPSE_SESSION
+        spse = ""
+        for c in ctx.cookies(["https://spse.inaproc.id"]):
+            if c["name"] == "SPSE_SESSION":
+                spse = c["value"]
+                break
+
+        browser.close()
+        pw.stop()
+
+        if access_token and spse:
+            _log(f"OK token={access_token[:16]}... lpse={lpse_kode}")
+            return access_token, spse, lpse_kode
+        _log("GAGAL: token atau SPSE_SESSION tidak ditemukan")
+        return "", "", lpse_kode
+    except Exception as ex:
+        _log(f"GAGAL CDP: {ex}")
+        return "", "", lpse_kode
+
+
+def buka_penawaran_v3(
+    kode_tender: str,
+    dir_output: str,
+    lpse_kode: str = "tapinkab",
+    progress_cb=None,
+) -> dict:
+    """
+    Download dokumen penawaran TANPA Apendo dan TANPA mitmproxy.
+
+    Flow:
+    1. Ambil access_token + SPSE_SESSION dari Chrome CDP
+    2. Generate Apendo-Signature dummy (server tidak validasi isi)
+    3. GET /lt17 → parse id_dok semua peserta
+    4. Download semua .rhs
+
+    Args:
+        kode_tender: mis. "10090469000"
+        dir_output:  folder simpan file .rhs
+        lpse_kode:   mis. "tapinkab"
+        progress_cb: callback(str) untuk update UI
+
+    Returns:
+        {"ok": bool, "files": [...], "pesan": "..."}
+    """
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    _log(f"Ambil token dari browser (kode tender: {kode_tender})...")
+    access_token, spse, lpse_kode = _ambil_token_dari_tab(
+        kode_tender, lpse_kode, progress_cb=_log
+    )
+    if not access_token or not spse:
+        return {"ok": False, "files": [], "pesan": "Gagal ambil token dari browser CDP"}
+
+    sig = _generate_signature()
+    base_url = f"https://spse.inaproc.id/{lpse_kode}/lt17"
+
+    headers = {
+        "User-Agent": APENDO_UA,
+        "Cookie": f"SPSE_SESSION={spse}",
+        "apendo-signature": sig,
+        "Accept-Language": "en-ID,*",
+        "Accept-Encoding": "identity",
+        "Connection": "Keep-Alive",
+    }
+
+    sess = requests.Session()
+    sess.proxies = {"http": None, "https": None}
+
+    # GET /lt17 → parse id_dok
+    _log("GET /lt17 untuk ambil daftar peserta...")
+    try:
+        r = sess.get(f"{base_url}?access_token={access_token}",
+                     headers=headers, timeout=30, verify=False)
+    except Exception as ex:
+        return {"ok": False, "files": [], "pesan": f"Error GET /lt17: {ex}"}
+
+    if r.status_code != 200:
+        return {"ok": False, "files": [], "pesan": f"GET /lt17 HTTP {r.status_code}"}
+
+    id_dok_list = list(dict.fromkeys(
+        re.findall(r'\bid\s*:\s*["\']?(10000\d+)["\']?', r.text)
+    ))
+    _log(f"OK {len(id_dok_list)} peserta ditemukan: {id_dok_list}")
+
+    if not id_dok_list:
+        return {"ok": False, "files": [], "pesan": "Tidak ada id_dok ditemukan di halaman lt17"}
+
+    # Download semua .rhs
+    os.makedirs(dir_output, exist_ok=True)
+    files_downloaded = []
+    for id_dok in id_dok_list:
+        fname = f"{kode_tender}-{id_dok}.rhs"
+        fpath = os.path.join(dir_output, fname)
+        dl_url = f"{base_url}/download?id={id_dok}&access_token={access_token}"
+        _log(f"  Download {id_dok}...")
+        try:
+            r2 = sess.get(dl_url, headers=headers, timeout=120, verify=False)
+            if r2.status_code == 200:
+                with open(fpath, "wb") as f:
+                    f.write(r2.content)
+                _log(f"  OK {fname} ({len(r2.content):,} bytes)")
+                files_downloaded.append(fpath)
+            else:
+                _log(f"  GAGAL HTTP {r2.status_code} untuk {id_dok}")
+        except Exception as ex:
+            _log(f"  GAGAL error: {ex}")
+
+    return {
+        "ok": len(files_downloaded) > 0,
+        "files": files_downloaded,
+        "pesan": f"{len(files_downloaded)}/{len(id_dok_list)} file berhasil diunduh",
+    }
