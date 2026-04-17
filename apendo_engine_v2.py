@@ -23,11 +23,12 @@ import urllib3
 urllib3.disable_warnings()
 
 PYTHON_SYS  = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\python.exe"
-MITM_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_log_response.py")
+MITM_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_inject_cookie.py")
 MITM_OUT    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_out.txt")
 MITM_PORT   = 8892
 
-APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
+APENDO_EXE    = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
+APENDO_CONFIG = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\config\config.json"
 
 SW_MINIMIZE = 6
 SW_HIDE     = 0
@@ -41,6 +42,20 @@ BASE_HEADERS = {
 }
 
 _mitm_proc = None
+
+
+# ── Apendo config proxy ───────────────────────────────────────────────────────
+
+def _set_apendo_proxy(address: str):
+    """Set proxy address di config.json Apendo. address='' untuk disable."""
+    try:
+        with open(APENDO_CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg.setdefault("proxy", {})["address"] = address
+        with open(APENDO_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception:
+        pass
 
 
 # ── mitmproxy lifecycle ───────────────────────────────────────────────────────
@@ -81,9 +96,91 @@ def _cari_hwnd_apendo() -> int:
     return hasil[0] if hasil else 0
 
 
-def launch_apendo(progress_cb=None) -> int:
+def _cdp_via_playwright(progress_cb=None):
+    """
+    Return (browser, pages) via Playwright connect_over_cdp.
+    Caller bertanggung jawab menutup browser.
+    """
+    from playwright.sync_api import sync_playwright
+    pw = sync_playwright().start()
+    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+    pages = browser.contexts[0].pages if browser.contexts else []
+    return pw, browser, pages
+
+
+def ambil_token_dari_browser(progress_cb=None) -> str:
+    """
+    Ambil token URL lt17 dari tab Chrome yang sedang aktif via Playwright CDP (port 9222).
+    Return URL lengkap mis. 'https://spse.inaproc.id/tapinkab/lt17/eyJ...' atau ''.
+    """
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    try:
+        pw, browser, pages = _cdp_via_playwright(progress_cb)
+        try:
+            for page in pages:
+                if "spse.inaproc.id" not in page.url:
+                    continue
+                token_url = page.evaluate("""() => {
+                    var links = document.querySelectorAll('a[href*="lt17"]');
+                    for (var i = 0; i < links.length; i++) {
+                        if (links[i].href && links[i].href.includes('/lt17/')) return links[i].href;
+                    }
+                    if (window.location.href.includes('/lt17/')) return window.location.href;
+                    return '';
+                }""")
+                if token_url and "/lt17/" in token_url:
+                    _log(f"OK Token URL ditemukan: {token_url[:60]}...")
+                    return token_url
+        finally:
+            browser.close()
+            pw.stop()
+
+        _log("INFO Token URL lt17 tidak ditemukan di tab Chrome")
+        return ""
+    except Exception as ex:
+        _log(f"INFO Tidak bisa ambil token dari browser: {ex}")
+        return ""
+
+
+def simpan_session_dari_browser(progress_cb=None) -> str:
+    """
+    Ambil SPSE_SESSION dari Chrome via Playwright CDP dan simpan ke spse_session.json.
+    Return nilai SPSE_SESSION atau ''.
+    """
+    def _log(msg):
+        if progress_cb: progress_cb(msg)
+
+    session_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spse_session.json")
+    try:
+        pw, browser, pages = _cdp_via_playwright(progress_cb)
+        try:
+            ctx = browser.contexts[0] if browser.contexts else None
+            if ctx:
+                cookies = ctx.cookies(["https://spse.inaproc.id"])
+                for c in cookies:
+                    if c.get("name") == "SPSE_SESSION":
+                        spse = c["value"]
+                        with open(session_file, "w") as f:
+                            json.dump({"SPSE_SESSION": spse}, f)
+                        _log(f"OK SPSE_SESSION disimpan ({spse[:16]}...)")
+                        return spse
+        finally:
+            browser.close()
+            pw.stop()
+
+        _log("INFO SPSE_SESSION tidak ditemukan di browser")
+        return ""
+    except Exception as ex:
+        _log(f"INFO Tidak bisa ambil session dari browser: {ex}")
+        return ""
+
+
+def launch_apendo(token_url: str = "", progress_cb=None) -> int:
     """
     Launch Apendo jika belum berjalan, minimize window-nya.
+    Jika token_url diberikan, launch dengan URL itu sebagai CLI arg (auto-load /lt17).
     Return PID Apendo, atau 0 jika gagal.
     """
     def _log(msg):
@@ -95,14 +192,22 @@ def launch_apendo(progress_cb=None) -> int:
     sudah_jalan = "Apendo.exe" in r.stdout
 
     if sudah_jalan:
-        _log("INFO Apendo sudah berjalan.")
+        _log("INFO Apendo sudah berjalan — tutup dulu untuk kirim token baru.")
+        tutup_apendo()
+        time.sleep(2)
+
+    if not os.path.exists(APENDO_EXE):
+        _log(f"GAGAL Apendo.exe tidak ditemukan: {APENDO_EXE}")
+        return 0
+
+    cmd = [APENDO_EXE]
+    if token_url:
+        cmd.append(token_url)
+        _log(f"Meluncurkan Apendo dengan token URL: {token_url[:60]}...")
     else:
-        if not os.path.exists(APENDO_EXE):
-            _log(f"GAGAL Apendo.exe tidak ditemukan: {APENDO_EXE}")
-            return 0
-        _log("Meluncurkan Apendo...")
-        subprocess.Popen([APENDO_EXE], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        time.sleep(4)  # tunggu window muncul
+        _log("Meluncurkan Apendo (tanpa token — perlu paste manual)...")
+    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    time.sleep(5)  # tunggu window muncul
 
     # Minimize window Apendo
     for _ in range(10):
@@ -152,9 +257,14 @@ def mulai_mitmproxy(progress_cb=None):
             progress_cb(msg)
 
     _kill_port(MITM_PORT)
+    # Juga kill semua proses mitmdump yang mungkin masih jalan
+    subprocess.run(["taskkill", "/F", "/IM", "mitmdump.exe"], capture_output=True)
     time.sleep(1)
 
-    # Aktifkan Windows system proxy
+    # Set proxy di config Apendo (Qt5Network pakai ini, bukan Windows proxy)
+    _set_apendo_proxy(f"127.0.0.1:{MITM_PORT}")
+
+    # Aktifkan Windows system proxy (untuk Chrome/browser jika perlu)
     subprocess.run([
         "powershell", "-Command",
         f"Set-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' "
@@ -164,7 +274,8 @@ def mulai_mitmproxy(progress_cb=None):
     ], capture_output=True)
 
     # Bersihkan file output lama
-    for f in [MITM_OUT, MITM_SCRIPT.replace("mitm_log_response.py", "mitm_headers_log.json")]:
+    LOG_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_headers_log.json")
+    for f in [MITM_OUT, LOG_JSON]:
         try:
             os.remove(f)
         except FileNotFoundError:
@@ -172,7 +283,7 @@ def mulai_mitmproxy(progress_cb=None):
 
     mitmdump = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\Scripts\mitmdump.exe"
     _mitm_proc = subprocess.Popen(
-        [mitmdump, "--mode", f"regular@127.0.0.1:{MITM_PORT}", "-s", MITM_SCRIPT],
+        [mitmdump, "-p", str(MITM_PORT), "-s", MITM_SCRIPT],
         stdout=open(MITM_OUT, "w"),
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NO_WINDOW,
@@ -194,11 +305,16 @@ def mulai_mitmproxy(progress_cb=None):
 
 
 def hentikan_mitmproxy():
-    """Hentikan mitmproxy dan matikan Windows proxy."""
+    """Hentikan mitmproxy, matikan Windows proxy, dan reset proxy Apendo."""
     global _mitm_proc
     if _mitm_proc:
         _mitm_proc.terminate()
         _mitm_proc = None
+
+    subprocess.run(["taskkill", "/F", "/IM", "mitmdump.exe"], capture_output=True)
+
+    # Reset proxy Apendo
+    _set_apendo_proxy("")
 
     subprocess.run([
         "powershell", "-Command",
@@ -241,8 +357,8 @@ def tunggu_capture(timeout=120, progress_cb=None) -> dict | None:
             if "/lt17?" not in url and "/lt17/download" not in url:
                 continue
             req_h = e.get("req_headers", {})
-            sig   = req_h.get("Apendo-Signature", "")
-            cookie = req_h.get("Cookie", "")
+            sig   = req_h.get("Apendo-Signature", "") or req_h.get("apendo-signature", "")
+            cookie = req_h.get("Cookie", "") or req_h.get("cookie", "")
             if not sig or not cookie:
                 continue
 
@@ -281,7 +397,7 @@ def _ambil_id_dari_halaman(base_url: str, token: str, sig: str, cookie: str) -> 
     sess.proxies = {"http": None, "https": None}
     headers = {
         "User-Agent": APENDO_UA,
-        "Apendo-Signature": sig,
+        "apendo-signature": sig,
         "Cookie": cookie,
     }
     try:
@@ -299,7 +415,7 @@ def _buat_session(capture: dict) -> requests.Session:
     sess = requests.Session()
     sess.proxies = {"http": None, "https": None}
     sess.headers.update(BASE_HEADERS)
-    sess.headers["Apendo-Signature"] = capture["signature"]
+    sess.headers["apendo-signature"] = capture["signature"]
     sess.headers["Cookie"] = capture["cookie"]
     return sess
 
@@ -399,6 +515,9 @@ def buka_penawaran(
         if progress_cb:
             progress_cb(msg)
 
+    # Step 0 — simpan SPSE_SESSION dari browser (untuk inject ke Apendo via mitmproxy)
+    simpan_session_dari_browser(progress_cb=_log)
+
     # Step 1 — start mitmproxy
     if not mulai_mitmproxy(progress_cb=_log):
         return {"ok": False, "files": [], "pesan": "mitmproxy gagal start"}
@@ -406,12 +525,16 @@ def buka_penawaran(
     # Step 1b — launch Apendo otomatis jika diminta
     apendo_pid = 0
     if auto_apendo:
-        apendo_pid = launch_apendo(progress_cb=_log)
+        # Coba ambil token URL dari browser
+        token_url = ambil_token_dari_browser(progress_cb=_log)
+        apendo_pid = launch_apendo(token_url=token_url, progress_cb=_log)
         if not apendo_pid:
             hentikan_mitmproxy()
             return {"ok": False, "files": [], "pesan": "Apendo gagal diluncurkan"}
-        _log("Apendo berjalan di background.")
-        _log("  → Login ke Apendo lalu paste token. Selesai — tidak perlu klik apapun lagi.")
+        if token_url:
+            _log("Apendo berjalan di background — auto-load halaman tender.")
+        else:
+            _log("Apendo berjalan di background — paste token di Apendo, lalu tunggu.")
     else:
         _log("mitmproxy aktif. Buka Apendo → paste token. Tidak perlu klik Unduh.")
 
