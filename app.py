@@ -20,6 +20,7 @@ import penjelasan_config
 import jadwal_engine
 import jadwal_config
 import kirimpesan_engine
+import merge_engine
 import bareviu_engine
 import ba_engine
 import ba_config
@@ -106,7 +107,8 @@ _HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 _BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
                "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
-tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
+tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
+    "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
     "5️⃣ Upload 5 BA", "6️⃣ Download Kualifikasi",
@@ -115,6 +117,337 @@ tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
 penjelasan_engine.start_scheduler()
+
+# ============================================================
+# Tab 0: Persiapan Draft Paket
+# ============================================================
+
+with tab0:
+    import inbox_engine
+
+    st.subheader("Serap Pesan Delegasi Pokja dari Inbox SPSE")
+    st.caption("Membaca pesan '(LPSE) Pengumuman Delegasi Pokja' dari inbox, mengekstrak data HTML + PDF, lalu menyimpan ke Supabase.")
+
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        serap_btn = st.button("📥 Serap Inbox", type="primary", use_container_width=True)
+
+    if serap_btn:
+        progress_bar = st.progress(0.0)
+        status_txt = st.empty()
+
+        def cb(pct, msg):
+            progress_bar.progress(min(pct, 1.0))
+            status_txt.info(msg)
+
+        try:
+            hasil = inbox_engine.serap_inbox(progress_cb=cb)
+            progress_bar.progress(1.0)
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("✅ Baru", hasil["baru"])
+            col2.metric("🔄 Diperbarui", hasil["diperbarui"])
+            col3.metric("❌ Error", len(hasil["error"]))
+
+            if hasil["error"]:
+                with st.expander("Detail Error"):
+                    for e in hasil["error"]:
+                        st.error(e)
+
+            if hasil["data"]:
+                st.success(f"Berhasil memproses {len(hasil['data'])} paket delegasi.")
+                import pandas as pd
+                df = pd.DataFrame(hasil["data"])
+                kolom_tampil = [c for c in [
+                    "kode_pokja", "kode_tender", "nama_tender", "nama_dinas",
+                    "nilai_pagu", "jangka_waktu", "nama_ppk", "nomor_pp", "tanggal_pesan", "status"
+                ] if c in df.columns]
+                st.dataframe(df[kolom_tampil], use_container_width=True)
+            else:
+                status_txt.warning("Tidak ada pesan Delegasi Pokja ditemukan di inbox.")
+
+        except Exception as e:
+            st.error(f"Gagal serap inbox: {e}")
+
+    # ── Tabel semua data draft_paket dari Supabase ──
+    st.divider()
+    st.markdown("#### Data Draft Paket Tersimpan")
+
+    if st.button("🔄 Refresh Tabel", key="refresh_draft"):
+        st.rerun()
+
+    _draft_rows = []
+    try:
+        _sb_draft = inbox_engine._sb()
+        rows = _sb_draft.table("draft_paket").select("*").order("diambil_pada", desc=True).execute()
+        _draft_rows = rows.data or []
+        if _draft_rows:
+            # Filter status
+            _status_options = ["Semua", "Baru", "Sudah Folder", "Belum Folder"]
+            _filter_col, _info_col = st.columns([2, 3])
+            _filter_status = _filter_col.selectbox("Filter:", _status_options, key="filter_draft_status", label_visibility="collapsed")
+            _info_col.caption(f"Total: {len(_draft_rows)} paket tersimpan")
+
+            _hari_ini = datetime.now().strftime("%Y-%m-%d")
+
+            def _filter_row(r):
+                if _filter_status == "Baru":
+                    return str(r.get("diambil_pada") or "").startswith(_hari_ini)
+                if _filter_status == "Sudah Folder":
+                    return bool(r.get("folder_dibuat"))
+                if _filter_status == "Belum Folder":
+                    return not bool(r.get("folder_dibuat"))
+                return True
+
+            _rows_tampil = [r for r in _draft_rows if _filter_row(r)]
+
+            # Header kolom
+            _hcols = st.columns([1, 1, 3, 2, 1, 1])
+            for _h, _t in zip(_hcols, ["Pokja", "Kode Tender", "Nama Tender", "Kode Unik", "", "Status"]):
+                _h.markdown(f"**{_t}**")
+            for _r in _rows_tampil:
+                _kt   = _r.get("kode_tender", "")
+                _pokja = str(_r.get("kode_pokja") or "").strip()
+                _nama  = str(_r.get("nama_tender") or "")[:45]
+                _ku_val = str(_r.get("kode_unik") or "")
+                _sudah_folder = bool(_r.get("folder_dibuat"))
+                _is_baru = str(_r.get("diambil_pada") or "").startswith(_hari_ini)
+                _c1, _c2, _c3, _c4, _c5, _c6 = st.columns([1, 1, 3, 2, 1, 1])
+                _c1.write(_pokja or "-")
+                _c2.write(_kt[:12] if _kt else "-")
+                _c3.write(_nama or "-")
+                _ku_input = _c4.text_input(
+                    "ku", value=_ku_val, key=f"ku_{_kt}",
+                    label_visibility="collapsed",
+                    placeholder="mis: DPUPR"
+                )
+                if _c5.button("💾", key=f"simpan_ku_{_kt}", help="Simpan kode unik"):
+                    try:
+                        inbox_engine._sb().table("draft_paket").update(
+                            {"kode_unik": _ku_input.strip()}
+                        ).eq("kode_tender", _kt).execute()
+                        st.success(f"Kode unik '{_ku_input.strip()}' disimpan.")
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f"Gagal simpan: {_e}")
+                _badge = ("🆕 Baru" if _is_baru else "") + (" ✅" if _sudah_folder else "")
+                _c6.write(_badge.strip() or "—")
+        else:
+            st.info("Belum ada data. Klik 'Serap Inbox' untuk mulai.")
+    except Exception as e:
+        st.warning(f"Gagal load data: {e}")
+
+    # ── Buat Folder Paket Baru ──
+    st.divider()
+    st.markdown("#### Buat Folder Paket Baru")
+    st.caption("Copy template terbaru ke folder paket baru + auto-link Word Mail Merge ke Excel. Nomor urut dihitung otomatis dari riwayat di database.")
+
+    import os as _os, subprocess as _sp
+    from config import POKJA_ROOT as _POKJA_ROOT
+
+    # Hitung nomor urut berikutnya dari kolom nomor_urut di Supabase
+    _nomor_terakhir = 0
+    if _draft_rows:
+        _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
+    _nomor_berikutnya = _nomor_terakhir + 1
+
+    # Dropdown pilih paket — hanya yang belum punya folder (folder_dibuat kosong)
+    _opsi_map = {}  # label → row dict
+    _opsi_map["(input manual)"] = None
+    if _draft_rows:
+        for _r in _draft_rows:
+            _pokja = str(_r.get("kode_pokja") or "").strip()
+            _nama  = str(_r.get("nama_tender") or "").strip()
+            if _pokja and _nama:
+                _sudah = bool(_r.get("folder_dibuat"))
+                _label = f"Pokja {_pokja} - {_nama[:45]}"
+                if _sudah:
+                    _label += " ✅"
+                _opsi_map[_label] = _r
+
+    _pilihan = st.selectbox(
+        "Pilih paket dari database:",
+        list(_opsi_map.keys()),
+        key="selectbox_paket_baru"
+    )
+    _row_terpilih = _opsi_map.get(_pilihan)
+
+    # Tampilkan kode unik paket terpilih
+    if _row_terpilih:
+        _ku_info = str(_row_terpilih.get("kode_unik") or "").strip()
+        if _ku_info:
+            st.info(f"Kode unik: **{_ku_info}**")
+        else:
+            st.warning("Kode unik belum diisi — isi dulu di tabel atas sebelum membuat folder.")
+
+    # Hitung nama folder default
+    # Format: "{nomor_urut}. {nama_tender} - Pokja {kode_pokja}"
+    _default_nama = ""
+    if _row_terpilih:
+        _pokja = str(_row_terpilih.get("kode_pokja") or "").strip()
+        _nama  = str(_row_terpilih.get("nama_tender") or "").strip()
+        # Pakai nomor_urut yang sudah ada jika paket ini sudah pernah dibuat folder
+        _nomor_paket = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
+        if _nama and _pokja:
+            _default_nama = f"{_nomor_paket}. {_nama} - Pokja {_pokja}"
+
+    if _nomor_terakhir > 0:
+        st.caption(f"Nomor urut terakhir: **{_nomor_terakhir}** — paket baru akan mendapat nomor **{_nomor_berikutnya}**")
+
+    _nama_folder = st.text_input(
+        "Nama folder paket baru:",
+        value=_default_nama,
+        placeholder=f'Contoh: {_nomor_berikutnya}. Normalisasi Sungai X - Pokja 086',
+        key="input_nama_folder"
+    )
+
+    # Info folder
+    _target_path = _os.path.join(_POKJA_ROOT, _nama_folder) if _nama_folder else ""
+    _folder_ada = bool(_target_path and _os.path.exists(_target_path))
+    if _folder_ada:
+        st.warning(f"Folder sudah ada: `{_target_path}`")
+
+    # Riwayat paket yang sudah punya folder
+    _sudah_dibuat = [_r for _r in _draft_rows if _r.get("folder_dibuat")]
+    if _sudah_dibuat:
+        with st.expander(f"Riwayat folder dibuat ({len(_sudah_dibuat)} paket)"):
+            for _r in sorted(_sudah_dibuat, key=lambda x: x.get("nomor_urut") or 0):
+                _n = _r.get("nomor_urut", "?")
+                _f = _r.get("folder_dibuat", "")
+                _tgl = str(_r.get("folder_dibuat_pada") or "")[:10]
+                st.markdown(f"**{_n}.** `{_f}` — {_tgl}")
+
+    _col_buat, _col_buka = st.columns([1, 1])
+    with _col_buat:
+        _buat_btn = st.button(
+            "📁 Buat Folder Paket",
+            type="primary",
+            disabled=not bool(_nama_folder),
+            use_container_width=True,
+            key="btn_buat_folder"
+        )
+    with _col_buka:
+        if _folder_ada:
+            if st.button("📂 Buka di Explorer", use_container_width=True, key="btn_buka_folder"):
+                _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
+
+    if _buat_btn and _nama_folder:
+        _py     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
+        _script = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+        with st.spinner(f"Membuat folder '{_nama_folder}'..."):
+            try:
+                result = _sp.run(
+                    [_py, _script, _nama_folder],
+                    capture_output=True, text=True, timeout=60
+                )
+                if result.returncode == 0:
+                    st.success(f"Folder berhasil dibuat: `{_target_path}`")
+                    with st.expander("Detail output"):
+                        st.code(result.stdout)
+
+                    # Simpan riwayat ke Supabase
+                    if _row_terpilih:
+                        from datetime import datetime, timezone as _tz
+                        _kode = _row_terpilih.get("kode_tender")
+                        _nomor_simpan = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
+                        try:
+                            inbox_engine._sb().table("draft_paket").update({
+                                "nomor_urut": _nomor_simpan,
+                                "folder_dibuat": _nama_folder,
+                                "folder_dibuat_pada": datetime.now(_tz.utc).isoformat(),
+                            }).eq("kode_tender", _kode).execute()
+                        except Exception as _e:
+                            st.warning(f"Folder dibuat tapi gagal update riwayat: {_e}")
+
+                    if st.button("📂 Buka Folder Sekarang", key="btn_buka_baru"):
+                        _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
+                    st.rerun()
+                else:
+                    st.error("Setup gagal.")
+                    st.code(result.stdout + "\n" + result.stderr)
+            except _sp.TimeoutExpired:
+                st.error("Timeout — proses terlalu lama.")
+
+    # ── Bulk Create Folder ──
+    st.divider()
+    st.markdown("#### Buat Semua Folder Sekaligus")
+    st.caption("Buat folder untuk semua paket yang belum punya folder (status_paket = baru atau belum folder). Kode unik wajib sudah diisi.")
+
+    _bulk_kandidat = [
+        _r for _r in _draft_rows
+        if not _r.get("folder_dibuat") and _r.get("nama_tender")
+    ]
+
+    if not _bulk_kandidat:
+        st.info("Tidak ada paket yang perlu dibuat foldernya.")
+    else:
+        # Preview daftar yang akan dibuat
+        _py_bulk  = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
+        _script_bulk = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+
+        # Hitung nomor urut mulai dari max existing
+        _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
+        _bulk_plan = []
+        _urut_counter = _max_urut
+        for _r in sorted(_bulk_kandidat, key=lambda x: x.get("diambil_pada") or ""):
+            if _r.get("nomor_urut"):
+                _n = int(_r["nomor_urut"])
+            else:
+                _urut_counter += 1
+                _n = _urut_counter
+            _pokja = str(_r.get("kode_pokja") or "").strip()
+            _nama  = str(_r.get("nama_tender") or "").strip()
+            _ku    = str(_r.get("kode_unik") or "").strip()
+            _nama_folder_bulk = f"{_n}. {_nama} - Pokja {_pokja}"
+            _bulk_plan.append({
+                "kode_tender": _r.get("kode_tender"),
+                "nomor_urut": _n,
+                "nama_folder": _nama_folder_bulk,
+                "kode_unik": _ku,
+                "row": _r,
+            })
+
+        with st.expander(f"Preview {len(_bulk_plan)} folder yang akan dibuat"):
+            for _bp in _bulk_plan:
+                _warn = " ⚠️ kode unik kosong" if not _bp["kode_unik"] else ""
+                st.markdown(f"**{_bp['nomor_urut']}.** `{_bp['nama_folder']}`{_warn}")
+
+        _bulk_ada_kosong = any(not _bp["kode_unik"] for _bp in _bulk_plan)
+        if _bulk_ada_kosong:
+            st.warning("Beberapa paket belum punya kode unik — isi dulu di tabel atas (opsional, folder tetap bisa dibuat).")
+
+        if st.button("📁 Buat Semua Folder", type="primary", key="btn_bulk_buat"):
+            from datetime import datetime, timezone as _tz2
+            _bulk_progress = st.progress(0.0)
+            _bulk_status   = st.empty()
+            _bulk_ok, _bulk_gagal = 0, 0
+            for _i, _bp in enumerate(_bulk_plan):
+                _bulk_progress.progress((_i + 1) / len(_bulk_plan))
+                _bulk_status.info(f"[{_i+1}/{len(_bulk_plan)}] Membuat: {_bp['nama_folder']}")
+                try:
+                    _res = _sp.run(
+                        [_py_bulk, _script_bulk, _bp["nama_folder"]],
+                        capture_output=True, text=True, timeout=60
+                    )
+                    if _res.returncode == 0:
+                        _bulk_ok += 1
+                        try:
+                            inbox_engine._sb().table("draft_paket").update({
+                                "nomor_urut": _bp["nomor_urut"],
+                                "folder_dibuat": _bp["nama_folder"],
+                                "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
+                            }).eq("kode_tender", _bp["kode_tender"]).execute()
+                        except Exception:
+                            pass
+                    else:
+                        _bulk_gagal += 1
+                        st.error(f"Gagal: {_bp['nama_folder']}\n{_res.stderr[:200]}")
+                except _sp.TimeoutExpired:
+                    _bulk_gagal += 1
+                    st.error(f"Timeout: {_bp['nama_folder']}")
+            _bulk_status.success(f"Selesai — {_bulk_ok} berhasil, {_bulk_gagal} gagal.")
+            st.rerun()
+
 
 # ============================================================
 # Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
@@ -990,6 +1323,9 @@ with tab9:
 
                     for p in paket_list:
                         key_chk = f"kp_chk_{p['id_lelang']}"
+                        key_lamp_bytes = f"kp_lamp_bytes_{p['id_lelang']}"
+                        key_lamp_nama  = f"kp_lamp_nama_{p['id_lelang']}"
+
                         col_chk, col_lamp = st.columns([3, 2])
                         with col_chk:
                             checked = st.checkbox(
@@ -998,20 +1334,80 @@ with tab9:
                                 key=key_chk,
                             )
                         with col_lamp:
-                            uploaded_lamp = st.file_uploader(
-                                "Lampiran",
-                                type=["pdf"],
-                                key=f"kp_lamp_{p['id_lelang']}",
-                                label_visibility="collapsed",
-                            )
-                            if uploaded_lamp:
-                                st.caption(f"📎 {uploaded_lamp.name}")
+                            # Tampilkan info lampiran yang sudah di-generate / diupload
+                            lamp_bytes = st.session_state.get(key_lamp_bytes)
+                            lamp_nama  = st.session_state.get(key_lamp_nama, "")
+                            if lamp_bytes:
+                                st.caption(f"📎 {lamp_nama}")
+                                if st.button("✖ Hapus", key=f"kp_hapus_{p['id_lelang']}", use_container_width=True):
+                                    del st.session_state[key_lamp_bytes]
+                                    st.session_state[key_lamp_nama] = ""
+                                    st.rerun()
+                            else:
+                                col_gen, col_up = st.columns(2)
+                                with col_gen:
+                                    if st.button(
+                                        "⚙️ Generate",
+                                        key=f"kp_gen_{p['id_lelang']}",
+                                        use_container_width=True,
+                                        help="Generate lampiran PDF dari Excel+Word (butuh folder paket sudah dibuat di Tab 0)",
+                                    ):
+                                        with st.spinner(f"Generate PDF {p['kode']}..."):
+                                            res_gen = merge_engine.generate_undangan_pdf(p["kode"])
+                                        if res_gen["sukses"]:
+                                            st.session_state[key_lamp_bytes] = res_gen["pdf_bytes"]
+                                            st.session_state[key_lamp_nama]  = f"Undangan_{p['kode'].replace('/', '-')}.pdf"
+                                            st.success(res_gen["pesan"])
+                                            st.rerun()
+                                        else:
+                                            st.error(res_gen["pesan"])
+                                with col_up:
+                                    uploaded_lamp = st.file_uploader(
+                                        "Upload",
+                                        type=["pdf"],
+                                        key=f"kp_lamp_{p['id_lelang']}",
+                                        label_visibility="collapsed",
+                                    )
+                                    if uploaded_lamp:
+                                        st.session_state[key_lamp_bytes] = uploaded_lamp.read()
+                                        st.session_state[key_lamp_nama]  = uploaded_lamp.name
+                                        st.rerun()
+
                         if checked:
-                            kp_selected.append({**p, "_lampiran": uploaded_lamp})
+                            lamp_bytes_final = st.session_state.get(key_lamp_bytes)
+                            lamp_nama_final  = st.session_state.get(key_lamp_nama, "")
+                            # Bungkus bytes ke objek file-like agar kompatibel dgn code lama
+                            kp_selected.append({
+                                **p,
+                                "_lampiran_bytes": lamp_bytes_final,
+                                "_lampiran_nama":  lamp_nama_final,
+                                "_lampiran": None,  # legacy field (tidak dipakai lagi)
+                            })
 
                     st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
         else:
             st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+
+        # ── Auto Pre-fill dari Excel (jika ada 1 paket terpilih & folder ada) ──
+        if len(kp_selected) == 1:
+            pkode = kp_selected[0]["kode"]
+            if st.button(
+                f"📋 Pre-fill Tanggal & Tempat dari Excel ({pkode})",
+                key="kp_prefill",
+                use_container_width=True,
+                help="Baca E26 (tanggal DPP) dan E31 (tempat) dari file Excel paket",
+            ):
+                with st.spinner("Membaca Excel..."):
+                    info = merge_engine.get_draft_info_from_excel(pkode)
+                if info["tanggal"]:
+                    st.session_state["kp_tgl"] = info["tanggal"]
+                if info["tempat"]:
+                    st.session_state["kp_tempat"] = info["tempat"]
+                if info["pesan"] != "OK":
+                    st.warning(f"Pre-fill: {info['pesan']}")
+                else:
+                    st.success("Tanggal & tempat berhasil diisi dari Excel.")
+                st.rerun()
 
         # ── 2. Detail Undangan ────────────────────────────────────────────────
         st.divider()
@@ -1135,7 +1531,14 @@ with tab9:
                             (i + 1) / len(kp_selected),
                             text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
                         )
-                        lamp = paket.get("_lampiran")
+                        lamp_bytes = paket.get("_lampiran_bytes")
+                        lamp_nama  = paket.get("_lampiran_nama", "")
+                        # Legacy fallback: file_uploader object
+                        if lamp_bytes is None:
+                            lamp_legacy = paket.get("_lampiran")
+                            if lamp_legacy:
+                                lamp_bytes = lamp_legacy.getvalue()
+                                lamp_nama  = lamp_legacy.name
                         res = kirimpesan_engine.kirim_undangan(
                             paket_id=paket["id_lelang"],
                             waktu=waktu_str,
@@ -1145,8 +1548,8 @@ with tab9:
                             hadir=kp_hadir.strip(),
                             is_online=False,
                             link_pembuktian="",
-                            lampiran_bytes=lamp.getvalue() if lamp else None,
-                            lampiran_nama=lamp.name if lamp else "",
+                            lampiran_bytes=lamp_bytes,
+                            lampiran_nama=lamp_nama,
                         )
 
                         hasil_list.append({

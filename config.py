@@ -3,7 +3,8 @@
 import os
 
 # === Paths ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+POKJA_ROOT = os.path.dirname(BASE_DIR)  # D:\Dokumen\@ POKJA 2026
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 BROWSER_SESSION_DIR = os.path.join(BASE_DIR, ".browser_session")
 
