@@ -312,14 +312,38 @@ def upsert_draft_paket(data: dict) -> dict:
 
 # ── Fungsi utama (dipanggil dari app.py Tab 0) ─────────────────────────────────
 
-def serap_inbox(progress_cb=None) -> dict:
-    """
-    Serap seluruh pesan Delegasi Pokja dari inbox, simpan ke Supabase.
+def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
+    """Proses satu pesan: fetch detail HTML + PDF + anggota. Return record atau error."""
+    try:
+        detail_html = parse_detail_pesan(pesan["id_pesan"])
+        if not detail_html.get("kode_tender"):
+            return {"_error": f"ID {pesan['id_pesan']}: kode_tender tidak ditemukan"}
 
-    progress_cb(pct: float, msg: str) — callback opsional untuk Streamlit progress bar.
+        detail_pdf = {}
+        if detail_html.get("link_pdf"):
+            detail_pdf = parse_pdf_inmemory(detail_html["link_pdf"])
 
-    Return: {"baru": int, "diperbarui": int, "error": list, "data": list}
+        kode_tender = detail_html["kode_tender"]
+        detail_anggota = parse_anggota_pokja(kode_tender)
+
+        record = {**detail_html, **detail_pdf, **detail_anggota}
+        record.pop("_error_pdf", None)
+        record.pop("_kode_tender_for_anggota", None)
+        record["id_pesan"] = pesan["id_pesan"]
+        record["_is_baru"] = kode_tender not in existing_kode
+        record["_tanggal_pesan"] = pesan["tanggal"]
+        return record
+    except Exception as e:
+        return {"_error": f"ID {pesan['id_pesan']}: {e}"}
+
+
+def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
     """
+    Serap pesan Delegasi Pokja dari inbox, simpan ke Supabase.
+    Incremental: skip id_pesan yang sudah ada. Paralel: max_workers thread.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     def log(pct, msg):
         if progress_cb:
             progress_cb(pct, msg)
@@ -329,65 +353,76 @@ def serap_inbox(progress_cb=None) -> dict:
     delegasi = filter_delegasi(semua)
 
     if not delegasi:
-        log(1.0, "Tidak ada pesan Delegasi Pokja baru.")
-        return {"baru": 0, "diperbarui": 0, "error": [], "data": []}
+        log(1.0, "Tidak ada pesan Delegasi Pokja ditemukan di inbox.")
+        return {"baru": 0, "diperbarui": 0, "skip": 0, "error": [], "data": []}
 
-    # Cek existing di Supabase
+    # Snapshot DB
+    log(0.08, "Mengambil snapshot database...")
     sb = _sb()
-    existing_raw = sb.table("draft_paket").select("kode_tender").execute()
-    existing_ids = {r["kode_tender"] for r in (existing_raw.data or [])}
+    existing_raw = sb.table("draft_paket").select("kode_tender,id_pesan,nama_tender").execute()
+    existing_id_pesan = {str(r["id_pesan"]) for r in (existing_raw.data or []) if r.get("id_pesan")}
+    existing_kode = {r["kode_tender"] for r in (existing_raw.data or [])}
+
+    # Snapshot nama paket yang sudah ada di DB (untuk skip duplikat pesan inbox)
+    existing_nama = {str(r.get("nama_tender") or "").strip().lower()
+                     for r in (existing_raw.data or []) if r.get("nama_tender")}
+
+    # Filter: skip jika id_pesan sudah ada ATAU nama paket sudah ada di DB
+    to_process = [
+        p for p in delegasi
+        if p["id_pesan"] not in existing_id_pesan
+        and p["kode_paket_raw"].strip().lower() not in existing_nama
+    ]
+    skip = len(delegasi) - len(to_process)
+    total = len(to_process)
+
+    log(0.10, f"⏭️ {skip} dilewati, memproses {total} pesan baru...")
+
+    if total == 0:
+        log(1.0, f"Selesai — semua sudah tersimpan, ⏭️ {skip} dilewati")
+        return {"baru": 0, "diperbarui": 0, "skip": skip, "error": [], "data": []}
 
     hasil_data = []
     errors = []
     baru = 0
     diperbarui = 0
-    total = len(delegasi)
+    done = 0
 
-    for i, pesan in enumerate(delegasi):
-        pct = 0.1 + (i / total) * 0.85
-        log(pct, f"[{i+1}/{total}] Memproses: {pesan['subjek']} — {pesan['id_pesan']}")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_proses_satu_pesan, p, existing_kode): p for p in to_process}
+        for future in as_completed(futures):
+            done += 1
+            pct = 0.10 + (done / total) * 0.85
+            record = future.result()
 
-        try:
-            # 1. Parse HTML detail pesan
-            detail_html = parse_detail_pesan(pesan["id_pesan"])
-
-            if not detail_html.get("kode_tender"):
-                errors.append(f"ID {pesan['id_pesan']}: kode_tender tidak ditemukan")
+            if "_error" in record:
+                errors.append(record["_error"])
+                log(pct, f"[{done}/{total}] ❌ {record['_error'][:60]}")
+                # Simpan ke DB dengan kode_tender = id_pesan agar skip di run berikutnya
+                id_p = futures[future]["id_pesan"]
+                try:
+                    sb.table("draft_paket").upsert({
+                        "kode_tender": f"_err_{id_p}",
+                        "id_pesan": id_p,
+                        "nama_tender": f"[ERROR] {record['_error'][:80]}",
+                    }).execute()
+                except Exception:
+                    pass
                 continue
 
-            # 2. Parse PDF in-memory (jika ada link)
-            detail_pdf = {}
-            if detail_html.get("link_pdf"):
-                log(pct, f"[{i+1}/{total}] Download & parse PDF...")
-                detail_pdf = parse_pdf_inmemory(detail_html["link_pdf"])
+            is_baru = record.pop("_is_baru")
+            tgl = record.pop("_tanggal_pesan", "")
+            try:
+                upsert_draft_paket(record)
+                if is_baru:
+                    baru += 1
+                else:
+                    diperbarui += 1
+                hasil_data.append({**record, "tanggal_pesan": tgl,
+                                   "status": "baru" if is_baru else "diperbarui"})
+                log(pct, f"[{done}/{total}] ✅ {record.get('nama_tender','')[:45]}")
+            except Exception as e:
+                errors.append(f"Upsert {record.get('kode_tender')}: {e}")
 
-            # 3. Scrape anggota pokja dari halaman /edit
-            kode_tender = detail_html.get("kode_tender", "")
-            log(pct, f"[{i+1}/{total}] Mengambil anggota pokja...")
-            detail_anggota = parse_anggota_pokja(kode_tender)
-
-            # 4. Gabungkan data
-            record = {**detail_html, **detail_pdf, **detail_anggota}
-            record.pop("_error_pdf", None)
-            record.pop("_kode_tender_for_anggota", None)
-
-            # 4. Upsert
-            is_baru = record["kode_tender"] not in existing_ids
-            upsert_draft_paket(record)
-
-            if is_baru:
-                baru += 1
-            else:
-                diperbarui += 1
-
-            hasil_data.append({
-                **record,
-                "tanggal_pesan": pesan["tanggal"],
-                "status": "baru" if is_baru else "diperbarui",
-            })
-
-        except Exception as e:
-            errors.append(f"ID {pesan['id_pesan']}: {e}")
-
-    log(1.0, f"Selesai — {baru} baru, {diperbarui} diperbarui, {len(errors)} error")
-    return {"baru": baru, "diperbarui": diperbarui, "error": errors, "data": hasil_data}
+    log(1.0, f"Selesai — {baru} baru, {diperbarui} diperbarui, ⏭️ {skip} dilewati, {len(errors)} error")
+    return {"baru": baru, "diperbarui": diperbarui, "skip": skip, "error": errors, "data": hasil_data}

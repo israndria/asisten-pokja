@@ -124,329 +124,231 @@ penjelasan_engine.start_scheduler()
 
 with tab0:
     import inbox_engine
-
-    st.subheader("Serap Pesan Delegasi Pokja dari Inbox SPSE")
-    st.caption("Membaca pesan '(LPSE) Pengumuman Delegasi Pokja' dari inbox, mengekstrak data HTML + PDF, lalu menyimpan ke Supabase.")
-
-    col_btn, col_info = st.columns([1, 3])
-    with col_btn:
-        serap_btn = st.button("📥 Serap Inbox", type="primary", use_container_width=True)
-
-    if serap_btn:
-        progress_bar = st.progress(0.0)
-        status_txt = st.empty()
-
-        def cb(pct, msg):
-            progress_bar.progress(min(pct, 1.0))
-            status_txt.info(msg)
-
-        try:
-            hasil = inbox_engine.serap_inbox(progress_cb=cb)
-            progress_bar.progress(1.0)
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("✅ Baru", hasil["baru"])
-            col2.metric("🔄 Diperbarui", hasil["diperbarui"])
-            col3.metric("❌ Error", len(hasil["error"]))
-
-            if hasil["error"]:
-                with st.expander("Detail Error"):
-                    for e in hasil["error"]:
-                        st.error(e)
-
-            if hasil["data"]:
-                st.success(f"Berhasil memproses {len(hasil['data'])} paket delegasi.")
-                import pandas as pd
-                df = pd.DataFrame(hasil["data"])
-                kolom_tampil = [c for c in [
-                    "kode_pokja", "kode_tender", "nama_tender", "nama_dinas",
-                    "nilai_pagu", "jangka_waktu", "nama_ppk", "nomor_pp", "tanggal_pesan", "status"
-                ] if c in df.columns]
-                st.dataframe(df[kolom_tampil], use_container_width=True)
-            else:
-                status_txt.warning("Tidak ada pesan Delegasi Pokja ditemukan di inbox.")
-
-        except Exception as e:
-            st.error(f"Gagal serap inbox: {e}")
-
-    # ── Tabel semua data draft_paket dari Supabase ──
-    st.divider()
-    st.markdown("#### Data Draft Paket Tersimpan")
-
-    if st.button("🔄 Refresh Tabel", key="refresh_draft"):
-        st.rerun()
-
-    _draft_rows = []
-    try:
-        _sb_draft = inbox_engine._sb()
-        rows = _sb_draft.table("draft_paket").select("*").order("diambil_pada", desc=True).execute()
-        _draft_rows = rows.data or []
-        if _draft_rows:
-            # Filter status
-            _status_options = ["Semua", "Baru", "Sudah Folder", "Belum Folder"]
-            _filter_col, _info_col = st.columns([2, 3])
-            _filter_status = _filter_col.selectbox("Filter:", _status_options, key="filter_draft_status", label_visibility="collapsed")
-            _info_col.caption(f"Total: {len(_draft_rows)} paket tersimpan")
-
-            _hari_ini = datetime.now().strftime("%Y-%m-%d")
-
-            def _filter_row(r):
-                if _filter_status == "Baru":
-                    return str(r.get("diambil_pada") or "").startswith(_hari_ini)
-                if _filter_status == "Sudah Folder":
-                    return bool(r.get("folder_dibuat"))
-                if _filter_status == "Belum Folder":
-                    return not bool(r.get("folder_dibuat"))
-                return True
-
-            _rows_tampil = [r for r in _draft_rows if _filter_row(r)]
-
-            # Header kolom
-            _hcols = st.columns([1, 1, 3, 2, 1, 1])
-            for _h, _t in zip(_hcols, ["Pokja", "Kode Tender", "Nama Tender", "Kode Unik", "", "Status"]):
-                _h.markdown(f"**{_t}**")
-            for _r in _rows_tampil:
-                _kt   = _r.get("kode_tender", "")
-                _pokja = str(_r.get("kode_pokja") or "").strip()
-                _nama  = str(_r.get("nama_tender") or "")[:45]
-                _ku_val = str(_r.get("kode_unik") or "")
-                _sudah_folder = bool(_r.get("folder_dibuat"))
-                _is_baru = str(_r.get("diambil_pada") or "").startswith(_hari_ini)
-                _c1, _c2, _c3, _c4, _c5, _c6 = st.columns([1, 1, 3, 2, 1, 1])
-                _c1.write(_pokja or "-")
-                _c2.write(_kt[:12] if _kt else "-")
-                _c3.write(_nama or "-")
-                _ku_input = _c4.text_input(
-                    "ku", value=_ku_val, key=f"ku_{_kt}",
-                    label_visibility="collapsed",
-                    placeholder="mis: DPUPR"
-                )
-                if _c5.button("💾", key=f"simpan_ku_{_kt}", help="Simpan kode unik"):
-                    try:
-                        inbox_engine._sb().table("draft_paket").update(
-                            {"kode_unik": _ku_input.strip()}
-                        ).eq("kode_tender", _kt).execute()
-                        st.success(f"Kode unik '{_ku_input.strip()}' disimpan.")
-                        st.rerun()
-                    except Exception as _e:
-                        st.error(f"Gagal simpan: {_e}")
-                _badge = ("🆕 Baru" if _is_baru else "") + (" ✅" if _sudah_folder else "")
-                _c6.write(_badge.strip() or "—")
-        else:
-            st.info("Belum ada data. Klik 'Serap Inbox' untuk mulai.")
-    except Exception as e:
-        st.warning(f"Gagal load data: {e}")
-
-    # ── Buat Folder Paket Baru ──
-    st.divider()
-    st.markdown("#### Buat Folder Paket Baru")
-    st.caption("Copy template terbaru ke folder paket baru + auto-link Word Mail Merge ke Excel. Nomor urut dihitung otomatis dari riwayat di database.")
-
     import os as _os, subprocess as _sp
     from config import POKJA_ROOT as _POKJA_ROOT
 
-    # Hitung nomor urut berikutnya dari kolom nomor_urut di Supabase
-    _nomor_terakhir = 0
-    if _draft_rows:
+    _PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
+    _SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+
+    # ── Load data draft_paket ──
+    _draft_rows = []
+    try:
+        _draft_rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+    except Exception as _e:
+        st.warning(f"Gagal load data: {_e}")
+
+    # ── Layout: kolom kiri (1) dan kanan (2) ──
+    _col_kiri, _col_kanan = st.columns(2)
+
+    # ══════════════════════════════════════════
+    # KOLOM KIRI — 1. Scrap Inbox SPSE
+    # ══════════════════════════════════════════
+    with _col_kiri:
+        st.markdown("#### 1. Scrap Inbox SPSE")
+        st.caption("Baca pesan Delegasi Pokja → parse HTML + PDF → simpan ke Supabase.")
+        serap_btn = st.button("📥 Update Inbox", type="primary", use_container_width=True)
+
+        if serap_btn:
+            _pb = st.progress(0.0)
+            _st = st.empty()
+            def cb(pct, msg):
+                _pb.progress(min(pct, 1.0))
+                _st.info(msg)
+            try:
+                hasil = inbox_engine.serap_inbox(progress_cb=cb)
+                _pb.progress(1.0)
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                _c1.metric("✅ Baru", hasil["baru"])
+                _c2.metric("🔄 Diperbarui", hasil["diperbarui"])
+                _c3.metric("⏭️ Dilewati", hasil.get("skip", 0))
+                _c4.metric("❌ Error", len(hasil["error"]))
+                if hasil["error"]:
+                    with st.expander("Detail Error"):
+                        for e in hasil["error"]:
+                            st.error(e)
+                if hasil["data"]:
+                    st.success(f"{len(hasil['data'])} paket diproses.")
+                else:
+                    _st.warning("Tidak ada pesan Delegasi Pokja baru.")
+            except Exception as e:
+                st.error(f"Gagal: {e}")
+
+    # ══════════════════════════════════════════
+    # KOLOM KANAN — 2. Buat Folder Paket
+    # ══════════════════════════════════════════
+    with _col_kanan:
+        st.markdown("#### 2. Buat Folder Paket")
+        st.caption("Buat satu folder atau semua sekaligus.")
+
         _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
-    _nomor_berikutnya = _nomor_terakhir + 1
+        _nomor_berikutnya = _nomor_terakhir + 1
 
-    # Dropdown pilih paket — hanya yang belum punya folder (folder_dibuat kosong)
-    _opsi_map = {}  # label → row dict
-    _opsi_map["(input manual)"] = None
-    if _draft_rows:
+        # Dropdown pilih paket (nama penuh, tanpa potong)
+        _opsi_map = {"(input manual)": None}
         for _r in _draft_rows:
-            _pokja = str(_r.get("kode_pokja") or "").strip()
-            _nama  = str(_r.get("nama_tender") or "").strip()
-            if _pokja and _nama:
-                _sudah = bool(_r.get("folder_dibuat"))
-                _label = f"Pokja {_pokja} - {_nama[:45]}"
-                if _sudah:
-                    _label += " ✅"
-                _opsi_map[_label] = _r
+            _pk = str(_r.get("kode_pokja") or "").strip()
+            _nm = str(_r.get("nama_tender") or "").strip()
+            if _pk and _nm:
+                _lbl = f"Pokja {_pk} - {_nm}"
+                if _r.get("folder_dibuat"):
+                    _lbl += " ✅"
+                _opsi_map[_lbl] = _r
 
-    _pilihan = st.selectbox(
-        "Pilih paket dari database:",
-        list(_opsi_map.keys()),
-        key="selectbox_paket_baru"
-    )
-    _row_terpilih = _opsi_map.get(_pilihan)
+        _pilihan = st.selectbox("Pilih paket:", list(_opsi_map.keys()), key="selectbox_paket_baru")
+        _row_terpilih = _opsi_map.get(_pilihan)
 
-    # Tampilkan kode unik paket terpilih
-    if _row_terpilih:
-        _ku_info = str(_row_terpilih.get("kode_unik") or "").strip()
-        if _ku_info:
-            st.info(f"Kode unik: **{_ku_info}**")
-        else:
-            st.warning("Kode unik belum diisi — isi dulu di tabel atas sebelum membuat folder.")
+        # Nama folder default (penuh)
+        _default_nama = ""
+        if _row_terpilih:
+            _pk = str(_row_terpilih.get("kode_pokja") or "").strip()
+            _nm = str(_row_terpilih.get("nama_tender") or "").strip()
+            _no = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
+            if _nm and _pk:
+                _default_nama = f"{_no}. {_nm} - Pokja {_pk}"
 
-    # Hitung nama folder default
-    # Format: "{nomor_urut}. {nama_tender} - Pokja {kode_pokja}"
-    _default_nama = ""
-    if _row_terpilih:
-        _pokja = str(_row_terpilih.get("kode_pokja") or "").strip()
-        _nama  = str(_row_terpilih.get("nama_tender") or "").strip()
-        # Pakai nomor_urut yang sudah ada jika paket ini sudah pernah dibuat folder
-        _nomor_paket = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
-        if _nama and _pokja:
-            _default_nama = f"{_nomor_paket}. {_nama} - Pokja {_pokja}"
-
-    if _nomor_terakhir > 0:
-        st.caption(f"Nomor urut terakhir: **{_nomor_terakhir}** — paket baru akan mendapat nomor **{_nomor_berikutnya}**")
-
-    _nama_folder = st.text_input(
-        "Nama folder paket baru:",
-        value=_default_nama,
-        placeholder=f'Contoh: {_nomor_berikutnya}. Normalisasi Sungai X - Pokja 086',
-        key="input_nama_folder"
-    )
-
-    # Info folder
-    _target_path = _os.path.join(_POKJA_ROOT, _nama_folder) if _nama_folder else ""
-    _folder_ada = bool(_target_path and _os.path.exists(_target_path))
-    if _folder_ada:
-        st.warning(f"Folder sudah ada: `{_target_path}`")
-
-    # Riwayat paket yang sudah punya folder
-    _sudah_dibuat = [_r for _r in _draft_rows if _r.get("folder_dibuat")]
-    if _sudah_dibuat:
-        with st.expander(f"Riwayat folder dibuat ({len(_sudah_dibuat)} paket)"):
-            for _r in sorted(_sudah_dibuat, key=lambda x: x.get("nomor_urut") or 0):
-                _n = _r.get("nomor_urut", "?")
-                _f = _r.get("folder_dibuat", "")
-                _tgl = str(_r.get("folder_dibuat_pada") or "")[:10]
-                st.markdown(f"**{_n}.** `{_f}` — {_tgl}")
-
-    _col_buat, _col_buka = st.columns([1, 1])
-    with _col_buat:
-        _buat_btn = st.button(
-            "📁 Buat Folder Paket",
-            type="primary",
-            disabled=not bool(_nama_folder),
-            use_container_width=True,
-            key="btn_buat_folder"
+        _nama_folder = st.text_input(
+            "Nama folder:",
+            value=_default_nama,
+            placeholder=f'{_nomor_berikutnya}. Nama Paket - Pokja 086',
+            key="input_nama_folder"
         )
-    with _col_buka:
+
+        _target_path = _os.path.join(_POKJA_ROOT, _nama_folder) if _nama_folder else ""
+        _folder_ada  = bool(_target_path and _os.path.exists(_target_path))
         if _folder_ada:
-            if st.button("📂 Buka di Explorer", use_container_width=True, key="btn_buka_folder"):
+            st.warning(f"Folder sudah ada: `{_target_path}`")
+
+        _cb1, _cb2 = st.columns(2)
+        _buat_btn = _cb1.button("📁 Buat Folder", type="primary",
+                                disabled=not bool(_nama_folder),
+                                use_container_width=True, key="btn_buat_folder")
+        if _folder_ada:
+            if _cb2.button("📂 Buka Explorer", use_container_width=True, key="btn_buka_folder"):
                 _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
 
-    if _buat_btn and _nama_folder:
-        _py     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
-        _script = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
-        with st.spinner(f"Membuat folder '{_nama_folder}'..."):
-            try:
-                result = _sp.run(
-                    [_py, _script, _nama_folder],
-                    capture_output=True, text=True, timeout=60
-                )
-                if result.returncode == 0:
-                    st.success(f"Folder berhasil dibuat: `{_target_path}`")
-                    with st.expander("Detail output"):
-                        st.code(result.stdout)
-
-                    # Simpan riwayat ke Supabase
-                    if _row_terpilih:
-                        from datetime import datetime, timezone as _tz
-                        _kode = _row_terpilih.get("kode_tender")
-                        _nomor_simpan = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
-                        try:
-                            inbox_engine._sb().table("draft_paket").update({
-                                "nomor_urut": _nomor_simpan,
-                                "folder_dibuat": _nama_folder,
-                                "folder_dibuat_pada": datetime.now(_tz.utc).isoformat(),
-                            }).eq("kode_tender", _kode).execute()
-                        except Exception as _e:
-                            st.warning(f"Folder dibuat tapi gagal update riwayat: {_e}")
-
-                    if st.button("📂 Buka Folder Sekarang", key="btn_buka_baru"):
-                        _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
-                    st.rerun()
-                else:
-                    st.error("Setup gagal.")
-                    st.code(result.stdout + "\n" + result.stderr)
-            except _sp.TimeoutExpired:
-                st.error("Timeout — proses terlalu lama.")
-
-    # ── Bulk Create Folder ──
-    st.divider()
-    st.markdown("#### Buat Semua Folder Sekaligus")
-    st.caption("Buat folder untuk semua paket yang belum punya folder (status_paket = baru atau belum folder). Kode unik wajib sudah diisi.")
-
-    _bulk_kandidat = [
-        _r for _r in _draft_rows
-        if not _r.get("folder_dibuat") and _r.get("nama_tender")
-    ]
-
-    if not _bulk_kandidat:
-        st.info("Tidak ada paket yang perlu dibuat foldernya.")
-    else:
-        # Preview daftar yang akan dibuat
-        _py_bulk  = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
-        _script_bulk = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
-
-        # Hitung nomor urut mulai dari max existing
-        _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
-        _bulk_plan = []
-        _urut_counter = _max_urut
-        for _r in sorted(_bulk_kandidat, key=lambda x: x.get("diambil_pada") or ""):
-            if _r.get("nomor_urut"):
-                _n = int(_r["nomor_urut"])
-            else:
-                _urut_counter += 1
-                _n = _urut_counter
-            _pokja = str(_r.get("kode_pokja") or "").strip()
-            _nama  = str(_r.get("nama_tender") or "").strip()
-            _ku    = str(_r.get("kode_unik") or "").strip()
-            _nama_folder_bulk = f"{_n}. {_nama} - Pokja {_pokja}"
-            _bulk_plan.append({
-                "kode_tender": _r.get("kode_tender"),
-                "nomor_urut": _n,
-                "nama_folder": _nama_folder_bulk,
-                "kode_unik": _ku,
-                "row": _r,
-            })
-
-        with st.expander(f"Preview {len(_bulk_plan)} folder yang akan dibuat"):
-            for _bp in _bulk_plan:
-                _warn = " ⚠️ kode unik kosong" if not _bp["kode_unik"] else ""
-                st.markdown(f"**{_bp['nomor_urut']}.** `{_bp['nama_folder']}`{_warn}")
-
-        _bulk_ada_kosong = any(not _bp["kode_unik"] for _bp in _bulk_plan)
-        if _bulk_ada_kosong:
-            st.warning("Beberapa paket belum punya kode unik — isi dulu di tabel atas (opsional, folder tetap bisa dibuat).")
-
-        if st.button("📁 Buat Semua Folder", type="primary", key="btn_bulk_buat"):
-            from datetime import datetime, timezone as _tz2
-            _bulk_progress = st.progress(0.0)
-            _bulk_status   = st.empty()
-            _bulk_ok, _bulk_gagal = 0, 0
-            for _i, _bp in enumerate(_bulk_plan):
-                _bulk_progress.progress((_i + 1) / len(_bulk_plan))
-                _bulk_status.info(f"[{_i+1}/{len(_bulk_plan)}] Membuat: {_bp['nama_folder']}")
+        if _buat_btn and _nama_folder:
+            with st.spinner(f"Membuat '{_nama_folder}'..."):
                 try:
-                    _res = _sp.run(
-                        [_py_bulk, _script_bulk, _bp["nama_folder"]],
-                        capture_output=True, text=True, timeout=60
-                    )
+                    _res = _sp.run([_PY, _SCRIPT, _nama_folder],
+                                   capture_output=True, text=True, timeout=60)
                     if _res.returncode == 0:
-                        _bulk_ok += 1
-                        try:
-                            inbox_engine._sb().table("draft_paket").update({
-                                "nomor_urut": _bp["nomor_urut"],
-                                "folder_dibuat": _bp["nama_folder"],
-                                "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
-                            }).eq("kode_tender", _bp["kode_tender"]).execute()
-                        except Exception:
-                            pass
+                        st.success(f"Folder dibuat: `{_target_path}`")
+                        if _row_terpilih:
+                            from datetime import timezone as _tz
+                            try:
+                                inbox_engine._sb().table("draft_paket").update({
+                                    "nomor_urut": int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya),
+                                    "folder_dibuat": _nama_folder,
+                                    "folder_dibuat_pada": datetime.now(_tz.utc).isoformat(),
+                                }).eq("kode_tender", _row_terpilih["kode_tender"]).execute()
+                            except Exception as _e2:
+                                st.warning(f"Gagal update riwayat: {_e2}")
+                        st.rerun()
                     else:
-                        _bulk_gagal += 1
-                        st.error(f"Gagal: {_bp['nama_folder']}\n{_res.stderr[:200]}")
+                        st.error("Setup gagal.")
+                        st.code(_res.stdout + "\n" + _res.stderr)
                 except _sp.TimeoutExpired:
-                    _bulk_gagal += 1
-                    st.error(f"Timeout: {_bp['nama_folder']}")
-            _bulk_status.success(f"Selesai — {_bulk_ok} berhasil, {_bulk_gagal} gagal.")
-            st.rerun()
+                    st.error("Timeout.")
+
+        # Bulk Create
+        st.divider()
+        _bulk_kandidat = [_r for _r in _draft_rows if not _r.get("folder_dibuat") and _r.get("nama_tender")
+                          and not str(_r.get("kode_tender","")).startswith("_err_")]
+        if _bulk_kandidat:
+            _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
+            _bulk_plan, _ctr = [], _max_urut
+            for _r in sorted(_bulk_kandidat, key=lambda x: x.get("diambil_pada") or ""):
+                _n = int(_r["nomor_urut"]) if _r.get("nomor_urut") else (_ctr := _ctr + 1) and _ctr
+                _bulk_plan.append({
+                    "kode_tender": _r["kode_tender"],
+                    "nomor_urut": _n,
+                    "nama_folder": f"{_n}. {str(_r.get('nama_tender','')).strip()} - Pokja {str(_r.get('kode_pokja','')).strip()}",
+                })
+            with st.expander(f"📋 Preview {len(_bulk_plan)} folder yang akan dibuat"):
+                for _bp in _bulk_plan:
+                    st.caption(_bp["nama_folder"])
+            if st.button(f"📁 Buat Semua ({len(_bulk_plan)} folder)", type="secondary",
+                         use_container_width=True, key="btn_bulk_buat"):
+                from datetime import timezone as _tz2
+                _bp2 = st.progress(0.0)
+                _bs  = st.empty()
+                _ok, _fail = 0, 0
+                for _i, _bp in enumerate(_bulk_plan):
+                    _bp2.progress((_i+1)/len(_bulk_plan))
+                    _bs.info(f"[{_i+1}/{len(_bulk_plan)}] {_bp['nama_folder'][:60]}")
+                    try:
+                        _r2 = _sp.run([_PY, _SCRIPT, _bp["nama_folder"]],
+                                      capture_output=True, text=True, timeout=60)
+                        if _r2.returncode == 0:
+                            _ok += 1
+                            try:
+                                inbox_engine._sb().table("draft_paket").update({
+                                    "nomor_urut": _bp["nomor_urut"],
+                                    "folder_dibuat": _bp["nama_folder"],
+                                    "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
+                                }).eq("kode_tender", _bp["kode_tender"]).execute()
+                            except Exception:
+                                pass
+                        else:
+                            _fail += 1
+                    except _sp.TimeoutExpired:
+                        _fail += 1
+                _bs.success(f"Selesai — {_ok} berhasil, {_fail} gagal.")
+                st.rerun()
+        else:
+            st.info("Semua paket sudah punya folder.")
+
+    # ══════════════════════════════════════════
+    # BAWAH — 3. Data Draft Paket
+    # ══════════════════════════════════════════
+    st.divider()
+    st.markdown("#### 3. Data Draft Paket")
+
+    _t_filter, _t_info, _t_refresh = st.columns([2, 3, 1])
+
+    _hari_ini = datetime.now().strftime("%Y-%m-%d")
+    _tahun_ini = datetime.now().year
+    _tahun_data = sorted({
+        int(str(r.get("nomor_pp") or "")[-4:])
+        for r in _draft_rows
+        if str(r.get("nomor_pp") or "")[-4:].isdigit()
+    }, reverse=True)
+    _tahun_options = ["Semua"] + [str(t) for t in range(_tahun_ini, min(_tahun_data or [_tahun_ini]) - 1, -1)] + ["Baru (hari ini)", "Sudah Folder", "Belum Folder"]
+    _default_idx = next((i for i, o in enumerate(_tahun_options) if o == str(_tahun_ini)), 1)
+    _filter_status = _t_filter.selectbox("Filter:", _tahun_options, index=_default_idx,
+                                         key="filter_draft_status", label_visibility="collapsed")
+    if _t_refresh.button("🔄", key="refresh_draft"):
+        st.rerun()
+
+    def _filter_row(r):
+        if _filter_status.isdigit():
+            return str(r.get("nomor_pp") or "").endswith(_filter_status)
+        if _filter_status == "Baru (hari ini)":
+            return str(r.get("diambil_pada") or "").startswith(_hari_ini)
+        if _filter_status == "Sudah Folder":
+            return bool(r.get("folder_dibuat"))
+        if _filter_status == "Belum Folder":
+            return not bool(r.get("folder_dibuat"))
+        return True
+
+    _rows_tampil = [r for r in _draft_rows
+                    if _filter_row(r) and not str(r.get("kode_tender","")).startswith("_err_")]
+    _t_info.caption(f"Menampilkan {len(_rows_tampil)} dari {len(_draft_rows)} paket")
+
+    if _rows_tampil:
+        import pandas as pd
+        _df_tampil = pd.DataFrame([{
+            "No": i + 1,
+            "Pokja": str(r.get("kode_pokja") or "").strip(),
+            "Kode Tender": str(r.get("kode_tender") or ""),
+            "Nama Tender": str(r.get("nama_tender") or ""),
+            "Status": ("🆕 " if str(r.get("diambil_pada","")).startswith(_hari_ini) else "") +
+                      ("✅ Folder" if r.get("folder_dibuat") else ""),
+        } for i, r in enumerate(_rows_tampil)])
+        st.dataframe(_df_tampil, use_container_width=True, hide_index=True,
+                     height=min(400, 35 + len(_rows_tampil) * 35))
+    else:
+        st.info("Belum ada data. Klik 'Update Inbox' untuk mulai.")
 
 
 # ============================================================
@@ -2252,146 +2154,3 @@ with tab_apendo:
                     else:
                         st.error(f"Gagal: {hasil_ap['pesan']}")
 
-# ── Section 4: Scan Folder Hasil Apendo ──────────────────────────────────────
-
-st.markdown("---")
-st.markdown("### 4. Scan Folder Hasil Apendo")
-
-_APENDO_BIDDINGS_BASE = r"D:\data\biddings"
-
-_sc_col1, _sc_col2 = st.columns([2, 3])
-
-with _sc_col1:
-    st.markdown("**Lokasi folder hasil**")
-    _sc_lpse_id = st.text_input(
-        "LPSE ID",
-        key="sc_lpse_id",
-        placeholder="tapinkab",
-        help="Subfolder pertama: nama LPSE (contoh: tapinkab, tanahbumbukab)",
-    )
-    _sc_kode_tender = st.text_input(
-        "Kode Tender",
-        key="sc_kode_tender",
-        placeholder="10096653000",
-        help="Subfolder kedua: kode tender dari URL SPSE",
-    )
-
-    # Tombol scan
-    _sc_folder_path = ""
-    if _sc_lpse_id.strip() and _sc_kode_tender.strip():
-        _sc_folder_path = os.path.join(
-            _APENDO_BIDDINGS_BASE,
-            _sc_lpse_id.strip(),
-            _sc_kode_tender.strip(),
-        )
-        st.caption(f"Path: `{_sc_folder_path}`")
-
-        if st.button("🔍 Scan Folder", key="sc_scan", use_container_width=True):
-            st.session_state["sc_scan_path"] = _sc_folder_path
-            st.session_state["sc_scan_result"] = apendo_engine._scan_folder_output(_sc_folder_path) if os.path.isdir(_sc_folder_path) else None
-
-    else:
-        st.info("Isi LPSE ID dan Kode Tender untuk scan.")
-
-with _sc_col2:
-    _sc_result = st.session_state.get("sc_scan_result")
-    _sc_path = st.session_state.get("sc_scan_path", "")
-
-    if _sc_result is None and _sc_path:
-        st.warning(f"Folder tidak ditemukan: `{_sc_path}`")
-    elif _sc_result is not None:
-        if len(_sc_result) == 0:
-            st.info(f"Folder ditemukan tapi kosong: `{_sc_path}`")
-        else:
-            st.success(f"**{len(_sc_result)} file** ditemukan di `{_sc_path}`")
-
-            # Tampilkan daftar file
-            _sc_df_data = []
-            for f in _sc_result[:50]:
-                _sc_df_data.append({
-                    "File": f["rel"],
-                    "Ukuran": f"{f['size'] // 1024} KB" if f['size'] >= 1024 else f"{f['size']} B",
-                })
-
-            import pandas as pd
-            st.dataframe(
-                pd.DataFrame(_sc_df_data),
-                use_container_width=True,
-                hide_index=True,
-                height=200,
-            )
-
-            if len(_sc_result) > 50:
-                st.caption(f"... dan {len(_sc_result) - 50} file lainnya")
-
-            # Tombol buka + pindahkan
-            _sc_open_col, _sc_move_col = st.columns(2)
-            with _sc_open_col:
-                if st.button("📂 Buka Folder", key="sc_open", use_container_width=True):
-                    os.startfile(_sc_path)
-
-            with _sc_move_col:
-                if st.button("📦 Pindahkan ke Folder Paket...", key="sc_move", use_container_width=True):
-                    st.session_state["sc_show_move"] = True
-
-            # Dialog pindah file
-            if st.session_state.get("sc_show_move"):
-                st.markdown("**Pilih folder tujuan:**")
-                _sc_dest = st.text_input(
-                    "Folder tujuan",
-                    key="sc_dest_folder",
-                    placeholder=r"D:\Dokumen\@ POKJA 2026\19. Pokja 091\Dokumen Penawaran",
-                )
-                _sc_dest_browse, _sc_dest_ok, _sc_dest_cancel = st.columns(3)
-                with _sc_dest_browse:
-                    if st.button("📁 Browse", key="sc_dest_browse_btn", use_container_width=True):
-                        try:
-                            import tkinter as tk
-                            from tkinter import filedialog
-                            root = tk.Tk()
-                            root.withdraw()
-                            root.wm_attributes("-topmost", True)
-                            sel = filedialog.askdirectory(title="Pilih Folder Tujuan")
-                            root.destroy()
-                            if sel:
-                                st.session_state["sc_dest_folder"] = sel.replace("/", "\\")
-                                st.rerun()
-                        except Exception as e:
-                            st.warning(f"Dialog gagal: {e}")
-
-                with _sc_dest_ok:
-                    if st.button("✅ Pindahkan", key="sc_dest_ok_btn", type="primary", use_container_width=True):
-                        dest = st.session_state.get("sc_dest_folder", "").strip()
-                        if not dest:
-                            st.warning("Pilih folder tujuan terlebih dahulu.")
-                        elif not os.path.isdir(dest):
-                            try:
-                                os.makedirs(dest, exist_ok=True)
-                            except Exception as e:
-                                st.error(f"Folder tujuan tidak bisa dibuat: {e}")
-                                dest = ""
-
-                        if dest:
-                            import shutil
-                            _sc_moved = 0
-                            _sc_errors = []
-                            for f in _sc_result:
-                                src = f["path"]
-                                dst = os.path.join(dest, os.path.basename(f["path"]))
-                                try:
-                                    shutil.copy2(src, dst)
-                                    _sc_moved += 1
-                                except Exception as e:
-                                    _sc_errors.append(f"{f['rel']}: {e}")
-
-                            if _sc_moved:
-                                st.success(f"✅ {_sc_moved} file berhasil disalin ke `{dest}`")
-                            if _sc_errors:
-                                st.error(f"{len(_sc_errors)} file gagal:\n" + "\n".join(_sc_errors[:5]))
-
-                            st.session_state["sc_show_move"] = False
-
-                with _sc_dest_cancel:
-                    if st.button("❌ Batal", key="sc_dest_cancel_btn", use_container_width=True):
-                        st.session_state["sc_show_move"] = False
-                        st.rerun()
