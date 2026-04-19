@@ -183,9 +183,27 @@ with tab0:
         _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
         _nomor_berikutnya = _nomor_terakhir + 1
 
+        # Filter tahun untuk dropdown (sama dengan filter Section 3)
+        _tahun_dd_options = ["Semua"] + [str(t) for t in range(datetime.now().year, datetime.now().year - 5, -1)] + ["Belum Folder", "Sudah Folder"]
+        _tahun_dd = st.selectbox("Filter tahun:", _tahun_dd_options, key="filter_dd_tahun")
+
+        def _dd_match(r):
+            kt = str(r.get("kode_tender", ""))
+            if kt.startswith("_err_") or not r.get("nama_tender"):
+                return False
+            if _tahun_dd.isdigit():
+                return str(r.get("nomor_pp") or "").endswith(_tahun_dd)
+            if _tahun_dd == "Belum Folder":
+                return not bool(r.get("folder_dibuat"))
+            if _tahun_dd == "Sudah Folder":
+                return bool(r.get("folder_dibuat"))
+            return True
+
         # Dropdown pilih paket (nama penuh, tanpa potong)
         _opsi_map = {"(input manual)": None}
         for _r in _draft_rows:
+            if not _dd_match(_r):
+                continue
             _pk = str(_r.get("kode_pokja") or "").strip()
             _nm = str(_r.get("nama_tender") or "").strip()
             if _pk and _nm:
@@ -1385,6 +1403,18 @@ with tab9:
             height=100,
         )
 
+        # ── Kode Unik ──────────────────────────────────────────────────────────
+        kp_kode_unik = st.text_input(
+            "Kode Unik Surat",
+            placeholder="mis. 001, 002, 003",
+            key="kp_kode_unik",
+            help="Nomor urut surat undangan reviu — digunakan di nomor surat (opsional, bisa diisi nanti)",
+        )
+        if kp_selected and kp_kode_unik:
+            # Simpan kode_unik ke Supabase untuk tiap paket terpilih
+            for _kp in kp_selected:
+                _kp["_kode_unik"] = kp_kode_unik
+
         # Hardcode: Mekanisme = Offline, Dibawa & Hadir pakai default
         kp_is_online = False
         kp_link = ""
@@ -1460,6 +1490,15 @@ with tab9:
                             "sukses": res["sukses"],
                             "pesan": res["pesan"],
                         })
+                        # Simpan kode_unik ke Supabase jika ada
+                        _ku = paket.get("_kode_unik") or kp_kode_unik
+                        if res["sukses"] and _ku:
+                            try:
+                                inbox_engine._sb().table("draft_paket").update({
+                                    "kode_unik": _ku,
+                                }).eq("kode_tender", paket["kode"]).execute()
+                            except Exception:
+                                pass
 
                     progress.empty()
 
