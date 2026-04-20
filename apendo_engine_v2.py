@@ -584,75 +584,34 @@ def _generate_signature() -> str:
 
 
 def _ambil_token_dari_tab(kode_tender: str, lpse_kode: str = "tapinkab",
-                           progress_cb=None) -> tuple[str, str]:
+                           progress_cb=None) -> tuple[str, str, str]:
     """
-    Ambil access_token + SPSE_SESSION dari tab /lelang/{kode_tender} di Chrome CDP.
-    Jika tab belum ada, buka tab baru ke URL tsb.
-    Return (access_token, spse_session) atau ('', '').
+    Ambil access_token + SPSE_SESSION dari Chrome CDP via subprocess terpisah
+    (Playwright sync API tidak thread-safe di dalam Streamlit).
+    Return (access_token, spse_session, lpse_kode).
     """
     def _log(msg):
         if progress_cb: progress_cb(msg)
 
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cdp_get_token.py")
     try:
-        from playwright.sync_api import sync_playwright
-        pw = sync_playwright().start()
-        browser = pw.chromium.connect_over_cdp("http://localhost:9222")
-        ctx = browser.contexts[0]
-
-        # Cari tab lelang yang sesuai
-        target_page = None
-        for page in ctx.pages:
-            if f"lelang/{kode_tender}" in page.url:
-                target_page = page
-                break
-
-        # Kalau tidak ada, buka tab baru
-        if not target_page:
-            _log(f"Buka tab lelang/{kode_tender}...")
-            target_page = ctx.new_page()
-            target_page.goto(
-                f"https://spse.inaproc.id/{lpse_kode}/lelang/{kode_tender}",
-                wait_until="domcontentloaded", timeout=20000
-            )
-            time.sleep(2)
-
-        # Ambil link Geret Token
-        import base64 as _b64
-        link = target_page.query_selector('a[href*="lt17"]')
-        access_token = ""
-        if link:
-            href = link.get_attribute("href") or ""
-            m = re.search(r"lt17/(.+)", href)
-            if m:
-                try:
-                    raw = m.group(1)
-                    pad = len(raw) % 4
-                    if pad:
-                        raw += "=" * (4 - pad)
-                    data = json.loads(_b64.b64decode(raw))
-                    access_token = data.get("access_token", "")
-                    root_url = data.get("root_url", href)
-                    m2 = re.search(r"inaproc\.id/([^/]+)/lt17", root_url)
-                    if m2:
-                        lpse_kode = m2.group(1)
-                except Exception:
-                    pass
-
-        # Ambil SPSE_SESSION
-        spse = ""
-        for c in ctx.cookies(["https://spse.inaproc.id"]):
-            if c["name"] == "SPSE_SESSION":
-                spse = c["value"]
-                break
-
-        browser.close()
-        pw.stop()
-
-        if access_token and spse:
-            _log(f"OK token={access_token[:16]}... lpse={lpse_kode}")
-            return access_token, spse, lpse_kode
-        _log("GAGAL: token atau SPSE_SESSION tidak ditemukan")
-        return "", "", lpse_kode
+        r = subprocess.run(
+            [PYTHON_SYS, helper, kode_tender, lpse_kode],
+            capture_output=True, text=True, timeout=30
+        )
+        out = r.stdout.strip()
+        if not out:
+            _log(f"GAGAL CDP subprocess: {r.stderr[:200]}")
+            return "", "", lpse_kode
+        data = json.loads(out)
+        if not data.get("ok"):
+            _log(f"GAGAL CDP: {data.get('error', 'tidak ada token/session')}")
+            return "", "", lpse_kode
+        access_token = data["access_token"]
+        spse         = data["spse_session"]
+        lpse_kode    = data.get("lpse_kode", lpse_kode)
+        _log(f"OK token={access_token[:16]}... lpse={lpse_kode}")
+        return access_token, spse, lpse_kode
     except Exception as ex:
         _log(f"GAGAL CDP: {ex}")
         return "", "", lpse_kode

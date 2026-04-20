@@ -1,6 +1,7 @@
 """Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
+import re
 import sys
 import threading
 import time
@@ -129,6 +130,7 @@ with tab0:
 
     _PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
     _SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+    _NO_WIN = 0x08000000  # CREATE_NO_WINDOW — cegah jendela hitam ngeblink di Windows
 
     # ── Load data draft_paket ──
     _draft_rows = []
@@ -222,7 +224,7 @@ with tab0:
             _nm = str(_row_terpilih.get("nama_tender") or "").strip()
             _no = int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya)
             if _nm and _pk:
-                _default_nama = f"{_no}. {_nm} - Pokja {_pk}"
+                _default_nama = f"{_no}. Pokja {_pk} - {_nm}"
 
         _nama_folder = st.text_input(
             "Nama folder:",
@@ -231,7 +233,8 @@ with tab0:
             key="input_nama_folder"
         )
 
-        _target_path = _os.path.join(_POKJA_ROOT, _nama_folder) if _nama_folder else ""
+        _nama_folder_clean = re.sub(r'[/<>:"\|?*]', "-", _nama_folder).strip() if _nama_folder else ""
+        _target_path = _os.path.join(_POKJA_ROOT, _nama_folder_clean) if _nama_folder_clean else ""
         _folder_ada  = bool(_target_path and _os.path.exists(_target_path))
         if _folder_ada:
             st.warning(f"Folder sudah ada: `{_target_path}`")
@@ -250,17 +253,18 @@ with tab0:
             _ip2 = str(_row_terpilih.get("id_pesan", ""))
             if _kt2 and _ip2:
                 if st.button("📦 Download Dokumen SPSE + Lampiran", use_container_width=True, key="btn_dl_dokumen_saja"):
-                    _dl_log2 = st.empty()
                     _dl_msgs2 = []
                     def _dl_cb2(msg):
-                        _dl_msgs2.append(msg)
-                        _dl_log2.info("\n".join(_dl_msgs2[-5:]))
-                    with st.spinner("Mengunduh dokumen..."):
-                        _dl2 = inbox_engine.download_dokumen_paket(_kt2, _ip2, _target_path, progress_cb=_dl_cb2)
-                    _dl_log2.empty()
+                        _dl_msgs2.append(msg)  # thread-safe, no st calls
+                    with st.spinner("Mengunduh dokumen + membuat Draft PDF..."):
+                        _dl2 = inbox_engine.download_dokumen_paket(_kt2, _ip2, _target_path, kode_pokja=_row_terpilih.get("kode_pokja",""), progress_cb=_dl_cb2)
                     st.success(
                         f"✅ {len(_dl2['ok'])} file, ⏭ {len(_dl2['skip'])} sudah ada, ❌ {len(_dl2['error'])} gagal"
+                        + (f" | 📎 {_os.path.basename(_dl2['draft_pdf'])}" if _dl2.get('draft_pdf') else "")
                     )
+                    if _dl_msgs2:
+                        with st.expander("Log download"):
+                            st.text("\n".join(_dl_msgs2))
                     if _dl2["error"]:
                         with st.expander("Detail error"):
                             for _e4 in _dl2["error"]:
@@ -272,7 +276,8 @@ with tab0:
             with st.spinner(f"Membuat '{_nama_folder}'..."):
                 try:
                     _res = _sp.run([_PY, _SCRIPT, _nama_folder],
-                                   capture_output=True, text=True, timeout=60)
+                                   capture_output=True, text=True, timeout=60,
+                                   creationflags=_NO_WIN)
                     if _res.returncode == 0:
                         st.success(f"Folder dibuat: `{_target_path}`")
                         if _row_terpilih:
@@ -290,21 +295,24 @@ with tab0:
                             _kt = _row_terpilih.get("kode_tender", "")
                             _ip = str(_row_terpilih.get("id_pesan", ""))
                             if _kt and _ip:
-                                _dl_log = st.empty()
                                 _dl_msgs = []
                                 def _dl_cb(msg):
-                                    _dl_msgs.append(msg)
-                                    _dl_log.info("\n".join(_dl_msgs[-5:]))
-                                with st.spinner("Mengunduh dokumen..."):
+                                    _dl_msgs.append(msg)  # thread-safe, no st calls
+                                with st.spinner("Mengunduh dokumen + membuat Draft PDF..."):
                                     _dl_hasil = inbox_engine.download_dokumen_paket(
-                                        _kt, _ip, _target_path, progress_cb=_dl_cb
+                                        _kt, _ip, _target_path,
+                                        kode_pokja=_row_terpilih.get("kode_pokja",""),
+                                        progress_cb=_dl_cb
                                     )
-                                _dl_log.empty()
                                 st.success(
                                     f"Download selesai — ✅ {len(_dl_hasil['ok'])} file, "
                                     f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
                                     f"❌ {len(_dl_hasil['error'])} gagal"
+                                    + (f" | 📎 {_os.path.basename(_dl_hasil['draft_pdf'])}" if _dl_hasil.get('draft_pdf') else "")
                                 )
+                                if _dl_msgs:
+                                    with st.expander("Log download"):
+                                        st.text("\n".join(_dl_msgs))
                                 if _dl_hasil["error"]:
                                     with st.expander("Detail error download"):
                                         for _e3 in _dl_hasil["error"]:
@@ -344,7 +352,8 @@ with tab0:
                     _bs.info(f"[{_i+1}/{len(_bulk_plan)}] {_bp['nama_folder'][:60]}")
                     try:
                         _r2 = _sp.run([_PY, _SCRIPT, _bp["nama_folder"]],
-                                      capture_output=True, text=True, timeout=60)
+                                      capture_output=True, text=True, timeout=60,
+                                      creationflags=_NO_WIN)
                         if _r2.returncode == 0:
                             _ok += 1
                             try:

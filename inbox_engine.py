@@ -167,15 +167,60 @@ def parse_detail_pesan(id_pesan: str) -> dict:
 
 # ── Scrape anggota pokja dari halaman /lelang/{kode_tender}/edit ───────────────
 
+_NAMA_DINAS_MAP = {
+    "DPUPR": "Dinas Pekerjaan Umum Dan Penataan Ruang",
+    "PUPR": "Dinas Pekerjaan Umum Dan Penataan Ruang",
+    "DISDIK": "Dinas Pendidikan",
+    "DIPERTA": "Dinas Pertanian",
+    "DISPORA": "Dinas Pemuda Dan Olahraga",
+    "DISDAG": "Dinas Perdagangan",
+    "DISKAN": "Dinas Perikanan",
+}
+
+def _resolve_nama_dinas(nomor_surat: str, nama_dinas_raw: str) -> str:
+    """Resolve nama dinas lengkap dari nomor surat atau nama singkatan."""
+    # Coba match singkatan dari nomor surat dulu (lebih akurat)
+    # contoh: 40-L1/DPUPR-BM/KAB-TAPIN/XI/2025
+    m = re.search(r"/([A-Z]+)(?:-[A-Z]+)?/KAB", nomor_surat, re.IGNORECASE)
+    if m:
+        kode = m.group(1).upper()
+        if kode in _NAMA_DINAS_MAP:
+            return _NAMA_DINAS_MAP[kode]
+    # Fallback: match dari nama_dinas_raw
+    for singkatan, nama_lengkap in _NAMA_DINAS_MAP.items():
+        if nama_dinas_raw.upper().startswith(singkatan):
+            return nama_lengkap
+    return nama_dinas_raw  # kembalikan apa adanya jika tidak match
+
+
 def parse_anggota_pokja(kode_tender: str) -> dict:
     """
     GET /lelang/{kode_tender}/edit, parse tabel "Anggota Pokja Pemilihan".
-    Return: {anggota_1, anggota_2, anggota_3}
+    GET /lelang/{kode_tender}, parse nama PPK dari baris "PPK | nama".
+    Return: {anggota_1, anggota_2, anggota_3, nama_ppk}
     """
-    hasil = {"anggota_1": "", "anggota_2": "", "anggota_3": ""}
+    hasil = {"anggota_1": "", "anggota_2": "", "anggota_3": "", "nama_ppk": ""}
     if not kode_tender:
         return hasil
 
+    # ── Ambil nama PPK dari halaman lelang utama ──
+    try:
+        r_main = _get(f"{BASE_URL}/lelang/{kode_tender}", referer=f"{BASE_URL}/admin/pegawai/inbox")
+        if r_main.status_code == 200:
+            soup_main = BeautifulSoup(r_main.text, "html.parser")
+            for tr in soup_main.find_all("tr"):
+                # Struktur: <th>PPK</th><td>Nama PPK</td>
+                th = tr.find("th")
+                td = tr.find("td")
+                if th and td and th.text.strip() == "PPK":
+                    nama_ppk = td.text.strip()
+                    nama_ppk = re.sub(r"\s*Ganti PPK.*", "", nama_ppk, flags=re.IGNORECASE).strip()
+                    hasil["nama_ppk"] = nama_ppk
+                    break
+    except Exception:
+        pass
+
+    # ── Ambil anggota pokja dari halaman edit ──
     url = f"{BASE_URL}/lelang/{kode_tender}/edit"
     try:
         r = _get(url, referer=f"{BASE_URL}/admin/pegawai/inbox")
@@ -185,8 +230,6 @@ def parse_anggota_pokja(kode_tender: str) -> dict:
         return hasil
 
     soup = BeautifulSoup(r.text, "html.parser")
-
-    # Cari tabel yang mengandung "Anggota Pokja Pemilihan"
     anggota = []
     for tbl in soup.find_all("table"):
         txt = tbl.get_text()
@@ -196,9 +239,7 @@ def parse_anggota_pokja(kode_tender: str) -> dict:
                 if not tds:
                     continue
                 nama = tds[0].text.strip()
-                # Filter: bukan header, ada isi, bukan tanggal saja
                 if nama and len(nama) > 3 and not nama.isdigit():
-                    # Skip baris header
                     if nama in ("Status", "Tanggal", "Alasan Tidak Setuju", "Anggota Pokja Pemilihan"):
                         continue
                     anggota.append(nama)
@@ -227,6 +268,7 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
         "nomor_pp": "",
         "nomor_surat_dinas": "",
         "nama_dinas": "",
+        "bidang": "",
         "nama_ppk": "",
         "jangka_waktu": "",
         "sumber_anggaran": "",
@@ -259,12 +301,16 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                     r"Nomor Surat\s*:\s*([^\n]+)", txt1
                 )
 
-                # Nama Dinas: "Surat Dari : DPUPR" atau "Surat Dari DINAS PEKERJAAN UMUM..."
-                nama_dinas = _re_extract(r"Surat Dari\s*[:\s]+([^\n]+)", txt1)
-                # Potong sebelum "Diterima", "Tanggal", "Nomor" jika ada (sisa baris terbawa)
-                import re as _re2
-                nama_dinas = _re2.split(r"\s+(Diterima|Tanggal|Nomor|Paraf|Catatan)\b", nama_dinas, flags=_re2.IGNORECASE)[0].strip()
-                hasil["nama_dinas"] = nama_dinas[:60].strip()
+                # Nama Dinas: ambil dari PDF lalu resolve ke nama lengkap via mapping
+                nama_dinas_raw = _re_extract(r"Surat Dari\s*[:\s]+([^\n]+)", txt1)
+                nama_dinas_raw = re.split(r"\s+(Diterima|Tanggal|Nomor|Paraf|Catatan)\b", nama_dinas_raw, flags=re.IGNORECASE)[0].strip()
+                hasil["nama_dinas"] = _resolve_nama_dinas(hasil["nomor_surat_dinas"], nama_dinas_raw)
+
+                # Bidang: hanya untuk PUPR — ambil dari kode surat (DPUPR-BM, PUPR-SDA, dst)
+                _BIDANG_MAP = {"BM": "Bidang Bina Marga", "SDA": "Bidang Sumber Daya Air", "CK": "Bidang Cipta Karya"}
+                _m_bidang = re.search(r"(?:DPUPR|PUPR)-([A-Z]+)", hasil["nomor_surat_dinas"], re.IGNORECASE)
+                if _m_bidang:
+                    hasil["bidang"] = _BIDANG_MAP.get(_m_bidang.group(1).upper(), "")
 
             # ── Halaman 2: Surat PPK ke UKPBJ ──
             if len(pdf.pages) >= 2:
@@ -300,13 +346,22 @@ def _sb():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
 
+_KOLOM_DRAFT_PAKET = {
+    "kode_tender", "id_pesan", "mak", "nama_tender", "kode_rup",
+    "nilai_pagu", "nilai_hps", "kode_pokja", "nomor_pp", "nomor_surat_dinas",
+    "nama_dinas", "bidang", "nama_ppk", "jangka_waktu", "sumber_anggaran",
+    "anggota_1", "anggota_2", "anggota_3",
+    "diambil_pada", "nomor_urut", "folder_dibuat", "folder_dibuat_pada", "kode_unik",
+}
+
 def upsert_draft_paket(data: dict) -> dict:
     """Upsert satu record ke tabel draft_paket. Return response Supabase."""
     sb = _sb()
     data["diambil_pada"] = datetime.now(timezone.utc).isoformat()
-    # Hapus key internal
     data.pop("_error_pdf", None)
-    r = sb.table("draft_paket").upsert(data).execute()
+    # Hanya kirim kolom yang dikenal agar tidak error jika schema belum ada kolom baru
+    filtered = {k: v for k, v in data.items() if k in _KOLOM_DRAFT_PAKET}
+    r = sb.table("draft_paket").upsert(filtered).execute()
     return r
 
 
@@ -434,15 +489,17 @@ def download_dokumen_paket(
     kode_tender: str,
     id_pesan: str,
     folder_tujuan: str,
+    kode_pokja: str = "",
     progress_cb=None,
 ) -> dict:
     """
-    Download semua dokumen paket ke folder_tujuan:
-      - Surat Dinas/   : lampiran file dari inbox (klik via Playwright)
-      - Dokumen SPSE/spek/, /skk/, /lainnya/ : scrape tabel file + download
+    Download semua dokumen paket langsung ke folder_tujuan (tanpa subfolder):
+      - Lampiran dari inbox (klik via Playwright)
+      - Dokumen SPSE: spek, docsskk, uploaduraian, lainnya
 
+    Setelah download, buat 1 PDF gabungan: Draft_Pokja_{kode_pokja}.pdf
     Butuh Chrome yang sudah login SPSE (CDP port 9222).
-    Return: {"ok": [...], "skip": [...], "error": [...]}
+    Return: {"ok": [...], "skip": [...], "error": [...], "draft_pdf": str}
     """
     import asyncio
     import shutil
@@ -454,20 +511,14 @@ def download_dokumen_paket(
         if progress_cb:
             progress_cb(msg)
 
-    hasil = {"ok": [], "skip": [], "error": []}
-
-    # ── Buat subfolder ──
-    dir_surat  = os.path.join(folder_tujuan, "Surat Dinas")
-    dir_spse   = os.path.join(folder_tujuan, "Dokumen SPSE")
-    for d in [dir_surat, dir_spse]:
-        os.makedirs(d, exist_ok=True)
+    hasil = {"ok": [], "skip": [], "error": [], "draft_pdf": ""}
+    os.makedirs(folder_tujuan, exist_ok=True)
 
     async def _run():
         async with async_playwright() as pw:
             browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
             ctx = browser.contexts[0]
 
-            # ── Ambil cookie untuk requests biasa ──
             cookies = await ctx.cookies(["https://spse.inaproc.id"])
             cookie_str = "; ".join(f'{c["name"]}={c["value"]}' for c in cookies)
             hdrs = {
@@ -476,132 +527,345 @@ def download_dokumen_paket(
                 "Referer": f"{BASE_URL}/admin/pegawai/inbox",
             }
 
+            async def _playwright_download(url: str, dst: str) -> bool:
+                """Download satu file via Playwright goto + expect_download."""
+                pg = await ctx.new_page()
+                try:
+                    async with pg.expect_download(timeout=30000) as dl_info:
+                        try:
+                            await pg.goto(url, wait_until="commit")
+                        except Exception:
+                            pass
+                    dl = await dl_info.value
+                    server_fname = urllib.parse.unquote_plus(dl.suggested_filename or "")
+                    if server_fname:
+                        clean = re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip()
+                        dst = os.path.join(os.path.dirname(dst), clean)
+                    tmp = await dl.path()
+                    if tmp:
+                        shutil.copy2(tmp, dst)
+                        return dst
+                    return False
+                except Exception as e:
+                    raise e
+                finally:
+                    await pg.close()
+
             # ════════════════════════════════
-            # 1. Lampiran Inbox (via Playwright click)
+            # 1. Lampiran Inbox
             # ════════════════════════════════
-            log(f"📨 Mengambil lampiran inbox pesan {id_pesan}...")
+            log(f"📨 Lampiran inbox pesan {id_pesan}...")
             try:
                 page = await ctx.new_page()
                 await page.goto(
                     f"{BASE_URL}/non-rekanan/inbox/{id_pesan}",
-                    wait_until="networkidle",
-                    timeout=20000,
+                    wait_until="networkidle", timeout=20000,
                 )
                 lamp_links = await page.query_selector_all('a[href*="/dl/"]')
-                log(f"  Ditemukan {len(lamp_links)} lampiran")
-
+                log(f"  {len(lamp_links)} lampiran ditemukan")
                 for link in lamp_links:
-                    fname_raw = (await link.text_content() or "").strip()
-                    # Bersihkan nama: hapus " - 52 KB" dll
-                    fname = re.sub(r"\s*-\s*\d+\s*KB\s*$", "", fname_raw, flags=re.IGNORECASE).strip()
-                    if not fname:
-                        fname = "lampiran"
-                    dst = os.path.join(dir_surat, fname)
+                    fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
+                                       (await link.text_content() or ""), flags=re.IGNORECASE).strip()
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
+                    dst = os.path.join(folder_tujuan, fname)
                     if os.path.exists(dst):
-                        log(f"  ⏭ {fname} (sudah ada)")
+                        log(f"  ⏭ {fname}")
                         hasil["skip"].append(fname)
                         continue
                     try:
                         async with page.expect_download(timeout=30000) as dl_info:
                             await link.click()
                         dl = await dl_info.value
-                        # Simpan ke folder
                         tmp = await dl.path()
                         if tmp:
                             shutil.copy2(tmp, dst)
                             log(f"  ✅ {fname}")
-                            hasil["ok"].append(fname)
-                        else:
-                            hasil["error"].append(f"Download gagal: {fname}")
+                            hasil["ok"].append(dst)
                     except Exception as e:
                         log(f"  ❌ {fname}: {e}")
                         hasil["error"].append(f"{fname}: {e}")
-
                 await page.close()
             except Exception as e:
                 log(f"  ❌ Gagal buka inbox: {e}")
-                hasil["error"].append(f"Inbox {id_pesan}: {e}")
+                hasil["error"].append(f"Inbox: {e}")
 
             # ════════════════════════════════
-            # 2. Dokumen SPSE (scrape tabel + requests download)
+            # 1b. Parse jangka_waktu dari PDF lampiran yang sudah didownload
             # ════════════════════════════════
-            sections = [
-                ("spek",         "Spesifikasi"),
-                ("docsskk",      "SKK"),
-                ("uploaduraian", "Uraian"),
-                ("lainnya",      "Lainnya"),
-            ]
+            jangka_waktu_found = ""
+            for fpath in hasil["ok"]:
+                if not fpath.lower().endswith(".pdf"):
+                    continue
+                try:
+                    import pdfplumber, io as _io
+                    with pdfplumber.open(fpath) as _pdf:
+                        for _page in _pdf.pages:
+                            _txt = _page.extract_text() or ""
+                            # Cari pola: "30 Hari Kalender", "60 (enam puluh) Hari"
+                            _m = re.search(
+                                r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)",
+                                _txt, re.IGNORECASE
+                            )
+                            if _m:
+                                jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
+                                log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
+                                break
+                except Exception:
+                    pass
+                if jangka_waktu_found:
+                    break
 
-            for sec_key, sec_label in sections:
-                url_sec = f"{BASE_URL}/dokumen/{kode_tender}/{sec_key}"
-                log(f"📄 Scrape {sec_label} ({sec_key})...")
+            # Update Supabase jika ketemu
+            if jangka_waktu_found and kode_tender:
+                try:
+                    _sb().table("draft_paket").update(
+                        {"jangka_waktu": jangka_waktu_found}
+                    ).eq("kode_tender", kode_tender).execute()
+                    log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
+                except Exception as _e:
+                    log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
+
+            # ════════════════════════════════
+            # 2. Dokumen SPSE
+            # ════════════════════════════════
+            sections = ["spek", "docsskk", "uploaduraian", "lainnya"]
+            for sec in sections:
+                url_sec = f"{BASE_URL}/dokumen/{kode_tender}/{sec}"
                 try:
                     r = requests.get(url_sec, headers=hdrs, timeout=15)
                     if r.status_code == 403:
-                        log(f"  ⏭ {sec_label}: kosong/tidak ada akses")
                         continue
                     r.raise_for_status()
                     soup = BeautifulSoup(r.text, "html.parser")
                     file_links = soup.select("table#files a[href]")
                     if not file_links:
-                        log(f"  ⏭ {sec_label}: tidak ada file")
                         continue
-
-                    dir_sec = os.path.join(dir_spse, sec_label)
-                    os.makedirs(dir_sec, exist_ok=True)
-                    log(f"  {len(file_links)} file ditemukan")
-
+                    log(f"📄 {sec}: {len(file_links)} file")
                     for a in file_links:
-                        # Ambil nama file: text langsung atau dari elemen anak (span dll)
                         fname = a.get_text(separator=" ", strip=True)
                         fname = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname).strip()
                         href = a["href"]
-                        # Fallback nama dari URL jika masih kosong
                         if not fname:
                             fname = urllib.parse.unquote(href.split("/")[-1].split("?")[0])
-                        # Sanitize karakter tidak valid Windows
-                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname).strip()
-                        if not fname:
-                            fname = f"file_{file_links.index(a)+1}"
-
-                        dst = os.path.join(dir_sec, fname)
+                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname).strip() or f"{sec}_file"
+                        dst = os.path.join(folder_tujuan, fname)
                         if os.path.exists(dst):
-                            log(f"  ⏭ {fname} (sudah ada)")
+                            log(f"  ⏭ {fname}")
                             hasil["skip"].append(fname)
                             continue
-
                         dl_url = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
-                        # Download via Playwright (handle redirect/auth otomatis)
-                        pg2 = await ctx.new_page()
                         try:
-                            async with pg2.expect_download(timeout=30000) as dl2_info:
-                                try:
-                                    await pg2.goto(dl_url, wait_until="commit")
-                                except Exception:
-                                    pass  # "Download is starting" = normal, lanjut
-                            dl2 = await dl2_info.value
-                            # Gunakan nama dari server, decode URL encoding
-                            server_fname = urllib.parse.unquote_plus(dl2.suggested_filename or "")
-                            if server_fname:
-                                server_fname = re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip()
-                                dst = os.path.join(dir_sec, server_fname)
-                                fname = server_fname
-                            tmp2 = await dl2.path()
-                            if tmp2:
-                                shutil.copy2(tmp2, dst)
-                                log(f"  ✅ {fname}")
-                                hasil["ok"].append(fname)
+                            saved = await _playwright_download(dl_url, dst)
+                            if saved:
+                                log(f"  ✅ {os.path.basename(saved)}")
+                                hasil["ok"].append(saved)
                             else:
                                 hasil["error"].append(f"{fname}: file kosong")
-                        except Exception as e2:
-                            log(f"  ❌ {fname}: {e2}")
-                            hasil["error"].append(f"{fname}: {e2}")
-                        finally:
-                            await pg2.close()
-
+                        except Exception as e:
+                            log(f"  ❌ {fname}: {e}")
+                            hasil["error"].append(f"{fname}: {e}")
                 except Exception as e:
-                    log(f"  ❌ Gagal scrape {sec_label}: {e}")
-                    hasil["error"].append(f"{sec_label}: {e}")
+                    hasil["error"].append(f"{sec}: {e}")
 
-    asyncio.run(_run())
+            # ════════════════════════════════
+            # 2b. Parse jangka_waktu dari dokumen SPSE jika belum ketemu
+            # ════════════════════════════════
+            if not jangka_waktu_found:
+                for fpath in hasil["ok"]:
+                    if not fpath.lower().endswith(".pdf"):
+                        continue
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(fpath) as _pdf:
+                            for _page in _pdf.pages:
+                                _txt = _page.extract_text() or ""
+                                _m = re.search(
+                                    r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)",
+                                    _txt, re.IGNORECASE
+                                )
+                                if _m:
+                                    jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
+                                    log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
+                                    break
+                    except Exception:
+                        pass
+                    if jangka_waktu_found:
+                        break
+
+                if jangka_waktu_found and kode_tender:
+                    try:
+                        _sb().table("draft_paket").update(
+                            {"jangka_waktu": jangka_waktu_found}
+                        ).eq("kode_tender", kode_tender).execute()
+                        log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
+                    except Exception as _e:
+                        log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
+
+    import concurrent.futures
+
+    def _run_in_thread():
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run())
+        finally:
+            loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run_in_thread).result()
+
+    # ════════════════════════════════
+    # 3. Gabung semua jadi 1 PDF Draft
+    # ════════════════════════════════
+    label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
+    draft_path = os.path.join(folder_tujuan, f"Draft_{label}.pdf")
+    # Gabung hanya file yang baru didownload dari SPSE (bukan template paket)
+    files_didownload = hasil["ok"][:]
+    try:
+        merged = _gabung_pdf_draft(draft_path, files_didownload, progress_cb)
+        hasil["draft_pdf"] = merged
+        log(f"📎 Draft PDF: {os.path.basename(merged)}")
+    except Exception as e:
+        log(f"❌ Gagal buat draft PDF: {e}")
+        hasil["error"].append(f"Draft PDF: {e}")
+
     return hasil
+
+
+def _gabung_pdf_draft(output_path: str, file_list: list, progress_cb=None) -> str:
+    """
+    Gabung file_list (path absolut hasil download SPSE) jadi 1 PDF.
+    PDF  : langsung merge via PyMuPDF (maks 50 hal)
+    Docx/xlsx : konversi ke PDF via Word/Excel COM dulu
+    Gambar : embed via PyMuPDF
+    File > 5MB dilewati agar proses cepat.
+    """
+    import fitz  # PyMuPDF
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    exts_office = {".docx", ".doc", ".xlsx", ".xls"}
+    exts_img    = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+    exts_pdf    = {".pdf"}
+
+    MAX_FILE_MB  = 5
+    MAX_PDF_PAGES = 50
+
+    # Filter: hanya file yang ada, didukung, dan tidak terlalu besar
+    files = []
+    for fpath in file_list:
+        if not os.path.isfile(fpath):
+            continue
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext not in exts_pdf | exts_office | exts_img:
+            continue
+        size_mb = os.path.getsize(fpath) / 1024 / 1024
+        if size_mb > MAX_FILE_MB:
+            log(f"  ⏭ {os.path.basename(fpath)} ({size_mb:.1f}MB, skip)")
+            continue
+        files.append(fpath)
+
+    if not files:
+        raise ValueError("Tidak ada file yang bisa digabung")
+
+    log(f"📎 Menggabung {len(files)} file ke PDF draft...")
+
+    merged_doc = fitz.open()
+    tmp_pdfs = []  # temp files Office→PDF untuk cleanup
+
+    for fpath in files:
+        ext = os.path.splitext(fpath)[1].lower()
+        fname = os.path.basename(fpath)
+        try:
+            if ext == ".pdf":
+                src = fitz.open(fpath)
+                n = src.page_count
+                # Ambil maks MAX_PDF_PAGES halaman pertama
+                end = min(n, MAX_PDF_PAGES)
+                merged_doc.insert_pdf(src, from_page=0, to_page=end - 1)
+                src.close()
+                note = f"{end}/{n} hal" if n > MAX_PDF_PAGES else f"{n} hal"
+                log(f"  + {fname} ({note})")
+
+            elif ext in exts_office:
+                # Konversi via COM (Word/Excel)
+                tmp_pdf = fpath + "_tmp.pdf"
+                _office_to_pdf_com(fpath, tmp_pdf)
+                if os.path.exists(tmp_pdf):
+                    src = fitz.open(tmp_pdf)
+                    n = src.page_count
+                    end = min(n, MAX_PDF_PAGES)
+                    merged_doc.insert_pdf(src, from_page=0, to_page=end - 1)
+                    src.close()
+                    tmp_pdfs.append(tmp_pdf)
+                    note = f"{end}/{n} hal" if n > MAX_PDF_PAGES else ""
+                    log(f"  + {fname} (via COM{', ' + note if note else ''})")
+                else:
+                    log(f"  ⏭ {fname}: konversi COM gagal, skip")
+
+            elif ext in exts_img:
+                # Buat halaman PDF dari gambar
+                img_doc = fitz.open(fpath)
+                rect = fitz.Rect(0, 0, 595, 842)  # A4
+                page = merged_doc.new_page(width=595, height=842)
+                page.insert_image(rect, filename=fpath)
+                log(f"  + {fname} (gambar)")
+
+        except Exception as e:
+            log(f"  ⏭ {fname}: {e}")
+
+    merged_doc.save(output_path, garbage=4, deflate=True)
+    merged_doc.close()
+
+    # Cleanup temp PDF
+    for tmp in tmp_pdfs:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+    return output_path
+
+
+def _office_to_pdf_com(src_path: str, dst_pdf: str):
+    """Konversi file Office ke PDF via COM (Word atau Excel)."""
+    import pythoncom
+    import win32com.client
+    ext = os.path.splitext(src_path)[1].lower()
+    src_abs = os.path.abspath(src_path)
+    dst_abs = os.path.abspath(dst_pdf)
+
+    pythoncom.CoInitialize()
+    try:
+        if ext in (".docx", ".doc"):
+            app = win32com.client.DispatchEx("Word.Application")
+            app.Visible = False
+            app.DisplayAlerts = False
+            try:
+                doc = app.Documents.Open(src_abs)
+                doc.SaveAs(dst_abs, FileFormat=17)  # wdFormatPDF=17
+                doc.Close(False)
+            finally:
+                app.Quit()
+        elif ext in (".xlsx", ".xls"):
+            app = win32com.client.DispatchEx("Excel.Application")
+            app.Visible = False
+            app.DisplayAlerts = False
+            app.AskToUpdateLinks = False
+            app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable — nonaktifkan macro
+            try:
+                wb = app.Workbooks.Open(
+                    src_abs,
+                    UpdateLinks=0,
+                    ReadOnly=True,
+                    IgnoreReadOnlyRecommended=True,
+                )
+                wb.ExportAsFixedFormat(0, dst_abs)  # xlTypePDF=0
+                wb.Close(False)
+            finally:
+                app.Quit()
+    finally:
+        pythoncom.CoUninitialize()
