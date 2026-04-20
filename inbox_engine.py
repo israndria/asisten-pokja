@@ -5,6 +5,7 @@ upsert ke Supabase tabel draft_paket.
 """
 
 import io
+import os
 import re
 import requests
 import pdfplumber
@@ -260,11 +261,10 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
 
                 # Nama Dinas: "Surat Dari : DPUPR" atau "Surat Dari DINAS PEKERJAAN UMUM..."
                 nama_dinas = _re_extract(r"Surat Dari\s*[:\s]+([^\n]+)", txt1)
-                # Ambil singkatan di akhir jika ada, atau 50 char pertama
-                if "DINAS" in nama_dinas.upper() or len(nama_dinas) > 30:
-                    hasil["nama_dinas"] = nama_dinas[:60].strip()
-                else:
-                    hasil["nama_dinas"] = nama_dinas
+                # Potong sebelum "Diterima", "Tanggal", "Nomor" jika ada (sisa baris terbawa)
+                import re as _re2
+                nama_dinas = _re2.split(r"\s+(Diterima|Tanggal|Nomor|Paraf|Catatan)\b", nama_dinas, flags=_re2.IGNORECASE)[0].strip()
+                hasil["nama_dinas"] = nama_dinas[:60].strip()
 
             # ── Halaman 2: Surat PPK ke UKPBJ ──
             if len(pdf.pages) >= 2:
@@ -426,3 +426,182 @@ def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
 
     log(1.0, f"Selesai — {baru} baru, {diperbarui} diperbarui, ⏭️ {skip} dilewati, {len(errors)} error")
     return {"baru": baru, "diperbarui": diperbarui, "skip": skip, "error": errors, "data": hasil_data}
+
+
+# ── Download Dokumen Paket (Lampiran Inbox + Dokumen SPSE) ────────────────────
+
+def download_dokumen_paket(
+    kode_tender: str,
+    id_pesan: str,
+    folder_tujuan: str,
+    progress_cb=None,
+) -> dict:
+    """
+    Download semua dokumen paket ke folder_tujuan:
+      - Surat Dinas/   : lampiran file dari inbox (klik via Playwright)
+      - Dokumen SPSE/spek/, /skk/, /lainnya/ : scrape tabel file + download
+
+    Butuh Chrome yang sudah login SPSE (CDP port 9222).
+    Return: {"ok": [...], "skip": [...], "error": [...]}
+    """
+    import asyncio
+    import shutil
+    import urllib.parse
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    hasil = {"ok": [], "skip": [], "error": []}
+
+    # ── Buat subfolder ──
+    dir_surat  = os.path.join(folder_tujuan, "Surat Dinas")
+    dir_spse   = os.path.join(folder_tujuan, "Dokumen SPSE")
+    for d in [dir_surat, dir_spse]:
+        os.makedirs(d, exist_ok=True)
+
+    async def _run():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
+            ctx = browser.contexts[0]
+
+            # ── Ambil cookie untuk requests biasa ──
+            cookies = await ctx.cookies(["https://spse.inaproc.id"])
+            cookie_str = "; ".join(f'{c["name"]}={c["value"]}' for c in cookies)
+            hdrs = {
+                "Cookie": cookie_str,
+                "User-Agent": "Mozilla/5.0",
+                "Referer": f"{BASE_URL}/admin/pegawai/inbox",
+            }
+
+            # ════════════════════════════════
+            # 1. Lampiran Inbox (via Playwright click)
+            # ════════════════════════════════
+            log(f"📨 Mengambil lampiran inbox pesan {id_pesan}...")
+            try:
+                page = await ctx.new_page()
+                await page.goto(
+                    f"{BASE_URL}/non-rekanan/inbox/{id_pesan}",
+                    wait_until="networkidle",
+                    timeout=20000,
+                )
+                lamp_links = await page.query_selector_all('a[href*="/dl/"]')
+                log(f"  Ditemukan {len(lamp_links)} lampiran")
+
+                for link in lamp_links:
+                    fname_raw = (await link.text_content() or "").strip()
+                    # Bersihkan nama: hapus " - 52 KB" dll
+                    fname = re.sub(r"\s*-\s*\d+\s*KB\s*$", "", fname_raw, flags=re.IGNORECASE).strip()
+                    if not fname:
+                        fname = "lampiran"
+                    dst = os.path.join(dir_surat, fname)
+                    if os.path.exists(dst):
+                        log(f"  ⏭ {fname} (sudah ada)")
+                        hasil["skip"].append(fname)
+                        continue
+                    try:
+                        async with page.expect_download(timeout=30000) as dl_info:
+                            await link.click()
+                        dl = await dl_info.value
+                        # Simpan ke folder
+                        tmp = await dl.path()
+                        if tmp:
+                            shutil.copy2(tmp, dst)
+                            log(f"  ✅ {fname}")
+                            hasil["ok"].append(fname)
+                        else:
+                            hasil["error"].append(f"Download gagal: {fname}")
+                    except Exception as e:
+                        log(f"  ❌ {fname}: {e}")
+                        hasil["error"].append(f"{fname}: {e}")
+
+                await page.close()
+            except Exception as e:
+                log(f"  ❌ Gagal buka inbox: {e}")
+                hasil["error"].append(f"Inbox {id_pesan}: {e}")
+
+            # ════════════════════════════════
+            # 2. Dokumen SPSE (scrape tabel + requests download)
+            # ════════════════════════════════
+            sections = [
+                ("spek",         "Spesifikasi"),
+                ("docsskk",      "SKK"),
+                ("uploaduraian", "Uraian"),
+                ("lainnya",      "Lainnya"),
+            ]
+
+            for sec_key, sec_label in sections:
+                url_sec = f"{BASE_URL}/dokumen/{kode_tender}/{sec_key}"
+                log(f"📄 Scrape {sec_label} ({sec_key})...")
+                try:
+                    r = requests.get(url_sec, headers=hdrs, timeout=15)
+                    if r.status_code == 403:
+                        log(f"  ⏭ {sec_label}: kosong/tidak ada akses")
+                        continue
+                    r.raise_for_status()
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    file_links = soup.select("table#files a[href]")
+                    if not file_links:
+                        log(f"  ⏭ {sec_label}: tidak ada file")
+                        continue
+
+                    dir_sec = os.path.join(dir_spse, sec_label)
+                    os.makedirs(dir_sec, exist_ok=True)
+                    log(f"  {len(file_links)} file ditemukan")
+
+                    for a in file_links:
+                        # Ambil nama file: text langsung atau dari elemen anak (span dll)
+                        fname = a.get_text(separator=" ", strip=True)
+                        fname = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname).strip()
+                        href = a["href"]
+                        # Fallback nama dari URL jika masih kosong
+                        if not fname:
+                            fname = urllib.parse.unquote(href.split("/")[-1].split("?")[0])
+                        # Sanitize karakter tidak valid Windows
+                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname).strip()
+                        if not fname:
+                            fname = f"file_{file_links.index(a)+1}"
+
+                        dst = os.path.join(dir_sec, fname)
+                        if os.path.exists(dst):
+                            log(f"  ⏭ {fname} (sudah ada)")
+                            hasil["skip"].append(fname)
+                            continue
+
+                        dl_url = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+                        # Download via Playwright (handle redirect/auth otomatis)
+                        pg2 = await ctx.new_page()
+                        try:
+                            async with pg2.expect_download(timeout=30000) as dl2_info:
+                                try:
+                                    await pg2.goto(dl_url, wait_until="commit")
+                                except Exception:
+                                    pass  # "Download is starting" = normal, lanjut
+                            dl2 = await dl2_info.value
+                            # Gunakan nama dari server, decode URL encoding
+                            server_fname = urllib.parse.unquote_plus(dl2.suggested_filename or "")
+                            if server_fname:
+                                server_fname = re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip()
+                                dst = os.path.join(dir_sec, server_fname)
+                                fname = server_fname
+                            tmp2 = await dl2.path()
+                            if tmp2:
+                                shutil.copy2(tmp2, dst)
+                                log(f"  ✅ {fname}")
+                                hasil["ok"].append(fname)
+                            else:
+                                hasil["error"].append(f"{fname}: file kosong")
+                        except Exception as e2:
+                            log(f"  ❌ {fname}: {e2}")
+                            hasil["error"].append(f"{fname}: {e2}")
+                        finally:
+                            await pg2.close()
+
+                except Exception as e:
+                    log(f"  ❌ Gagal scrape {sec_label}: {e}")
+                    hasil["error"].append(f"{sec_label}: {e}")
+
+    asyncio.run(_run())
+    return hasil

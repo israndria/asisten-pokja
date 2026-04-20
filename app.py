@@ -244,6 +244,30 @@ with tab0:
             if _cb2.button("📂 Buka Explorer", use_container_width=True, key="btn_buka_folder"):
                 _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
 
+        # Tombol download dokumen mandiri (untuk folder yang sudah ada)
+        if _folder_ada and _row_terpilih:
+            _kt2 = _row_terpilih.get("kode_tender", "")
+            _ip2 = str(_row_terpilih.get("id_pesan", ""))
+            if _kt2 and _ip2:
+                if st.button("📦 Download Dokumen SPSE + Lampiran", use_container_width=True, key="btn_dl_dokumen_saja"):
+                    _dl_log2 = st.empty()
+                    _dl_msgs2 = []
+                    def _dl_cb2(msg):
+                        _dl_msgs2.append(msg)
+                        _dl_log2.info("\n".join(_dl_msgs2[-5:]))
+                    with st.spinner("Mengunduh dokumen..."):
+                        _dl2 = inbox_engine.download_dokumen_paket(_kt2, _ip2, _target_path, progress_cb=_dl_cb2)
+                    _dl_log2.empty()
+                    st.success(
+                        f"✅ {len(_dl2['ok'])} file, ⏭ {len(_dl2['skip'])} sudah ada, ❌ {len(_dl2['error'])} gagal"
+                    )
+                    if _dl2["error"]:
+                        with st.expander("Detail error"):
+                            for _e4 in _dl2["error"]:
+                                st.error(_e4)
+
+        _dl_dokumen = st.checkbox("📦 Download dokumen SPSE + lampiran surat", value=True, key="cb_dl_dokumen")
+
         if _buat_btn and _nama_folder:
             with st.spinner(f"Membuat '{_nama_folder}'..."):
                 try:
@@ -261,6 +285,30 @@ with tab0:
                                 }).eq("kode_tender", _row_terpilih["kode_tender"]).execute()
                             except Exception as _e2:
                                 st.warning(f"Gagal update riwayat: {_e2}")
+                        # Download dokumen jika checkbox aktif
+                        if _dl_dokumen and _row_terpilih and _target_path:
+                            _kt = _row_terpilih.get("kode_tender", "")
+                            _ip = str(_row_terpilih.get("id_pesan", ""))
+                            if _kt and _ip:
+                                _dl_log = st.empty()
+                                _dl_msgs = []
+                                def _dl_cb(msg):
+                                    _dl_msgs.append(msg)
+                                    _dl_log.info("\n".join(_dl_msgs[-5:]))
+                                with st.spinner("Mengunduh dokumen..."):
+                                    _dl_hasil = inbox_engine.download_dokumen_paket(
+                                        _kt, _ip, _target_path, progress_cb=_dl_cb
+                                    )
+                                _dl_log.empty()
+                                st.success(
+                                    f"Download selesai — ✅ {len(_dl_hasil['ok'])} file, "
+                                    f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
+                                    f"❌ {len(_dl_hasil['error'])} gagal"
+                                )
+                                if _dl_hasil["error"]:
+                                    with st.expander("Detail error download"):
+                                        for _e3 in _dl_hasil["error"]:
+                                            st.error(_e3)
                         st.rerun()
                     else:
                         st.error("Setup gagal.")
