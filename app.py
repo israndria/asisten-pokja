@@ -1692,7 +1692,8 @@ with tab9:
 
 with tab_ba:
 
-    _ba_col1, _ba_col2, _ba_col3, _ba_col4 = st.columns([2, 2, 2, 2])
+    _ba_col1, _ba_col2, _ba_col3, _ba_col4, _ba_col5 = st.columns([2.2, 1.7, 1.7, 1.7, 1.7])
+
 
     with _ba_col1:
 
@@ -1803,131 +1804,114 @@ with tab_ba:
     with _ba_col2:
 
         st.markdown("### 2. Konfigurasi BA")
-        for jenis_key in ["penjelasan", "hasil_pemilihan"]:
-            st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[jenis_key]}")
-            _nomor_display = st.session_state.get(f"ba_no_{jenis_key}", "")
-            if _nomor_display:
-                st.code(_nomor_display, language=None)
-            else:
-                st.caption("_Nomor: klik 🔄 Auto Nomor_")
-            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
-            _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
-            if isinstance(_dt, date):
-                st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
-            st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
-            st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
-            if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
-                st.session_state["ba_auto_target"] = jenis_key
-            st.divider()
+        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['penjelasan']}")
+        _nd = st.session_state.get("ba_no_penjelasan", "")
+        if _nd:
+            st.code(_nd, language=None)
+        else:
+            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_penjelasan", format="DD/MM/YYYY", label_visibility="collapsed")
+        _dt = st.session_state.get("ba_tgl_date_penjelasan", date.today())
+        if isinstance(_dt, date):
+            st.session_state["ba_tgl_penjelasan"] = _dt.strftime("%d-%m-%Y")
+        st.text_area("Keterangan (opsional)", key="ba_info_penjelasan", height=100, label_visibility="collapsed")
+        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_penjelasan", use_container_width=True, disabled=len(ba_selected) == 0):
+            st.session_state["ba_auto_target"] = "penjelasan"
 
     with _ba_col3:
 
         st.markdown("### &nbsp;")
-        for jenis_key in ["evaluasi", "lainnya"]:
-            st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[jenis_key]}")
-            _nomor_display = st.session_state.get(f"ba_no_{jenis_key}", "")
-            if _nomor_display:
-                st.code(_nomor_display, language=None)
-            else:
-                st.caption("_Nomor: klik 🔄 Auto Nomor_")
-            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
-            _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
-            if isinstance(_dt, date):
-                st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
-            st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
-            st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
-            if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
-                st.session_state["ba_auto_target"] = jenis_key
-            st.divider()
+        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['evaluasi']}")
+        _nd = st.session_state.get("ba_no_evaluasi", "")
+        if _nd:
+            st.code(_nd, language=None)
+        else:
+            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_evaluasi", format="DD/MM/YYYY", label_visibility="collapsed")
+        _dt = st.session_state.get("ba_tgl_date_evaluasi", date.today())
+        if isinstance(_dt, date):
+            st.session_state["ba_tgl_evaluasi"] = _dt.strftime("%d-%m-%Y")
+        st.text_area("Keterangan (opsional)", key="ba_info_evaluasi", height=100, label_visibility="collapsed")
+        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_evaluasi", use_container_width=True, disabled=len(ba_selected) == 0):
+            st.session_state["ba_auto_target"] = "evaluasi"
 
     with _ba_col4:
 
         st.markdown("### &nbsp;")
-        _jk = "negosiasi"
-        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[_jk]}")
-        _nomor_display = st.session_state.get(f"ba_no_{_jk}", "")
-        if _nomor_display:
-            st.code(_nomor_display, language=None)
+        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['hasil_pemilihan']}")
+        _nd = st.session_state.get("ba_no_hasil_pemilihan", "")
+        if _nd:
+            st.code(_nd, language=None)
         else:
-            st.caption("_Nomor: klik 🔄 Auto Nomor_")
-        st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{_jk}", format="DD/MM/YYYY", label_visibility="collapsed")
-        _dt = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
+            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_hasil_pemilihan", format="DD/MM/YYYY", label_visibility="collapsed")
+        _dt = st.session_state.get("ba_tgl_date_hasil_pemilihan", date.today())
         if isinstance(_dt, date):
-            st.session_state[f"ba_tgl_{_jk}"] = _dt.strftime("%d-%m-%Y")
-        st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{_jk}", label_visibility="collapsed")
-        st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{_jk}", height=68, label_visibility="collapsed")
-        if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{_jk}", use_container_width=True):
-            st.session_state["ba_auto_target"] = _jk
-        st.divider()
+            st.session_state["ba_tgl_hasil_pemilihan"] = _dt.strftime("%d-%m-%Y")
+        st.text_area("Keterangan (opsional)", key="ba_info_hasil_pemilihan", height=100, label_visibility="collapsed")
+        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_hasil_pemilihan", use_container_width=True, disabled=len(ba_selected) == 0):
+            st.session_state["ba_auto_target"] = "hasil_pemilihan"
 
-        ba_n = len(ba_selected)
+    with _ba_col5:
 
-        do_upload = st.button(f"🚀 Upload {ba_n} Paket × 5 BA", key="ba5_upload", type="primary", disabled=ba_n == 0, use_container_width=True)
+        st.markdown("### &nbsp;")
+        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['negosiasi']}")
+        _nd = st.session_state.get("ba_no_negosiasi", "")
+        if _nd:
+            st.code(_nd, language=None)
+        else:
+            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_negosiasi", format="DD/MM/YYYY", label_visibility="collapsed")
+        _dt = st.session_state.get("ba_tgl_date_negosiasi", date.today())
+        if isinstance(_dt, date):
+            st.session_state["ba_tgl_negosiasi"] = _dt.strftime("%d-%m-%Y")
+        st.text_area("Keterangan (opsional)", key="ba_info_negosiasi", height=100, label_visibility="collapsed")
+        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_negosiasi", use_container_width=True, disabled=len(ba_selected) == 0):
+            st.session_state["ba_auto_target"] = "negosiasi"
 
-        if do_upload:
-
-            progress = st.progress(0, text="Memulai...")
-
-            hasil_ba = []
-
-            for i, p in enumerate(ba_selected):
-
-                pid = p["id_lelang"]
-
-                progress.progress((i + 0.5) / len(ba_selected), text=f"Upload BA untuk {p['kode']} ({i+1}/{len(ba_selected)})...")
-
-                paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
-
-                for jenis_key in ba_config.JENIS_KEYS:
-
-                    file_up = st.session_state.get(f"ba_file_{jenis_key}")
-
-                    nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
-
-                    tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
-
-                    info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
-
-                    ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati"}
-
-                    if file_up and nomor and tanggal:
-
-                        try:
-
-                            r = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=file_up.getvalue(), file_name=file_up.name, info=info)
-
-                            ba_result["status"] = "✅" if r["ok"] else f"❌ HTTP {r['status']}"
-
-                            ba_result["detail"] = r
-
-                        except Exception as e:
-
-                            ba_result["status"] = f"❌ {e}"
-
-                    elif file_up:
-
-                        ba_result["status"] = "⚠️ Nomor/tanggal belum diisi"
-
-                    paket_hasil["ba"].append(ba_result)
-
-                hasil_ba.append(paket_hasil)
-
-            progress.empty()
-
-            sukses_n = sum(1 for h in hasil_ba for b in h["ba"] if b["status"] == "✅")
-
-            st.success(f"✅ Selesai! {sukses_n} BA berhasil di-upload.")
-
-            for h in hasil_ba:
-
-                st.markdown(f"**{h['kode']}** —  {h['nama']}")
-
-                for b in h["ba"]:
-
-                    st.caption(f"{b['status']} {b['jenis']}")
-
-                st.divider()
-
+    # ── BA Lainnya (manual: scan dulu) ──────────────────────────────────
+    with st.expander("\U0001f4c1 BA Lainnya (Upload Manual)", expanded=False):
+        st.caption("BA Lainnya memerlukan penggabungan file scan terlebih dahulu.")
+        _ln_col1, _ln_col2 = st.columns(2)
+        with _ln_col1:
+            st.text_input("Nomor BA Lainnya", key="ba_no_lainnya", placeholder="000/BA/POKJA/2026")
+        with _ln_col2:
+            st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
+            _dt = st.session_state.get("ba_tgl_date_lainnya", date.today())
+            if isinstance(_dt, date):
+                st.session_state["ba_tgl_lainnya"] = _dt.strftime("%d-%m-%Y")
+        st.file_uploader("File PDF BA Lainnya", type=["pdf"], key="ba_file_lainnya")
+        st.text_area("Keterangan (opsional)", key="ba_info_lainnya", height=68)
+        _ba_ln_n = len(ba_selected)
+        if st.button(
+            f"\U0001f680 Upload BA Lainnya ({len(ba_selected)} paket)",
+            key="ba_lainnya_upload",
+            disabled=_ba_ln_n == 0 or not st.session_state.get("ba_file_lainnya"),
+            use_container_width=True,
+        ):
+            _file_up = st.session_state.get("ba_file_lainnya")
+            _nomor_l = st.session_state.get("ba_no_lainnya", "").strip()
+            _tgl_l = st.session_state.get("ba_tgl_lainnya", "").strip()
+            if _file_up and _nomor_l and _tgl_l:
+                _prog_l = st.progress(0, text="Uploading BA Lainnya...")
+                _hasil_l = []
+                for _il, _pl in enumerate(ba_selected):
+                    try:
+                        _r = ba_engine.upload_ba(
+                            paket_id=_pl["id_lelang"], jenis_key="lainnya",
+                            nomor_ba=_nomor_l, tanggal_ba=_tgl_l,
+                            file_bytes=_file_up.getvalue(), file_name=_file_up.name,
+                            info=st.session_state.get("ba_info_lainnya", ""),
+                        )
+                        _hasil_l.append({"kode": _pl["kode"], "ok": _r["ok"]})
+                    except Exception as _e:
+                        _hasil_l.append({"kode": _pl["kode"], "ok": False, "err": str(_e)})
+                    _prog_l.progress((_il + 1) / len(ba_selected))
+                _prog_l.empty()
+                _sukses_l = sum(1 for h in _hasil_l if h["ok"])
+                st.success(f"\u2705 {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
+            else:
+                st.warning("\u26a0\ufe0f Lengkapi Nomor, Tanggal, dan File PDF.")
 
         if st.session_state.get("ba_auto_target"):
             jenis_target = st.session_state["ba_auto_target"]
