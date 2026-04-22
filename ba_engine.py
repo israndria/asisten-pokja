@@ -174,3 +174,45 @@ def upload_multi_ba(paket_id: str, ba_list: list[dict]) -> list[dict]:
         except Exception as e:
             results.append({"jenis": ba.get("jenis", "?"), "ok": False, "error": str(e)})
     return results
+
+# "?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?
+# Cetak BA dari SPSE
+# "?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?"?
+
+def cetak_ba(
+    paket_id: str,
+    jenis_key: str,
+    nomor_ba: str,
+    tanggal_ba: str
+) -> dict:
+    """
+    Cetak (Download PDF) BA dari SPSE.
+    Return: {"ok": bool, "pdf_bytes": bytes, "status": int, "error": str}
+    """
+    try:
+        ctx = scrap_ba_context(paket_id)
+        jenis_val = JENIS_BA.get(jenis_key, jenis_key)
+        
+        payload = {
+            "authenticityToken": ctx["token"],
+            "ref": ctx["ref"],
+            "jenis": jenis_val,
+            "no": nomor_ba.strip(),
+            "tanggal": tanggal_ba.strip(),
+        }
+        
+        url = f"{SPSE_BASE_URL}berita_acara/{paket_id}/cetak"
+        resp = requests.post(url, data=payload, headers={
+            **HEADERS_BASE,
+            "Cookie": ctx["cookie"],
+            "Referer": ctx["ref"],
+        }, allow_redirects=False, timeout=30)
+        
+        if resp.status_code == 200 and 'pdf' in resp.headers.get('Content-Type', '').lower():
+            return {"ok": True, "pdf_bytes": resp.content, "status": 200, "error": ""}
+        else:
+            return {"ok": False, "pdf_bytes": b"", "status": resp.status_code, "error": f"Invalid Content-Type: {resp.headers.get('Content-Type')}"}
+            
+    except Exception as e:
+        return {"ok": False, "pdf_bytes": b"", "status": 0, "error": str(e)}
+
