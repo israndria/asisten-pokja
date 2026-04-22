@@ -1804,8 +1804,8 @@ with tab_ba:
                     st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
             st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
             st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
-            if st.button(f"🖨️ Cetak", key=f"btn_cetak_{jenis_key}", use_container_width=True):
-                st.session_state["ba_cetak_target"] = jenis_key
+            if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
+                st.session_state["ba_auto_target"] = jenis_key
             st.divider()
 
     with _ba_col3:
@@ -1823,8 +1823,8 @@ with tab_ba:
                     st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
             st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
             st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
-            if st.button(f"🖨️ Cetak", key=f"btn_cetak_{jenis_key}", use_container_width=True):
-                st.session_state["ba_cetak_target"] = jenis_key
+            if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
+                st.session_state["ba_auto_target"] = jenis_key
             st.divider()
 
     with _ba_col4:
@@ -1842,8 +1842,8 @@ with tab_ba:
                 st.session_state[f"ba_tgl_{_jk}"] = _dt.strftime("%d-%m-%Y")
         st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{_jk}", label_visibility="collapsed")
         st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{_jk}", height=68, label_visibility="collapsed")
-        if st.button(f"🖨️ Cetak", key=f"btn_cetak_{_jk}", use_container_width=True):
-            st.session_state["ba_cetak_target"] = _jk
+        if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{_jk}", use_container_width=True):
+            st.session_state["ba_auto_target"] = _jk
         st.divider()
 
         ba_n = len(ba_selected)
@@ -1915,19 +1915,18 @@ with tab_ba:
                 st.divider()
 
 
-        if st.session_state.get("ba_cetak_target"):
-            jenis_target = st.session_state["ba_cetak_target"]
-            progress = st.progress(0, text=f"Memulai Cetak {ba_config.JENIS_BA[jenis_target]}...")
-            hasil_cetak = []
+        if st.session_state.get("ba_auto_target"):
+            jenis_target = st.session_state["ba_auto_target"]
+            progress = st.progress(0, text=f"Memulai Cetak & Upload {ba_config.JENIS_BA[jenis_target]}...")
+            hasil_auto = []
             import os as _os
             from config import POKJA_ROOT as _POKJA_ROOT
             
             for i, p in enumerate(ba_selected):
                 pid = p["id_lelang"]
-                progress.progress((i + 0.5) / len(ba_selected), text=f"Cetak BA {p['kode']} ({i+1}/{len(ba_selected)})...")
+                progress.progress((i + 0.5) / len(ba_selected), text=f"Proses {p['kode']} ({i+1}/{len(ba_selected)})...")
                 paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
                 
-                # Setup target folder
                 safe_nama = "".join(c for c in p['nama'] if c.isalnum() or c in " -_()").strip()
                 folder_name = f"Cetak_BA_{p['kode']}"
                 target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", folder_name)
@@ -1936,32 +1935,41 @@ with tab_ba:
                 for jenis_key in [jenis_target]:
                     nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
                     tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
+                    info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
                     
                     ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati"}
                     
                     if nomor and tanggal:
                         try:
-                            r = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
-                            if r["ok"]:
+                            # 1. Cetak Draft
+                            r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
+                            if r_cetak["ok"]:
+                                # Save Backup Local
                                 safe_no = "".join(c if c.isalnum() else "_" for c in nomor)
                                 fn = f"Cetak_{jenis_key}_{safe_no}.pdf"
                                 with open(_os.path.join(target_dir, fn), "wb") as f:
-                                    f.write(r["pdf_bytes"])
-                                ba_result["status"] = f"✅ Saved to {fn}"
+                                    f.write(r_cetak["pdf_bytes"])
+                                
+                                # 2. Upload Final
+                                r_up = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=r_cetak["pdf_bytes"], file_name=fn, info=info)
+                                if r_up["ok"]:
+                                    ba_result["status"] = f"✅ Auto-Upload Sukses (Backup: {fn})"
+                                else:
+                                    ba_result["status"] = f"❌ Upload Error {r_up['status']}"
                             else:
-                                ba_result["status"] = f"❌ Error {r['status']}: {r.get('error')}"
+                                ba_result["status"] = f"❌ Cetak Error {r_cetak['status']}: {r_cetak.get('error')}"
                         except Exception as e:
                             ba_result["status"] = f"❌ {e}"
                             
                     if ba_result["status"] != "⏭️ Lewati":
                         paket_hasil["ba"].append(ba_result)
                 
-                hasil_cetak.append(paket_hasil)
+                hasil_auto.append(paket_hasil)
                 
             progress.empty()
-            st.success(f"✅ Selesai! Hasil cetak BA disimpan di Asisten_Pokja_Downloads.")
-            del st.session_state["ba_cetak_target"]
-            for h in hasil_cetak:
+            st.success(f"✅ Selesai! Hasil auto-upload telah dikirim ke SPSE dan backup PDF disimpan.")
+            del st.session_state["ba_auto_target"]
+            for h in hasil_auto:
                 st.markdown(f"**{h['kode']}** — {h['nama']}")
                 for b in h["ba"]:
                     st.caption(f"{b['status']} {b['jenis']}")
