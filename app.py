@@ -1781,27 +1781,39 @@ with tab_ba:
 
         # ── Inisialisasi session state BA ─────────────────────────────────
         for jenis_key in ba_config.JENIS_KEYS:
-            if f"ba_no_{jenis_key}" not in st.session_state:
-                st.session_state[f"ba_no_{jenis_key}"] = ""
             if f"ba_tgl_{jenis_key}" not in st.session_state:
                 st.session_state[f"ba_tgl_{jenis_key}"] = datetime.today().strftime("%d-%m-%Y")
             if f"ba_info_{jenis_key}" not in st.session_state:
                 st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
+
+        # ── Auto-populate nomor BA dari dokpil paket pertama yang dipilih ──
+        if ba_selected and st.button("🔄 Auto Nomor dari Dokpil", key="ba_auto_nomor", use_container_width=True):
+            with st.spinner("Mengambil nomor dokpil..."):
+                _nomor_dokpil = ba_engine.get_nomor_dokpil(ba_selected[0]["id_lelang"])
+            if _nomor_dokpil:
+                for jenis_key in ba_config.JENIS_KEYS:
+                    _urut = ba_config.NOMOR_URUT[jenis_key]
+                    st.session_state[f"ba_no_{jenis_key}"] = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
+                st.success(f"✅ Nomor BA berhasil di-generate dari: `{_nomor_dokpil}`")
+            else:
+                st.warning("⚠️ Nomor dokpil tidak ditemukan di halaman SPSE.")
+            st.rerun()
 
 
     with _ba_col2:
 
         st.markdown("### 2. Konfigurasi BA")
         for jenis_key in ["penjelasan", "hasil_pemilihan"]:
-            st.markdown(f"#### 📋 {ba_config.JENIS_BA[jenis_key]}")
-            col_no, col_tgl = st.columns(2)
-            with col_no:
-                st.text_input("Nomor BA", key=f"ba_no_{jenis_key}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
-            with col_tgl:
-                st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
-                _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
-                if isinstance(_dt, date):
-                    st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
+            st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[jenis_key]}")
+            _nomor_display = st.session_state.get(f"ba_no_{jenis_key}", "")
+            if _nomor_display:
+                st.code(_nomor_display, language=None)
+            else:
+                st.caption("_Nomor: klik 🔄 Auto Nomor_")
+            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
+            _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
+            if isinstance(_dt, date):
+                st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
             st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
             st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
             if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
@@ -1812,15 +1824,16 @@ with tab_ba:
 
         st.markdown("### &nbsp;")
         for jenis_key in ["evaluasi", "lainnya"]:
-            st.markdown(f"#### 📋 {ba_config.JENIS_BA[jenis_key]}")
-            col_no, col_tgl = st.columns(2)
-            with col_no:
-                st.text_input("Nomor BA", key=f"ba_no_{jenis_key}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
-            with col_tgl:
-                st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
-                _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
-                if isinstance(_dt, date):
-                    st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
+            st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[jenis_key]}")
+            _nomor_display = st.session_state.get(f"ba_no_{jenis_key}", "")
+            if _nomor_display:
+                st.code(_nomor_display, language=None)
+            else:
+                st.caption("_Nomor: klik 🔄 Auto Nomor_")
+            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{jenis_key}", format="DD/MM/YYYY", label_visibility="collapsed")
+            _dt = st.session_state.get(f"ba_tgl_date_{jenis_key}", date.today())
+            if isinstance(_dt, date):
+                st.session_state[f"ba_tgl_{jenis_key}"] = _dt.strftime("%d-%m-%Y")
             st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{jenis_key}", label_visibility="collapsed")
             st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{jenis_key}", height=68, label_visibility="collapsed")
             if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{jenis_key}", use_container_width=True):
@@ -1831,15 +1844,16 @@ with tab_ba:
 
         st.markdown("### &nbsp;")
         _jk = "negosiasi"
-        st.markdown(f"#### 📋 {ba_config.JENIS_BA[_jk]}")
-        col_no, col_tgl = st.columns(2)
-        with col_no:
-            st.text_input("Nomor BA", key=f"ba_no_{_jk}", placeholder="000/BA/POKJA/2026", label_visibility="collapsed")
-        with col_tgl:
-            st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{_jk}", format="DD/MM/YYYY", label_visibility="collapsed")
-            _dt = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
-            if isinstance(_dt, date):
-                st.session_state[f"ba_tgl_{_jk}"] = _dt.strftime("%d-%m-%Y")
+        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL[_jk]}")
+        _nomor_display = st.session_state.get(f"ba_no_{_jk}", "")
+        if _nomor_display:
+            st.code(_nomor_display, language=None)
+        else:
+            st.caption("_Nomor: klik 🔄 Auto Nomor_")
+        st.date_input("Tanggal", value=date.today(), key=f"ba_tgl_date_{_jk}", format="DD/MM/YYYY", label_visibility="collapsed")
+        _dt = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
+        if isinstance(_dt, date):
+            st.session_state[f"ba_tgl_{_jk}"] = _dt.strftime("%d-%m-%Y")
         st.file_uploader("File PDF", type=["pdf"], key=f"ba_file_{_jk}", label_visibility="collapsed")
         st.text_area("Keterangan tambahan (opsional)", key=f"ba_info_{_jk}", height=68, label_visibility="collapsed")
         if st.button(f"⚡ Cetak && Upload", key=f"btn_cetak_{_jk}", use_container_width=True):

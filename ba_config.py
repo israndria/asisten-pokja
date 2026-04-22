@@ -8,6 +8,25 @@ JENIS_BA = {
     "lainnya":          "BA Lainnya",
 }
 
+# Label tampilan dengan nomor urut (untuk UI Tab 5)
+JENIS_LABEL = {
+    "penjelasan":       "2. BA Pemberian Penjelasan",
+    "evaluasi":         "4. BA Evaluasi Penawaran",
+    "hasil_pemilihan":  "8. BA Hasil Pemilihan",
+    "negosiasi":        "10. BA Negosiasi",
+    "lainnya":          "BA Lainnya",
+}
+
+# Nomor urut dalam format /XX/ untuk auto-generate nomor BA dari nomor dokpil
+# Contoh dokpil: 000.3.3/01/T/PJ.D_... → ubah /01/ jadi /02/ untuk Penjelasan
+NOMOR_URUT = {
+    "penjelasan":       "02",
+    "evaluasi":         "04",
+    "hasil_pemilihan":  "08",
+    "negosiasi":        "10",
+    "lainnya":          "99",
+}
+
 JENIS_KEYS = list(JENIS_BA.keys())
 
 # Template keterangan tambahan per jenis

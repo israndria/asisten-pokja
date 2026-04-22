@@ -216,3 +216,50 @@ def cetak_ba(
     except Exception as e:
         return {"ok": False, "pdf_bytes": b"", "status": 0, "error": str(e)}
 
+
+# ─────────────────────────────────────────────────────────────────────
+# Scrape nomor dokpil + auto-derive nomor BA
+# ─────────────────────────────────────────────────────────────────────
+
+def get_nomor_dokpil(paket_id: str) -> str:
+    """
+    GET halaman /dokumen/{paket_id}, scrape nomor dokpil pertama.
+    Contoh hasil: "000.3.3/01/T/PJ.D_HatungunRT06/POKJA086/UKPBJ/2025"
+    Return: string nomor atau "" jika tidak ditemukan.
+    """
+    url = f"{SPSE_BASE_URL}dokumen/{paket_id}"
+    cookie_str = spse_browser.get_spse_cookies()
+    resp = requests.get(url, headers={**HEADERS_BASE, "Cookie": cookie_str}, timeout=20)
+    if resp.status_code != 200:
+        return ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Cari <th> atau <td> yang berisi "Nomor" dan ambil nilai setelahnya
+    for th in soup.find_all(["th", "td"]):
+        if th.get_text(strip=True) == "Nomor":
+            sibling = th.find_next_sibling("td")
+            if sibling:
+                nomor = sibling.get_text(strip=True)
+                if nomor:
+                    return nomor
+
+    # Fallback: cari pola teks numerik dengan garis miring
+    text = soup.get_text(" ")
+    m = re.search(r'\d{3}\.\d+\.\d+/\d+/T/[^\s]+', text)
+    if m:
+        return m.group(0)
+
+    return ""
+
+
+def derive_nomor_ba(nomor_dokpil: str, urut: str) -> str:
+    """
+    Ganti nomor urut /XX/ pertama pada nomor_dokpil dengan urut baru.
+    Contoh: derive_nomor_ba("000.3.3/01/T/PJ...", "02") → "000.3.3/02/T/PJ..."
+    """
+    if not nomor_dokpil:
+        return ""
+    return re.sub(r'/\d+/', f'/{urut}/', nomor_dokpil, count=1)
+
+
