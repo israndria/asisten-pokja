@@ -435,7 +435,7 @@ with tab_setup:
     _sp_col_kiri, _sp_col_kanan = st.columns([2, 3])
 
     with _sp_col_kiri:
-        st.markdown("### 1. Pilih Paket")
+        st.markdown("### 1. Ambil Data Paket")
         col_spfetch, col_spall, col_spnone = st.columns([3, 1, 1])
         with col_spfetch:
             if st.button("🔍 Ambil Paket Draft", key="sp_fetch_draft", use_container_width=True):
@@ -454,7 +454,7 @@ with tab_setup:
             else:
                 paket_list_sp = r.get("paket", [])
                 if not paket_list_sp:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     with col_spall:
                         if st.button("✅ Semua", key="sp_sel_all", use_container_width=True):
@@ -491,7 +491,7 @@ with tab_setup:
 
                     st.caption(f"**{len(sp_selected)}** dari **{len(paket_list_sp)}** paket dipilih")
         else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
     with _sp_col_kiri:
         st.markdown("### 2. Upload Dokumen Pemilihan")
@@ -823,7 +823,7 @@ with tab7:
     _pj_col_kiri, _pj_col_kanan = st.columns([2, 3])
 
     with _pj_col_kiri:
-        st.markdown("### 1. Pilih Paket")
+        st.markdown("### 1. Ambil Data Paket")
         col_pjfetch, col_pjall, col_pjnone = st.columns([3, 1, 1])
         with col_pjfetch:
             if st.button("🔍 Ambil Paket Draft", key="pj_fetch_draft", use_container_width=True):
@@ -842,7 +842,7 @@ with tab7:
             else:
                 paket_list_pj = r.get("paket", [])
                 if not paket_list_pj:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     with col_pjall:
                         if st.button("✅ Semua", key="pj_sel_all", use_container_width=True):
@@ -867,7 +867,7 @@ with tab7:
 
                     st.caption(f"**{len(pj_selected)}** dari **{len(paket_list_pj)}** paket dipilih")
         else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
         # ── Status Antrian ─────────────────────────────────────────────────
         st.divider()
@@ -1076,7 +1076,7 @@ with tab8:
     _jd_col_list, _jd_col_detail = st.columns([3, 2])
 
     with _jd_col_list:
-        st.markdown("### 1. Pilih Paket")
+        st.markdown("### 1. Ambil Data Paket")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
             if st.button("🔍 Ambil Paket Draft", key="jd_fetch_draft", use_container_width=True):
@@ -1095,7 +1095,7 @@ with tab8:
             else:
                 paket_list = r.get("paket", [])
                 if not paket_list:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     with col_all:
                         if st.button("✅ Semua", key="jd_sel_all", use_container_width=True):
@@ -1120,7 +1120,7 @@ with tab8:
 
                     st.caption(f"**{len(jd_selected)}** dari **{len(paket_list)}** paket dipilih")
         else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
     with _jd_col_detail:
         st.markdown("### 2. Tanggal Mulai")
@@ -1266,7 +1266,7 @@ with tab9:
     _kp_col_list, _kp_col_detail = st.columns([3, 2])
 
     with _kp_col_list:
-        st.markdown("### 1. Pilih Paket")
+        st.markdown("### 1. Ambil Data Paket")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
             if st.button("🔍 Ambil Paket Draft", key="kp_fetch_draft", use_container_width=True):
@@ -1285,7 +1285,7 @@ with tab9:
             else:
                 paket_list = r.get("paket", [])
                 if not paket_list:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     with col_all:
                         if st.button("✅ Semua", key="kp_sel_all", use_container_width=True):
@@ -1363,7 +1363,7 @@ with tab9:
 
                     st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
         else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
         # ── Auto Pre-fill dari Excel (jika ada 1 paket terpilih & folder ada) ──
         if len(kp_selected) == 1:
@@ -1602,7 +1602,7 @@ with tab9:
             else:
                 _ba_paket_list = _ba_r.get("paket", [])
                 if not _ba_paket_list:
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     for _p in _ba_paket_list:
                         _key_chk = f"ba_chk_{_p['id_lelang']}"
@@ -1625,7 +1625,7 @@ with tab9:
                         if _checked:
                             ba_selected.append({**_p, "_ba_file": _ba_up})
         else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
         st.divider()
         ba_tgl = st.date_input(
@@ -1697,14 +1697,14 @@ with tab_ba:
 
     with _ba_col1:
 
-        st.markdown("### 1. Pilih Paket")
+        st.markdown("### 1. Ambil Data Paket")
 
 
         col_bafetch, col_baall, col_banone = st.columns([3, 1, 1])
 
         with col_bafetch:
 
-            if st.button("🔍 Ambil Paket Draft", key="ba5_fetch_draft", use_container_width=True):
+            if st.button("🔍 Ambil Data Paket", key="ba5_fetch_draft", use_container_width=True):
 
                 with st.spinner("Mengambil daftar paket..."):
 
@@ -1734,7 +1734,7 @@ with tab_ba:
 
                 if not paket_list_ba:
 
-                    st.warning("⚠️ Tidak ada paket berstatus Draft.")
+                    st.warning("⚠️ Tidak ada paket ditemukan.")
 
                 else:
 
@@ -1758,27 +1758,27 @@ with tab_ba:
 
                             st.rerun()
 
+
                     for p in paket_list_ba:
-
-                        key_chk = f"ba_chk_{p['id_lelang']}"
-
-                        checked = st.checkbox(
-
-                            f"**{p['kode']}** —  {p['nama']}",
-
-                            value=st.session_state.get(key_chk, True), key=key_chk,
-
-                        )
-
+                        key_chk = f'ba_chk_{p["id_lelang"]}'
+                        _chk_col, _super_col = st.columns([3, 1])
+                        with _chk_col:
+                            checked = st.checkbox(
+                                f"**{p['kode']}** — {p['nama']}",
+                                value=st.session_state.get(key_chk, True), key=key_chk,
+                            )
+                        with _super_col:
+                            if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
+                                st.session_state["ba_auto_target"] = "SEMUA"
+                                st.session_state["ba_super_paket"] = [p]
                         if checked:
-
                             ba_selected.append(p)
 
                     st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
 
         else:
 
-            st.info("Klik tombol di atas untuk mengambil daftar paket Draft.")
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
         # ── Inisialisasi session state BA ─────────────────────────────────
         for jenis_key in ba_config.JENIS_KEYS:
@@ -1800,108 +1800,102 @@ with tab_ba:
                 st.warning("⚠️ Nomor dokpil tidak ditemukan di halaman SPSE.")
             st.rerun()
 
-
     with _ba_col2:
 
         st.markdown("### 2. Konfigurasi BA")
-        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['penjelasan']}")
+        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['penjelasan']}")
         _nd = st.session_state.get("ba_no_penjelasan", "")
         if _nd:
             st.code(_nd, language=None)
         else:
-            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
         st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_penjelasan", format="DD/MM/YYYY", label_visibility="collapsed")
         _dt = st.session_state.get("ba_tgl_date_penjelasan", date.today())
         if isinstance(_dt, date):
             st.session_state["ba_tgl_penjelasan"] = _dt.strftime("%d-%m-%Y")
         st.text_area("Keterangan (opsional)", key="ba_info_penjelasan", height=100, label_visibility="collapsed")
-        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_penjelasan", use_container_width=True, disabled=len(ba_selected) == 0):
+        if st.button("⚡ Cetak & Upload", key="btn_cetak_penjelasan", use_container_width=True, disabled=len(ba_selected) == 0):
             st.session_state["ba_auto_target"] = "penjelasan"
 
     with _ba_col3:
 
         st.markdown("### &nbsp;")
-        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['evaluasi']}")
+        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['evaluasi']}")
         _nd = st.session_state.get("ba_no_evaluasi", "")
         if _nd:
             st.code(_nd, language=None)
         else:
-            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
         st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_evaluasi", format="DD/MM/YYYY", label_visibility="collapsed")
         _dt = st.session_state.get("ba_tgl_date_evaluasi", date.today())
         if isinstance(_dt, date):
             st.session_state["ba_tgl_evaluasi"] = _dt.strftime("%d-%m-%Y")
         st.text_area("Keterangan (opsional)", key="ba_info_evaluasi", height=100, label_visibility="collapsed")
-        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_evaluasi", use_container_width=True, disabled=len(ba_selected) == 0):
+        if st.button("⚡ Cetak & Upload", key="btn_cetak_evaluasi", use_container_width=True, disabled=len(ba_selected) == 0):
             st.session_state["ba_auto_target"] = "evaluasi"
 
     with _ba_col4:
 
         st.markdown("### &nbsp;")
-        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['hasil_pemilihan']}")
+        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['hasil_pemilihan']}")
         _nd = st.session_state.get("ba_no_hasil_pemilihan", "")
         if _nd:
             st.code(_nd, language=None)
         else:
-            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
         st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_hasil_pemilihan", format="DD/MM/YYYY", label_visibility="collapsed")
         _dt = st.session_state.get("ba_tgl_date_hasil_pemilihan", date.today())
         if isinstance(_dt, date):
             st.session_state["ba_tgl_hasil_pemilihan"] = _dt.strftime("%d-%m-%Y")
         st.text_area("Keterangan (opsional)", key="ba_info_hasil_pemilihan", height=100, label_visibility="collapsed")
-        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_hasil_pemilihan", use_container_width=True, disabled=len(ba_selected) == 0):
+        if st.button("⚡ Cetak & Upload", key="btn_cetak_hasil_pemilihan", use_container_width=True, disabled=len(ba_selected) == 0):
             st.session_state["ba_auto_target"] = "hasil_pemilihan"
 
     with _ba_col5:
 
         st.markdown("### &nbsp;")
-        st.markdown(f"#### \U0001f4cb {ba_config.JENIS_LABEL['negosiasi']}")
+        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['negosiasi']}")
         _nd = st.session_state.get("ba_no_negosiasi", "")
         if _nd:
             st.code(_nd, language=None)
         else:
-            st.caption("_Nomor: klik \U0001f504 Auto Nomor_")
+            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
         st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_negosiasi", format="DD/MM/YYYY", label_visibility="collapsed")
         _dt = st.session_state.get("ba_tgl_date_negosiasi", date.today())
         if isinstance(_dt, date):
             st.session_state["ba_tgl_negosiasi"] = _dt.strftime("%d-%m-%Y")
         st.text_area("Keterangan (opsional)", key="ba_info_negosiasi", height=100, label_visibility="collapsed")
-        if st.button("\u26a1 Cetak && Upload", key="btn_cetak_negosiasi", use_container_width=True, disabled=len(ba_selected) == 0):
+        if st.button("⚡ Cetak & Upload", key="btn_cetak_negosiasi", use_container_width=True, disabled=len(ba_selected) == 0):
             st.session_state["ba_auto_target"] = "negosiasi"
 
-    # ── BA Lainnya (manual: scan dulu) ──────────────────────────────────
-    with st.expander("\U0001f4c1 BA Lainnya (Upload Manual)", expanded=False):
-        st.caption("BA Lainnya memerlukan penggabungan file scan terlebih dahulu.")
-        _ln_col1, _ln_col2 = st.columns(2)
-        with _ln_col1:
-            st.text_input("Nomor BA Lainnya", key="ba_no_lainnya", placeholder="000/BA/POKJA/2026")
-        with _ln_col2:
-            st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
-            _dt = st.session_state.get("ba_tgl_date_lainnya", date.today())
-            if isinstance(_dt, date):
-                st.session_state["ba_tgl_lainnya"] = _dt.strftime("%d-%m-%Y")
-        st.file_uploader("File PDF BA Lainnya", type=["pdf"], key="ba_file_lainnya")
-        st.text_area("Keterangan (opsional)", key="ba_info_lainnya", height=68)
-        _ba_ln_n = len(ba_selected)
+
+    # ── BA Lainnya (manual: scan dulu) ────────────────────────────────────
+    with _ba_col2:
+        st.markdown("#### 📁 BA Lainnya")
+        st.caption("Upload manual — gabungkan scan terlebih dahulu.")
+        st.date_input("Tanggal BA Lainnya", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
+        _dt = st.session_state.get("ba_tgl_date_lainnya", date.today())
+        if isinstance(_dt, date):
+            st.session_state["ba_tgl_lainnya"] = _dt.strftime("%d-%m-%Y")
+        st.file_uploader("File PDF", type=["pdf"], key="ba_file_lainnya")
         if st.button(
-            f"\U0001f680 Upload BA Lainnya ({len(ba_selected)} paket)",
+            f"🚀 Upload BA Lainnya ({len(ba_selected)} paket)",
             key="ba_lainnya_upload",
-            disabled=_ba_ln_n == 0 or not st.session_state.get("ba_file_lainnya"),
+            disabled=len(ba_selected) == 0 or not st.session_state.get("ba_file_lainnya"),
             use_container_width=True,
         ):
             _file_up = st.session_state.get("ba_file_lainnya")
-            _nomor_l = st.session_state.get("ba_no_lainnya", "").strip()
             _tgl_l = st.session_state.get("ba_tgl_lainnya", "").strip()
-            if _file_up and _nomor_l and _tgl_l:
+            if _file_up and _tgl_l:
                 _prog_l = st.progress(0, text="Uploading BA Lainnya...")
                 _hasil_l = []
                 for _il, _pl in enumerate(ba_selected):
                     try:
                         _r = ba_engine.upload_ba(
                             paket_id=_pl["id_lelang"], jenis_key="lainnya",
-                            nomor_ba=_nomor_l, tanggal_ba=_tgl_l,
+                            nomor_ba="", tanggal_ba=_tgl_l,
                             file_bytes=_file_up.getvalue(), file_name=_file_up.name,
-                            info=st.session_state.get("ba_info_lainnya", ""),
+                            info="",
                         )
                         _hasil_l.append({"kode": _pl["kode"], "ok": _r["ok"]})
                     except Exception as _e:
@@ -1909,69 +1903,67 @@ with tab_ba:
                     _prog_l.progress((_il + 1) / len(ba_selected))
                 _prog_l.empty()
                 _sukses_l = sum(1 for h in _hasil_l if h["ok"])
-                st.success(f"\u2705 {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
+                st.success(f"✅ {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
             else:
-                st.warning("\u26a0\ufe0f Lengkapi Nomor, Tanggal, dan File PDF.")
+                st.warning("⚠️ Lengkapi Tanggal dan File PDF.")
 
-        if st.session_state.get("ba_auto_target"):
-            jenis_target = st.session_state["ba_auto_target"]
-            progress = st.progress(0, text=f"Memulai Cetak & Upload {ba_config.JENIS_BA[jenis_target]}...")
-            hasil_auto = []
-            import os as _os
-            from config import POKJA_ROOT as _POKJA_ROOT
-            
-            for i, p in enumerate(ba_selected):
-                pid = p["id_lelang"]
-                progress.progress((i + 0.5) / len(ba_selected), text=f"Proses {p['kode']} ({i+1}/{len(ba_selected)})...")
-                paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
-                
-                safe_nama = "".join(c for c in p['nama'] if c.isalnum() or c in " -_()").strip()
-                folder_name = f"Cetak_BA_{p['kode']}"
-                target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", folder_name)
-                _os.makedirs(target_dir, exist_ok=True)
-                
-                for jenis_key in [jenis_target]:
-                    nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
-                    tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
-                    info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
-                    
-                    ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati"}
-                    
-                    if nomor and tanggal:
-                        try:
-                            # 1. Cetak Draft
-                            r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
-                            if r_cetak["ok"]:
-                                # Save Backup Local
-                                safe_no = "".join(c if c.isalnum() else "_" for c in nomor)
-                                fn = f"Cetak_{jenis_key}_{safe_no}.pdf"
-                                with open(_os.path.join(target_dir, fn), "wb") as f:
-                                    f.write(r_cetak["pdf_bytes"])
-                                
-                                # 2. Upload Final
-                                r_up = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=r_cetak["pdf_bytes"], file_name=fn, info=info)
-                                if r_up["ok"]:
-                                    ba_result["status"] = f"✅ Auto-Upload Sukses (Backup: {fn})"
-                                else:
-                                    ba_result["status"] = f"❌ Upload Error {r_up['status']}"
+    # ── Proses Cetak & Auto-Upload ───────────────────────────────────────
+    _FILE_LABEL_BA = {
+        "penjelasan":      "2. Berita Acara Pemberian Penjelasan",
+        "evaluasi":        "4. Berita Acara Evaluasi Penawaran",
+        "hasil_pemilihan": "8. Berita Acara Hasil Pemilihan",
+        "negosiasi":       "10. Berita Acara Negosiasi",
+    }
+    if st.session_state.get("ba_auto_target"):
+        import os as _os
+        from config import POKJA_ROOT as _POKJA_ROOT
+        jenis_target = st.session_state["ba_auto_target"]
+        target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
+        target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
+        label_target = "Semua BA" if jenis_target == "SEMUA" else ba_config.JENIS_BA[jenis_target]
+        progress = st.progress(0, text=f"Memulai Cetak & Upload {label_target}...")
+        hasil_auto = []
+        total_ops = len(target_paket) * len(jenis_list)
+        op_idx = 0
+        for i, p in enumerate(target_paket):
+            pid = p["id_lelang"]
+            paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
+            folder_name = f"Cetak_BA_{p['kode']}"
+            target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", folder_name)
+            _os.makedirs(target_dir, exist_ok=True)
+            for jenis_key in jenis_list:
+                op_idx += 1
+                progress.progress(op_idx / total_ops, text=f"Proses {p['kode']} — {ba_config.JENIS_BA[jenis_key]} ({op_idx}/{total_ops})...")
+                nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
+                tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
+                info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
+                ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati (nomor/tanggal kosong)"}
+                if nomor and tanggal:
+                    try:
+                        r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
+                        if r_cetak["ok"]:
+                            fn = f"{_FILE_LABEL_BA.get(jenis_key, jenis_key)}-{p['kode']}.pdf"
+                            with open(_os.path.join(target_dir, fn), "wb") as f:
+                                f.write(r_cetak["pdf_bytes"])
+                            r_up = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=r_cetak["pdf_bytes"], file_name=fn, info=info)
+                            if r_up["ok"]:
+                                ba_result["status"] = f"✅ Sukses — `{fn}`"
                             else:
-                                ba_result["status"] = f"❌ Cetak Error {r_cetak['status']}: {r_cetak.get('error')}"
-                        except Exception as e:
-                            ba_result["status"] = f"❌ {e}"
-                            
-                    if ba_result["status"] != "⏭️ Lewati":
-                        paket_hasil["ba"].append(ba_result)
-                
-                hasil_auto.append(paket_hasil)
-                
-            progress.empty()
-            st.success(f"✅ Selesai! Hasil auto-upload telah dikirim ke SPSE dan backup PDF disimpan.")
-            del st.session_state["ba_auto_target"]
-            for h in hasil_auto:
-                st.markdown(f"**{h['kode']}** — {h['nama']}")
-                for b in h["ba"]:
-                    st.caption(f"{b['status']} {b['jenis']}")
-                st.divider()
+                                ba_result["status"] = f"❌ Upload Error {r_up['status']}"
+                        else:
+                            ba_result["status"] = f"❌ Cetak Error {r_cetak['status']}: {r_cetak.get('error')}"
+                    except Exception as e:
+                        ba_result["status"] = f"❌ {e}"
+                paket_hasil["ba"].append(ba_result)
+            hasil_auto.append(paket_hasil)
+        progress.empty()
+        st.success(f"✅ Selesai! {label_target} telah dikirim ke SPSE dan backup PDF disimpan.")
+        del st.session_state["ba_auto_target"]
+        for h in hasil_auto:
+            st.markdown(f"**{h['kode']}** — {h['nama']}")
+            for b in h["ba"]:
+                st.caption(f"{b['status']} — {b['jenis']}")
+            st.divider()
 
 # ============================================================
 # Tab 6: Download Dokumen Kualifikasi
