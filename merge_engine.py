@@ -19,25 +19,13 @@ import glob
 import pathlib
 from typing import Optional
 
+from config import sb as _sb
+
 # ── Lokasi word_merge.py (satu level di atas Asisten_Pokja) ──────────────────
 _THIS_DIR = pathlib.Path(__file__).parent          # Asisten_Pokja/
 _WPY_DIR  = _THIS_DIR.parent / "V19_Scheduler" / "WPy64-313110"
 _PYTHON   = _WPY_DIR / "python" / "python.exe"
 _WORD_MERGE = _WPY_DIR / "word_merge.py"
-
-
-# ── Supabase helper (sama persis dgn inbox_engine._sb()) ─────────────────────
-
-def _sb():
-    import pathlib as _pl
-    from supabase import create_client
-    from dotenv import load_dotenv
-    env_path = _pl.Path(__file__).parent.parent / "V19_Scheduler/WPy64-313110/secret_supabase.env"
-    if not env_path.exists():
-        env_path = _pl.Path(__file__).parent / "secret_supabase.env"
-    load_dotenv(env_path)
-    import os as _os
-    return create_client(_os.environ["SUPABASE_URL"], _os.environ["SUPABASE_KEY"])
 
 
 def get_folder_by_kode_tender(kode_tender: str) -> Optional[str]:

@@ -1,6 +1,7 @@
 """Konfigurasi Asisten Pokja — SPSE Automation."""
 
 import os
+import pathlib
 
 # === Paths ===
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -19,3 +20,14 @@ KODE_LPSE = "266"
 # Pastikan folder download ada
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(BROWSER_SESSION_DIR, exist_ok=True)
+
+
+def sb():
+    """Buat Supabase client. Baca env dari secret_supabase.env (V19 atau lokal)."""
+    from supabase import create_client
+    from dotenv import load_dotenv
+    env_path = pathlib.Path(__file__).parent.parent / "V19_Scheduler/WPy64-313110/secret_supabase.env"
+    if not env_path.exists():
+        env_path = pathlib.Path(__file__).parent / "secret_supabase.env"
+    load_dotenv(env_path)
+    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])

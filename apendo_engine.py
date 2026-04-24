@@ -25,10 +25,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import APENDO_EXE, PYTHON_SYS
 BG_SCRIPT   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_bg.py")
 
-# Legacy AHK (tidak dipakai, dipertahankan sebagai referensi)
-AHK_EXE    = r"C:\Program Files\AutoHotkey\AutoHotkey.exe"
-AHK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_flow.ahk")
-
 
 # ── Ambil token dari halaman SPSE ────────────────────────────────────────────
 

@@ -16,8 +16,8 @@ from bs4 import BeautifulSoup
 from datetime import date
 from kirimpesan_engine import upload_lampiran
 import spse_browser
+from config import SPSE_BASE_URL
 
-SPSE_BASE_URL = "https://spse.inaproc.id/tapinkab/"
 HEADERS_BASE = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
     "Origin": "https://spse.inaproc.id",

@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 
 import spse_browser
+from config import sb as _sb
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 SUBJEK_DELEGASI = "(LPSE) Pengumuman Delegasi Pokja"
@@ -332,19 +333,6 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
 
 
 # ── Upsert ke Supabase ─────────────────────────────────────────────────────────
-
-def _sb():
-    import os
-    from supabase import create_client
-    from dotenv import load_dotenv
-    import pathlib
-    env_path = pathlib.Path(__file__).parent.parent / "V19_Scheduler/WPy64-313110/secret_supabase.env"
-    if not env_path.exists():
-        # Fallback: cari di folder yang sama
-        env_path = pathlib.Path(__file__).parent / "secret_supabase.env"
-    load_dotenv(env_path)
-    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
-
 
 _KOLOM_DRAFT_PAKET = {
     "kode_tender", "id_pesan", "mak", "nama_tender", "kode_rup",
