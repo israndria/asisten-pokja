@@ -1800,6 +1800,27 @@ with tab_ba:
                 st.warning("⚠️ Nomor dokpil tidak ditemukan di halaman SPSE.")
             st.rerun()
 
+        # ── Auto-detect tanggal BA dari Google Calendar ───────────────────
+        if ba_selected and st.button("📅 Auto Tanggal dari GCal", key="ba_auto_tgl_gcal", use_container_width=True):
+            with st.spinner("Mencari tanggal di Google Calendar..."):
+                try:
+                    import gcal_helper
+                    _nama_paket = ba_selected[0]["nama"]
+                    _tgl_map = gcal_helper.get_tanggal_ba_dari_gcal(_nama_paket)
+                    _found = []
+                    for _jk, _d in _tgl_map.items():
+                        if _d is not None:
+                            st.session_state[f"ba_tgl_date_{_jk}"] = _d
+                            st.session_state[f"ba_tgl_{_jk}"] = _d.strftime("%d-%m-%Y")
+                            _found.append(ba_config.JENIS_LABEL.get(_jk, _jk))
+                    if _found:
+                        st.success(f"✅ Tanggal ditemukan: {', '.join(_found)}")
+                    else:
+                        st.warning(f"⚠️ Tidak ada event GCal yang cocok dengan paket:\n**{_nama_paket}**")
+                except Exception as _e:
+                    st.error(f"❌ GCal error: {_e}")
+            st.rerun()
+
     with _ba_col2:
 
         st.markdown("### 2. Konfigurasi BA")
