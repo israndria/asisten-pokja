@@ -108,6 +108,35 @@ _HARI_NAMA  = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 _BULAN_NAMA = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
                "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
 
+_LIBUR_2026 = {
+    "2026-01-01": "Tahun Baru 2026 Masehi",
+    "2026-01-16": "Isra Mikraj Nabi Muhammad S.A.W.",
+    "2026-02-16": "Cuti Bersama Tahun Baru Imlek",
+    "2026-02-17": "Tahun Baru Imlek 2577 Kongzili",
+    "2026-03-18": "Cuti Bersama Hari Suci Nyepi",
+    "2026-03-19": "Hari Suci Nyepi (Tahun Baru Saka 1948)",
+    "2026-03-20": "Cuti Bersama Idul Fitri 1447 Hijriah",
+    "2026-03-21": "Idul Fitri 1447 Hijriah",
+    "2026-03-22": "Idul Fitri 1447 Hijriah",
+    "2026-03-23": "Cuti Bersama Idul Fitri 1447 Hijriah",
+    "2026-03-24": "Cuti Bersama Idul Fitri 1447 Hijriah",
+    "2026-04-03": "Wafat Yesus Kristus",
+    "2026-04-05": "Kebangkitan Yesus Kristus (Paskah)",
+    "2026-05-01": "Hari Buruh Internasional",
+    "2026-05-14": "Kenaikan Yesus Kristus",
+    "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus",
+    "2026-05-27": "Idul Adha 1447 Hijriah",
+    "2026-05-28": "Cuti Bersama Idul Adha 1447 Hijriah",
+    "2026-05-31": "Hari Raya Waisak 2570 BE",
+    "2026-06-01": "Hari Lahir Pancasila",
+    "2026-06-16": "1 Muharam Tahun Baru Islam 1448 Hijriah",
+    "2026-08-17": "Proklamasi Kemerdekaan",
+    "2026-08-25": "Maulid Nabi Muhammad S.A.W.",
+    "2026-12-24": "Cuti Bersama Kelahiran Yesus Kristus",
+    "2026-12-25": "Kelahiran Yesus Kristus",
+}
+_LIBUR_MAP = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in _LIBUR_2026.items()}
+
 tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
@@ -1041,37 +1070,7 @@ with tab7:
 
 with tab8:
 
-    _hari_nama  = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]
-    _bulan_nama = ["Januari","Februari","Maret","April","Mei","Juni",
-                   "Juli","Agustus","September","Oktober","November","Desember"]
-    LIBUR_2026 = {
-        "2026-01-01": "Tahun Baru 2026 Masehi",
-        "2026-01-16": "Isra Mikraj Nabi Muhammad S.A.W.",
-        "2026-02-16": "Cuti Bersama Tahun Baru Imlek",
-        "2026-02-17": "Tahun Baru Imlek 2577 Kongzili",
-        "2026-03-18": "Cuti Bersama Hari Suci Nyepi",
-        "2026-03-19": "Hari Suci Nyepi (Tahun Baru Saka 1948)",
-        "2026-03-20": "Cuti Bersama Idul Fitri 1447 Hijriah",
-        "2026-03-21": "Idul Fitri 1447 Hijriah",
-        "2026-03-22": "Idul Fitri 1447 Hijriah",
-        "2026-03-23": "Cuti Bersama Idul Fitri 1447 Hijriah",
-        "2026-03-24": "Cuti Bersama Idul Fitri 1447 Hijriah",
-        "2026-04-03": "Wafat Yesus Kristus",
-        "2026-04-05": "Kebangkitan Yesus Kristus (Paskah)",
-        "2026-05-01": "Hari Buruh Internasional",
-        "2026-05-14": "Kenaikan Yesus Kristus",
-        "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus",
-        "2026-05-27": "Idul Adha 1447 Hijriah",
-        "2026-05-28": "Cuti Bersama Idul Adha 1447 Hijriah",
-        "2026-05-31": "Hari Raya Waisak 2570 BE",
-        "2026-06-01": "Hari Lahir Pancasila",
-        "2026-06-16": "1 Muharam Tahun Baru Islam 1448 Hijriah",
-        "2026-08-17": "Proklamasi Kemerdekaan",
-        "2026-08-25": "Maulid Nabi Muhammad S.A.W.",
-        "2026-12-24": "Cuti Bersama Kelahiran Yesus Kristus",
-        "2026-12-25": "Kelahiran Yesus Kristus",
-    }
-    _libur_map = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in LIBUR_2026.items()}
+    _libur_map = _LIBUR_MAP
 
     _jd_col_list, _jd_col_detail = st.columns([3, 2])
 
@@ -1140,7 +1139,7 @@ with tab8:
                     format="DD/MM/YYYY",
                     key="jd_tgl_global",
                 )
-                st.markdown(f"**{_hari_nama[jd_tgl_global.weekday()]}, {jd_tgl_global.day} {_bulan_nama[jd_tgl_global.month-1]} {jd_tgl_global.year}**")
+                st.markdown(f"**{_HARI_NAMA[jd_tgl_global.weekday()]}, {jd_tgl_global.day} {_BULAN_NAMA[jd_tgl_global.month-1]} {jd_tgl_global.year}**")
             with col_time:
                 jd_jam_global = st.time_input(
                     "Jam",
@@ -1170,7 +1169,7 @@ with tab8:
                         if tgl_p in _libur_map:
                             st.caption(f"⚠️ {_libur_map[tgl_p]}")
                         else:
-                            st.caption(f"{_hari_nama[tgl_p.weekday()]}, {tgl_p.day} {_bulan_nama[tgl_p.month-1]} {tgl_p.year}")
+                            st.caption(f"{_HARI_NAMA[tgl_p.weekday()]}, {tgl_p.day} {_BULAN_NAMA[tgl_p.month-1]} {tgl_p.year}")
                     with col_jam:
                         st.time_input(
                             "Jam",
@@ -1183,7 +1182,7 @@ with tab8:
             hari_ini = datetime.now().date()
             sisa = sorted(d for d in _libur_map if d >= hari_ini)
             for d in sisa:
-                st.write(f"• {_hari_nama[d.weekday()]}, {d.day} {_bulan_nama[d.month-1]} {d.year} — {_libur_map[d]}")
+                st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_libur_map[d]}")
 
         st.divider()
         st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
@@ -1390,35 +1389,9 @@ with tab9:
         st.divider()
         st.markdown("### 2. Detail Undangan")
 
-        _kp_hari_nama  = _HARI_NAMA
-        _kp_bulan_nama = _BULAN_NAMA
-        _kp_libur_map = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in {
-            "2026-01-01": "Tahun Baru 2026 Masehi",
-            "2026-01-16": "Isra Mikraj Nabi Muhammad S.A.W.",
-            "2026-02-16": "Cuti Bersama Tahun Baru Imlek",
-            "2026-02-17": "Tahun Baru Imlek 2577 Kongzili",
-            "2026-03-18": "Cuti Bersama Hari Suci Nyepi",
-            "2026-03-19": "Hari Suci Nyepi (Tahun Baru Saka 1948)",
-            "2026-03-20": "Cuti Bersama Idul Fitri 1447 Hijriah",
-            "2026-03-21": "Idul Fitri 1447 Hijriah",
-            "2026-03-22": "Idul Fitri 1447 Hijriah",
-            "2026-03-23": "Cuti Bersama Idul Fitri 1447 Hijriah",
-            "2026-03-24": "Cuti Bersama Idul Fitri 1447 Hijriah",
-            "2026-04-03": "Wafat Yesus Kristus",
-            "2026-04-05": "Kebangkitan Yesus Kristus (Paskah)",
-            "2026-05-01": "Hari Buruh Internasional",
-            "2026-05-14": "Kenaikan Yesus Kristus",
-            "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus",
-            "2026-05-27": "Idul Adha 1447 Hijriah",
-            "2026-05-28": "Cuti Bersama Idul Adha 1447 Hijriah",
-            "2026-05-31": "Hari Raya Waisak 2570 BE",
-            "2026-06-01": "Hari Lahir Pancasila",
-            "2026-06-16": "1 Muharam Tahun Baru Islam 1448 Hijriah",
-            "2026-08-17": "Proklamasi Kemerdekaan",
-            "2026-08-25": "Maulid Nabi Muhammad S.A.W.",
-            "2026-12-24": "Cuti Bersama Kelahiran Yesus Kristus",
-            "2026-12-25": "Kelahiran Yesus Kristus",
-        }.items()}
+        _kp_HARI_NAMA  = _HARI_NAMA
+        _kp_BULAN_NAMA = _BULAN_NAMA
+        _kp_libur_map = _LIBUR_MAP
 
         col_tgl, col_mulai, col_selesai = st.columns(3)
         with col_tgl:
@@ -1428,7 +1401,7 @@ with tab9:
                 format="DD/MM/YYYY",
                 key="kp_tgl",
             )
-            st.markdown(f"**{_kp_hari_nama[kp_tgl.weekday()]}, {kp_tgl.day} {_kp_bulan_nama[kp_tgl.month-1]} {kp_tgl.year}**")
+            st.markdown(f"**{_kp_HARI_NAMA[kp_tgl.weekday()]}, {kp_tgl.day} {_kp_BULAN_NAMA[kp_tgl.month-1]} {kp_tgl.year}**")
         with col_mulai:
             kp_jam_mulai = st.time_input(
                 "Mulai",
@@ -1451,7 +1424,7 @@ with tab9:
             _kp_hari_ini = datetime.now().date()
             _kp_sisa = sorted(d for d in _kp_libur_map if d >= _kp_hari_ini)
             for d in _kp_sisa:
-                st.write(f"• {_kp_hari_nama[d.weekday()]}, {d.day} {_kp_bulan_nama[d.month-1]} {d.year} — {_kp_libur_map[d]}")
+                st.write(f"• {_kp_HARI_NAMA[d.weekday()]}, {d.day} {_kp_BULAN_NAMA[d.month-1]} {d.year} — {_kp_libur_map[d]}")
 
         kp_tempat = st.text_area(
             "Tempat",
@@ -1586,17 +1559,17 @@ with tab9:
     with _kp_col_detail:
         st.markdown("### 3. Upload BA Reviu DPP")
         st.caption("Upload BA Hasil Reviu setelah PPK menandatangani.")
-        if st.button("🔍 Ambil Paket Draft", key="ba_fetch_draft", use_container_width=True):
+        if st.button("🔍 Ambil Paket Draft", key="r1_ba_fetch_draft", use_container_width=True):
             with st.spinner("Mengambil daftar paket..."):
                 _ba_result = kirimpesan_engine.fetch_paket_draft()
-            st.session_state["ba_paket_draft"] = _ba_result
+            st.session_state["r1_ba_paket_draft"] = _ba_result
             for _k in list(st.session_state.keys()):
-                if _k.startswith("ba_chk_"):
+                if _k.startswith("r1_ba_chk_"):
                     del st.session_state[_k]
 
         ba_selected = []
-        if "ba_paket_draft" in st.session_state:
-            _ba_r = st.session_state["ba_paket_draft"]
+        if "r1_ba_paket_draft" in st.session_state:
+            _ba_r = st.session_state["r1_ba_paket_draft"]
             if not _ba_r["sukses"]:
                 st.error(f"❌ {_ba_r['pesan']}")
             else:
@@ -1605,7 +1578,7 @@ with tab9:
                     st.warning("⚠️ Tidak ada paket ditemukan.")
                 else:
                     for _p in _ba_paket_list:
-                        _key_chk = f"ba_chk_{_p['id_lelang']}"
+                        _key_chk = f"r1_ba_chk_{_p['id_lelang']}"
                         _col_chk, _col_file = st.columns([3, 2])
                         with _col_chk:
                             _checked = st.checkbox(
@@ -1617,7 +1590,7 @@ with tab9:
                             _ba_up = st.file_uploader(
                                 "BA Reviu",
                                 type=["pdf"],
-                                key=f"ba_file_{_p['id_lelang']}",
+                                key=f"r1_ba_file_{_p['id_lelang']}",
                                 label_visibility="collapsed",
                             )
                             if _ba_up:
@@ -1631,7 +1604,7 @@ with tab9:
         ba_tgl = st.date_input(
             "Tanggal BA Reviu",
             value=datetime.now().date(),
-            key="ba_tgl",
+            key="r1_ba_tgl",
             format="DD/MM/YYYY",
         )
         st.caption(f"{_HARI_NAMA[ba_tgl.weekday()]}, {ba_tgl.day} {_BULAN_NAMA[ba_tgl.month-1]} {ba_tgl.year}")
@@ -1940,7 +1913,8 @@ with tab_ba:
         from config import POKJA_ROOT as _POKJA_ROOT
         jenis_target = st.session_state["ba_auto_target"]
         target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
-        target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
+        _JENIS_AUTO = [k for k in ba_config.JENIS_KEYS if k != "lainnya"]
+        jenis_list = _JENIS_AUTO if jenis_target == "SEMUA" else [jenis_target]
         label_target = "Semua BA" if jenis_target == "SEMUA" else ba_config.JENIS_BA[jenis_target]
         progress = st.progress(0, text=f"Memulai Cetak & Upload {label_target}...")
         hasil_auto = []

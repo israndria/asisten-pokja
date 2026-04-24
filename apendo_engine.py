@@ -22,8 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
-PYTHON_SYS  = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\python.exe"
+from config import APENDO_EXE, PYTHON_SYS
 BG_SCRIPT   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_bg.py")
 
 # Legacy AHK (tidak dipakai, dipertahankan sebagai referensi)
