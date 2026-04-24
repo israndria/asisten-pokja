@@ -26,8 +26,6 @@ import bareviu_engine
 import ba_engine
 import ba_config
 import kualifikasi_engine
-import apendo_engine
-import apendo_engine_v2
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -142,7 +140,7 @@ tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
     "5️⃣ Upload & Cetak 5 BA", "6️⃣ Download Kualifikasi",
-    "7️⃣ Buka Penawaran",
+    "7️⃣ Dokumen Penawaran",
 ])
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
@@ -2116,191 +2114,216 @@ with tab_kual:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
 
 # ============================================================
-# Tab 7: Buka Dokumen Penawaran (Apendo Automation)
+# Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
 
+_DP_DEFAULT_SRC = r"D:\data"
+_DP_SUBFOLDER_TEKNIS = "teknis"
+_DP_SUBFOLDER_HARGA  = "harga"
+_DP_DEST_SUBFOLDER   = "Dokumen Penawaran"
+
+
+def _dp_list_files(folder: str, subfolders: list[str]) -> list[dict]:
+    """Kumpulkan file dari subfolder teknis/harga di folder sumber."""
+    hasil = []
+    for sub in subfolders:
+        path = os.path.join(folder, sub)
+        if not os.path.isdir(path):
+            continue
+        for fname in os.listdir(path):
+            fpath = os.path.join(path, fname)
+            if os.path.isfile(fpath):
+                hasil.append({
+                    "nama": fname,
+                    "sumber": fpath,
+                    "subfolder": sub,
+                    "ukuran": os.path.getsize(fpath),
+                })
+    return hasil
+
+
+def _dp_pindah(files: list[dict], dest_dir: str) -> dict:
+    """Pindah (move) file ke dest_dir. Buat folder jika belum ada."""
+    import shutil
+    os.makedirs(dest_dir, exist_ok=True)
+    sukses, gagal = [], []
+    for f in files:
+        tujuan = os.path.join(dest_dir, f["nama"])
+        try:
+            shutil.move(f["sumber"], tujuan)
+            sukses.append(f["nama"])
+        except Exception as e:
+            gagal.append(f"{f['nama']}: {e}")
+    return {"sukses": sukses, "gagal": gagal}
+
+
 with tab_apendo:
-    _ap_col1, _ap_col2 = st.columns([2, 3])
+    st.markdown("### Pindah Dokumen Penawaran ke Folder Paket")
+    st.caption(
+        "Setelah download manual via Apendo, gunakan fitur ini untuk memindahkan "
+        "file dari subfolder **teknis** dan **harga** ke folder **Dokumen Penawaran** "
+        "di dalam folder paket yang dipilih."
+    )
 
-    with _ap_col1:
-        st.markdown("### 1. Paket Tender")
-        ap_kode = st.text_input(
-            "Kode Tender",
-            key="ap_kode",
-            placeholder="10096653000",
+    _dp_col_kiri, _dp_col_kanan = st.columns([2, 3])
+
+    with _dp_col_kiri:
+        st.markdown("#### 1. Folder Sumber (Hasil Download)")
+
+        dp_src = st.text_input(
+            "Folder sumber",
+            key="dp_src",
+            value=st.session_state.get("dp_src_val", _DP_DEFAULT_SRC),
             label_visibility="collapsed",
+            placeholder=r"D:\data",
         )
-        st.caption("Kode tender dari URL SPSE, contoh: `/lelang/10096653000`")
+        st.caption(f"Default: `{_DP_DEFAULT_SRC}` — akan dicari subfolder `teknis/` dan `harga/`")
 
-        if st.button("🔑 Ambil Token dari SPSE", key="ap_fetch_token", use_container_width=True):
-            if not ap_kode.strip():
-                st.warning("Masukkan kode tender terlebih dahulu.")
-            else:
-                with st.spinner("Mengambil token dari halaman SPSE..."):
-                    res_token = apendo_engine.get_token_dari_spse(ap_kode.strip())
-                st.session_state["ap_token_res"] = res_token
-
-        ap_token_res = st.session_state.get("ap_token_res")
-        if ap_token_res:
-            if not ap_token_res["ok"]:
-                st.error(ap_token_res["pesan"])
-            else:
-                st.success(f"Token ditemukan!")
-                st.caption(f"Tender: **{ap_token_res.get('nama_tender', '-')}**")
-                st.caption(f"Access token: `{ap_token_res['access_token'][:12]}...`")
-
-    with _ap_col2:
-        st.markdown("### 2. Folder Output")
-
-        _ap_default_dir = apendo_engine.get_last_apendo_dir()
-        ap_folder = st.text_input(
-            "Folder tujuan",
-            key="ap_folder",
-            value=st.session_state.get("ap_folder_val", _ap_default_dir),
-            label_visibility="collapsed",
-        )
-        st.caption("Apendo akan membuat subfolder otomatis di dalam folder ini.")
-
-        _ap_browse_col, _ap_open_col = st.columns(2)
-        with _ap_browse_col:
-            if st.button("📁 Pilih Folder", key="ap_browse", use_container_width=True):
+        _dp_browse_col, _dp_open_col = st.columns(2)
+        with _dp_browse_col:
+            if st.button("📁 Pilih Folder", key="dp_browse_src", use_container_width=True):
                 try:
                     import tkinter as tk
                     from tkinter import filedialog
                     root = tk.Tk()
                     root.withdraw()
                     root.wm_attributes("-topmost", True)
-                    selected = filedialog.askdirectory(
-                        initialdir=st.session_state.get("ap_folder_val", _ap_default_dir),
-                        title="Pilih Folder Output Apendo"
+                    sel = filedialog.askdirectory(
+                        initialdir=st.session_state.get("dp_src_val", _DP_DEFAULT_SRC),
+                        title="Pilih Folder Hasil Download Apendo",
                     )
                     root.destroy()
-                    if selected:
-                        st.session_state["ap_folder_val"] = selected.replace("/", "\\")
+                    if sel:
+                        st.session_state["dp_src_val"] = sel.replace("/", "\\")
                         st.rerun()
                 except Exception as e:
-                    st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
-
-        with _ap_open_col:
-            _ap_folder_now = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
+                    st.warning(f"Dialog gagal: {e} — ketik path manual.")
+        with _dp_open_col:
+            _dp_src_now = st.session_state.get("dp_src_val", _DP_DEFAULT_SRC) or dp_src
             if st.button(
-                "📂 Buka Folder",
-                key="ap_open_folder",
+                "📂 Buka",
+                key="dp_open_src",
                 use_container_width=True,
-                disabled=not (_ap_folder_now and os.path.isdir(_ap_folder_now)),
+                disabled=not (_dp_src_now and os.path.isdir(_dp_src_now)),
             ):
-                os.startfile(_ap_folder_now)
+                os.startfile(_dp_src_now)
 
-        st.markdown("### 3. Jalankan Apendo")
-
-        ap_token_res2 = st.session_state.get("ap_token_res")
-        folder_val2 = st.session_state.get("ap_folder_val", _ap_default_dir) or ap_folder
-        siap = ap_token_res2 and ap_token_res2.get("ok") and folder_val2 and os.path.isdir(folder_val2)
-
-        _ap_peserta_col, _ap_mode_col = st.columns([1, 1])
-        with _ap_peserta_col:
-            ap_jumlah_peserta = st.number_input(
-                "Jumlah peserta yang diunduh",
-                min_value=1, max_value=10, value=1, step=1,
-                key="ap_jumlah_peserta",
-                help="Sesuaikan dengan jumlah peserta yang mengajukan penawaran",
-            )
-        with _ap_mode_col:
-            ap_mode = st.selectbox(
-                "Mode otomasi",
-                options=["v3", "v2", "bg"],
-                index=0,
-                key="ap_mode",
-                help="v3 = CDP otomatis (RECOMMENDED) | v2 = mitmproxy+drag | bg = Win32 hybrid",
-                format_func=lambda x: {
-                    "v3": "HTTP Engine v3 — Otomatis via CDP (RECOMMENDED)",
-                    "v2": "HTTP Engine v2 — drag token ke Apendo",
-                    "bg": "Win32 Hybrid (lama)",
-                }.get(x, x),
-            )
-
-        if ap_mode == "v3":
-            st.info(
-                "**Mode v3 (Fully Otomatis)**: Cukup masukkan kode tender — engine ambil token "
-                "dari browser CDP, generate signature, dan download semua dokumen. "
-                "**Tidak perlu Apendo, tidak perlu drag apapun.**"
-            )
-        elif ap_mode == "v2":
-            st.info(
-                "**Mode v2**: mitmproxy + drag token ke Apendo 1x. Sisanya otomatis."
-            )
-
-        if not folder_val2 or not os.path.isdir(folder_val2):
-            st.warning("Pilih folder output yang valid.")
-        elif not ap_kode.strip():
-            st.info("Masukkan kode tender terlebih dahulu.")
+        # Preview file yang akan dipindah
+        _dp_src_now = st.session_state.get("dp_src_val", _DP_DEFAULT_SRC) or dp_src
+        if _dp_src_now and os.path.isdir(_dp_src_now):
+            _dp_files = _dp_list_files(_dp_src_now, [_DP_SUBFOLDER_TEKNIS, _DP_SUBFOLDER_HARGA])
+            if _dp_files:
+                st.success(f"✅ {len(_dp_files)} file ditemukan:")
+                for fi in _dp_files:
+                    kb = fi["ukuran"] // 1024
+                    st.caption(f"• [{fi['subfolder']}] {fi['nama']} ({kb} KB)")
+                st.session_state["dp_files_preview"] = _dp_files
+            else:
+                st.warning("Tidak ada file di subfolder `teknis/` atau `harga/`.")
+                st.session_state["dp_files_preview"] = []
         else:
-            if st.button(
-                "Unduh Dokumen Penawaran",
-                key="ap_run",
-                type="primary",
-                use_container_width=True,
-            ):
-                apendo_engine.save_last_apendo_dir(folder_val2)
-                log_area = st.empty()
-                log_lines = []
+            st.info("Masukkan folder sumber yang valid.")
+            st.session_state["dp_files_preview"] = []
 
-                def _ap_log(msg):
-                    log_lines.append(msg)
-                    log_area.code("\n".join(log_lines[-20:]))
+    with _dp_col_kanan:
+        st.markdown("#### 2. Folder Paket Tujuan")
 
-                if ap_mode == "v3":
-                    with st.spinner("Mengunduh dokumen penawaran via CDP..."):
-                        hasil_ap = apendo_engine_v2.buka_penawaran_v3(
-                            kode_tender=ap_kode.strip(),
-                            dir_output=folder_val2,
-                            lpse_kode="tapinkab",
-                            progress_cb=_ap_log,
-                        )
-                    if hasil_ap["ok"]:
-                        st.success(f"Selesai! {hasil_ap['pesan']}")
-                        for fp in hasil_ap.get("files", []):
-                            size_kb = os.path.getsize(fp) // 1024 if os.path.exists(fp) else 0
-                            st.caption(f"• {os.path.basename(fp)} ({size_kb} KB)")
-                    else:
-                        st.error(f"Gagal: {hasil_ap['pesan']}")
-                elif ap_mode == "v2":
-                    with st.spinner("mitmproxy aktif — drag token dari SPSE ke Apendo..."):
-                        hasil_ap = apendo_engine_v2.buka_penawaran(
-                            kode_tender=ap_kode.strip(),
-                            id_dok_list=[],
-                            dir_output=folder_val2,
-                            progress_cb=_ap_log,
-                            timeout_capture=180,
-                            auto_apendo=True,
-                        )
-                    if hasil_ap["ok"]:
-                        st.success(f"Selesai! {hasil_ap['pesan']}")
-                        for fp in hasil_ap.get("files", []):
-                            size_kb = os.path.getsize(fp) // 1024 if os.path.exists(fp) else 0
-                            st.caption(f"• {os.path.basename(fp)} ({size_kb} KB)")
-                    else:
-                        st.error(f"Gagal: {hasil_ap['pesan']}")
+        if st.button("🔍 Ambil Daftar Paket", key="dp_fetch_paket", use_container_width=True):
+            with st.spinner("Mengambil paket dari Supabase..."):
+                try:
+                    from config import sb as _sb_dp
+                    _r = _sb_dp().table("draft_paket").select("kode_tender,nama_paket,folder_dibuat").order("nama_paket").execute()
+                    st.session_state["dp_paket_list"] = _r.data or []
+                except Exception as e:
+                    st.error(f"Gagal fetch paket: {e}")
+                    st.session_state["dp_paket_list"] = []
+
+        dp_paket_list = st.session_state.get("dp_paket_list", [])
+        if dp_paket_list:
+            _dp_labels = [
+                f"{p.get('nama_paket', p['kode_tender'])}"
+                for p in dp_paket_list
+            ]
+            dp_paket_idx = st.selectbox(
+                "Pilih paket tujuan",
+                options=range(len(dp_paket_list)),
+                format_func=lambda i: _dp_labels[i],
+                key="dp_paket_idx",
+                label_visibility="collapsed",
+            )
+            dp_paket_sel = dp_paket_list[dp_paket_idx]
+            dp_folder_paket = dp_paket_sel.get("folder_dibuat", "")
+
+            if dp_folder_paket and os.path.isdir(dp_folder_paket):
+                _dp_dest = os.path.join(dp_folder_paket, _DP_DEST_SUBFOLDER)
+                st.info(f"📂 Tujuan: `{_dp_dest}`")
+
+                if st.button(
+                    "📂 Buka Folder Paket",
+                    key="dp_open_paket",
+                    use_container_width=True,
+                ):
+                    os.startfile(dp_folder_paket)
+
+                st.markdown("#### 3. Pindahkan File")
+
+                _dp_files_ok = st.session_state.get("dp_files_preview", [])
+                if not _dp_files_ok:
+                    st.warning("Tidak ada file untuk dipindah — cek folder sumber di kiri.")
                 else:
-                    with st.spinner("Menjalankan Apendo di background..."):
-                        hasil_ap = apendo_engine.buka_dokumen_penawaran(
-                            token_url=ap_token_res2["token_url"],
-                            folder_output=folder_val2,
-                            progress_cb=_ap_log,
-                            jumlah_peserta=int(ap_jumlah_peserta),
-                            mode=ap_mode,
-                        )
+                    st.write(f"**{len(_dp_files_ok)} file** akan dipindah ke `Dokumen Penawaran/`")
+                    if st.button(
+                        "🚚 Pindahkan Sekarang",
+                        key="dp_run",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        hasil = _dp_pindah(_dp_files_ok, _dp_dest)
+                        if hasil["sukses"]:
+                            st.success(f"✅ {len(hasil['sukses'])} file dipindah:")
+                            for nm in hasil["sukses"]:
+                                st.caption(f"• {nm}")
+                            # Bersihkan preview supaya tidak double-run
+                            st.session_state["dp_files_preview"] = []
+                        if hasil["gagal"]:
+                            st.error(f"❌ {len(hasil['gagal'])} file gagal:")
+                            for err in hasil["gagal"]:
+                                st.caption(f"• {err}")
+                        if hasil["sukses"]:
+                            if st.button("📂 Buka Folder Dokumen Penawaran", key="dp_open_dest"):
+                                os.startfile(_dp_dest)
+            elif dp_folder_paket:
+                st.error(f"Folder paket tidak ditemukan: `{dp_folder_paket}`")
+            else:
+                st.warning("Paket ini belum punya folder yang dibuat. Buat folder di Tab 0 dulu.")
+        else:
+            st.info("Klik **Ambil Daftar Paket** untuk memilih tujuan.")
 
-                    if hasil_ap["ok"]:
-                        st.success(f"Selesai! Dokumen diunduh ke `{folder_val2}`")
-                        files = hasil_ap.get("files", [])
-                        if files:
-                            st.markdown(f"**{len(files)} file ditemukan:**")
-                            for f in files[:30]:
-                                size_kb = f["size"] // 1024
-                                st.caption(f"• {f['rel']} ({size_kb} KB)")
-                        else:
-                            st.info("Folder output masih kosong — dokumen mungkin disimpan di subfolder Apendo.")
-                    else:
-                        st.error(f"Gagal: {hasil_ap['pesan']}")
+        st.markdown("---")
+        st.markdown("#### Atau — Ketik Path Manual")
+        dp_manual = st.text_input(
+            "Path folder paket tujuan (manual)",
+            key="dp_manual_path",
+            placeholder=r"D:\Dokumen\@ POKJA 2026\1. Pokja 086 - ...",
+            label_visibility="collapsed",
+        )
+        if dp_manual and os.path.isdir(dp_manual):
+            _dp_dest_manual = os.path.join(dp_manual, _DP_DEST_SUBFOLDER)
+            st.info(f"📂 Tujuan: `{_dp_dest_manual}`")
+            _dp_files_manual = st.session_state.get("dp_files_preview", [])
+            if _dp_files_manual:
+                if st.button(
+                    "🚚 Pindahkan ke Path Manual",
+                    key="dp_run_manual",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    hasil = _dp_pindah(_dp_files_manual, _dp_dest_manual)
+                    if hasil["sukses"]:
+                        st.success(f"✅ {len(hasil['sukses'])} file dipindah.")
+                        st.session_state["dp_files_preview"] = []
+                    if hasil["gagal"]:
+                        st.error(f"❌ Gagal: {', '.join(hasil['gagal'])}")
+        elif dp_manual:
+            st.error("Path tidak ditemukan.")
 
