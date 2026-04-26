@@ -26,6 +26,7 @@ import bareviu_engine
 import ba_engine
 import ba_config
 import kualifikasi_engine
+import pl_engine
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -35,6 +36,24 @@ st.set_page_config(
 
 st.title("🤖 Asisten Pokja")
 st.caption("Otomasi SPSE — spse.tapinkab.go.id")
+
+# ── Mode Switcher ──────────────────────────────────────────────────────────────
+_MODE_OPTIONS = ["Tender", "Pengadaan Langsung"]
+if "app_mode" not in st.session_state:
+    st.session_state["app_mode"] = "Tender"
+
+_mode_col, _ = st.columns([2, 5])
+with _mode_col:
+    _selected_mode = st.radio(
+        "Mode:",
+        _MODE_OPTIONS,
+        index=_MODE_OPTIONS.index(st.session_state["app_mode"]),
+        horizontal=True,
+        key="radio_app_mode",
+    )
+    st.session_state["app_mode"] = _selected_mode
+
+st.divider()
 
 # ============================================================
 # Sidebar — Browser Control
@@ -135,6 +154,192 @@ _LIBUR_2026 = {
 }
 _LIBUR_MAP = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in _LIBUR_2026.items()}
 
+# Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
+penjelasan_engine.start_scheduler()
+
+if st.session_state["app_mode"] == "Pengadaan Langsung":
+    # ============================================================
+    # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
+    # ============================================================
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4 = st.tabs([
+        "0️⃣ Draft Paket PL",
+        "1️⃣ Undangan",
+        "2️⃣ Evaluasi",
+        "3️⃣ Negosiasi",
+        "4️⃣ BA & Laporan",
+    ])
+
+    # ── Tab 0: Draft Paket PL ──────────────────────────────────────────────────
+    with _pl_tab0:
+        import os as _pl_os, subprocess as _pl_sp
+        from config import POKJA_ROOT as _PL_POKJA_ROOT
+
+        _PL_PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
+        _PL_SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+        _PL_NO_WIN = 0x08000000
+
+        st.markdown("### Draft Paket Pengadaan Langsung")
+        st.caption("Input manual paket PL (JKK atau PK), simpan ke database, dan buat folder paket.")
+
+        # Load data
+        _pl_rows = pl_engine.load_draft_pl()
+
+        _pl_col_kiri, _pl_col_kanan = st.columns(2)
+
+        # ── Kolom Kiri: Form Input Paket Baru ──
+        with _pl_col_kiri:
+            st.markdown("#### 1. Tambah / Edit Paket PL")
+
+            with st.form("form_paket_pl", clear_on_submit=True):
+                _f_jenis = st.selectbox("Jenis PL:", ["JKK", "PK"], key="f_jenis_pl")
+                _f_kode  = st.text_input("Kode Paket *", placeholder="Contoh: PL-JKK-001-2026")
+                _f_nama  = st.text_input("Nama Paket *", placeholder="Perencanaan Pembangunan ...")
+                _f_hps   = st.text_input("Nilai HPS", placeholder="85.000.000")
+                _f_pagu  = st.text_input("Nilai Pagu", placeholder="90.000.000")
+                _f_rup   = st.text_input("Kode RUP", placeholder="12345678")
+                _f_mak   = st.text_input("MAK / Kode Akun", placeholder="5.2.02.01.01")
+                _f_satker = st.selectbox("Satker:", pl_engine.SATKER_LIST)
+                _f_satker_manual = ""
+                if _f_satker == "Lainnya":
+                    _f_satker_manual = st.text_input("Nama satker (manual):")
+                _f_ppk   = st.text_input("Nama PPK", placeholder="...")
+                _f_bidang = st.text_input("Bidang Pekerjaan", placeholder="Bina Marga / Cipta Karya / ...")
+                _f_jangka = st.text_input("Jangka Waktu", placeholder="30 hari kalender")
+                _f_sumber = st.text_input("Sumber Anggaran", placeholder="APBD 2026")
+                _f_catatan = st.text_area("Catatan", height=80)
+
+                _f_submit = st.form_submit_button("💾 Simpan Paket", type="primary", use_container_width=True)
+
+            if _f_submit:
+                if not _f_kode or not _f_nama:
+                    st.error("Kode Paket dan Nama Paket wajib diisi.")
+                else:
+                    _satker_val = _f_satker_manual if _f_satker == "Lainnya" else _f_satker
+                    _hasil_simpan = pl_engine.simpan_paket_pl({
+                        "kode_paket": _f_kode.strip(),
+                        "jenis_pl": _f_jenis,
+                        "nama_paket": _f_nama.strip(),
+                        "nilai_hps": _f_hps.strip(),
+                        "nilai_pagu": _f_pagu.strip(),
+                        "kode_rup": _f_rup.strip(),
+                        "mak": _f_mak.strip(),
+                        "satker": _satker_val.strip(),
+                        "nama_ppk": _f_ppk.strip(),
+                        "bidang": _f_bidang.strip(),
+                        "jangka_waktu": _f_jangka.strip(),
+                        "sumber_anggaran": _f_sumber.strip(),
+                        "catatan": _f_catatan.strip(),
+                    })
+                    if _hasil_simpan["ok"]:
+                        st.success(f"Paket `{_f_kode}` berhasil disimpan.")
+                        st.rerun()
+                    else:
+                        st.error(f"Gagal simpan: {_hasil_simpan['error']}")
+
+        # ── Kolom Kanan: Daftar Paket + Buat Folder ──
+        with _pl_col_kanan:
+            st.markdown("#### 2. Daftar Paket PL")
+
+            _pl_filter = st.selectbox(
+                "Filter:",
+                ["Semua", "JKK", "PK", "Belum Folder", "Sudah Folder"],
+                key="pl_filter_jenis",
+            )
+
+            def _pl_match(r):
+                if _pl_filter == "JKK":
+                    return r.get("jenis_pl") == "JKK"
+                if _pl_filter == "PK":
+                    return r.get("jenis_pl") == "PK"
+                if _pl_filter == "Belum Folder":
+                    return not bool(r.get("folder_dibuat"))
+                if _pl_filter == "Sudah Folder":
+                    return bool(r.get("folder_dibuat"))
+                return True
+
+            _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
+
+            if not _pl_filtered:
+                st.info("Belum ada paket PL. Tambah via form di sebelah kiri.")
+            else:
+                for _pr in _pl_filtered:
+                    _pr_kode  = _pr.get("kode_paket", "")
+                    _pr_nama  = _pr.get("nama_paket", "-")
+                    _pr_jenis = _pr.get("jenis_pl", "")
+                    _pr_hps   = _pr.get("nilai_hps", "-")
+                    _pr_status = _pr.get("status", "draft")
+                    _pr_folder = _pr.get("folder_dibuat", False)
+
+                    _pr_label = f"{'✅' if _pr_folder else '📋'} [{_pr_jenis}] {_pr_nama}"
+                    with st.expander(_pr_label):
+                        st.caption(f"Kode: `{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
+
+                        _pr_c1, _pr_c2, _pr_c3 = st.columns(3)
+
+                        # Tombol buat folder
+                        if not _pr_folder:
+                            _pr_no = _pr.get("nomor_urut") or (len(_pl_rows) + 1)
+                            _pr_nama_folder_default = f"{_pr_no}. PL {_pr_jenis} - {_pr_nama}"
+                            _pr_nama_folder = st.text_input(
+                                "Nama folder:",
+                                value=_pr_nama_folder_default,
+                                key=f"pl_nama_folder_{_pr_kode}",
+                            )
+                            if _pr_c1.button("📁 Buat Folder", key=f"pl_buat_{_pr_kode}", use_container_width=True):
+                                _pr_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pr_nama_folder).strip()
+                                _pr_target = _pl_os.path.join(_PL_POKJA_ROOT, _pr_nama_clean)
+                                if _pl_os.path.exists(_pr_target):
+                                    st.warning(f"Folder sudah ada: `{_pr_target}`")
+                                else:
+                                    try:
+                                        _pl_sp.run(
+                                            [_PL_PY, _PL_SCRIPT, _pr_nama_clean],
+                                            creationflags=_PL_NO_WIN,
+                                            check=True,
+                                        )
+                                        pl_engine.tandai_folder_dibuat(_pr_kode)
+                                        st.success(f"Folder `{_pr_nama_clean}` berhasil dibuat.")
+                                        st.rerun()
+                                    except Exception as _pe:
+                                        st.error(f"Gagal buat folder: {_pe}")
+                        else:
+                            _pr_c1.success("Folder sudah dibuat ✅")
+
+                        # Update status
+                        _pr_status_baru = _pr_c2.selectbox(
+                            "Status:",
+                            pl_engine.STATUS_LIST,
+                            index=pl_engine.STATUS_LIST.index(_pr_status) if _pr_status in pl_engine.STATUS_LIST else 0,
+                            key=f"pl_status_{_pr_kode}",
+                        )
+                        if _pr_c2.button("💾 Update", key=f"pl_upd_status_{_pr_kode}", use_container_width=True):
+                            pl_engine.update_status(_pr_kode, _pr_status_baru)
+                            st.rerun()
+
+                        # Hapus
+                        if _pr_c3.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
+                            pl_engine.hapus_paket_pl(_pr_kode)
+                            st.rerun()
+
+    # ── Tab 1–4: Placeholder ──────────────────────────────────────────────────
+    with _pl_tab1:
+        st.info("🚧 Tab Undangan belum tersedia — akan dikembangkan.")
+
+    with _pl_tab2:
+        st.info("🚧 Tab Evaluasi belum tersedia — akan dikembangkan.")
+
+    with _pl_tab3:
+        st.info("🚧 Tab Negosiasi belum tersedia — akan dikembangkan.")
+
+    with _pl_tab4:
+        st.info("🚧 Tab BA & Laporan belum tersedia — akan dikembangkan.")
+
+    st.stop()  # Jangan render tab Tender jika mode PL
+
+# ============================================================
+# MODE: TENDER
+# ============================================================
 tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
@@ -142,9 +347,6 @@ tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
     "5️⃣ Upload & Cetak 5 BA", "6️⃣ Download Kualifikasi",
     "7️⃣ Dokumen Penawaran",
 ])
-
-# Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
-penjelasan_engine.start_scheduler()
 
 # ============================================================
 # Tab 0: Persiapan Draft Paket
@@ -2326,4 +2528,3 @@ with tab_apendo:
                         st.error(f"❌ Gagal: {', '.join(hasil['gagal'])}")
         elif dp_manual:
             st.error("Path tidak ditemukan.")
-
