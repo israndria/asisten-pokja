@@ -356,7 +356,7 @@ def upsert_draft_paket(data: dict) -> dict:
 # ── Fungsi utama (dipanggil dari app.py Tab 0) ─────────────────────────────────
 
 def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
-    """Proses satu pesan: fetch detail HTML + PDF + anggota. Return record atau error."""
+    """Proses satu pesan: fetch detail HTML + PDF + anggota + HPS. Return record atau error."""
     try:
         detail_html = parse_detail_pesan(pesan["id_pesan"])
         if not detail_html.get("kode_tender"):
@@ -375,6 +375,17 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         record["id_pesan"] = pesan["id_pesan"]
         record["_is_baru"] = kode_tender not in existing_kode
         record["_tanggal_pesan"] = pesan["tanggal"]
+
+        # Scrape HPS — pakai session requests yang sama (_get)
+        try:
+            from hps_engine import scrape_dan_upsert_hps
+            import requests as _req
+            _sess = _req.Session()
+            _sess.headers.update(_headers())
+            scrape_dan_upsert_hps(kode_tender, _sess)
+        except Exception:
+            pass  # HPS gagal tidak menggagalkan proses utama
+
         return record
     except Exception as e:
         return {"_error": f"ID {pesan['id_pesan']}: {e}"}
