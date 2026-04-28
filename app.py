@@ -26,6 +26,8 @@ import bareviu_engine
 import ba_engine
 import ba_config
 import kualifikasi_engine
+import kualifikasi_parser
+import kk_evaluasi_engine
 import pl_engine
 
 st.set_page_config(
@@ -2393,6 +2395,101 @@ with tab_kual:
                                 st.caption(f"• {h['nama']}: {h['pesan']}")
             else:
                 st.info("Pilih peserta di kolom kiri.")
+
+            # ── Auto-Fill KK Evaluasi Kualifikasi ─────────────────────────────
+            st.divider()
+            st.markdown("### 4. Auto-Fill KK Evaluasi Kualifikasi")
+
+            _kl_paket_kk = st.session_state.get("kl_paket_aktif")
+            kl_res_kk = st.session_state.get("kl_peserta")
+
+            if not _kl_paket_kk or not kl_res_kk or not kl_res_kk.get("ok"):
+                st.info("Fetch peserta terlebih dahulu (langkah 1-2).")
+            elif not _kl_folder_efektif or not os.path.isdir(_kl_folder_efektif):
+                st.warning("Folder belum diketahui — resolve folder paket terlebih dahulu.")
+            else:
+                # Cari file Excel BA PK di folder paket (satu level di atas Dokumen Evaluasi)
+                _kl_folder_paket = os.path.dirname(_kl_folder_efektif)
+                _kl_excel_candidates = [
+                    f for f in os.listdir(_kl_folder_paket)
+                    if f.endswith(".xlsm") and "BA PK" in f
+                ]
+
+                if not _kl_excel_candidates:
+                    st.warning(f"File .xlsm BA PK tidak ditemukan di `{_kl_folder_paket}`")
+                else:
+                    _kl_excel_path = os.path.join(_kl_folder_paket, _kl_excel_candidates[0])
+                    st.caption(f"Excel: `{_kl_excel_candidates[0]}`")
+
+                    _kl_total_kk = len(kl_res_kk["peserta"])
+                    kl_selected_kk = [
+                        p for p in kl_res_kk["peserta"]
+                        if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
+                    ]
+
+                    if st.button(
+                        f"📋 Auto-Fill KK Evaluasi ({len(kl_selected_kk)} peserta)",
+                        key="kl_autofill_kk",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        log_area_kk = st.empty()
+                        log_kk = []
+
+                        def _log_kk(msg):
+                            log_kk.append(msg)
+                            log_area_kk.code("\n".join(log_kk[-25:]))
+
+                        progress_kk = st.progress(0, text="Memulai parsing...")
+                        semua_data_peserta = []
+
+                        for i, peserta in enumerate(kl_selected_kk):
+                            progress_kk.progress(
+                                i / len(kl_selected_kk),
+                                text=f"Parsing {peserta['nama']} ({i+1}/{len(kl_selected_kk)})...",
+                            )
+                            # Tentukan folder peserta (sama dengan logika download)
+                            if _kl_total_kk >= 2:
+                                import kualifikasi_engine as _kl_eng
+                                slug = re.sub(r'[\\/:*?"<>|]', "", peserta["nama"]).strip()[:80]
+                                folder_p = os.path.join(_kl_folder_efektif, f"{i+1}. {slug}")
+                            else:
+                                folder_p = _kl_folder_efektif
+
+                            data_p = kualifikasi_parser.parse_peserta_lengkap(
+                                kualifikasi_id=peserta["kualifikasi_id"],
+                                folder_peserta=folder_p,
+                                progress_cb=_log_kk,
+                            )
+                            if data_p.get("skp_berbeda"):
+                                _log_kk(f"  ⚠️ {peserta['nama']}: SKP berbeda antara SPSE dan Formulir")
+                            semua_data_peserta.append(data_p)
+
+                        progress_kk.progress(0.8, text="Mengisi Excel...")
+                        _log_kk("Mengisi sheet KK Evaluasi Kualifikasi...")
+
+                        res_fill = kk_evaluasi_engine.fill_kk_evaluasi(
+                            excel_path=_kl_excel_path,
+                            semua_peserta=semua_data_peserta,
+                            progress_cb=_log_kk,
+                        )
+
+                        progress_kk.progress(1.0, text="Selesai!")
+
+                        if res_fill["ok"]:
+                            st.success(f"✅ {res_fill['pesan']}")
+                            peringatan_skp = [
+                                d for d in semua_data_peserta if d.get("skp_berbeda")
+                            ]
+                            if peringatan_skp:
+                                st.warning(
+                                    "⚠️ SKP berbeda antara SPSE preview dan Formulir Isian pada: "
+                                    + ", ".join(d.get("nama", "?") for d in peringatan_skp)
+                                    + " — harap cek manual."
+                                )
+                        else:
+                            st.error(f"❌ {res_fill['pesan']}")
+
         else:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
 
