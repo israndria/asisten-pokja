@@ -818,6 +818,11 @@ def _gabung_pdf_draft(output_path: str, file_list: list, progress_cb=None) -> st
     return output_path
 
 
+def gabung_pdf(output_path: str, file_list: list, progress_cb=None) -> str:
+    """Wrapper publik untuk _gabung_pdf_draft — bisa diimport modul lain."""
+    return _gabung_pdf_draft(output_path, file_list, progress_cb)
+
+
 def _office_to_pdf_com(src_path: str, dst_pdf: str):
     """Konversi file Office ke PDF via COM (Word atau Excel)."""
     import pythoncom

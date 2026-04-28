@@ -2168,22 +2168,82 @@ with tab_kual:
     _kl_col1, _kl_col2 = st.columns([2, 3])
 
     with _kl_col1:
-        st.markdown("### 1. URL Penawaran")
-        url_penawaran = st.text_input(
-            "URL halaman /penawaran",
-            key="kl_url_penawaran",
-            placeholder="https://spse.inaproc.id/tapinkab/peserta/10096884000/penawaran",
-            label_visibility="collapsed",
-        )
+        st.markdown("### 1. Pilih Paket")
 
-        if st.button("🔍 Fetch Peserta", key="kl_fetch", use_container_width=True):
-            if not url_penawaran.strip():
-                st.warning("Masukkan URL /penawaran terlebih dahulu.")
+        _kl_fetch_col, _kl_ref_col = st.columns([3, 1])
+        with _kl_fetch_col:
+            if st.button("🔍 Ambil Data Paket", key="kl_fetch_draft", use_container_width=True):
+                with st.spinner("Mengambil daftar paket..."):
+                    _kl_draft = kirimpesan_engine.fetch_paket_aktif()
+                st.session_state["kl_paket_draft"] = _kl_draft
+                st.session_state["kl_paket_aktif"] = None
+                st.session_state["kl_peserta"] = None
+                for k in list(st.session_state.keys()):
+                    if k.startswith("kl_cek_"):
+                        del st.session_state[k]
+        with _kl_ref_col:
+            if st.button("🔄", key="kl_refresh", use_container_width=True, help="Refresh ulang daftar paket"):
+                st.session_state.pop("kl_paket_draft", None)
+                st.session_state.pop("kl_paket_aktif", None)
+                st.session_state.pop("kl_peserta", None)
+                st.rerun()
+
+        if "kl_paket_draft" in st.session_state:
+            _kl_draft = st.session_state["kl_paket_draft"]
+            if not _kl_draft["sukses"]:
+                st.error(f"❌ {_kl_draft['pesan']}")
             else:
+                _kl_paket_list = _kl_draft.get("paket", [])
+                if not _kl_paket_list:
+                    st.warning("⚠️ Tidak ada paket aktif ditemukan.")
+                else:
+                    st.caption(f"{len(_kl_paket_list)} paket aktif — pilih satu:")
+                    for p in _kl_paket_list:
+                        _kl_chk_key = f"kl_chk_{p['kode']}"
+                        _checked = st.checkbox(
+                            f"**{p['kode']}**  \n{p['nama'][:60]}  \n_{p.get('status', '')}_",
+                            key=_kl_chk_key,
+                            value=st.session_state.get(_kl_chk_key, False),
+                        )
+                        if _checked:
+                            _prev = st.session_state.get("kl_paket_aktif")
+                            if _prev and _prev["kode"] != p["kode"]:
+                                # uncheck paket sebelumnya — hanya 1 aktif
+                                st.session_state[f"kl_chk_{_prev['kode']}"] = False
+                            st.session_state["kl_paket_aktif"] = p
+        else:
+            st.info("Klik tombol di atas untuk mengambil daftar paket.")
+
+        with st.expander("🔗 Atau masukkan URL manual"):
+            url_penawaran = st.text_input(
+                "URL halaman /penawaran",
+                key="kl_url_penawaran",
+                placeholder="https://spse.inaproc.id/tapinkab/peserta/10096884000/penawaran",
+                label_visibility="collapsed",
+            )
+            if st.button("Fetch via URL", key="kl_fetch_url", use_container_width=True):
+                if not url_penawaran.strip():
+                    st.warning("Masukkan URL /penawaran terlebih dahulu.")
+                else:
+                    with st.spinner("Mengambil daftar peserta..."):
+                        res = kualifikasi_engine.fetch_peserta(url_penawaran.strip())
+                    st.session_state["kl_peserta"] = res
+                    st.session_state["kl_paket_aktif"] = None
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("kl_cek_"):
+                            del st.session_state[k]
+
+        # ── Fetch peserta dari paket terpilih ──────────────────────────────
+        _kl_paket_aktif = st.session_state.get("kl_paket_aktif")
+        if _kl_paket_aktif:
+            st.markdown(f"### 2. Peserta — {_kl_paket_aktif['kode']}")
+            if st.button("🔍 Fetch Peserta", key="kl_fetch", use_container_width=True):
                 with st.spinner("Mengambil daftar peserta..."):
-                    res = kualifikasi_engine.fetch_peserta(url_penawaran.strip())
+                    res = kualifikasi_engine.fetch_peserta_by_kode(_kl_paket_aktif["kode"])
                 st.session_state["kl_peserta"] = res
-                st.session_state["kl_cek"] = {}
+                for k in list(st.session_state.keys()):
+                    if k.startswith("kl_cek_"):
+                        del st.session_state[k]
 
         kl_res = st.session_state.get("kl_peserta")
         if kl_res:
@@ -2191,7 +2251,7 @@ with tab_kual:
                 st.error(kl_res["pesan"])
             else:
                 st.success(kl_res["pesan"])
-                st.markdown("### 2. Pilih Peserta")
+                _kl_total = len(kl_res["peserta"])
 
                 col_all, col_none = st.columns(2)
                 with col_all:
@@ -2205,76 +2265,94 @@ with tab_kual:
                             st.session_state[f"kl_cek_{p['kualifikasi_id']}"] = False
                         st.rerun()
 
-                for p in kl_res["peserta"]:
+                for i, p in enumerate(kl_res["peserta"], 1):
                     st.checkbox(
-                        p["nama"],
+                        f"{i}. {p['nama']}",
                         key=f"kl_cek_{p['kualifikasi_id']}",
-                        value=st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", False),
+                        value=st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True),
                     )
 
     with _kl_col2:
-        st.markdown("### 3. Folder Output")
+        st.markdown("### 3. Folder & Download")
 
-        # Folder picker via tkinter
-        _kl_default_dir = kualifikasi_engine.get_last_dir()
-        kl_folder = st.text_input(
-            "Folder paket tujuan",
-            key="kl_folder",
-            value=st.session_state.get("kl_folder_val", _kl_default_dir),
-            label_visibility="collapsed",
-        )
+        # ── Resolve folder otomatis dari Supabase ──────────────────────────
+        _kl_paket_aktif2 = st.session_state.get("kl_paket_aktif")
+        _kl_folder_auto = None
+        _kl_folder_info = ""
 
-        if st.button("📁 Pilih Folder", key="kl_browse", use_container_width=True):
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.wm_attributes("-topmost", True)
-                init_dir = st.session_state.get("kl_folder_val", _kl_default_dir)
-                selected = filedialog.askdirectory(initialdir=init_dir, title="Pilih Folder Paket")
-                root.destroy()
-                if selected:
-                    st.session_state["kl_folder_val"] = selected.replace("/", "\\")
-                    st.rerun()
-            except Exception as e:
-                st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
+        if _kl_paket_aktif2:
+            _kl_resolve = kualifikasi_engine.resolve_folder_paket(_kl_paket_aktif2["kode"])
+            if _kl_resolve["ok"]:
+                _kl_folder_auto = _kl_resolve["path"]
+                _kl_folder_info = _kl_resolve["pesan"]
+                st.success(f"📁 **Auto:** `...\\{_kl_folder_info}\\Dokumen Evaluasi`")
+            else:
+                st.warning(f"⚠️ Folder auto tidak ditemukan: {_kl_resolve['pesan']}")
 
-        _kl_folder_now = st.session_state.get("kl_folder_val", _kl_default_dir) or kl_folder
-        if st.button(
-            "📂 Buka Folder Paket",
-            key="kl_open_folder",
-            use_container_width=True,
-            disabled=not (_kl_folder_now and os.path.isdir(_kl_folder_now)),
-        ):
-            os.startfile(_kl_folder_now)
+        # ── Fallback folder manual ─────────────────────────────────────────
+        with st.expander("📂 Override folder manual" if _kl_folder_auto else "📂 Pilih folder manual"):
+            _kl_default_dir = kualifikasi_engine.get_last_dir()
+            kl_folder_manual = st.text_input(
+                "Path folder tujuan",
+                key="kl_folder",
+                value=st.session_state.get("kl_folder_val", _kl_default_dir),
+                label_visibility="collapsed",
+            )
+            if st.button("📁 Browse", key="kl_browse", use_container_width=True):
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.wm_attributes("-topmost", True)
+                    selected = filedialog.askdirectory(
+                        initialdir=st.session_state.get("kl_folder_val", _kl_default_dir),
+                        title="Pilih Folder Tujuan",
+                    )
+                    root.destroy()
+                    if selected:
+                        st.session_state["kl_folder_val"] = selected.replace("/", "\\")
+                        st.rerun()
+                except Exception as e:
+                    st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
 
-        # Preview dokumen peserta yang dipilih
+        # Folder efektif yang dipakai
+        _kl_folder_efektif = _kl_folder_auto or st.session_state.get("kl_folder_val", "")
+
+        if _kl_folder_efektif and os.path.isdir(_kl_folder_efektif):
+            if st.button("📂 Buka Folder", key="kl_open_folder", use_container_width=True):
+                os.startfile(_kl_folder_efektif)
+
+        # ── Preview peserta terpilih & tombol download ─────────────────────
         kl_res2 = st.session_state.get("kl_peserta")
         if kl_res2 and kl_res2["ok"]:
+            _kl_total2 = len(kl_res2["peserta"])
             kl_selected = [
                 p for p in kl_res2["peserta"]
-                if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", False)
+                if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
             ]
 
             if kl_selected:
-                st.markdown(f"**{len(kl_selected)} peserta dipilih:**")
+                st.markdown(f"**{len(kl_selected)} peserta dipilih** (total {_kl_total2}):")
                 for i, p in enumerate(kl_selected, 1):
-                    st.caption(f"{i}. {p['nama']}")
+                    if _kl_total2 >= 2:
+                        st.caption(f"{i}. {p['nama']} → subfolder `{i}. {p['nama'][:30]}/`")
+                    else:
+                        st.caption(f"1. {p['nama']} → langsung di `Dokumen Evaluasi/`")
 
-                folder_val = st.session_state.get("kl_folder_val", _kl_default_dir) or kl_folder
+                st.divider()
 
                 if st.button(
                     f"⬇️ Download {len(kl_selected)} Dokumen Kualifikasi",
                     key="kl_download",
                     type="primary",
                     use_container_width=True,
-                    disabled=not folder_val,
+                    disabled=not _kl_folder_efektif,
                 ):
-                    if not folder_val or not os.path.isdir(folder_val):
-                        st.error("Folder tidak valid. Pilih folder yang sudah ada.")
+                    if not _kl_folder_efektif:
+                        st.error("Folder tidak ditemukan — pilih folder manual.")
                     else:
-                        kualifikasi_engine.save_last_dir(folder_val)
+                        kualifikasi_engine.save_last_dir(_kl_folder_efektif)
 
                         log_area = st.empty()
                         log_lines = []
@@ -2293,8 +2371,9 @@ with tab_kual:
                             )
                             res_dl = kualifikasi_engine.download_kualifikasi_peserta(
                                 peserta=peserta,
-                                folder_output=folder_val,
+                                folder_output=_kl_folder_efektif,
                                 urutan=i + 1,
+                                total_peserta=_kl_total2,
                                 progress_cb=_log_cb,
                             )
                             hasil_kl.append({**peserta, **res_dl})
@@ -2305,13 +2384,15 @@ with tab_kual:
                         gagal = [h for h in hasil_kl if not h["ok"]]
 
                         if sukses:
-                            st.success(f"✅ {len(sukses)} dokumen berhasil didownload ke `{folder_val}`")
+                            st.success(f"✅ {len(sukses)} peserta selesai didownload ke `{_kl_folder_efektif}`")
+                            for h in sukses:
+                                st.caption(f"• {h['nama']}: {h['pesan']}")
                         if gagal:
                             st.error(f"❌ {len(gagal)} gagal:")
                             for h in gagal:
                                 st.caption(f"• {h['nama']}: {h['pesan']}")
             else:
-                st.info("Pilih peserta di kolom kiri untuk mulai download.")
+                st.info("Pilih peserta di kolom kiri.")
         else:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
 

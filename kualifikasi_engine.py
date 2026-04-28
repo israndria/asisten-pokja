@@ -2,9 +2,7 @@
 
 import os
 import re
-import zipfile
 import json
-import tempfile
 from pathlib import Path
 from bs4 import BeautifulSoup
 
@@ -113,6 +111,34 @@ def fetch_peserta(url_penawaran: str) -> dict:
 
     except Exception as e:
         return {"ok": False, "peserta": [], "pesan": str(e)}
+
+
+def fetch_peserta_by_kode(kode_tender: str) -> dict:
+    """Wrapper fetch_peserta dari kode_tender (kolom 0 dt/paketpanitia, format 10072844000)."""
+    base = SPSE_BASE_URL.rstrip("/")
+    url = f"{base}/peserta/{kode_tender}/penawaran"
+    return fetch_peserta(url)
+
+
+def resolve_folder_paket(kode_tender: str) -> dict:
+    """
+    Lookup folder paket dari Supabase draft_paket.folder_dibuat.
+    Return: {"ok": bool, "path": str, "pesan": str}
+    path = POKJA_ROOT / folder_dibuat / Dokumen Evaluasi  (dibuat jika belum ada)
+    """
+    from config import sb, POKJA_ROOT
+    try:
+        r = sb().table("draft_paket").select("folder_dibuat").eq("kode_tender", kode_tender).maybe_single().execute()
+        if not r.data:
+            return {"ok": False, "path": "", "pesan": "Paket tidak ditemukan di database"}
+        folder_dibuat = r.data.get("folder_dibuat")
+        if not folder_dibuat:
+            return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 0)"}
+        path = os.path.join(POKJA_ROOT, folder_dibuat, "Dokumen Evaluasi")
+        os.makedirs(path, exist_ok=True)
+        return {"ok": True, "path": path, "pesan": folder_dibuat}
+    except Exception as e:
+        return {"ok": False, "path": "", "pesan": str(e)}
 
 
 # ── Fetch daftar dokumen dari /kualifikasi/{id}/preview ───────────────────────
@@ -230,17 +256,20 @@ def download_kualifikasi_peserta(
     peserta: dict,
     folder_output: str,
     urutan: int,
+    total_peserta: int = 1,
     progress_cb=None,
 ) -> dict:
     """
-    Download semua dokumen kualifikasi 1 peserta + generate checklist PDF,
-    lalu zip semuanya.
+    Download semua dokumen kualifikasi 1 peserta + generate checklist PDF, lalu zip.
 
     Args:
-        peserta: {"nama", "kualifikasi_id", "lelang_id"}
-        folder_output: path folder tujuan (folder paket user)
-        urutan: nomor urut untuk nama file (1, 2, 3, ...)
-        progress_cb: callback(pesan: str) untuk update progress
+        peserta       : {"nama", "kualifikasi_id", "lelang_id"}
+        folder_output : path Dokumen Evaluasi/ (sudah resolved)
+        urutan        : nomor urut peserta (1, 2, 3)
+        total_peserta : jumlah total peserta — menentukan apakah pakai subfolder
+                        1 peserta → file langsung di folder_output (flat)
+                        ≥2 peserta → subfolder "{urutan}. {nama_perusahaan}/"
+        progress_cb   : callback(pesan: str)
 
     Return: {"ok": bool, "pesan": str, "zip_path": str}
     """
@@ -254,62 +283,52 @@ def download_kualifikasi_peserta(
 
     _log(f"Memproses: {nama}")
 
+    # Tentukan folder tujuan akhir
+    if total_peserta >= 2:
+        dest_folder = os.path.join(folder_output, f"{urutan}. {slug_nama}")
+    else:
+        dest_folder = folder_output
+    os.makedirs(dest_folder, exist_ok=True)
+
     # 1. Fetch daftar dokumen
     result_dok = fetch_dokumen_kualifikasi(kualifikasi_id)
     if not result_dok["ok"]:
-        return {"ok": False, "pesan": f"Gagal fetch dokumen: {result_dok['pesan']}", "zip_path": ""}
+        return {"ok": False, "pesan": f"Gagal fetch dokumen: {result_dok['pesan']}", "path": ""}
 
     dokumen = result_dok["dokumen"]
-    url_preview = result_dok["url_preview"]
 
-    # 2. Buat folder temp untuk kumpulkan file
-    tmp_dir = os.path.join(
-        tempfile.gettempdir(),
-        f"kualifikasi_{kualifikasi_id}_{urutan}",
-    )
-    os.makedirs(tmp_dir, exist_ok=True)
-
-    # 3. Download tiap dokumen
+    # 2. Download tiap dokumen langsung ke dest_folder
+    file_didownload = []
     for i, dok in enumerate(dokumen):
         _log(f"  Downloading ({i+1}/{len(dokumen)}): {dok['nama']}")
-        # Nama file: pakai nama dari server, fallback ke nama link
-        ext = ".pdf"
         nama_file = _slug(dok["nama"])
         if not nama_file.lower().endswith(".pdf"):
-            nama_file += ext
-        dest = os.path.join(tmp_dir, nama_file)
-        res = _download_file(dok["url"], dest)
-        if not res["ok"]:
+            nama_file += ".pdf"
+        dest_file = os.path.join(dest_folder, nama_file)
+        res = _download_file(dok["url"], dest_file)
+        if res["ok"]:
+            file_didownload.append(res.get("path", dest_file))
+        else:
             _log(f"  [GAGAL] {dok['nama']} - {res['pesan']}")
 
-    # 4. Generate checklist PDF
+    # 3. Generate checklist PDF langsung ke dest_folder
     _log("  Membuat checklist PDF...")
-    checklist_path = os.path.join(tmp_dir, f"checklist_kualifikasi_{slug_nama}.pdf")
+    checklist_path = os.path.join(dest_folder, f"checklist_kualifikasi_{slug_nama}.pdf")
     res_pdf = generate_checklist_pdf(kualifikasi_id, checklist_path)
-    if not res_pdf["ok"]:
-        _log(f"  ⚠️ Gagal buat PDF: {res_pdf['pesan']}")
+    if res_pdf["ok"]:
+        file_didownload.append(checklist_path)
+    else:
+        _log(f"  ⚠️ Gagal buat checklist PDF: {res_pdf['pesan']}")
 
-    # 5. ZIP semua file
-    zip_name = f"{urutan}. Dokumen Kualifikasi ({slug_nama}).zip"
-    zip_path = os.path.join(folder_output, zip_name)
-    os.makedirs(folder_output, exist_ok=True)
-
-    _log(f"  Membuat ZIP: {zip_name}")
+    # 4. Gabung semua jadi 1 PDF
+    gabungan_path = os.path.join(dest_folder, f"Kualifikasi {slug_nama}.pdf")
+    _log(f"  Menggabung {len(file_didownload)} file → Kualifikasi {slug_nama}.pdf")
     try:
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in os.listdir(tmp_dir):
-                fpath = os.path.join(tmp_dir, f)
-                if os.path.isfile(fpath):
-                    zf.write(fpath, f)
-        _log(f"  ✅ Selesai: {zip_name}")
+        import inbox_engine
+        inbox_engine.gabung_pdf(gabungan_path, file_didownload, _log)
+        _log(f"  ✅ Selesai: Kualifikasi {slug_nama}.pdf")
     except Exception as e:
-        return {"ok": False, "pesan": f"Gagal ZIP: {e}", "zip_path": ""}
+        _log(f"  ⚠️ Gagal gabung PDF: {e}")
+        gabungan_path = ""
 
-    # 6. Cleanup temp
-    import shutil
-    try:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    except Exception:
-        pass
-
-    return {"ok": True, "pesan": f"✅ {zip_name}", "zip_path": zip_path}
+    return {"ok": True, "pesan": f"✅ {len(file_didownload)} file + gabungan", "path": gabungan_path}

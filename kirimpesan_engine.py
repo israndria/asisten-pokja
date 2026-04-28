@@ -339,6 +339,62 @@ def fetch_paket_draft() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
+def fetch_paket_aktif() -> dict:
+    """
+    Ambil daftar paket yang sedang berjalan (bukan Draft, bukan Selesai) dari dt/paketpanitia.
+    Return: {"sukses": bool, "paket": [{"kode", "nama", "id_lelang", "pokja", "status"}], "pesan": str}
+    """
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return {"sukses": False, "pesan": "Browser belum terhubung", "paket": []}
+
+    url = f"{SPSE_BASE_URL}dt/paketpanitia"
+    params = {
+        "draw": 1,
+        "start": 0,
+        "length": 200,
+        "order[0][column]": 3,
+        "order[0][dir]": "desc",
+        "search[value]": "",
+        "search[regex]": "false",
+    }
+    try:
+        resp = requests.get(
+            url,
+            params=params,
+            headers={
+                "Cookie": cookie_str,
+                "User-Agent": "Mozilla/5.0",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{SPSE_BASE_URL}paket",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return {"sukses": False, "pesan": f"HTTP {resp.status_code}", "paket": []}
+
+        data = resp.json()
+        rows = data.get("data", [])
+
+        _SKIP_STATUS = ("draft", "tender sudah selesai", "selesai")
+        paket = []
+        for r in rows:
+            status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
+            if any(s in status.lower() for s in _SKIP_STATUS):
+                continue
+            paket.append({
+                "kode": str(r[_COL_KODE]),
+                "nama": str(r[_COL_NAMA]),
+                "id_lelang": str(r[_COL_ID_LELANG]),
+                "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
+                "status": status,
+            })
+
+        return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket aktif ditemukan"}
+    except Exception as e:
+        return {"sukses": False, "pesan": str(e), "paket": []}
+
+
 def kirim_undangan_batch(
     paket_list: list[dict],
     waktu: str,
