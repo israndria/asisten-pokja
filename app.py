@@ -2398,7 +2398,7 @@ with tab_kual:
 
             # ── Auto-Fill KK Evaluasi Kualifikasi ─────────────────────────────
             st.divider()
-            st.markdown("### 4. Auto-Fill KK Evaluasi Kualifikasi")
+            st.markdown("### 4. Simpan Data KK Evaluasi ke Supabase")
 
             _kl_paket_kk = st.session_state.get("kl_paket_aktif")
             kl_res_kk = st.session_state.get("kl_peserta")
@@ -2408,87 +2408,124 @@ with tab_kual:
             elif not _kl_folder_efektif or not os.path.isdir(_kl_folder_efektif):
                 st.warning("Folder belum diketahui — resolve folder paket terlebih dahulu.")
             else:
-                # Cari file Excel BA PK di folder paket (satu level di atas Dokumen Evaluasi)
-                _kl_folder_paket = os.path.dirname(_kl_folder_efektif)
-                _kl_excel_candidates = [
-                    f for f in os.listdir(_kl_folder_paket)
-                    if f.endswith(".xlsm") and "BA PK" in f
+                _kl_kode_tender_kk = _kl_paket_kk.get("kode_tender", "")
+                st.caption(f"Kode Tender: `{_kl_kode_tender_kk}`")
+
+                _kl_total_kk = len(kl_res_kk["peserta"])
+                kl_selected_kk = [
+                    p for p in kl_res_kk["peserta"]
+                    if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
                 ]
 
-                if not _kl_excel_candidates:
-                    st.warning(f"File .xlsm BA PK tidak ditemukan di `{_kl_folder_paket}`")
-                else:
-                    _kl_excel_path = os.path.join(_kl_folder_paket, _kl_excel_candidates[0])
-                    st.caption(f"Excel: `{_kl_excel_candidates[0]}`")
+                if st.button(
+                    f"📋 Parse & Simpan KK Evaluasi ({len(kl_selected_kk)} peserta)",
+                    key="kl_autofill_kk",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    log_area_kk = st.empty()
+                    log_kk = []
 
-                    _kl_total_kk = len(kl_res_kk["peserta"])
-                    kl_selected_kk = [
-                        p for p in kl_res_kk["peserta"]
-                        if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
-                    ]
+                    def _log_kk(msg):
+                        log_kk.append(msg)
+                        log_area_kk.code("\n".join(log_kk[-25:]))
 
-                    if st.button(
-                        f"📋 Auto-Fill KK Evaluasi ({len(kl_selected_kk)} peserta)",
-                        key="kl_autofill_kk",
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        log_area_kk = st.empty()
-                        log_kk = []
+                    progress_kk = st.progress(0, text="Memulai parsing...")
+                    semua_data_peserta = []
 
-                        def _log_kk(msg):
-                            log_kk.append(msg)
-                            log_area_kk.code("\n".join(log_kk[-25:]))
+                    for i, peserta in enumerate(kl_selected_kk):
+                        progress_kk.progress(
+                            i / len(kl_selected_kk),
+                            text=f"Parsing {peserta['nama']} ({i+1}/{len(kl_selected_kk)})...",
+                        )
+                        if _kl_total_kk >= 2:
+                            slug = re.sub(r'[\\/:*?"<>|]', "", peserta["nama"]).strip()[:80]
+                            folder_p = os.path.join(_kl_folder_efektif, f"{i+1}. {slug}")
+                        else:
+                            folder_p = _kl_folder_efektif
 
-                        progress_kk = st.progress(0, text="Memulai parsing...")
-                        semua_data_peserta = []
-
-                        for i, peserta in enumerate(kl_selected_kk):
-                            progress_kk.progress(
-                                i / len(kl_selected_kk),
-                                text=f"Parsing {peserta['nama']} ({i+1}/{len(kl_selected_kk)})...",
-                            )
-                            # Tentukan folder peserta (sama dengan logika download)
-                            if _kl_total_kk >= 2:
-                                import kualifikasi_engine as _kl_eng
-                                slug = re.sub(r'[\\/:*?"<>|]', "", peserta["nama"]).strip()[:80]
-                                folder_p = os.path.join(_kl_folder_efektif, f"{i+1}. {slug}")
-                            else:
-                                folder_p = _kl_folder_efektif
-
-                            data_p = kualifikasi_parser.parse_peserta_lengkap(
-                                kualifikasi_id=peserta["kualifikasi_id"],
-                                folder_peserta=folder_p,
-                                progress_cb=_log_kk,
-                            )
-                            if data_p.get("skp_berbeda"):
-                                _log_kk(f"  ⚠️ {peserta['nama']}: SKP berbeda antara SPSE dan Formulir")
-                            semua_data_peserta.append(data_p)
-
-                        progress_kk.progress(0.8, text="Mengisi Excel...")
-                        _log_kk("Mengisi sheet KK Evaluasi Kualifikasi...")
-
-                        res_fill = kk_evaluasi_engine.fill_kk_evaluasi(
-                            excel_path=_kl_excel_path,
-                            semua_peserta=semua_data_peserta,
+                        data_p = kualifikasi_parser.parse_peserta_lengkap(
+                            kualifikasi_id=peserta["kualifikasi_id"],
+                            folder_peserta=folder_p,
                             progress_cb=_log_kk,
                         )
+                        if data_p.get("skp_berbeda"):
+                            _log_kk(f"  ⚠️ {peserta['nama']}: SKP berbeda antara SPSE dan Formulir")
+                        semua_data_peserta.append(data_p)
 
+                    progress_kk.progress(0.85, text="Menyimpan ke Supabase...")
+                    _log_kk("Menyimpan ke Supabase tabel kk_evaluasi_peserta...")
+
+                    try:
+                        from config import sb as _sb_kk
+                        from datetime import datetime, timezone
+                        _db_kk = _sb_kk()
+                        rows = []
+                        for i, d in enumerate(semua_data_peserta):
+                            pgl = d.get("pengalaman", [])
+                            p1 = pgl[0] if len(pgl) > 0 else {}
+                            p2 = pgl[1] if len(pgl) > 1 else {}
+                            pemilik = d.get("pemilik", [])
+                            rows.append({
+                                "kode_tender": _kl_kode_tender_kk,
+                                "urutan": i + 1,
+                                "nama": d.get("nama"),
+                                "npwp": d.get("npwp"),
+                                "nib_nomor": d.get("nib", {}).get("nomor"),
+                                "nib_berlaku": d.get("nib", {}).get("berlaku"),
+                                "ss_nomor": d.get("ss", {}).get("nomor"),
+                                "ss_berlaku": d.get("ss", {}).get("berlaku"),
+                                "ss_terverifikasi": d.get("ss", {}).get("terverifikasi"),
+                                "sbu_nomor": d.get("sbu", {}).get("nomor"),
+                                "sbu_berlaku": d.get("sbu", {}).get("berlaku"),
+                                "sbu_kualifikasi": d.get("sbu", {}).get("kualifikasi"),
+                                "sbu_klasifikasi": d.get("sbu", {}).get("klasifikasi"),
+                                "sbu_subklas_label": d.get("sbu", {}).get("subklas_label"),
+                                "pgl1_nama": p1.get("nama_pekerjaan"),
+                                "pgl1_instansi": p1.get("instansi"),
+                                "pgl1_nilai": p1.get("nilai"),
+                                "pgl1_tanggal": p1.get("tanggal"),
+                                "pgl1_nomor": p1.get("nomor_kontrak"),
+                                "pgl2_nama": p2.get("nama_pekerjaan"),
+                                "pgl2_instansi": p2.get("instansi"),
+                                "pgl2_nilai": p2.get("nilai"),
+                                "pgl2_tanggal": p2.get("tanggal"),
+                                "pgl2_nomor": p2.get("nomor_kontrak"),
+                                "skp": d.get("skp"),
+                                "skp_catatan": d.get("skp_catatan"),
+                                "skp_berbeda": bool(d.get("skp_berbeda")),
+                                "kswp_status": d.get("kswp_status"),
+                                "akta_p_nomor": d.get("akta_pendirian", {}).get("nomor"),
+                                "akta_p_tanggal": d.get("akta_pendirian", {}).get("tanggal"),
+                                "akta_p_notaris": d.get("akta_pendirian", {}).get("notaris"),
+                                "akta_k_nomor": d.get("akta_perubahan", {}).get("nomor"),
+                                "akta_k_tanggal": d.get("akta_perubahan", {}).get("tanggal"),
+                                "akta_k_notaris": d.get("akta_perubahan", {}).get("notaris"),
+                                "pemilik_1": pemilik[0] if len(pemilik) > 0 else None,
+                                "pemilik_2": pemilik[1] if len(pemilik) > 1 else None,
+                                "pemilik_3": pemilik[2] if len(pemilik) > 2 else None,
+                                "pemilik_4": pemilik[3] if len(pemilik) > 3 else None,
+                                "kinerja_ada": bool(d.get("kinerja_ada")),
+                                "kinerja_nilai": d.get("kinerja_nilai"),
+                                "kinerja_kategori": d.get("kinerja_kategori"),
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        _db_kk.table("kk_evaluasi_peserta").upsert(rows).execute()
+                        _log_kk(f"✅ {len(rows)} peserta tersimpan ke Supabase.")
                         progress_kk.progress(1.0, text="Selesai!")
+                        st.success(f"✅ Data {len(rows)} peserta disimpan ke Supabase. Buka Excel lalu klik tombol **Muat KK Evaluasi** di sheet \"3. KK Evaluasi Kualifikasi\".")
 
-                        if res_fill["ok"]:
-                            st.success(f"✅ {res_fill['pesan']}")
-                            peringatan_skp = [
-                                d for d in semua_data_peserta if d.get("skp_berbeda")
-                            ]
-                            if peringatan_skp:
-                                st.warning(
-                                    "⚠️ SKP berbeda antara SPSE preview dan Formulir Isian pada: "
-                                    + ", ".join(d.get("nama", "?") for d in peringatan_skp)
-                                    + " — harap cek manual."
-                                )
-                        else:
-                            st.error(f"❌ {res_fill['pesan']}")
+                        peringatan_skp = [d for d in semua_data_peserta if d.get("skp_berbeda")]
+                        if peringatan_skp:
+                            st.warning(
+                                "⚠️ SKP berbeda antara SPSE preview dan Formulir Isian pada: "
+                                + ", ".join(d.get("nama", "?") for d in peringatan_skp)
+                                + " — harap cek manual."
+                            )
+                    except Exception as e_sb:
+                        progress_kk.progress(1.0, text="Error!")
+                        st.error(f"❌ Gagal simpan Supabase: {e_sb}")
+                        _log_kk(f"ERROR: {e_sb}")
 
         else:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
