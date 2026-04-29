@@ -2,7 +2,6 @@
 
 import re
 from decimal import Decimal, ROUND_HALF_UP
-from bs4 import BeautifulSoup
 from config import sb as _sb, SPSE_BASE_URL
 
 
@@ -17,40 +16,68 @@ def _parse_rp(s: str) -> float:
         return 0.0
 
 
-def scrape_hps(kode_tender: str, session) -> dict:
+def _parse_rows_via_playwright(kode_tender: str) -> dict:
     """
-    Scrape halaman /dokumen/{kode_tender}/hps via session cloudscraper.
-    Return dict: {"items": [...], "total_nilai": float, "total_nilai_bulat": float}
-    Setiap item: {urutan, jenis_bj, satuan, vol, harga, pajak_pct, total_spse,
-                  kbki, is_divisi, selisih, selisih_ok}
+    Scrape tabel HPS via Playwright CDP — halaman di-render JS, requests biasa tidak cukup.
+    Return dict {"rows": [[...], ...], "rekap": [[...], ...]}
     """
+    import spse_browser
+
     url = f"{SPSE_BASE_URL}dokumen/{kode_tender}/hps"
-    resp = session.get(url, timeout=30)
-    resp.raise_for_status()
+    spse_browser.buka_browser(navigate=False)
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    tables = soup.find_all("table")
+    # Cari tab yang sudah buka URL ini, atau navigate tab pertama
+    page = next((p for p in spse_browser._context.pages if f"/{kode_tender}/hps" in p.url), None)
+    if page is None:
+        # Buka di tab yang sudah ada (jangan buat tab baru)
+        page = spse_browser._context.pages[0]
+        spse_browser._run(page.goto(url, wait_until="networkidle", timeout=30000))
+    else:
+        # Pastikan halaman sudah selesai load
+        spse_browser._run(page.wait_for_load_state("networkidle", timeout=15000))
 
-    if len(tables) < 2:
+    JS = """() => {
+        const tbls = document.querySelectorAll('table');
+        const allRows = (tbl) => Array.from(tbl.querySelectorAll('tr')).map(r =>
+            Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.trim())
+        );
+        // tbl[1] = item HPS, tbl[5] = rekap total (berdasarkan struktur yang sudah diverifikasi)
+        const rekapTbl = Array.from(tbls).find(t => t.id === 'rekap');
+        return {
+            rows:  tbls.length > 1 ? allRows(tbls[1]) : [],
+            rekap: rekapTbl      ? allRows(rekapTbl) : [],
+        };
+    }"""
+    return spse_browser._run(page.evaluate(JS))
+
+
+def scrape_hps(kode_tender: str, session=None) -> dict:
+    """
+    Scrape halaman /dokumen/{kode_tender}/hps via Playwright (JS-rendered).
+    session diabaikan — dipertahankan untuk backward compat.
+    Return dict: {"items": [...], "total_nilai": float, "total_nilai_bulat": float}
+    """
+    data = _parse_rows_via_playwright(kode_tender)
+    rows = data.get("rows", [])
+    rekap = data.get("rekap", [])
+
+    if not rows:
         return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
-    # Tabel 1: item HPS (header di baris 0)
-    rows = tables[1].find_all("tr")
     items = []
     for row in rows[1:]:  # skip header
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 7:
+        if len(row) < 7:
             continue
 
         # Kolom: [urutan, jenis_bj, satuan, vol, harga, pajak, total, ket, kunci, kbki]
-        urutan_raw = cells[0]
-        jenis_bj   = cells[1]
-        satuan     = cells[2]
-        vol_raw    = cells[3]
-        harga_raw  = cells[4]
-        pajak_raw  = cells[5]
-        total_raw  = cells[6]
-        kbki       = cells[9] if len(cells) > 9 else ""
+        urutan_raw = row[0]
+        jenis_bj   = row[1]
+        satuan     = row[2]
+        vol_raw    = row[3]
+        harga_raw  = row[4]
+        pajak_raw  = row[5]
+        total_raw  = row[6]
+        kbki       = row[9] if len(row) > 9 else ""
 
         is_divisi = (satuan == "" and vol_raw == "" and harga_raw == "")
 
@@ -59,7 +86,6 @@ def scrape_hps(kode_tender: str, session) -> dict:
         pajak_pct  = _parse_rp(pajak_raw)
         total_spse = _parse_rp(total_raw)
 
-        # Hitung manual: vol × harga × (1 + pajak/100), bulatkan 2 desimal
         if not is_divisi and vol > 0 and harga > 0:
             total_hitung = float(
                 (Decimal(str(vol)) * Decimal(str(harga)) * (1 + Decimal(str(pajak_pct)) / 100))
@@ -92,18 +118,14 @@ def scrape_hps(kode_tender: str, session) -> dict:
             "selisih_ok":   selisih_ok,
         })
 
-    # Cari total nilai dari tabel "TOTAL NILAI"
     total_nilai       = 0.0
     total_nilai_bulat = 0.0
-    for tbl in tables:
-        if "TOTAL NILAI" in tbl.get_text():
-            for r in tbl.find_all("tr"):
-                cells = [c.get_text(strip=True) for c in r.find_all(["td", "th"])]
-                if len(cells) >= 2:
-                    if "setelah pembulatan" in cells[0].lower():
-                        total_nilai_bulat = _parse_rp(cells[1])
-                    elif "TOTAL NILAI" in cells[0]:
-                        total_nilai = _parse_rp(cells[1])
+    for r in rekap:
+        if len(r) >= 2:
+            if "setelah pembulatan" in r[0].lower():
+                total_nilai_bulat = _parse_rp(r[1])
+            elif "TOTAL NILAI" in r[0]:
+                total_nilai = _parse_rp(r[1])
 
     return {
         "items":             items,
@@ -147,7 +169,7 @@ def upsert_hps(kode_tender: str, hasil: dict) -> dict:
     }
 
 
-def scrape_dan_upsert_hps(kode_tender: str, session) -> dict:
+def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
     """
     Fungsi utama: scrape HPS dari SPSE → upsert ke Supabase.
     Return: {"count", "warning", "total_nilai", "total_nilai_bulat", "error"}

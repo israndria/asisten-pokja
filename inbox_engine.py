@@ -376,13 +376,10 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         record["_is_baru"] = kode_tender not in existing_kode
         record["_tanggal_pesan"] = pesan["tanggal"]
 
-        # Scrape HPS — pakai session requests yang sama (_get)
+        # Scrape HPS via Playwright (halaman di-render JS)
         try:
             from hps_engine import scrape_dan_upsert_hps
-            import requests as _req
-            _sess = _req.Session()
-            _sess.headers.update(_headers())
-            scrape_dan_upsert_hps(kode_tender, _sess)
+            scrape_dan_upsert_hps(kode_tender)
         except Exception:
             pass  # HPS gagal tidak menggagalkan proses utama
 
