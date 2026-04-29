@@ -2403,12 +2403,23 @@ with tab_kual:
             _kl_paket_kk = st.session_state.get("kl_paket_aktif")
             kl_res_kk = st.session_state.get("kl_peserta")
 
-            if not _kl_paket_kk or not kl_res_kk or not kl_res_kk.get("ok"):
+            # kode_tender = field "kode" dari paket aktif (bukan "kode_tender")
+            _kl_kode_tender_kk = ""
+            if _kl_paket_kk:
+                _kl_kode_tender_kk = _kl_paket_kk.get("kode", "") or _kl_paket_kk.get("kode_tender", "")
+            # Izinkan input manual jika tidak ada dari paket terpilih
+            _kl_kt_manual = st.text_input("Kode Tender (manual, jika tidak pilih dari daftar):",
+                                           key="kl_kode_tender_kk_manual",
+                                           value=_kl_kode_tender_kk,
+                                           placeholder="contoh: 4794177")
+            if _kl_kt_manual.strip():
+                _kl_kode_tender_kk = _kl_kt_manual.strip()
+
+            if not kl_res_kk or not kl_res_kk.get("ok"):
                 st.info("Fetch peserta terlebih dahulu (langkah 1-2).")
             elif not _kl_folder_efektif or not os.path.isdir(_kl_folder_efektif):
                 st.warning("Folder belum diketahui — resolve folder paket terlebih dahulu.")
             else:
-                _kl_kode_tender_kk = _kl_paket_kk.get("kode_tender", "")
                 st.caption(f"Kode Tender: `{_kl_kode_tender_kk}`")
 
                 _kl_total_kk = len(kl_res_kk["peserta"])
@@ -2544,7 +2555,12 @@ with tab_kual:
         st.caption(f"Paket: **{_kl_hp_kode}** — {_kl_hp_nama[:60]}")
     else:
         _kl_hp_kode = ""
-        st.caption("Pilih paket terlebih dahulu dari kolom kiri Tab 6.")
+        st.caption("Pilih paket dari kolom kiri, atau input manual di bawah.")
+
+    _kl_hp_manual = st.text_input("Kode Tender (manual):", key="kl_hp_manual",
+                                   placeholder="contoh: 4794177")
+    if _kl_hp_manual.strip():
+        _kl_hp_kode = _kl_hp_manual.strip()
 
     if st.button("📊 Serap Harga Penawaran", key="kl_serap_hp",
                  disabled=not _kl_hp_kode, use_container_width=True):
@@ -2570,6 +2586,64 @@ with tab_kual:
             )
         else:
             st.warning("Tidak ada peserta yang sudah mengirim penawaran.")
+
+    # ── Serap Identitas Peserta ──
+    st.divider()
+    st.markdown("#### 🪪 Serap Identitas Peserta")
+    st.caption("Scrape NPWP, alamat, direktur dari /preview SPSE + jumlah dokumen penawaran → Supabase.")
+
+    _kl_id_paket = st.session_state.get("kl_paket_aktif")
+    if _kl_id_paket:
+        _kl_id_kode = _kl_id_paket.get("kode", "")
+        _kl_id_nama = _kl_id_paket.get("nama", "")
+        st.caption(f"Paket: **{_kl_id_kode}** — {_kl_id_nama[:60]}")
+    else:
+        _kl_id_kode = ""
+        st.caption("Pilih paket terlebih dahulu dari kolom kiri, atau input manual di bawah.")
+
+    # Input manual kode tender (untuk test / paket yang belum muncul di daftar)
+    _kl_id_manual = st.text_input("Kode Tender (manual):", key="kl_id_manual",
+                                   placeholder="contoh: 4794177")
+    if _kl_id_manual.strip():
+        _kl_id_kode = _kl_id_manual.strip()
+
+    # Cek apakah sudah ada peserta dari langkah 1-2
+    _kl_id_peserta_ada = st.session_state.get("kl_peserta")
+    _kl_id_peserta_ids = []
+    if _kl_id_peserta_ada and _kl_id_peserta_ada.get("ok"):
+        for p in _kl_id_peserta_ada["peserta"]:
+            pid = p.get("kualifikasi_id") or p.get("peserta_id", "")
+            if pid:
+                _kl_id_peserta_ids.append({"peserta_id": pid, "nama_peserta": p.get("nama", "")})
+        if _kl_id_peserta_ids:
+            st.caption(f"ℹ️ {len(_kl_id_peserta_ids)} peserta dari langkah 1-2 akan dipakai langsung (tanpa scrape ulang /penawaran).")
+
+    if st.button("🪪 Serap Identitas Peserta", key="kl_serap_identitas",
+                 disabled=not _kl_id_kode, use_container_width=True):
+        import identitas_engine
+        _log_id_area = st.empty()
+        _log_id = []
+
+        def _log_id_cb(msg):
+            _log_id.append(msg)
+            _log_id_area.code("\n".join(_log_id[-20:]))
+
+        with st.spinner("Scraping identitas peserta..."):
+            hasil_id = identitas_engine.scrape_dan_upsert_semua(
+                _kl_id_kode,
+                progress_cb=_log_id_cb,
+                peserta_override=_kl_id_peserta_ids or None,
+            )
+
+        if hasil_id["errors"]:
+            st.warning("⚠️ Ada error: " + " | ".join(hasil_id["errors"]))
+        if hasil_id["peserta"] > 0:
+            st.success(
+                f"✅ {hasil_id['peserta']} peserta tersimpan ke Supabase. "
+                f"Buka Excel lalu klik **Muat Input BA** di sheet \"0. Input BA\"."
+            )
+        else:
+            st.info("Tidak ada peserta dengan penawaran terkirim (jumlah dokumen tetap tersimpan).")
 
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
