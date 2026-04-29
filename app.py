@@ -2532,6 +2532,45 @@ with tab_kual:
         else:
             st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
 
+    # ── Serap Harga Penawaran ──
+    st.divider()
+    st.markdown("#### 📊 Serap Harga Penawaran")
+    st.caption("Scrape rincian harga penawaran semua peserta dari SPSE → simpan ke Supabase.")
+
+    _kl_hp_paket = st.session_state.get("kl_paket_aktif")
+    if _kl_hp_paket:
+        _kl_hp_kode = _kl_hp_paket.get("kode", "")
+        _kl_hp_nama = _kl_hp_paket.get("nama", "")
+        st.caption(f"Paket: **{_kl_hp_kode}** — {_kl_hp_nama[:60]}")
+    else:
+        _kl_hp_kode = ""
+        st.caption("Pilih paket terlebih dahulu dari kolom kiri Tab 6.")
+
+    if st.button("📊 Serap Harga Penawaran", key="kl_serap_hp",
+                 disabled=not _kl_hp_kode, use_container_width=True):
+        import penawaran_engine
+        _log_hp_area = st.empty()
+        _log_hp = []
+
+        def _log_hp_cb(msg):
+            _log_hp.append(msg)
+            _log_hp_area.code("\n".join(_log_hp[-20:]))
+
+        with st.spinner("Scraping harga penawaran..."):
+            hasil_hp = penawaran_engine.scrape_dan_upsert_semua(
+                _kl_hp_kode, progress_cb=_log_hp_cb
+            )
+
+        if hasil_hp["errors"]:
+            st.warning("⚠️ Ada error: " + " | ".join(hasil_hp["errors"]))
+        if hasil_hp["peserta"] > 0:
+            st.success(
+                f"✅ {hasil_hp['peserta']} peserta, {hasil_hp['items']} item tersimpan ke Supabase. "
+                f"Buka Excel lalu klik **Muat Harga Penawaran** di sheet \"6. Harga Penawaran\"."
+            )
+        else:
+            st.warning("Tidak ada peserta yang sudah mengirim penawaran.")
+
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
