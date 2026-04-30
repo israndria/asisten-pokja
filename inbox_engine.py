@@ -622,46 +622,88 @@ def download_dokumen_paket(
                     log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
 
             # ════════════════════════════════
-            # 2. Dokumen SPSE
+            # 2. Dokumen SPSE (Scrape link dari halaman edit)
             # ════════════════════════════════
-            sections = ["spek", "docsskk", "uploaduraian", "lainnya"]
-            for sec in sections:
-                url_sec = f"{BASE_URL}/dokumen/{kode_tender}/{sec}"
-                try:
-                    r = requests.get(url_sec, headers=hdrs, timeout=15)
-                    if r.status_code == 403:
+            log(f"📄 Mencari link dokumen di halaman persiapan...")
+            page_edit = await ctx.new_page()
+            try:
+                await page_edit.goto(f"{BASE_URL}/lelang/{kode_tender}/edit", wait_until="networkidle", timeout=20000)
+                edit_html = await page_edit.content()
+                soup_edit = BeautifulSoup(edit_html, "html.parser")
+            except Exception as e:
+                log(f"  ❌ Gagal buka halaman edit: {e}")
+                soup_edit = None
+            finally:
+                await page_edit.close()
+
+            if soup_edit:
+                # Cari semua link di list-group
+                links_dok = soup_edit.select("a.list-group-item")
+                log(f"  Ditemukan {len(links_dok)} link bagian")
+                
+                targets = []
+                for a in links_dok:
+                    txt = a.get_text().lower()
+                    href = a.get("href", "")
+                    if not href or "/dl/" in href: # skip link download langsung (seperti POKJA.pdf)
                         continue
-                    r.raise_for_status()
-                    soup = BeautifulSoup(r.text, "html.parser")
-                    file_links = soup.select("table#files a[href]")
-                    if not file_links:
-                        continue
-                    log(f"📄 {sec}: {len(file_links)} file")
-                    for a in file_links:
-                        fname = a.get_text(separator=" ", strip=True)
-                        fname = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname).strip()
-                        href = a["href"]
-                        if not fname:
-                            fname = urllib.parse.unquote(href.split("/")[-1].split("?")[0])
-                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname).strip() or f"{sec}_file"
-                        dst = os.path.join(folder_tujuan, fname)
-                        if os.path.exists(dst):
-                            log(f"  ⏭ {fname}")
-                            hasil["skip"].append(fname)
+                    
+                    # Daftar keyword bagian yang berisi file upload
+                    keywords = ["spek", "rancangan kontrak", "uraian singkat", "lainnya", "kak", "spesifikasi"]
+                    if any(kw in txt for kw in keywords):
+                        label_clean = re.sub(r"\s*\*.*$", "", a.get_text(strip=True)).strip()
+                        targets.append({"label": label_clean, "href": href})
+                
+                if not targets:
+                    log("  ⚠ Tidak ditemukan link dokumen spek/uraian/lainnya")
+
+                for target in targets:
+                    url_sec = f"https://spse.inaproc.id{target['href']}" if target['href'].startswith("/") else target['href']
+                    log(f"📂 Membuka {target['label']}...")
+                    try:
+                        r = requests.get(url_sec, headers=hdrs, timeout=15)
+                        if r.status_code == 403:
+                            log(f"  ❌ Akses ditolak ke {target['label']}")
                             continue
-                        dl_url = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
-                        try:
-                            saved = await _playwright_download(dl_url, dst)
-                            if saved:
-                                log(f"  ✅ {os.path.basename(saved)}")
-                                hasil["ok"].append(saved)
-                            else:
-                                hasil["error"].append(f"{fname}: file kosong")
-                        except Exception as e:
-                            log(f"  ❌ {fname}: {e}")
-                            hasil["error"].append(f"{fname}: {e}")
-                except Exception as e:
-                    hasil["error"].append(f"{sec}: {e}")
+                        r.raise_for_status()
+                        soup = BeautifulSoup(r.text, "html.parser")
+                        file_links = soup.select("table#files a[href], table.table a[href*='/dl/']")
+                        if not file_links:
+                            log(f"  ℹ Tidak ada file di {target['label']}")
+                            continue
+                        
+                        log(f"  Ditemukan {len(file_links)} file")
+                        for a in file_links:
+                            fname_raw = a.get_text(separator=" ", strip=True)
+                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname_raw).strip()
+                            href = a["href"]
+                            if not fname_raw or fname_raw.lower() == "download":
+                                fname_raw = urllib.parse.unquote(href.split("/")[-1].split("?")[0])
+                            
+                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_spse"
+                            dst = os.path.join(folder_tujuan, fname)
+                            
+                            if os.path.exists(dst):
+                                log(f"  ⏭ {fname}")
+                                hasil["skip"].append(fname)
+                                continue
+                                
+                            dl_url = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+                            try:
+                                saved = await _playwright_download(dl_url, dst)
+                                if saved:
+                                    log(f"  ✅ {os.path.basename(saved)}")
+                                    hasil["ok"].append(saved)
+                                else:
+                                    hasil["error"].append(f"{fname}: file kosong")
+                            except Exception as e:
+                                log(f"  ❌ {fname}: {e}")
+                                hasil["error"].append(f"{fname}: {e}")
+                    except Exception as e:
+                        log(f"  ❌ Error di {target['label']}: {e}")
+                        hasil["error"].append(f"{target['label']}: {e}")
+            else:
+                log("  ❌ Lewati scan dokumen karena halaman edit gagal dibuka")
 
             # ════════════════════════════════
             # 2b. Parse jangka_waktu dari dokumen SPSE jika belum ketemu
