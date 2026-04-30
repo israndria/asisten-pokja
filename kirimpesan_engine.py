@@ -339,6 +339,64 @@ def fetch_paket_draft() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
+def fetch_paket_semua() -> dict:
+    """
+    Ambil SEMUA paket dari SPSE (termasuk yang sudah selesai).
+    Return: {"sukses": bool, "paket": [{...}], "pesan": str}
+    """
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return {"sukses": False, "pesan": "Browser belum terhubung", "paket": []}
+
+    url = f"{SPSE_BASE_URL}dt/paketpanitia"
+    params = {
+        "draw": 1,
+        "start": 0,
+        "length": 500,
+        "order[0][column]": 3,
+        "order[0][dir]": "desc",
+        "search[value]": "",
+        "search[regex]": "false",
+    }
+    try:
+        resp = requests.get(
+            url,
+            params=params,
+            headers={
+                "Cookie": cookie_str,
+                "User-Agent": "Mozilla/5.0",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{SPSE_BASE_URL}paket",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return {"sukses": False, "pesan": f"HTTP {resp.status_code}", "paket": []}
+
+        data = resp.json()
+        rows = data.get("data", [])
+
+        paket = []
+        seen = set()
+        for r in rows:
+            kode = str(r[_COL_KODE])
+            if kode in seen:
+                continue
+            seen.add(kode)
+            status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
+            paket.append({
+                "kode": kode,
+                "nama": str(r[_COL_NAMA]),
+                "id_lelang": str(r[_COL_ID_LELANG]),
+                "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
+                "status": status,
+            })
+
+        return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket ditemukan (semua status)"}
+    except Exception as e:
+        return {"sukses": False, "pesan": str(e), "paket": []}
+
+
 def fetch_paket_aktif() -> dict:
     """
     Ambil daftar paket yang sedang berjalan (bukan Draft, bukan Selesai) dari dt/paketpanitia.

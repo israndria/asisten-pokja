@@ -406,11 +406,50 @@ with tab0:
             except Exception as e:
                 st.error(f"Gagal: {e}")
 
+        st.divider()
+        st.markdown("#### 🔄 Sinkronkan Paket SPSE")
+        st.caption("Fetch daftar paket dari SPSE 1x — dipakai oleh semua tab.")
+        _sync_semua = st.checkbox("Termasuk paket selesai (untuk uji coba paket lama)", key="cb_sync_semua")
+        _sync_col1, _sync_col2 = st.columns(2)
+        with _sync_col1:
+            if st.button("🔄 Sinkronkan Paket", type="secondary", use_container_width=True, key="btn_sync_spse"):
+                with st.spinner("Mengambil daftar paket dari SPSE..."):
+                    if _sync_semua:
+                        _all = kirimpesan_engine.fetch_paket_semua()
+                        st.session_state["global_paket_draft"] = _all
+                        st.session_state["global_paket_aktif"] = _all
+                    else:
+                        st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_draft()
+                        st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
+                _gd = st.session_state.get("global_paket_draft", {})
+                _ga = st.session_state.get("global_paket_aktif", {})
+                st.toast("✅ Data paket SPSE tersinkronkan!", icon="🔄")
+                st.success(f"Draft: {len(_gd.get('paket',[]))} paket | Aktif: {len(_ga.get('paket',[]))} paket")
+        with _sync_col2:
+            _has_draft = "global_paket_draft" in st.session_state
+            _has_aktif = "global_paket_aktif" in st.session_state
+            if _has_draft or _has_aktif:
+                st.caption(f"✅ Draft: {len(st.session_state.get('global_paket_draft',{}).get('paket',[]))} | Aktif: {len(st.session_state.get('global_paket_aktif',{}).get('paket',[]))}")
+            else:
+                st.caption("⚠️ Belum disinkronkan")
+
     # ══════════════════════════════════════════
     # KOLOM KANAN — 2. Buat Folder Paket
     # ══════════════════════════════════════════
     with _col_kanan:
         st.markdown("#### 2. Buat Folder Paket")
+
+        # ── Notif folder baru dibuat (persist across rerun) ──
+        if "_folder_just_created" in st.session_state:
+            _just = st.session_state.pop("_folder_just_created")
+            st.toast(f"✅ Folder berhasil dibuat: {_just}", icon="📁")
+            st.success(f"✅ Folder **{_just}** berhasil dibuat!")
+            st.balloons()
+        if "_folder_bulk_created" in st.session_state:
+            _bulk_msg = st.session_state.pop("_folder_bulk_created")
+            st.toast(_bulk_msg, icon="📁")
+            st.success(f"✅ {_bulk_msg}")
+            st.balloons()
         st.caption("Buat satu folder atau semua sekaligus.")
 
         _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
@@ -548,6 +587,7 @@ with tab0:
                                     with st.expander("Detail error download"):
                                         for _e3 in _dl_hasil["error"]:
                                             st.error(_e3)
+                        st.session_state["_folder_just_created"] = _nama_folder_clean
                         st.rerun()
                     else:
                         st.error("Setup gagal.")
@@ -600,6 +640,7 @@ with tab0:
                     except _sp.TimeoutExpired:
                         _fail += 1
                 _bs.success(f"Selesai — {_ok} berhasil, {_fail} gagal.")
+                st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil dibuat"
                 st.rerun()
         else:
             st.info("Semua paket sudah punya folder.")
@@ -666,20 +707,17 @@ with tab_setup:
     _sp_col_kiri, _sp_col_kanan = st.columns([2, 3])
 
     with _sp_col_kiri:
-        st.markdown("### 1. Ambil Data Paket")
+        st.markdown("### 1. Pilih Paket")
         col_spfetch, col_spall, col_spnone = st.columns([3, 1, 1])
         with col_spfetch:
-            if st.button("🔍 Ambil Paket Draft", key="sp_fetch_draft", use_container_width=True):
-                with st.spinner("Mengambil daftar paket..."):
-                    result = kirimpesan_engine.fetch_paket_draft()
-                st.session_state["sp_paket_draft"] = result
-                for key in list(st.session_state.keys()):
-                    if key.startswith("sp_chk_"):
-                        del st.session_state[key]
+            if "global_paket_draft" not in st.session_state:
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
+            else:
+                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
 
         sp_selected = []
-        if "sp_paket_draft" in st.session_state:
-            r = st.session_state["sp_paket_draft"]
+        if "global_paket_draft" in st.session_state:
+            r = st.session_state["global_paket_draft"]
             if not r["sukses"]:
                 st.error(f"❌ {r['pesan']}")
             else:
@@ -1054,20 +1092,17 @@ with tab7:
     _pj_col_kiri, _pj_col_kanan = st.columns([2, 3])
 
     with _pj_col_kiri:
-        st.markdown("### 1. Ambil Data Paket")
+        st.markdown("### 1. Pilih Paket")
         col_pjfetch, col_pjall, col_pjnone = st.columns([3, 1, 1])
         with col_pjfetch:
-            if st.button("🔍 Ambil Paket Draft", key="pj_fetch_draft", use_container_width=True):
-                with st.spinner("Mengambil daftar paket..."):
-                    result = kirimpesan_engine.fetch_paket_draft()
-                st.session_state["pj_paket_draft"] = result
-                for key in list(st.session_state.keys()):
-                    if key.startswith("pj_chk_"):
-                        del st.session_state[key]
+            if "global_paket_draft" not in st.session_state:
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
+            else:
+                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
 
         pj_selected = []
-        if "pj_paket_draft" in st.session_state:
-            r = st.session_state["pj_paket_draft"]
+        if "global_paket_draft" in st.session_state:
+            r = st.session_state["global_paket_draft"]
             if not r["sukses"]:
                 st.error(f"❌ {r['pesan']}")
             else:
@@ -1277,20 +1312,17 @@ with tab8:
     _jd_col_list, _jd_col_detail = st.columns([3, 2])
 
     with _jd_col_list:
-        st.markdown("### 1. Ambil Data Paket")
+        st.markdown("### 1. Pilih Paket")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
-            if st.button("🔍 Ambil Paket Draft", key="jd_fetch_draft", use_container_width=True):
-                with st.spinner("Mengambil daftar paket..."):
-                    result_draft = kirimpesan_engine.fetch_paket_draft()
-                st.session_state["jd_paket_draft"] = result_draft
-                for key in list(st.session_state.keys()):
-                    if key.startswith("jd_chk_") or key.startswith("jd_tgl_"):
-                        del st.session_state[key]
+            if "global_paket_draft" not in st.session_state:
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
+            else:
+                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
 
         jd_selected = []
-        if "jd_paket_draft" in st.session_state:
-            r = st.session_state["jd_paket_draft"]
+        if "global_paket_draft" in st.session_state:
+            r = st.session_state["global_paket_draft"]
             if not r["sukses"]:
                 st.error(f"❌ {r['pesan']}")
             else:
@@ -1467,20 +1499,17 @@ with tab9:
     _kp_col_list, _kp_col_detail = st.columns([3, 2])
 
     with _kp_col_list:
-        st.markdown("### 1. Ambil Data Paket")
+        st.markdown("### 1. Pilih Paket")
         col_fetch, col_all, col_none = st.columns([3, 1, 1])
         with col_fetch:
-            if st.button("🔍 Ambil Paket Draft", key="kp_fetch_draft", use_container_width=True):
-                with st.spinner("Mengambil daftar paket..."):
-                    result = kirimpesan_engine.fetch_paket_draft()
-                st.session_state["kp_paket_draft"] = result
-                for key in list(st.session_state.keys()):
-                    if key.startswith("kp_chk_"):
-                        del st.session_state[key]
+            if "global_paket_draft" not in st.session_state:
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
+            else:
+                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
 
         kp_selected = []
-        if "kp_paket_draft" in st.session_state:
-            r = st.session_state["kp_paket_draft"]
+        if "global_paket_draft" in st.session_state:
+            r = st.session_state["global_paket_draft"]
             if not r["sukses"]:
                 st.error(f"❌ {r['pesan']}")
             else:
@@ -1522,34 +1551,31 @@ with tab9:
                                     st.session_state[key_lamp_nama] = ""
                                     st.rerun()
                             else:
-                                col_gen, col_up = st.columns(2)
-                                with col_gen:
-                                    if st.button(
-                                        "⚙️ Generate",
-                                        key=f"kp_gen_{p['id_lelang']}",
-                                        use_container_width=True,
-                                        help="Generate lampiran PDF dari Excel+Word (butuh folder paket sudah dibuat di Tab 0)",
-                                    ):
-                                        with st.spinner(f"Generate PDF {p['kode']}..."):
-                                            res_gen = merge_engine.generate_undangan_pdf(p["kode"])
-                                        if res_gen["sukses"]:
-                                            st.session_state[key_lamp_bytes] = res_gen["pdf_bytes"]
-                                            st.session_state[key_lamp_nama]  = f"Undangan_{p['kode'].replace('/', '-')}.pdf"
-                                            st.success(res_gen["pesan"])
-                                            st.rerun()
-                                        else:
-                                            st.error(res_gen["pesan"])
-                                with col_up:
-                                    uploaded_lamp = st.file_uploader(
-                                        "Upload",
-                                        type=["pdf"],
-                                        key=f"kp_lamp_{p['id_lelang']}",
-                                        label_visibility="collapsed",
-                                    )
-                                    if uploaded_lamp:
-                                        st.session_state[key_lamp_bytes] = uploaded_lamp.read()
-                                        st.session_state[key_lamp_nama]  = uploaded_lamp.name
+                                if st.button(
+                                    "⚙️ Generate",
+                                    key=f"kp_gen_{p['id_lelang']}",
+                                    use_container_width=True,
+                                    help="Generate lampiran PDF dari Excel+Word (butuh folder paket sudah dibuat di Tab 0)",
+                                ):
+                                    with st.spinner(f"Generate PDF {p['kode']}..."):
+                                        res_gen = merge_engine.generate_undangan_pdf(p["kode"])
+                                    if res_gen["sukses"]:
+                                        st.session_state[key_lamp_bytes] = res_gen["pdf_bytes"]
+                                        st.session_state[key_lamp_nama]  = f"Undangan_{p['kode'].replace('/', '-')}.pdf"
+                                        st.success(res_gen["pesan"])
                                         st.rerun()
+                                    else:
+                                        st.error(res_gen["pesan"])
+                                uploaded_lamp = st.file_uploader(
+                                    "Upload",
+                                    type=["pdf"],
+                                    key=f"kp_lamp_{p['id_lelang']}",
+                                    label_visibility="collapsed",
+                                )
+                                if uploaded_lamp:
+                                    st.session_state[key_lamp_bytes] = uploaded_lamp.read()
+                                    st.session_state[key_lamp_nama]  = uploaded_lamp.name
+                                    st.rerun()
 
                         if checked:
                             lamp_bytes_final = st.session_state.get(key_lamp_bytes)
@@ -1761,17 +1787,12 @@ with tab9:
     with _kp_col_detail:
         st.markdown("### 3. Upload BA Reviu DPP")
         st.caption("Upload BA Hasil Reviu setelah PPK menandatangani.")
-        if st.button("🔍 Ambil Paket Draft", key="r1_ba_fetch_draft", use_container_width=True):
-            with st.spinner("Mengambil daftar paket..."):
-                _ba_result = kirimpesan_engine.fetch_paket_draft()
-            st.session_state["r1_ba_paket_draft"] = _ba_result
-            for _k in list(st.session_state.keys()):
-                if _k.startswith("r1_ba_chk_"):
-                    del st.session_state[_k]
+        if "global_paket_draft" not in st.session_state:
+            st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
 
         ba_selected = []
-        if "r1_ba_paket_draft" in st.session_state:
-            _ba_r = st.session_state["r1_ba_paket_draft"]
+        if "global_paket_draft" in st.session_state:
+            _ba_r = st.session_state["global_paket_draft"]
             if not _ba_r["sukses"]:
                 st.error(f"❌ {_ba_r['pesan']}")
             else:
@@ -1879,25 +1900,19 @@ with tab_ba:
 
         with col_bafetch:
 
-            if st.button("🔍 Ambil Data Paket", key="ba5_fetch_draft", use_container_width=True):
+            if "global_paket_draft" not in st.session_state:
 
-                with st.spinner("Mengambil daftar paket..."):
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
 
-                    result = kirimpesan_engine.fetch_paket_draft()
+            else:
 
-                st.session_state["ba_paket_draft"] = result
-
-                for key in list(st.session_state.keys()):
-
-                    if key.startswith("ba_chk_"):
-
-                        del st.session_state[key]
+                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft")
 
         ba_selected = []
 
-        if "ba_paket_draft" in st.session_state:
+        if "global_paket_draft" in st.session_state:
 
-            r = st.session_state["ba_paket_draft"]
+            r = st.session_state["global_paket_draft"]
 
             if not r["sukses"]:
 
@@ -2174,15 +2189,10 @@ with tab_kual:
 
         _kl_fetch_col, _kl_ref_col = st.columns([3, 1])
         with _kl_fetch_col:
-            if st.button("🔍 Ambil Data Paket", key="kl_fetch_draft", use_container_width=True):
-                with st.spinner("Mengambil daftar paket..."):
-                    _kl_draft = kirimpesan_engine.fetch_paket_aktif()
-                st.session_state["kl_paket_draft"] = _kl_draft
-                st.session_state["kl_paket_aktif"] = None
-                st.session_state["kl_peserta"] = None
-                for k in list(st.session_state.keys()):
-                    if k.startswith("kl_cek_"):
-                        del st.session_state[k]
+            if "global_paket_aktif" not in st.session_state:
+                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
+            else:
+                st.caption(f"📋 {len(st.session_state['global_paket_aktif'].get('paket',[]))} paket aktif tersedia")
         with _kl_ref_col:
             if st.button("🔄", key="kl_refresh", use_container_width=True, help="Refresh ulang daftar paket"):
                 st.session_state.pop("kl_paket_draft", None)
@@ -2190,8 +2200,8 @@ with tab_kual:
                 st.session_state.pop("kl_peserta", None)
                 st.rerun()
 
-        if "kl_paket_draft" in st.session_state:
-            _kl_draft = st.session_state["kl_paket_draft"]
+        if "global_paket_aktif" in st.session_state:
+            _kl_draft = st.session_state["global_paket_aktif"]
             if not _kl_draft["sukses"]:
                 st.error(f"❌ {_kl_draft['pesan']}")
             else:
@@ -2213,9 +2223,6 @@ with tab_kual:
                                 # uncheck paket sebelumnya — hanya 1 aktif
                                 st.session_state[f"kl_chk_{_prev['kode']}"] = False
                             st.session_state["kl_paket_aktif"] = p
-        else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket.")
-
         with st.expander("🔗 Atau masukkan kode tender manual"):
             kode_manual_input = st.text_input(
                 "Kode Tender",
