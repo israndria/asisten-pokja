@@ -163,10 +163,24 @@ def fill_kk_evaluasi(
         _set(_ROW["nama_peserta"], col, data.get("nama", ""))
         _set(_ROW["urutan"], col, urutan)
 
-        # Syarat 1: NIB & Perizinan
+        # Syarat 1: NIB & Perizinan — tentukan poin a/b/c
+        # Poin a: NIB + SS + SBU semua ada
+        # Poin b: NIB + SS ada, SBU tidak ada (atau sebaliknya)
+        # Poin c: NIB ada saja (SS dan SBU tidak ada)
+        # Tidak memenuhi: NIB tidak ada
         nib_ada = "Ada" if data.get("nib_nomor") else "Tidak Ada"
-        _set(_ROW["syarat1_hasil"], col,
-             "Memenuhi Syarat Kualifikasi pada Poin a)." if data.get("nib_nomor") else "Tidak Memenuhi")
+        _has_nib = bool(data.get("nib_nomor"))
+        _has_ss  = bool(data.get("ss_nomor"))
+        _has_sbu = bool(data.get("sbu_nomor"))
+        if _has_nib and _has_ss and _has_sbu:
+            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin a)."
+        elif _has_nib and (_has_ss or _has_sbu):
+            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin b)."
+        elif _has_nib:
+            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin c)."
+        else:
+            _poin1 = "Tidak Memenuhi"
+        _set(_ROW["syarat1_hasil"], col, _poin1)
         _set(_ROW["nib_ada"],    col, nib_ada)
         _set(_ROW["nib_nomor"],  col, data.get("nib_nomor", ""))
         _set(_ROW["ss_status"],  col, data.get("ss_terverifikasi", ""))
@@ -174,8 +188,9 @@ def fill_kk_evaluasi(
         _set(_ROW["ss_oss"],     col, "-")
         _set(_ROW["sbu_ada"],    col, "-")
 
-        # Syarat 2: SBU
-        sbu_label = _format_sbu_label(data.get("sbu_klasifikasi", ""), data.get("sbu_kualifikasi", ""))
+        # Syarat 2: SBU — pakai sbu_subklas_label dari parser jika ada, fallback _format_sbu_label
+        sbu_label = data.get("sbu_subklas_label") or _format_sbu_label(
+            data.get("sbu_klasifikasi", ""), data.get("sbu_kualifikasi", ""))
         _set(_ROW["sbu_subklas"],    col, sbu_label)
         _set(_ROW["sbu_pbumku"],     col, data.get("sbu_nomor", ""))
         _set(_ROW["sbu_berlaku"],    col, data.get("sbu_berlaku", ""))
@@ -209,7 +224,7 @@ def fill_kk_evaluasi(
         _set(_ROW["skp_nilai"], col, skp_catatan)
 
         # Syarat 5: NPWP & KSWP
-        _set(_ROW["npwp_nomor"],  col, data.get("npwp", ""))
+        _set(_ROW["npwp_nomor"],  col, _format_npwp(data.get("npwp", "")))
         _set(_ROW["kswp_status"], col, data.get("kswp_status", ""))
 
         # Syarat 6: Akta
@@ -258,6 +273,22 @@ def fill_kk_evaluasi(
 
 
 # ── Helpers format ─────────────────────────────────────────────────────────────
+
+def _format_npwp(npwp: str) -> str:
+    """
+    Format NPWP ke XX.XXX.XXX.X-XXX.XXX dari string digit mentah.
+    Menerima 15 atau 16 digit (SPSE kadang kirim dengan leading zero ekstra).
+    """
+    if not npwp:
+        return ""
+    digits = re.sub(r"[^0-9]", "", str(npwp))
+    # Jika 16 digit, strip leading zero jadi 15
+    if len(digits) == 16 and digits[0] == "0":
+        digits = digits[1:]
+    if len(digits) == 15:
+        return f"{digits[0:2]}.{digits[2:5]}.{digits[5:8]}.{digits[8]}-{digits[9:12]}.{digits[12:15]}"
+    return npwp  # panjang tidak standar — kembalikan apa adanya
+
 
 def _format_sbu_label(klasifikasi: str, kualifikasi: str) -> str:
     """

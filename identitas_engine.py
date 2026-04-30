@@ -204,6 +204,52 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
         try:
             log(f"Scraping preview: {nama} ({pid})...")
             data = scrape_preview(pid)
+
+            # Personel & peralatan: coba dari /preview dulu via kualifikasi_parser
+            try:
+                import kualifikasi_parser
+                html_data = kualifikasi_parser.parse_preview_html(pid)
+                personel_list  = html_data.get("personel_list", [])
+                peralatan_list = html_data.get("peralatan_list", [])
+                log(f"  /preview → {len(personel_list)} personel, {len(peralatan_list)} alat")
+            except Exception as ep:
+                log(f"  ⚠️ parse_preview_html error: {ep}")
+                personel_list  = []
+                peralatan_list = []
+
+            # Fallback ke dokumen teknis PDF jika /preview kosong
+            if not personel_list or not peralatan_list:
+                try:
+                    import dokumen_teknis_engine
+                    # Cari folder peserta dari session state tidak tersedia di sini,
+                    # coba tebak dari kode_tender + urutan
+                    from config import POKJA_ROOT, sb as _sb2
+                    r2 = _sb2().table("draft_paket").select("folder_dibuat") \
+                                .eq("kode_tender", kode_tender).maybe_single().execute()
+                    folder_dibuat = r2.data.get("folder_dibuat", "") if r2.data else ""
+                    if folder_dibuat:
+                        import os, re as _re
+                        slug = _re.sub(r'[\\/:*?"<>|]', "", nama).strip()[:80]
+                        urutan = peserta_list.index(p) + 1
+                        fp = os.path.join(POKJA_ROOT, folder_dibuat, "Dokumen Evaluasi",
+                                          f"{urutan}. {slug}")
+                        if os.path.isdir(fp):
+                            log(f"  Fallback PDF: {fp}")
+                            res_dt = dokumen_teknis_engine.parse_dan_upsert(
+                                kode_tender, pid, fp, progress_cb=log
+                            )
+                            if res_dt["ok"]:
+                                personel_list  = personel_list  or res_dt["personel"]
+                                peralatan_list = peralatan_list or res_dt["alat"]
+                except Exception as ef:
+                    log(f"  ⚠️ fallback PDF error: {ef}")
+
+            data["personel_1"] = personel_list[0] if len(personel_list) > 0 else ""
+            data["personel_2"] = personel_list[1] if len(personel_list) > 1 else ""
+            data["alat_1"]     = peralatan_list[0] if len(peralatan_list) > 0 else ""
+            data["alat_2"]     = peralatan_list[1] if len(peralatan_list) > 1 else ""
+            data["alat_3"]     = peralatan_list[2] if len(peralatan_list) > 2 else ""
+
             upsert_peserta_identitas(kode_tender, pid, data)
             log(f"  OK: {data['nama_perusahaan']} | direktur: {data['nama_direktur']}")
         except Exception as e:

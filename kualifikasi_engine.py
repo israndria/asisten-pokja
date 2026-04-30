@@ -284,10 +284,7 @@ def download_kualifikasi_peserta(
     _log(f"Memproses: {nama}")
 
     # Tentukan folder tujuan akhir
-    if total_peserta >= 2:
-        dest_folder = os.path.join(folder_output, f"{urutan}. {slug_nama}")
-    else:
-        dest_folder = folder_output
+    dest_folder = os.path.join(folder_output, f"{urutan}. {slug_nama}")
     os.makedirs(dest_folder, exist_ok=True)
 
     # 1. Fetch daftar dokumen

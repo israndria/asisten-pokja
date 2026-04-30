@@ -147,7 +147,7 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
 
     # Tabel 1: IZIN USAHA (NIB, SS, SBU)
     t1 = _tbl(1)
-    nib_row = next((r for r in t1 if r and "Nomor Induk Berusaha" in r[0]), None)
+    nib_row = next((r for r in t1 if r and ("Nomor Induk Berusaha" in r[0] or "NIB" == r[0].strip())), None)
     ss_row  = next((r for r in t1 if r and "Sertifikat Standar" in r[0]), None)
     sbu_row = next((r for r in t1 if r and "Sertifikat Badan Usaha" in r[0]), None)
 
@@ -158,14 +158,24 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
     if ss_row and len(ss_row) >= 4:
         hasil["ss_nomor"]       = ss_row[1]
         hasil["ss_berlaku"]     = ss_row[2]
+        hasil["ss_instansi"]    = ss_row[3] if len(ss_row) > 3 else ""
         hasil["ss_kualifikasi"] = ss_row[4] if len(ss_row) > 4 else ""
         hasil["ss_klasifikasi"] = ss_row[5] if len(ss_row) > 5 else ""
 
     if sbu_row and len(sbu_row) >= 4:
         hasil["sbu_nomor"]       = sbu_row[1]   # PBUMKU
         hasil["sbu_berlaku"]     = sbu_row[2]
+        hasil["sbu_instansi"]    = sbu_row[3] if len(sbu_row) > 3 else ""
         hasil["sbu_kualifikasi"] = sbu_row[4] if len(sbu_row) > 4 else ""
-        hasil["sbu_klasifikasi"] = sbu_row[5] if len(sbu_row) > 5 else ""
+        sbu_klas = sbu_row[5] if len(sbu_row) > 5 else ""
+        hasil["sbu_klasifikasi"] = sbu_klas
+        # Bentuk label ringkas: "F42911 - KONSTRUKSI BANGUNAN..." → ambil kode + nama pendek
+        if sbu_klas:
+            kode_sbu = sbu_klas.split(" - ")[0].strip() if " - " in sbu_klas else sbu_klas
+            nama_sbu = sbu_klas.split(" - ", 1)[1].strip()[:80] if " - " in sbu_klas else ""
+            hasil["sbu_subklas_label"] = f"{kode_sbu} - {nama_sbu}" if nama_sbu else kode_sbu
+        else:
+            hasil["sbu_subklas_label"] = ""
 
     # Tabel 2: AKTA
     t2 = _tbl(2)
@@ -202,6 +212,31 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
             pemilik_list.append(row[0])
     hasil["pemilik"] = pemilik_list
 
+    # Tabel PERSONEL MANAJERIAL — id: "table-tenaga-ahli"
+    # Kolom terverifikasi: Nama | Tanggal Lahir | NPWP | Pendidikan | Pengalaman Kerja | Profesi/Keahlian
+    # col[0]=Nama, col[5]=Profesi/Keahlian (jabatan)
+    _tbl_personel = soup.find("table", id="table-tenaga-ahli")
+    if _tbl_personel:
+        _rows_per_orang = [
+            [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+            for tr in _tbl_personel.find_all("tr")
+            if tr.find_all(["td", "th"])
+        ]
+    else:
+        _rows_per_orang = []
+
+    personel_list = []
+    for row in _rows_per_orang[1:]:
+        if not row or row[0] == "No data available in table":
+            continue
+        nama_p  = row[0].strip()
+        jabatan = row[5].strip() if len(row) > 5 else ""
+        if not nama_p or nama_p.lower() in ("nama", "no", "no."):
+            continue
+        entry = f"{nama_p} ({jabatan})" if jabatan else nama_p
+        personel_list.append(entry)
+    hasil["personel_list"] = personel_list
+
     # Tabel 5: PENGALAMAN KERJA
     t5 = _tbl(5)
     pengalaman = []
@@ -218,6 +253,31 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
             "nomor":     row[7] if len(row) > 7 else "",
         })
     hasil["pengalaman"] = pengalaman
+
+    # Tabel PERALATAN UTAMA — id: "table-peralatan"
+    # Kolom terverifikasi: Nama Alat | Jumlah | Kapasitas | Merk/Tipe | Tahun | Kondisi | Lokasi | Status | Bukti
+    # col[0]=Nama Alat, col[1]=Jumlah
+    _tbl_peralatan = soup.find("table", id="table-peralatan")
+    if _tbl_peralatan:
+        _rows_alat = [
+            [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+            for tr in _tbl_peralatan.find_all("tr")
+            if tr.find_all(["td", "th"])
+        ]
+    else:
+        _rows_alat = []
+
+    peralatan_list = []
+    for row in _rows_alat[1:]:
+        if not row or row[0] == "No data available in table":
+            continue
+        nama_alat = row[0].strip()
+        jumlah    = row[1].strip() if len(row) > 1 else ""
+        if not nama_alat or nama_alat.lower() in ("nama alat", "peralatan", "no", "no."):
+            continue
+        entry = f"{nama_alat} ({jumlah})" if jumlah else nama_alat
+        peralatan_list.append(entry)
+    hasil["peralatan_list"] = peralatan_list
 
     # Tabel 6: PEKERJAAN SEDANG BERJALAN → hitung JP → SKP
     t6 = _tbl(6)
@@ -406,34 +466,16 @@ def parse_skp_formulir(pdf_path: str) -> dict:
 
 def get_skp(folder_peserta: str, jp_preview: int) -> dict:
     """
-    Double-check SKP:
-    - Sumber 1: jp_preview dari tabel HTML /preview
-    - Sumber 2: Formulir Isian Kualifikasi PDF
+    Hitung SKP dari jp_preview (tabel pekerjaan berjalan di HTML /preview).
+    Formulir Isian PDF tidak dipakai karena sering tidak konsisten.
     Return: {"skp": int, "jp": int, "catatan": str, "berbeda": bool}
     """
-    pdf = _find_file(folder_peserta, "formulir isian", "formulir_isian", "isian kualifikasi")
-    if not pdf:
-        return {
-            "skp": 5 - jp_preview,
-            "jp": jp_preview,
-            "catatan": f"{5 - jp_preview} SKP (dari SPSE preview)",
-            "berbeda": False,
-        }
-
-    hasil_pdf = parse_skp_formulir(pdf)
-    jp_formulir = hasil_pdf["jp"]
-    skp_formulir = hasil_pdf["skp"]
-    berbeda = jp_formulir != jp_preview
-
-    catatan = f"{skp_formulir} SKP"
-    if berbeda:
-        catatan += f" ⚠️ SPSE={5-jp_preview} vs Formulir={skp_formulir}"
-
+    skp = 5 - jp_preview
     return {
-        "skp": skp_formulir,
-        "jp": jp_formulir,
-        "catatan": catatan,
-        "berbeda": berbeda,
+        "skp": skp,
+        "jp": jp_preview,
+        "catatan": f"{skp} SKP",
+        "berbeda": False,
     }
 
 
@@ -481,9 +523,6 @@ def parse_peserta_lengkap(
     _log("[Parser] Hitung SKP (double-check)...")
     skp_data = get_skp(folder_peserta, html_data.get("jp_preview", 0))
 
-    if skp_data["berbeda"]:
-        _log(f"  ⚠️ SKP berbeda: SPSE preview={html_data.get('skp_preview')} vs Formulir={skp_data['skp']}")
-
     return {
         "ok": True,
         # Identitas
@@ -497,12 +536,19 @@ def parse_peserta_lengkap(
         "ss_nomor":      html_data.get("ss_nomor", ""),
         "ss_berlaku":    html_data.get("ss_berlaku", ""),
         "ss_kualifikasi": html_data.get("ss_kualifikasi", ""),
-        "ss_terverifikasi": "Terverifikasi" if html_data.get("ss_nomor") else "Tidak Menyampaikan",
+        # ss_terverifikasi: NIB dari OSS selalu "Terverifikasi" jika ada nomor,
+        # "Belum Terverifikasi" hanya jika ada nomor tapi instansi bukan OSS
+        "ss_terverifikasi": (
+            "Terverifikasi" if html_data.get("ss_nomor") and "OSS" in html_data.get("ss_instansi", "")
+            else ("Belum Terverifikasi" if html_data.get("ss_nomor")
+            else "Tidak Menyampaikan")
+        ),
         # SBU
         "sbu_nomor":      html_data.get("sbu_nomor", ""),
         "sbu_berlaku":    html_data.get("sbu_berlaku", ""),
         "sbu_kualifikasi": html_data.get("sbu_kualifikasi", "Kecil"),
         "sbu_klasifikasi": html_data.get("sbu_klasifikasi", ""),
+        "sbu_subklas_label": html_data.get("sbu_subklas_label", ""),
         # Pengalaman
         "pengalaman": html_data.get("pengalaman", []),
         # Pemilik
@@ -520,4 +566,7 @@ def parse_peserta_lengkap(
         "kinerja_ada":       kinerja["ada"],
         "kinerja_nilai":     kinerja["nilai"],
         "kinerja_kategori":  kinerja["kategori"],
+        # Personel & Peralatan dari /preview (kosong jika tidak diinput peserta)
+        "personel_list":     html_data.get("personel_list", []),
+        "peralatan_list":    html_data.get("peralatan_list", []),
     }
