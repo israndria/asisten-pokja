@@ -487,6 +487,7 @@ def download_dokumen_paket(
     folder_tujuan: str,
     kode_pokja: str = "",
     progress_cb=None,
+    st_ctx=None,
 ) -> dict:
     """
     Download semua dokumen paket langsung ke folder_tujuan (tanpa subfolder):
@@ -500,6 +501,7 @@ def download_dokumen_paket(
     import asyncio
     import shutil
     import urllib.parse
+    import threading
     from playwright.async_api import async_playwright
     from bs4 import BeautifulSoup
 
@@ -523,9 +525,14 @@ def download_dokumen_paket(
                 "Referer": f"{BASE_URL}/admin/pegawai/inbox",
             }
 
-            async def _playwright_download(url: str, dst: str) -> bool:
+            # Worker page untuk download (reuse agar tidak bolak-balik buka tab baru)
+            worker_page = await ctx.new_page()
+            try:
+                await worker_page.set_viewport_size({"width": 100, "height": 100})
+            except: pass
+
+            async def _playwright_download(url: str, dst: str, pg) -> bool:
                 """Download satu file via Playwright goto + expect_download."""
-                pg = await ctx.new_page()
                 try:
                     async with pg.expect_download(timeout=30000) as dl_info:
                         try:
@@ -544,166 +551,124 @@ def download_dokumen_paket(
                     return False
                 except Exception as e:
                     raise e
-                finally:
-                    await pg.close()
 
             # ════════════════════════════════
             # 1. Lampiran Inbox
             # ════════════════════════════════
             log(f"📨 Lampiran inbox pesan {id_pesan}...")
             try:
-                page = await ctx.new_page()
-                await page.goto(
+                await worker_page.goto(
                     f"{BASE_URL}/non-rekanan/inbox/{id_pesan}",
                     wait_until="networkidle", timeout=20000,
                 )
-                lamp_links = await page.query_selector_all('a[href*="/dl/"]')
-                log(f"  {len(lamp_links)} lampiran ditemukan")
-                for link in lamp_links:
+                lamp_links = await worker_page.query_selector_all('a[href*="/dl/"]')
+                total_lamp = len(lamp_links)
+                log(f"  {total_lamp} lampiran ditemukan")
+                for i, link in enumerate(lamp_links, 1):
                     fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
                                        (await link.text_content() or ""), flags=re.IGNORECASE).strip()
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
                     dst = os.path.join(folder_tujuan, fname)
                     if os.path.exists(dst):
-                        log(f"  ⏭ {fname}")
+                        log(f"  ({i}/{total_lamp}) ⏭ {fname}")
                         hasil["skip"].append(fname)
                         continue
                     try:
-                        async with page.expect_download(timeout=30000) as dl_info:
+                        async with worker_page.expect_download(timeout=30000) as dl_info:
                             await link.click()
                         dl = await dl_info.value
                         tmp = await dl.path()
                         if tmp:
                             shutil.copy2(tmp, dst)
-                            log(f"  ✅ {fname}")
+                            log(f"  ({i}/{total_lamp}) ✅ {fname}")
                             hasil["ok"].append(dst)
                     except Exception as e:
-                        log(f"  ❌ {fname}: {e}")
+                        log(f"  ({i}/{total_lamp}) ❌ {fname}: {e}")
                         hasil["error"].append(f"{fname}: {e}")
-                await page.close()
             except Exception as e:
                 log(f"  ❌ Gagal buka inbox: {e}")
                 hasil["error"].append(f"Inbox: {e}")
 
             # ════════════════════════════════
-            # 1b. Parse jangka_waktu dari PDF lampiran yang sudah didownload
+            # 1b. Parse jangka_waktu
             # ════════════════════════════════
             jangka_waktu_found = ""
             for fpath in hasil["ok"]:
-                if not fpath.lower().endswith(".pdf"):
-                    continue
+                if not fpath.lower().endswith(".pdf"): continue
                 try:
-                    import pdfplumber, io as _io
+                    import pdfplumber
                     with pdfplumber.open(fpath) as _pdf:
                         for _page in _pdf.pages:
                             _txt = _page.extract_text() or ""
-                            # Cari pola: "30 Hari Kalender", "60 (enam puluh) Hari"
-                            _m = re.search(
-                                r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)",
-                                _txt, re.IGNORECASE
-                            )
+                            _m = re.search(r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)", _txt, re.IGNORECASE)
                             if _m:
                                 jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
                                 log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
                                 break
-                except Exception:
-                    pass
-                if jangka_waktu_found:
-                    break
-
-            # Update Supabase jika ketemu
-            if jangka_waktu_found and kode_tender:
-                try:
-                    _sb().table("draft_paket").update(
-                        {"jangka_waktu": jangka_waktu_found}
-                    ).eq("kode_tender", kode_tender).execute()
-                    log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
-                except Exception as _e:
-                    log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
+                except Exception: pass
+                if jangka_waktu_found: break
 
             # ════════════════════════════════
-            # 2. Dokumen SPSE (Scrape link dari halaman edit)
+            # 2. Dokumen SPSE
             # ════════════════════════════════
             log(f"📄 Mencari link dokumen di halaman persiapan...")
-            page_edit = await ctx.new_page()
             try:
-                await page_edit.goto(f"{BASE_URL}/lelang/{kode_tender}/edit", wait_until="networkidle", timeout=20000)
-                edit_html = await page_edit.content()
+                await worker_page.goto(f"{BASE_URL}/lelang/{kode_tender}/edit", wait_until="networkidle", timeout=20000)
+                edit_html = await worker_page.content()
                 soup_edit = BeautifulSoup(edit_html, "html.parser")
             except Exception as e:
                 log(f"  ❌ Gagal buka halaman edit: {e}")
                 soup_edit = None
-            finally:
-                await page_edit.close()
 
             if soup_edit:
-                # Cari semua link di list-group
                 links_dok = soup_edit.select("a.list-group-item")
-                log(f"  Ditemukan {len(links_dok)} link bagian")
-                
                 targets = []
                 for a in links_dok:
                     txt = a.get_text().lower()
                     href = a.get("href", "")
-                    if not href or "/dl/" in href: # skip link download langsung (seperti POKJA.pdf)
-                        continue
-                    
-                    # Daftar keyword bagian yang berisi file upload
+                    if not href or "/dl/" in href: continue
                     keywords = ["spek", "rancangan kontrak", "uraian singkat", "lainnya", "kak", "spesifikasi"]
                     if any(kw in txt for kw in keywords):
                         label_clean = re.sub(r"\s*\*.*$", "", a.get_text(strip=True)).strip()
                         targets.append({"label": label_clean, "href": href})
                 
-                if not targets:
-                    log("  ⚠ Tidak ditemukan link dokumen spek/uraian/lainnya")
+                total_bagisan = len(targets)
+                log(f"  Ditemukan {total_bagisan} bagian dokumen")
 
-                for target in targets:
+                for idx, target in enumerate(targets, 1):
                     url_sec = f"https://spse.inaproc.id{target['href']}" if target['href'].startswith("/") else target['href']
-                    log(f"📂 Membuka {target['label']}...")
+                    log(f"[{idx}/{total_bagisan}] 📂 Membuka {target['label']}...")
                     try:
                         r = requests.get(url_sec, headers=hdrs, timeout=15)
-                        if r.status_code == 403:
-                            log(f"  ❌ Akses ditolak ke {target['label']}")
-                            continue
+                        if r.status_code == 403: continue
                         r.raise_for_status()
                         soup = BeautifulSoup(r.text, "html.parser")
                         file_links = soup.select("table#files a[href], table.table a[href*='/dl/']")
-                        if not file_links:
-                            log(f"  ℹ Tidak ada file di {target['label']}")
-                            continue
-                        
-                        log(f"  Ditemukan {len(file_links)} file")
-                        for a in file_links:
-                            fname_raw = a.get_text(separator=" ", strip=True)
-                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname_raw).strip()
+                        num_f = len(file_links)
+                        for fi, a in enumerate(file_links, 1):
+                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", a.get_text(separator=" ", strip=True)).strip()
                             href = a["href"]
-                            if not fname_raw or fname_raw.lower() == "download":
-                                fname_raw = urllib.parse.unquote(href.split("/")[-1].split("?")[0])
-                            
-                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_spse"
+                            fname = re.sub(r'[<>:"/\\|?*]', "_", (fname_raw or urllib.parse.unquote(href.split("/")[-1].split("?")[0]))).strip() or f"file"
                             dst = os.path.join(folder_tujuan, fname)
-                            
                             if os.path.exists(dst):
-                                log(f"  ⏭ {fname}")
+                                log(f"  ({fi}/{num_f}) ⏭ {fname}")
                                 hasil["skip"].append(fname)
                                 continue
-                                
-                            dl_url = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
                             try:
-                                saved = await _playwright_download(dl_url, dst)
+                                saved = await _playwright_download(f"https://spse.inaproc.id{href}" if href.startswith("/") else href, dst, worker_page)
                                 if saved:
-                                    log(f"  ✅ {os.path.basename(saved)}")
+                                    log(f"  ({fi}/{num_f}) ✅ {os.path.basename(saved)}")
                                     hasil["ok"].append(saved)
                                 else:
-                                    hasil["error"].append(f"{fname}: file kosong")
+                                    hasil["error"].append(f"{fname}: gagal")
                             except Exception as e:
                                 log(f"  ❌ {fname}: {e}")
                                 hasil["error"].append(f"{fname}: {e}")
                     except Exception as e:
-                        log(f"  ❌ Error di {target['label']}: {e}")
+                        log(f"  ❌ Error: {e}")
                         hasil["error"].append(f"{target['label']}: {e}")
             else:
-                log("  ❌ Lewati scan dokumen karena halaman edit gagal dibuka")
+                log("  ❌ Lewati scan dokumen")
 
             # ════════════════════════════════
             # 2b. Parse jangka_waktu dari dokumen SPSE jika belum ketemu
@@ -739,9 +704,15 @@ def download_dokumen_paket(
                     except Exception as _e:
                         log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
 
+            await worker_page.close()
+            log("🏁 Proses download dokumen selesai.")
+
     import concurrent.futures
 
     def _run_in_thread():
+        if st_ctx:
+            from streamlit.runtime.scriptrunner import add_script_run_ctx
+            add_script_run_ctx(threading.current_thread(), st_ctx)
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
