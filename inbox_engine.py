@@ -340,7 +340,44 @@ _KOLOM_DRAFT_PAKET = {
     "nama_dinas", "bidang", "nama_ppk", "jangka_waktu", "sumber_anggaran",
     "anggota_1", "anggota_2", "anggota_3",
     "diambil_pada", "nomor_urut", "folder_dibuat", "folder_dibuat_pada", "kode_unik",
+    "sbu_baru", "sbu_lama",
 }
+
+# ── SBU Detection Engine ────────────────────────────────────────────────────────
+# Urutan prioritas: lebih spesifik di atas, lebih umum di bawah
+_SBU_RULES = [
+    ("BS016", "SI011", ["stadion", "lapangan sepakbola", "lapangan bola",
+                        "lapangan olahraga", "lapangan olah raga", "kolam renang"]),
+    ("BG006", "BG007", ["ruang kelas", "sekolah", "sdn ", "smpn ", "smkn ", "sman ",
+                        "madrasah", "perpustakaan", "universitas"]),
+    ("BG005", "BG008", ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik"]),
+    ("BG002", "BG004", ["kantor", "perkantoran", "pengadilan", "polsek", "polres",
+                        "koramil", "kodim", "pos pengaman", "pos jaga",
+                        "balai desa", "balai kecamatan", "aula"]),
+    ("BS002", "SI004", ["jembatan", "fly over", "flyover", "underpass",
+                        "jalan layang", "titian", "gorong-gorong"]),
+    ("BS004", "SI001", ["drainase", "irigasi", "tersier", "tabat",
+                        "siring jalan", "siring pengaman",
+                        "saluran drainase", "saluran irigasi", "saluran pembuangan"]),
+    ("BS010", "SI001", ["normalisasi", "pengerukan", "tebing sungai", "siring sungai",
+                        "rehab sungai", "rehabilitasi sungai", "tanggul", "bendung",
+                        "embung", "check dam", "waduk", "pintu air", "sei.",
+                        "sumber daya air"]),
+    ("BS001", "SI003", ["jalan", "pengaspalan", "aspal", "hotmix", "hot mix",
+                        "perkerasan", "pelebaran", "rabat beton", "rigid pavement"]),
+    ("BS010", "SI001", ["sungai"]),
+    ("BG009", "BG009", ["gedung", "serbaguna", "paud", "rumah ibadah",
+                        "masjid", "musholla", "gereja", "lapas"]),
+]
+
+def detect_sbu(nama_tender: str) -> tuple[str, str]:
+    """Deteksi SBU dari judul paket. Return (sbu_baru, sbu_lama), kosong jika tidak cocok."""
+    nama_lower = nama_tender.lower()
+    for sbu_baru, sbu_lama, keywords in _SBU_RULES:
+        for kw in keywords:
+            if kw in nama_lower:
+                return sbu_baru, sbu_lama
+    return "", ""
 
 def upsert_draft_paket(data: dict) -> dict:
     """Upsert satu record ke tabel draft_paket. Return response Supabase."""
@@ -375,6 +412,11 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         record["id_pesan"] = pesan["id_pesan"]
         record["_is_baru"] = kode_tender not in existing_kode
         record["_tanggal_pesan"] = pesan["tanggal"]
+
+        # Deteksi SBU dari judul paket
+        sbu_baru, sbu_lama = detect_sbu(record.get("nama_tender", ""))
+        record["sbu_baru"] = sbu_baru
+        record["sbu_lama"] = sbu_lama
 
         # Scrape HPS via Playwright (halaman di-render JS)
         try:
