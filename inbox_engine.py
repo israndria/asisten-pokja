@@ -344,71 +344,96 @@ _KOLOM_DRAFT_PAKET = {
 }
 
 # ── SBU Detection Engine ────────────────────────────────────────────────────────
+# Format: (sbu_baru_lengkap, sbu_lama_lengkap, [include_keywords], [exclude_keywords_opsional])
 # Urutan prioritas: lebih spesifik di atas, lebih umum di bawah
 _SBU_RULES = [
-    # Format: (sbu_baru, sbu_lama, [include_keywords], [exclude_keywords_optional])
-    # Lebih spesifik di atas, lebih umum di bawah
-    ("BS016", "SI011", ["stadion", "lapangan sepakbola", "lapangan bola",
-                        "lapangan olahraga", "lapangan olah raga", "kolam renang",
-                        "kolam karang taruna", "gelanggang", "gedung olahraga",
-                        "gor ", "tribun", "velodrome", "skatepark"]),
-    ("BS016", "SI011", ["kolam"],
-                       ["tambak", "ikan", "perikanan", "udang", "lele", "nila", "bandeng"]),
-    ("BG006", "BG007", ["ruang kelas", "sekolah", "sdn ", "smpn ", "smkn ", "sman ",
-                        "madrasah", "perpustakaan", "universitas"]),
-    ("BG005", "BG008", ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik"]),
-    ("BG002", "BG004", ["kantor", "perkantoran", "pengadilan", "polsek", "polres",
-                        "koramil", "kodim", "pos pengaman", "pos jaga",
-                        "balai desa", "balai kecamatan", "aula"]),
-    ("BS002", "SI004", ["jembatan", "fly over", "flyover", "underpass",
-                        "jalan layang", "titian", "gorong-gorong"]),
-    ("BS004", "SI001", ["drainase", "irigasi", "tersier", "tabat",
-                        "siring jalan", "siring pengaman",
-                        "saluran drainase", "saluran irigasi", "saluran pembuangan"]),
-    ("BS010", "SI001", ["normalisasi", "pengerukan", "tebing sungai", "siring sungai",
-                        "rehab sungai", "rehabilitasi sungai", "tanggul", "bendung",
-                        "embung", "check dam", "waduk", "pintu air", "sei.",
-                        "sumber daya air"]),
-    ("BS001", "SI003", ["jalan", "pengaspalan", "aspal", "hotmix", "hot mix",
-                        "perkerasan", "pelebaran", "rabat beton", "rigid pavement"]),
-    ("BS010", "SI001", ["sungai"]),
-    ("BG009", "BG009", ["gedung", "serbaguna", "paud", "rumah ibadah",
-                        "masjid", "musholla", "gereja", "lapas"]),
+    # BS016 SI012 — fasilitas olahraga INDOOR (GOR, gedung olahraga, kolam renang dalam gedung)
+    (
+        "Subklasifikasi BS016 (KBLI 2020) Konstruksi Bangunan Sipil Fasilitas Olah Raga",
+        "Subklasifikasi SI012 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Fasilitas Olah Raga Indoor dan Fasilitas",
+        ["gedung olahraga", "gor ", "velodrome", "skatepark"],
+    ),
+    # BS016 SI011 — fasilitas olahraga OUTDOOR (stadion, lapangan, tribun, kolam renang terbuka)
+    (
+        "Subklasifikasi BS016 (KBLI 2020) Konstruksi Bangunan Sipil Fasilitas Olah Raga",
+        "Subklasifikasi SI011 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Stadion Untuk Olahraga Outdoor",
+        ["stadion", "lapangan sepakbola", "lapangan bola", "lapangan olahraga",
+         "lapangan olah raga", "kolam renang", "kolam karang taruna", "gelanggang", "tribun"],
+    ),
+    (
+        "Subklasifikasi BS016 (KBLI 2020) Konstruksi Bangunan Sipil Fasilitas Olah Raga",
+        "Subklasifikasi SI011 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Stadion Untuk Olahraga Outdoor",
+        ["kolam"],
+        ["tambak", "ikan", "perikanan", "udang", "lele", "nila", "bandeng"],
+    ),
+    # BG006 BG007 — gedung pendidikan
+    (
+        "Subklasifikasi BG006 (KBLI 2020) Konstruksi Gedung Pendidikan",
+        "Subklasifikasi BG007 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Pendidikan",
+        ["ruang kelas", "sekolah", "sdn ", "smpn ", "smkn ", "sman ",
+         "madrasah", "perpustakaan", "universitas"],
+    ),
+    # BG005 BG008 — gedung kesehatan
+    (
+        "Subklasifikasi BG005 (KBLI 2020) Konstruksi Gedung Kesehatan",
+        "Subklasifikasi BG008 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Kesehatan",
+        ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik"],
+    ),
+    # BG002 BG004 — gedung perkantoran/komersial
+    (
+        "Subklasifikasi BG002 (KBLI 2020) Konstruksi Gedung Perkantoran",
+        "Subklasifikasi BG004 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Komersial",
+        ["kantor", "perkantoran", "pengadilan", "polsek", "polres",
+         "koramil", "kodim", "pos pengaman", "pos jaga",
+         "balai desa", "balai kecamatan", "aula"],
+    ),
+    # BS002 SI004 — jembatan & jalan layang
+    (
+        "Subklasifikasi BS002 (KBLI 2020) Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass",
+        "Subklasifikasi SI004 (KBLI 2015) Jasa Pelaksana Konstruksi Jembatan, Jalan Layang, Terowongan, dan Subways",
+        ["jembatan", "fly over", "flyover", "underpass", "jalan layang", "titian", "gorong-gorong"],
+    ),
+    # BS004 SI001 — drainase & irigasi
+    (
+        "Subklasifikasi BS004 (KBLI 2020) Konstruksi Jaringan Irigasi dan Drainase",
+        "Subklasifikasi SI001 (KBLI 2015) Jasa Pelaksana Konstruksi Saluran Air, Pelabuhan, Dam, dan Prasarana Sumber Daya Air Lainnya",
+        ["drainase", "irigasi", "tersier", "tabat", "siring jalan", "siring pengaman",
+         "saluran drainase", "saluran irigasi", "saluran pembuangan"],
+    ),
+    # BS010 SI001 — sumber daya air, sungai, bendung
+    (
+        "Subklasifikasi BS010 (KBLI 2020) Konstruksi Bangunan Prasarana Sumber Daya Air",
+        "Subklasifikasi SI001 (KBLI 2015) Jasa Pelaksana Konstruksi Saluran Air, Pelabuhan, Dam, dan Prasarana Sumber Daya Air Lainnya",
+        ["normalisasi", "pengerukan", "tebing sungai", "siring sungai",
+         "rehab sungai", "rehabilitasi sungai", "tanggul", "bendung",
+         "embung", "check dam", "waduk", "pintu air", "sei.", "sumber daya air", "sungai"],
+    ),
+    # BS001 SI003 — jalan
+    (
+        "Subklasifikasi BS001 (KBLI 2020) Konstruksi Bangunan Sipil Jalan",
+        "Subklasifikasi SI003 (KBLI 2015) Jasa Pelaksana Konstruksi Jalan Raya (kecuali Jalan Layang), Jalan, Rel Kereta Api, dan Landas Pacu Bandara",
+        ["jalan", "pengaspalan", "aspal", "hotmix", "hot mix",
+         "perkerasan", "pelebaran", "rabat beton", "rigid pavement"],
+    ),
+    # BG009 BG009 — gedung lainnya (paling umum, selalu di bawah)
+    (
+        "Subklasifikasi BG009 (KBLI 2020) Konstruksi Gedung Lainnya",
+        "Subklasifikasi BG009 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Gedung Lainnya",
+        ["gedung", "serbaguna", "paud", "rumah ibadah", "masjid", "musholla", "gereja", "lapas"],
+    ),
 ]
 
-_SBU_DESC_CACHE: dict[str, tuple[str, str]] = {}
-
-def _lookup_sbu_desc(kode_baru: str, kode_lama: str) -> tuple[str, str]:
-    """Ambil deskripsi lengkap dari master_sbu berdasarkan kode. Di-cache per sesi."""
-    cache_key = f"{kode_baru}|{kode_lama}"
-    if cache_key in _SBU_DESC_CACHE:
-        return _SBU_DESC_CACHE[cache_key]
-    try:
-        res = _sb().table("master_sbu").select("sbu_baru,sbu_lama") \
-            .like("sbu_baru", f"%{kode_baru}%") \
-            .like("sbu_lama", f"%{kode_lama}%") \
-            .limit(1).execute()
-        if res.data:
-            desc_baru = res.data[0]["sbu_baru"]
-            desc_lama = res.data[0]["sbu_lama"]
-        else:
-            desc_baru, desc_lama = kode_baru, kode_lama
-    except Exception:
-        desc_baru, desc_lama = kode_baru, kode_lama
-    _SBU_DESC_CACHE[cache_key] = (desc_baru, desc_lama)
-    return desc_baru, desc_lama
-
 def detect_sbu(nama_tender: str) -> tuple[str, str]:
-    """Deteksi SBU dari judul paket. Return (sbu_baru_desc, sbu_lama_desc) deskripsi lengkap."""
+    """Deteksi SBU dari judul paket. Return (sbu_baru_lengkap, sbu_lama_lengkap)."""
     nama_lower = nama_tender.lower()
     for rule in _SBU_RULES:
-        kode_baru, kode_lama, keywords = rule[0], rule[1], rule[2]
+        sbu_baru, sbu_lama, keywords = rule[0], rule[1], rule[2]
         excludes = rule[3] if len(rule) > 3 else []
         for kw in keywords:
             if kw in nama_lower:
                 if any(ex in nama_lower for ex in excludes):
                     break  # keyword cocok tapi ada exclude → skip rule ini
-                return _lookup_sbu_desc(kode_baru, kode_lama)
+                return sbu_baru, sbu_lama
     return "", ""
 
 def upsert_draft_paket(data: dict) -> dict:
