@@ -346,8 +346,14 @@ _KOLOM_DRAFT_PAKET = {
 # ── SBU Detection Engine ────────────────────────────────────────────────────────
 # Urutan prioritas: lebih spesifik di atas, lebih umum di bawah
 _SBU_RULES = [
+    # Format: (sbu_baru, sbu_lama, [include_keywords], [exclude_keywords_optional])
+    # Lebih spesifik di atas, lebih umum di bawah
     ("BS016", "SI011", ["stadion", "lapangan sepakbola", "lapangan bola",
-                        "lapangan olahraga", "lapangan olah raga", "kolam renang"]),
+                        "lapangan olahraga", "lapangan olah raga", "kolam renang",
+                        "kolam karang taruna", "gelanggang", "gedung olahraga",
+                        "gor ", "tribun", "velodrome", "skatepark"]),
+    ("BS016", "SI011", ["kolam"],
+                       ["tambak", "ikan", "perikanan", "udang", "lele", "nila", "bandeng"]),
     ("BG006", "BG007", ["ruang kelas", "sekolah", "sdn ", "smpn ", "smkn ", "sman ",
                         "madrasah", "perpustakaan", "universitas"]),
     ("BG005", "BG008", ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik"]),
@@ -370,13 +376,39 @@ _SBU_RULES = [
                         "masjid", "musholla", "gereja", "lapas"]),
 ]
 
+_SBU_DESC_CACHE: dict[str, tuple[str, str]] = {}
+
+def _lookup_sbu_desc(kode_baru: str, kode_lama: str) -> tuple[str, str]:
+    """Ambil deskripsi lengkap dari master_sbu berdasarkan kode. Di-cache per sesi."""
+    cache_key = f"{kode_baru}|{kode_lama}"
+    if cache_key in _SBU_DESC_CACHE:
+        return _SBU_DESC_CACHE[cache_key]
+    try:
+        res = _sb().table("master_sbu").select("sbu_baru,sbu_lama") \
+            .like("sbu_baru", f"%{kode_baru}%") \
+            .like("sbu_lama", f"%{kode_lama}%") \
+            .limit(1).execute()
+        if res.data:
+            desc_baru = res.data[0]["sbu_baru"]
+            desc_lama = res.data[0]["sbu_lama"]
+        else:
+            desc_baru, desc_lama = kode_baru, kode_lama
+    except Exception:
+        desc_baru, desc_lama = kode_baru, kode_lama
+    _SBU_DESC_CACHE[cache_key] = (desc_baru, desc_lama)
+    return desc_baru, desc_lama
+
 def detect_sbu(nama_tender: str) -> tuple[str, str]:
-    """Deteksi SBU dari judul paket. Return (sbu_baru, sbu_lama), kosong jika tidak cocok."""
+    """Deteksi SBU dari judul paket. Return (sbu_baru_desc, sbu_lama_desc) deskripsi lengkap."""
     nama_lower = nama_tender.lower()
-    for sbu_baru, sbu_lama, keywords in _SBU_RULES:
+    for rule in _SBU_RULES:
+        kode_baru, kode_lama, keywords = rule[0], rule[1], rule[2]
+        excludes = rule[3] if len(rule) > 3 else []
         for kw in keywords:
             if kw in nama_lower:
-                return sbu_baru, sbu_lama
+                if any(ex in nama_lower for ex in excludes):
+                    break  # keyword cocok tapi ada exclude → skip rule ini
+                return _lookup_sbu_desc(kode_baru, kode_lama)
     return "", ""
 
 def upsert_draft_paket(data: dict) -> dict:
