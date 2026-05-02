@@ -44,7 +44,10 @@ _COL_KODE = 0       # kode paket / ID lelang
 _COL_NAMA = 1       # nama paket
 _COL_STATUS = 2     # status: "Draft" / "Tender Sudah Selesai" / dll
 _COL_ID_LELANG = 5  # ID lelang (untuk endpoint /lelang/[ID]/...)
+_COL_TANGGAL = 20   # tanggal format "YYYY-MM-DD HH:MM:SS" — untuk filter tahun
 _COL_POKJA = 21     # nama pokja
+
+_FILTER_TAHUN = "2025"  # hanya tampilkan paket tahun ini
 
 
 def _get_url(paket_id: str) -> str:
@@ -327,6 +330,9 @@ def fetch_paket_draft() -> dict:
             status = r[_COL_STATUS] if len(r) > _COL_STATUS else ""
             if "draft" not in status.lower():
                 continue
+            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
+            if not tgl.startswith(_FILTER_TAHUN):
+                continue
             paket.append({
                 "kode": str(r[_COL_KODE]),
                 "nama": str(r[_COL_NAMA]),
@@ -383,6 +389,9 @@ def fetch_paket_semua() -> dict:
             if kode in seen:
                 continue
             seen.add(kode)
+            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
+            if not tgl.startswith(_FILTER_TAHUN):
+                continue
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
             paket.append({
                 "kode": kode,
@@ -439,6 +448,9 @@ def fetch_paket_aktif() -> dict:
         for r in rows:
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
             if any(s in status.lower() for s in _SKIP_STATUS):
+                continue
+            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
+            if not tgl.startswith(_FILTER_TAHUN):
                 continue
             paket.append({
                 "kode": str(r[_COL_KODE]),
