@@ -145,6 +145,9 @@ def upsert_peserta_identitas(kode_tender: str, peserta_id: str, data: dict) -> N
         "alat_1":         data.get("alat_1", ""),
         "alat_2":         data.get("alat_2", ""),
         "alat_3":         data.get("alat_3", ""),
+        "alat_4":         data.get("alat_4", ""),
+        "alat_5":         data.get("alat_5", ""),
+        "alat_6":         data.get("alat_6", ""),
     }
     _sb().table("peserta_identitas").upsert(record).execute()
 
@@ -394,6 +397,9 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
             data["alat_1"]     = peralatan_list[0] if len(peralatan_list) > 0 else ""
             data["alat_2"]     = peralatan_list[1] if len(peralatan_list) > 1 else ""
             data["alat_3"]     = peralatan_list[2] if len(peralatan_list) > 2 else ""
+            data["alat_4"]     = peralatan_list[3] if len(peralatan_list) > 3 else ""
+            data["alat_5"]     = peralatan_list[4] if len(peralatan_list) > 4 else ""
+            data["alat_6"]     = peralatan_list[5] if len(peralatan_list) > 5 else ""
 
             upsert_peserta_identitas(kode_tender, pid, data)
             log(f"  OK: {data['nama_perusahaan']} | direktur: {data['nama_direktur']}")
