@@ -2333,7 +2333,7 @@ with tab_kual:
                 fc1, fc2 = st.columns([4, 1])
                 with fc1:
                     if item["folder_ok"]:
-                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\Dokumen Evaluasi`")
+                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\1. Dokumen Kualifikasi`")
                     else:
                         st.error(f"❌ **{p['kode']}** — {item['folder_info']}")
                         _kl_semua_folder_ok = False
@@ -2491,9 +2491,13 @@ with tab_kual:
                             _db_kk.table("kk_evaluasi_peserta").upsert(rows).execute()
                             _log_cb(f"✅ [{kode_tender}] {len(rows)} peserta tersimpan ke Supabase.")
 
+                            # Harga Penawaran — scrape hanya peserta dari KK Evaluasi (presisi)
                             try:
                                 import penawaran_engine
-                                hasil_hp = penawaran_engine.scrape_dan_upsert_semua(kode_tender, progress_cb=_log_cb)
+                                _hp_peserta = [{"peserta_id": ps.get("kualifikasi_id", ""), "nama_peserta": ps.get("nama", "")}
+                                               for ps in peserta_list if ps.get("kualifikasi_id")]
+                                hasil_hp = penawaran_engine.scrape_dan_upsert_semua(
+                                    kode_tender, progress_cb=_log_cb, peserta_override=_hp_peserta or None)
                                 _log_cb(f"✅ [{kode_tender}] HP: {hasil_hp['peserta']} peserta, {hasil_hp['items']} item"
                                         if hasil_hp["peserta"] > 0 else f"⚠️ [{kode_tender}] HP: belum ada penawaran")
                             except Exception as e_hp:
@@ -2524,212 +2528,94 @@ with tab_kual:
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
 
-_DP_DEFAULT_SRC = r"D:\data"
-_DP_SUBFOLDER_TEKNIS = "teknis"
-_DP_SUBFOLDER_HARGA  = "harga"
-_DP_DEST_SUBFOLDER   = "Dokumen Penawaran"
-
-
-def _dp_list_files(folder: str, subfolders: list[str]) -> list[dict]:
-    """Kumpulkan file dari subfolder teknis/harga di folder sumber."""
-    hasil = []
-    for sub in subfolders:
-        path = os.path.join(folder, sub)
-        if not os.path.isdir(path):
-            continue
-        for fname in os.listdir(path):
-            fpath = os.path.join(path, fname)
-            if os.path.isfile(fpath):
-                hasil.append({
-                    "nama": fname,
-                    "sumber": fpath,
-                    "subfolder": sub,
-                    "ukuran": os.path.getsize(fpath),
-                })
-    return hasil
-
-
-def _dp_pindah(files: list[dict], dest_dir: str) -> dict:
-    """Pindah (move) file ke dest_dir. Buat folder jika belum ada."""
-    import shutil
-    os.makedirs(dest_dir, exist_ok=True)
-    sukses, gagal = [], []
-    for f in files:
-        tujuan = os.path.join(dest_dir, f["nama"])
-        try:
-            shutil.move(f["sumber"], tujuan)
-            sukses.append(f["nama"])
-        except Exception as e:
-            gagal.append(f"{f['nama']}: {e}")
-    return {"sukses": sukses, "gagal": gagal}
-
-
 with tab_apendo:
-    st.markdown("### Pindah Dokumen Penawaran ke Folder Paket")
+    import pindah_penawaran_engine as _pe
+
+    st.markdown("### Dokumen Penawaran")
     st.caption(
-        "Setelah download manual via Apendo, gunakan fitur ini untuk memindahkan "
-        "file dari subfolder **teknis** dan **harga** ke folder **Dokumen Penawaran** "
-        "di dalam folder paket yang dipilih."
+        "Scan otomatis hasil decrypt Apendo di `D:\\data\\biddings`, "
+        "cocokkan dengan paket + peserta di Supabase, lalu pindah ke folder paket."
     )
 
-    _dp_col_kiri, _dp_col_kanan = st.columns([2, 3])
+    _dp_col_scan, _ = st.columns([1, 3])
+    with _dp_col_scan:
+        if st.button("🔍 Scan Apendo", key="dp_scan", use_container_width=True):
+            st.session_state.pop("dp_scan_result", None)
+            st.rerun()
 
-    with _dp_col_kiri:
-        st.markdown("#### 1. Folder Sumber (Hasil Download)")
-
-        dp_src = st.text_input(
-            "Folder sumber",
-            key="dp_src",
-            value=st.session_state.get("dp_src_val", _DP_DEFAULT_SRC),
-            label_visibility="collapsed",
-            placeholder=r"D:\data",
-        )
-        st.caption(f"Default: `{_DP_DEFAULT_SRC}` — akan dicari subfolder `teknis/` dan `harga/`")
-
-        _dp_browse_col, _dp_open_col = st.columns(2)
-        with _dp_browse_col:
-            if st.button("📁 Pilih Folder", key="dp_browse_src", use_container_width=True):
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.wm_attributes("-topmost", True)
-                    sel = filedialog.askdirectory(
-                        initialdir=st.session_state.get("dp_src_val", _DP_DEFAULT_SRC),
-                        title="Pilih Folder Hasil Download Apendo",
-                    )
-                    root.destroy()
-                    if sel:
-                        st.session_state["dp_src_val"] = sel.replace("/", "\\")
-                        st.rerun()
-                except Exception as e:
-                    st.warning(f"Dialog gagal: {e} — ketik path manual.")
-        with _dp_open_col:
-            _dp_src_now = st.session_state.get("dp_src_val", _DP_DEFAULT_SRC) or dp_src
-            if st.button(
-                "📂 Buka",
-                key="dp_open_src",
-                use_container_width=True,
-                disabled=not (_dp_src_now and os.path.isdir(_dp_src_now)),
-            ):
-                os.startfile(_dp_src_now)
-
-        # Preview file yang akan dipindah
-        _dp_src_now = st.session_state.get("dp_src_val", _DP_DEFAULT_SRC) or dp_src
-        if _dp_src_now and os.path.isdir(_dp_src_now):
-            _dp_files = _dp_list_files(_dp_src_now, [_DP_SUBFOLDER_TEKNIS, _DP_SUBFOLDER_HARGA])
-            if _dp_files:
-                st.success(f"✅ {len(_dp_files)} file ditemukan:")
-                for fi in _dp_files:
-                    kb = fi["ukuran"] // 1024
-                    st.caption(f"• [{fi['subfolder']}] {fi['nama']} ({kb} KB)")
-                st.session_state["dp_files_preview"] = _dp_files
+    if "dp_scan_result" not in st.session_state:
+        with st.spinner("Scanning D:\\data\\biddings ..."):
+            _raw = _pe.scan_apendo()
+            if _raw:
+                _enriched = _pe.lookup_supabase(_raw)
             else:
-                st.warning("Tidak ada file di subfolder `teknis/` atau `harga/`.")
-                st.session_state["dp_files_preview"] = []
-        else:
-            st.info("Masukkan folder sumber yang valid.")
-            st.session_state["dp_files_preview"] = []
+                _enriched = []
+            st.session_state["dp_scan_result"] = _enriched
 
-    with _dp_col_kanan:
-        st.markdown("#### 2. Folder Paket Tujuan")
+    _dp_items = st.session_state.get("dp_scan_result", [])
 
-        # Menggunakan data dari Supabase (draft_paket) secara otomatis
-        if "dp_paket_list" not in st.session_state:
-            try:
-                from config import sb as _sb_dp
-                _r = _sb_dp().table("draft_paket").select("kode_tender,nama_paket,folder_dibuat").order("nama_paket").execute()
-                st.session_state["dp_paket_list"] = _r.data or []
-            except Exception as e:
-                st.error(f"Gagal memuat paket dari database: {e}")
-                st.session_state["dp_paket_list"] = []
+    if "dp_notif" in st.session_state:
+        st.success(st.session_state.pop("dp_notif"))
 
-        dp_paket_list = st.session_state.get("dp_paket_list", [])
-        if dp_paket_list:
-            _dp_labels = [
-                f"{p.get('nama_paket', p['kode_tender'])}"
-                for p in dp_paket_list
-            ]
-            dp_paket_idx = st.selectbox(
-                "Pilih paket tujuan",
-                options=range(len(dp_paket_list)),
-                format_func=lambda i: _dp_labels[i],
-                key="dp_paket_idx",
-                label_visibility="collapsed",
-            )
-            dp_paket_sel = dp_paket_list[dp_paket_idx]
-            dp_folder_paket = dp_paket_sel.get("folder_dibuat", "")
+    if not _dp_items:
+        st.info("Tidak ada data di `D:\\data\\biddings`. Download dulu via Apendo.")
+    else:
+        # Hitung total peserta per paket untuk resolve_dest
+        _dp_total: dict[str, int] = {}
+        for _it in _dp_items:
+            _dp_total[_it["kode_tender"]] = _dp_total.get(_it["kode_tender"], 0) + 1
 
-            if dp_folder_paket and os.path.isdir(dp_folder_paket):
-                _dp_dest = os.path.join(dp_folder_paket, _DP_DEST_SUBFOLDER)
-                st.info(f"📂 Tujuan: `{_dp_dest}`")
+        # Kelompokkan per paket untuk tampilan
+        _dp_by_paket: dict[str, list] = {}
+        for _it in _dp_items:
+            _dp_by_paket.setdefault(_it["kode_tender"], []).append(_it)
 
-                if st.button(
-                    "📂 Buka Folder Paket",
-                    key="dp_open_paket",
-                    use_container_width=True,
-                ):
-                    os.startfile(dp_folder_paket)
+        for _kt, _peserta_list in _dp_by_paket.items():
+            _folder_dibuat = _peserta_list[0].get("folder_dibuat", "")
+            _paket_label = _folder_dibuat if _folder_dibuat else _peserta_list[0].get("nama_tender", _kt)
+            _folder_paket = _peserta_list[0].get("folder_paket", "")
+            _folder_ada = bool(_folder_paket and os.path.isdir(_folder_paket))
 
-                st.markdown("#### 3. Pindahkan File")
-
-                _dp_files_ok = st.session_state.get("dp_files_preview", [])
-                if not _dp_files_ok:
-                    st.warning("Tidak ada file untuk dipindah — cek folder sumber di kiri.")
+            with st.expander(f"**{_paket_label}** ({len(_peserta_list)} peserta)", expanded=True):
+                if not _folder_ada:
+                    st.warning("Folder paket belum ditemukan — buat folder di Tab 0 dulu.")
                 else:
-                    st.write(f"**{len(_dp_files_ok)} file** akan dipindah ke `Dokumen Penawaran/`")
+                    st.text(f"📂 {_folder_paket}")
+
+                for _ps in _peserta_list:
+                    _nama = _ps["nama_perusahaan"]
+                    _n_teknis = len(_pe._collect_files(_ps["path_teknis"])) if _ps.get("path_teknis") else 0
+                    _n_harga  = len(_pe._collect_files(_ps["path_harga"]))  if _ps.get("path_harga")  else 0
+                    st.markdown(f"**Peserta {_ps['urutan']} = {_nama}** — {_n_teknis} file teknis, {_n_harga} file harga")
+
+                if _folder_ada:
+                    _dp_run_key = f"dp_run_{_kt}"
                     if st.button(
-                        "🚚 Pindahkan Sekarang",
-                        key="dp_run",
+                        f"🚚 Pindahkan & Gabung PDF — {_paket_label[:40]}",
+                        key=_dp_run_key,
                         type="primary",
                         use_container_width=True,
                     ):
-                        hasil = _dp_pindah(_dp_files_ok, _dp_dest)
-                        if hasil["sukses"]:
-                            st.success(f"✅ {len(hasil['sukses'])} file dipindah:")
-                            for nm in hasil["sukses"]:
-                                st.caption(f"• {nm}")
-                            # Bersihkan preview supaya tidak double-run
-                            st.session_state["dp_files_preview"] = []
-                        if hasil["gagal"]:
-                            st.error(f"❌ {len(hasil['gagal'])} file gagal:")
-                            for err in hasil["gagal"]:
-                                st.caption(f"• {err}")
-                        if hasil["sukses"]:
-                            if st.button("📂 Buka Folder Dokumen Penawaran", key="dp_open_dest"):
-                                os.startfile(_dp_dest)
-            elif dp_folder_paket:
-                st.error(f"Folder paket tidak ditemukan: `{dp_folder_paket}`")
-            else:
-                st.warning("Paket ini belum punya folder yang dibuat. Buat folder di Tab 0 dulu.")
-        else:
-            st.info("Klik **Ambil Daftar Paket** untuk memilih tujuan.")
-
-        st.markdown("---")
-        st.markdown("#### Atau — Ketik Path Manual")
-        dp_manual = st.text_input(
-            "Path folder paket tujuan (manual)",
-            key="dp_manual_path",
-            placeholder=r"D:\Dokumen\@ POKJA 2026\1. Pokja 086 - ...",
-            label_visibility="collapsed",
-        )
-        if dp_manual and os.path.isdir(dp_manual):
-            _dp_dest_manual = os.path.join(dp_manual, _DP_DEST_SUBFOLDER)
-            st.info(f"📂 Tujuan: `{_dp_dest_manual}`")
-            _dp_files_manual = st.session_state.get("dp_files_preview", [])
-            if _dp_files_manual:
-                if st.button(
-                    "🚚 Pindahkan ke Path Manual",
-                    key="dp_run_manual",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    hasil = _dp_pindah(_dp_files_manual, _dp_dest_manual)
-                    if hasil["sukses"]:
-                        st.success(f"✅ {len(hasil['sukses'])} file dipindah.")
-                        st.session_state["dp_files_preview"] = []
-                    if hasil["gagal"]:
-                        st.error(f"❌ Gagal: {', '.join(hasil['gagal'])}")
-        elif dp_manual:
-            st.error("Path tidak ditemukan.")
+                        _log_msgs = []
+                        _semua_sukses, _semua_gagal = [], []
+                        _dest_dirs = []
+                        for _ps in _peserta_list:
+                            _dest = _pe.resolve_dest(_ps, _dp_total)
+                            _dest_dirs.append(_dest)
+                            _hasil = _pe.pindah_dan_gabung(_ps, _dest, log=_log_msgs.append)
+                            _semua_sukses.extend(_hasil["sukses"])
+                            _semua_gagal.extend(_hasil["gagal"])
+                        if _semua_sukses:
+                            _notif = (
+                                f"✅ {len(_semua_sukses)} file dipindah dari **{_paket_label}** "
+                                f"→ `{_dest_dirs[0]}`"
+                            )
+                            st.session_state["dp_notif"] = _notif
+                            st.session_state.pop("dp_scan_result", None)
+                            st.rerun()
+                        for _msg in _log_msgs:
+                            st.caption(_msg)
+                        if _semua_gagal:
+                            st.error(f"❌ {len(_semua_gagal)} gagal:")
+                            for _e in _semua_gagal:
+                                st.caption(f"• {_e}")

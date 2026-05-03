@@ -132,7 +132,7 @@ def resolve_folder_paket(kode_tender: str) -> dict:
     """
     Lookup folder paket dari Supabase draft_paket.folder_dibuat.
     Return: {"ok": bool, "path": str, "pesan": str}
-    path = POKJA_ROOT / folder_dibuat / Dokumen Evaluasi  (dibuat jika belum ada)
+    path = POKJA_ROOT / folder_dibuat / 1. Dokumen Kualifikasi  (dibuat jika belum ada)
     """
     from config import sb, POKJA_ROOT
     try:
@@ -144,7 +144,7 @@ def resolve_folder_paket(kode_tender: str) -> dict:
             return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 0)"}
         # Windows tidak izinkan '/' dalam nama folder — sanitasi sama seperti saat folder dibuat
         folder_dibuat_safe = re.sub(r'[/\\:*?"<>|]', "-", folder_dibuat).strip()
-        path = os.path.join(POKJA_ROOT, folder_dibuat_safe, "Dokumen Evaluasi")
+        path = os.path.join(POKJA_ROOT, folder_dibuat_safe, "1. Dokumen Kualifikasi")
         os.makedirs(path, exist_ok=True)
         return {"ok": True, "path": path, "pesan": folder_dibuat}
     except Exception as e:
@@ -274,7 +274,7 @@ def download_kualifikasi_peserta(
 
     Args:
         peserta       : {"nama", "kualifikasi_id", "lelang_id"}
-        folder_output : path Dokumen Evaluasi/ (sudah resolved)
+        folder_output : path 1. Dokumen Kualifikasi/ (sudah resolved)
         urutan        : nomor urut peserta (1, 2, 3)
         total_peserta : jumlah total peserta — menentukan apakah pakai subfolder
                         1 peserta → file langsung di folder_output (flat)

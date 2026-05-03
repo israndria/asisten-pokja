@@ -108,8 +108,21 @@ def scrape_rincian_penawaran(peserta_id: str) -> dict:
             total_penawaran = _parse_rp(cells[3])
             continue
 
-        # Skip baris PDN / ringkasan lain
+        # Baris divisi/header section (colspan → sedikit cell, teks mengandung "DIVISI")
         if len(cells) < 11:
+            teks = " ".join(cells)
+            if teks.strip():
+                urutan += 1
+                items.append({
+                    "urutan":           urutan,
+                    "jenis_bj":         teks,
+                    "satuan":           None,
+                    "vol":              None,
+                    "harga_satuan":     None,
+                    "pajak_pct":        None,
+                    "total_stlh_pajak": None,
+                    "is_divisi":        True,
+                })
             continue
 
         jenis_bj  = cells[0]
@@ -166,20 +179,25 @@ def upsert_harga_penawaran(kode_tender: str, peserta_id: str,
     return len(records)
 
 
-def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None) -> dict:
+def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
+                            peserta_override: list[dict] | None = None) -> dict:
     """
     Entry point utama: scrape semua peserta → upsert ke Supabase.
+    peserta_override: [{"peserta_id", "nama_peserta"}] — jika diisi, skip fetch_peserta_ids.
     Return: {"peserta": int, "items": int, "errors": [...]}
     """
     def log(msg):
         if progress_cb:
             progress_cb(msg)
 
-    peserta_list = fetch_peserta_ids(kode_tender)
-    if not peserta_list:
-        return {"peserta": 0, "items": 0, "errors": ["Tidak ada peserta yang sudah kirim penawaran"]}
-
-    log(f"Ditemukan {len(peserta_list)} peserta dengan penawaran")
+    if peserta_override:
+        peserta_list = peserta_override
+        log(f"HP: scrape {len(peserta_list)} peserta dari KK Evaluasi")
+    else:
+        peserta_list = fetch_peserta_ids(kode_tender)
+        if not peserta_list:
+            return {"peserta": 0, "items": 0, "errors": ["Tidak ada peserta yang sudah kirim penawaran"]}
+        log(f"Ditemukan {len(peserta_list)} peserta dengan penawaran")
 
     total_items = 0
     errors = []

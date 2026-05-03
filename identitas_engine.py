@@ -156,10 +156,10 @@ def upsert_peserta_identitas(kode_tender: str, peserta_id: str, data: dict) -> N
 # 3. Gabung PDF + parse Formulir Isian Kualifikasi
 # ──────────────────────────────────────────────
 
-def gabung_pdf_peserta(folder_peserta: str, nama_peserta: str, log=None) -> str:
+def gabung_pdf_peserta(folder_peserta: str, nama_peserta: str, nomor_pokja: str = "", log=None) -> str:
     """
     Gabungkan semua PDF di folder_peserta menjadi satu file.
-    Output: DokumenFull_kualifikasi_{nama_peserta}.pdf di folder yang sama.
+    Output: DokkualifFull_{nama_peserta}_{nomor_pokja}.pdf di folder yang sama.
     Return: path file output, atau "" jika gagal/tidak ada PDF.
     """
     def _log(m):
@@ -181,7 +181,8 @@ def gabung_pdf_peserta(folder_peserta: str, nama_peserta: str, log=None) -> str:
         return ""
 
     nama_safe = sanitasi_nama_folder(nama_peserta)[:80].strip("-")
-    out_path = os.path.join(folder_peserta, f"DokumenFull_kualifikasi_{nama_safe}.pdf")
+    suffix    = f"_{nomor_pokja}" if nomor_pokja else ""
+    out_path  = os.path.join(folder_peserta, f"1. DokkualifFull_{nama_safe}{suffix}.pdf")
 
     try:
         merged = fitz.open()
@@ -369,16 +370,19 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                     folder_safe = sanitasi_nama_folder(folder_dibuat)
                     slug = sanitasi_nama_folder(nama)[:80].strip("-")
                     urutan = peserta_list.index(p) + 1
-                    fp = os.path.join(POKJA_ROOT, folder_safe, "Dokumen Evaluasi",
+                    fp = os.path.join(POKJA_ROOT, folder_safe, "1. Dokumen Kualifikasi",
                                       f"{urutan}. {slug}")
                     if os.path.isdir(fp):
                         folder_peserta = fp
             except Exception as ef:
                 log(f"  ⚠️ lookup folder peserta error: {ef}")
 
-            # Gabung semua PDF → DokumenFull_kualifikasi_{nama}.pdf (selalu dilakukan)
+            # Gabung semua PDF → DokkualifFull_{nama}_{nomor_pokja}.pdf (selalu dilakukan)
             if folder_peserta:
-                gabung_pdf_peserta(folder_peserta, nama, log=log)
+                import re as _re
+                _m = _re.search(r"Pokja\s+(\d+)", folder_dibuat, _re.IGNORECASE) if folder_dibuat else None
+                _nomor_pokja = _m.group(1) if _m else ""
+                gabung_pdf_peserta(folder_peserta, nama, nomor_pokja=_nomor_pokja, log=log)
 
             # Parse personel & alat dari Formulir Isian Kualifikasi jika /preview kosong
             if folder_peserta and (not personel_list or not peralatan_list):

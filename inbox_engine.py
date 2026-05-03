@@ -674,7 +674,7 @@ def download_dokumen_paket(
                         continue
                     try:
                         async with worker_page.expect_download(timeout=30000) as dl_info:
-                            await link.click()
+                            await link.evaluate("el => el.click()")
                         dl = await dl_info.value
                         tmp = await dl.path()
                         if tmp:
