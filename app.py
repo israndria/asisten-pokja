@@ -10,6 +10,14 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _pokja_label(p: dict) -> str:
+    """Buat label ringkas paket: 'Pokja 086 · 10096884000 — Nama Paket'."""
+    pokja_raw = p.get("pokja") or ""
+    m = re.search(r"\d+", pokja_raw)
+    pokja_no = m.group() if m else p.get("kode", "")
+    return f"Pokja {pokja_no} · {p['kode']} — {p['nama']}"
+
 from config import SPSE_BASE_URL
 import spse_browser
 import ldk_engine
@@ -786,7 +794,7 @@ with tab_setup:
                         col_chk, col_dokpil = st.columns([3, 2])
                         with col_chk:
                             checked = st.checkbox(
-                                f"**{p['kode']}** — {p['nama']}",
+                                _pokja_label(p),
                                 value=st.session_state.get(key_chk, True),
                                 key=key_chk,
                             )
@@ -820,11 +828,11 @@ with tab_setup:
             if _dp_dengan_file:
                 st.caption(f"✅ **{len(_dp_dengan_file)} paket** siap diupload:")
                 for _p in _dp_dengan_file:
-                    st.markdown(f"- **{_p['kode']}** — {_p['nama'][:60]}  \n  📄 `{_p['_dokpil'].name}`")
+                    st.markdown(f"- {_pokja_label(_p)[:80]}  \n  📄 `{_p['_dokpil'].name}`")
             if _dp_tanpa_file:
                 st.caption(f"⚠️ **{len(_dp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
                 for _p in _dp_tanpa_file:
-                    st.markdown(f"- **{_p['kode']}** — {_p['nama'][:60]}")
+                    st.markdown(f"- {_pokja_label(_p)[:80]}")
 
         dp_nomor_ba = st.text_input(
             "Nomor BA",
@@ -1168,7 +1176,7 @@ with tab7:
                     for p in paket_list_pj:
                         key_chk = f"pj_chk_{p['id_lelang']}"
                         checked = st.checkbox(
-                            f"**{p['kode']}** — {p['nama']}",
+                            _pokja_label(p),
                             value=st.session_state.get(key_chk, True),
                             key=key_chk,
                         )
@@ -1388,7 +1396,7 @@ with tab8:
                     for p in paket_list:
                         key_chk = f"jd_chk_{p['id_lelang']}"
                         checked = st.checkbox(
-                            f"**{p['kode']}** — {p['nama']}",
+                            _pokja_label(p),
                             value=st.session_state.get(key_chk, True),
                             key=key_chk,
                         )
@@ -1581,7 +1589,7 @@ with tab9:
                         col_chk, col_lamp = st.columns([3, 2])
                         with col_chk:
                             checked = st.checkbox(
-                                f"**{p['kode']}** — {p['nama']}",
+                                _pokja_label(p),
                                 value=st.session_state.get(key_chk, True),
                                 key=key_chk,
                             )
@@ -1971,7 +1979,7 @@ with tab_ba:
                         _chk_col, _super_col = st.columns([3, 1])
                         with _chk_col:
                             checked = st.checkbox(
-                                f"**{p['kode']}** — {p['nama']}",
+                                _pokja_label(p),
                                 value=st.session_state.get(key_chk, True), key=key_chk,
                             )
                         with _super_col:
@@ -2234,7 +2242,7 @@ with tab_kual:
                         _kl_chk_key = f"kl_chk_{p['kode']}"
                         _was = st.session_state.get(_kl_chk_key, False)
                         _checked = st.checkbox(
-                            f"**{p['kode']}**  \n{p['nama'][:60]}  \n_{p.get('status', '')}_",
+                            f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
                             key=_kl_chk_key,
                             value=_was,
                         )
