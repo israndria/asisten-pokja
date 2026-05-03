@@ -19,10 +19,49 @@ Payload:
 Response sukses: HTTP 302 redirect kembali ke /kirimpesan
 """
 
+import os
+import json
+import time
 import requests
 from bs4 import BeautifulSoup
 from config import SPSE_BASE_URL
 import spse_browser
+
+# ── Cache file — persist lintas browser refresh ───────────────────────────────
+_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".paket_cache.json")
+_CACHE_TTL = 3600  # detik — 1 jam sebelum dianggap stale
+
+
+def load_paket_cache() -> dict:
+    """Baca cache paket dari file. Return None jika tidak ada / expired."""
+    try:
+        if not os.path.exists(_CACHE_FILE):
+            return None
+        with open(_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if time.time() - data.get("_ts", 0) > _CACHE_TTL:
+            return None  # expired
+        return data
+    except Exception:
+        return None
+
+
+def save_paket_cache(draft: dict, aktif: dict):
+    """Simpan hasil fetch ke cache file."""
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"draft": draft, "aktif": aktif, "_ts": time.time()}, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def clear_paket_cache():
+    """Hapus cache paksa — dipakai saat user klik Refresh."""
+    try:
+        if os.path.exists(_CACHE_FILE):
+            os.remove(_CACHE_FILE)
+    except Exception:
+        pass
 
 # ── Default isi undangan (sesuai kebiasaan pokja) ────────────────────────────
 DEFAULT_TEMPAT = (
@@ -338,8 +377,10 @@ def fetch_paket_draft() -> dict:
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
+                "tanggal": tgl,
             })
 
+        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket Draft ditemukan"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
@@ -399,8 +440,10 @@ def fetch_paket_semua() -> dict:
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
                 "status": status,
+                "tanggal": tgl,
             })
 
+        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket ditemukan (semua status)"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
@@ -458,8 +501,10 @@ def fetch_paket_aktif() -> dict:
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
                 "status": status,
+                "tanggal": tgl,
             })
 
+        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket aktif ditemukan"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}

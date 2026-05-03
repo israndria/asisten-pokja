@@ -558,6 +558,7 @@ def parse_peserta_lengkap(
         "akta_perubahan": html_data.get("akta_perubahan", {}),
         # SKP
         "skp":          skp_data["skp"],
+        "skp_jp":       skp_data["jp"],
         "skp_catatan":  skp_data["catatan"],
         "skp_berbeda":  skp_data["berbeda"],
         # KSWP

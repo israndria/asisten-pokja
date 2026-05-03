@@ -45,6 +45,7 @@ _ROW = {
     "pgl2_nomor":     29,
     # Syarat 4: SKP
     "skp_hasil":      30,
+    "skp_jp":         31,   # jumlah paket berjalan (0 jika tidak ada)
     "skp_nilai":      33,
     # Syarat 5: NPWP & KSWP
     "npwp_nomor":     35,
@@ -141,9 +142,15 @@ def fill_kk_evaluasi(
     except Exception as e:
         return {"ok": False, "pesan": f"Gagal buka Excel: {e}"}
 
+    # Baris yang harus diformat teks (tidak boleh diinterpretasi Excel sebagai tanggal)
+    _TEXT_ROWS = {_ROW["akta_p_tanggal"], _ROW["akta_k_tanggal"]}
+
     def _set(row, col, val):
         try:
-            ws.Cells(row, col).Value = val
+            cell = ws.Cells(row, col)
+            if row in _TEXT_ROWS:
+                cell.NumberFormat = "@"
+            cell.Value = val
         except Exception:
             pass
 
@@ -220,7 +227,9 @@ def fill_kk_evaluasi(
         # Syarat 4: SKP
         skp = data.get("skp", 5)
         skp_catatan = data.get("skp_catatan", f"{skp} SKP")
+        jp = data.get("skp_jp", 5 - skp)   # jumlah paket berjalan
         _set(_ROW["skp_hasil"], col, "Memenuhi")
+        _set(_ROW["skp_jp"],    col, jp if jp > 0 else 0)
         _set(_ROW["skp_nilai"], col, skp_catatan)
 
         # Syarat 5: NPWP & KSWP

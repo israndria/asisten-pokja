@@ -408,29 +408,49 @@ with tab0:
 
         st.divider()
         st.markdown("#### 🔄 Sinkronkan Paket SPSE")
-        st.caption("Fetch daftar paket dari SPSE 1x — dipakai oleh semua tab.")
+        st.caption("Fetch daftar paket dari SPSE — dipakai oleh semua tab. Auto-dimuat saat pertama buka.")
+
+        # Auto-load: session baru → baca cache dulu (instan), baru fetch SPSE kalau cache expired
+        if "global_paket_draft" not in st.session_state:
+            _cache = kirimpesan_engine.load_paket_cache()
+            if _cache:
+                st.session_state["global_paket_draft"] = _cache["draft"]
+                st.session_state["global_paket_aktif"] = _cache["aktif"]
+            else:
+                with st.spinner("Memuat daftar paket dari SPSE..."):
+                    _gd0 = kirimpesan_engine.fetch_paket_draft()
+                    _ga0 = kirimpesan_engine.fetch_paket_aktif()
+                    st.session_state["global_paket_draft"] = _gd0
+                    st.session_state["global_paket_aktif"] = _ga0
+                    kirimpesan_engine.save_paket_cache(_gd0, _ga0)
+
         _sync_semua = st.checkbox("Termasuk paket selesai (untuk uji coba paket lama)", key="cb_sync_semua")
         _sync_col1, _sync_col2 = st.columns(2)
         with _sync_col1:
-            if st.button("🔄 Sinkronkan Paket", type="secondary", use_container_width=True, key="btn_sync_spse"):
+            if st.button("🔄 Refresh dari SPSE", type="secondary", use_container_width=True, key="btn_sync_spse"):
+                kirimpesan_engine.clear_paket_cache()
                 with st.spinner("Mengambil daftar paket dari SPSE..."):
                     if _sync_semua:
-                        st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_semua()
-                        st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
+                        _gd_r = kirimpesan_engine.fetch_paket_semua()
+                        _ga_r = kirimpesan_engine.fetch_paket_aktif()
                     else:
-                        st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_draft()
-                        st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
-                _gd = st.session_state.get("global_paket_draft", {})
-                _ga = st.session_state.get("global_paket_aktif", {})
+                        _gd_r = kirimpesan_engine.fetch_paket_draft()
+                        _ga_r = kirimpesan_engine.fetch_paket_aktif()
+                    st.session_state["global_paket_draft"] = _gd_r
+                    st.session_state["global_paket_aktif"] = _ga_r
+                    kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
                 st.toast("✅ Data paket SPSE tersinkronkan!", icon="🔄")
-                st.success(f"Draft: {len(_gd.get('paket',[]))} paket | Aktif: {len(_ga.get('paket',[]))} paket")
+                st.success(f"Draft: {len(_gd_r.get('paket',[]))} paket | Aktif: {len(_ga_r.get('paket',[]))} paket")
         with _sync_col2:
-            _has_draft = "global_paket_draft" in st.session_state
-            _has_aktif = "global_paket_aktif" in st.session_state
-            if _has_draft or _has_aktif:
-                st.caption(f"✅ Draft: {len(st.session_state.get('global_paket_draft',{}).get('paket',[]))} | Aktif: {len(st.session_state.get('global_paket_aktif',{}).get('paket',[]))}")
-            else:
-                st.caption("⚠️ Belum disinkronkan")
+            import os as _os_sync
+            _gd2 = st.session_state.get("global_paket_draft", {})
+            _ga2 = st.session_state.get("global_paket_aktif", {})
+            _cache_info = ""
+            if _os_sync.path.exists(kirimpesan_engine._CACHE_FILE):
+                import time as _t_sync
+                _age = int((_t_sync.time() - _os_sync.path.getmtime(kirimpesan_engine._CACHE_FILE)) / 60)
+                _cache_info = f" (cache {_age}m lalu)"
+            st.caption(f"✅ Draft: {len(_gd2.get('paket',[]))} | Aktif: {len(_ga2.get('paket',[]))}{_cache_info}")
 
     # ══════════════════════════════════════════
     # KOLOM KANAN — 2. Buat Folder Paket
@@ -2176,12 +2196,24 @@ with tab_ba:
 # ============================================================
 
 with tab_kual:
+    # ── Pre-render: fetch semua paket yang dicek tapi belum ada datanya ────────
+    if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+        _kl_perlu_fetch = [
+            p for p in st.session_state["global_paket_draft"].get("paket", [])
+            if p.get("kode") != "00000000000"
+            and st.session_state.get(f"kl_chk_{p['kode']}", False)
+            and f"kl_peserta_{p['kode']}" not in st.session_state
+        ]
+        if _kl_perlu_fetch:
+            with st.spinner(f"Memuat peserta {len(_kl_perlu_fetch)} paket..."):
+                for _kl_fp in _kl_perlu_fetch:
+                    _kl_id = _kl_fp.get("id_lelang") or _kl_fp["kode"]
+                    st.session_state[f"kl_peserta_{_kl_fp['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
+
     _kl_col1, _kl_col2 = st.columns([2, 3])
 
     with _kl_col1:
-        st.markdown("### 1. Pilih Paket")
-
-        # Menggunakan data paket yang sudah disinkronkan di Tab 0
+        st.markdown("#### 1. Pilih Paket")
         if "global_paket_draft" not in st.session_state:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
@@ -2189,390 +2221,296 @@ with tab_kual:
             if not _kl_draft.get("sukses"):
                 st.error(f"❌ {_kl_draft.get('pesan', 'Gagal memuat data paket')}")
             else:
-                _kl_paket_list = [p for p in _kl_draft.get("paket", []) if p.get("kode") != "00000000000"]
+                _kl_paket_list = sorted(
+                    [p for p in _kl_draft.get("paket", []) if p.get("kode") != "00000000000"],
+                    key=lambda p: p.get("tanggal", ""),
+                    reverse=True,
+                )
                 if not _kl_paket_list:
                     st.warning("⚠️ Tidak ada paket aktif ditemukan.")
                 else:
-                    st.caption(f"📋 {len(_kl_paket_list)} paket aktif tersedia — pilih satu:")
+                    st.caption(f"📋 {len(_kl_paket_list)} paket — centang satu atau lebih:")
                     for p in _kl_paket_list:
                         _kl_chk_key = f"kl_chk_{p['kode']}"
+                        _was = st.session_state.get(_kl_chk_key, False)
                         _checked = st.checkbox(
                             f"**{p['kode']}**  \n{p['nama'][:60]}  \n_{p.get('status', '')}_",
                             key=_kl_chk_key,
-                            value=st.session_state.get(_kl_chk_key, False),
+                            value=_was,
                         )
-                        if _checked:
-                            _prev = st.session_state.get("kl_paket_aktif")
-                            if _prev and _prev["kode"] != p["kode"]:
-                                # uncheck paket sebelumnya — hanya 1 aktif
-                                st.session_state[f"kl_chk_{_prev['kode']}"] = False
-                            st.session_state["kl_paket_aktif"] = p
 
         st.divider()
-        with st.expander("🔗 Atau masukkan kode tender manual"):
-            kode_manual_input = st.text_input(
-                "Kode Tender",
-                key="kl_kode_manual_input",
-                placeholder="contoh: 10096653000",
-                label_visibility="collapsed",
+        st.markdown("#### 2. Peserta per Paket")
+        if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+            _kl_paket_list2 = sorted(
+                [p for p in st.session_state["global_paket_draft"].get("paket", []) if p.get("kode") != "00000000000"],
+                key=lambda p: p.get("tanggal", ""),
+                reverse=True,
             )
-            if st.button("Fetch Peserta via Kode Tender", key="kl_fetch_url", use_container_width=True):
-                if not kode_manual_input.strip():
-                    st.warning("Masukkan kode tender terlebih dahulu.")
+            _kl_ada_terpilih = False
+            for p in _kl_paket_list2:
+                if not st.session_state.get(f"kl_chk_{p['kode']}", False):
+                    continue
+                _kl_ada_terpilih = True
+                kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
+                if kl_res_p is None:
+                    st.caption(f"⏳ {p['kode']} — menunggu fetch...")
+                elif not kl_res_p["ok"]:
+                    st.warning(f"❌ {p['kode']}: {kl_res_p['pesan']}")
+                    if st.button("🔄 Retry", key=f"kl_retry_{p['kode']}"):
+                        _kl_id = p.get("id_lelang") or p["kode"]
+                        with st.spinner("..."):
+                            st.session_state[f"kl_peserta_{p['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
+                        st.rerun()
                 else:
-                    _kode_m = kode_manual_input.strip()
-                    with st.spinner("Mengambil daftar peserta..."):
-                        res = kualifikasi_engine.fetch_peserta_by_kode(_kode_m)
-                    st.session_state["kl_peserta"] = res
-                    # Simpan sebagai paket_aktif minimal agar resolve folder bisa jalan
-                    st.session_state["kl_paket_aktif"] = {"kode": _kode_m, "nama": _kode_m}
-                    # Reset pilihan checkbox peserta
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("kl_cek_"):
-                            del st.session_state[k]
-
-        # ── Fetch peserta dari paket terpilih ──────────────────────────────
-        _kl_paket_aktif = st.session_state.get("kl_paket_aktif")
-        if _kl_paket_aktif:
-            st.markdown(f"### 2. Peserta — {_kl_paket_aktif['kode']}")
-            if st.button("🔍 Fetch Peserta", key="kl_fetch", use_container_width=True):
-                with st.spinner("Mengambil daftar peserta..."):
-                    _id_lelang = _kl_paket_aktif.get("id_lelang") or _kl_paket_aktif["kode"]
-                    res = kualifikasi_engine.fetch_peserta_by_id_lelang(_id_lelang)
-                st.session_state["kl_peserta"] = res
-                for k in list(st.session_state.keys()):
-                    if k.startswith("kl_cek_"):
-                        del st.session_state[k]
-
-        kl_res = st.session_state.get("kl_peserta")
-        if kl_res:
-            if not kl_res["ok"]:
-                st.error(kl_res["pesan"])
-            else:
-                st.success(kl_res["pesan"])
-                _kl_total = len(kl_res["peserta"])
-
-                col_all, col_none = st.columns(2)
-                with col_all:
-                    if st.button("✅ Semua", key="kl_all", use_container_width=True):
-                        for p in kl_res["peserta"]:
-                            st.session_state[f"kl_cek_{p['kualifikasi_id']}"] = True
-                        st.rerun()
-                with col_none:
-                    if st.button("⬜ Hapus", key="kl_none", use_container_width=True):
-                        for p in kl_res["peserta"]:
-                            st.session_state[f"kl_cek_{p['kualifikasi_id']}"] = False
-                        st.rerun()
-
-                for i, p in enumerate(kl_res["peserta"], 1):
-                    st.checkbox(
-                        f"{i}. {p['nama']}",
-                        key=f"kl_cek_{p['kualifikasi_id']}",
-                        value=st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True),
-                    )
+                    n_p = len(kl_res_p["peserta"])
+                    with st.expander(f"**{p['kode']}** — {n_p} peserta", expanded=True):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("✅ Semua", key=f"kl_all_{p['kode']}", use_container_width=True):
+                                for ps in kl_res_p["peserta"]:
+                                    st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = True
+                                st.rerun()
+                        with c2:
+                            if st.button("⬜ Batal", key=f"kl_none_{p['kode']}", use_container_width=True):
+                                for ps in kl_res_p["peserta"]:
+                                    st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = False
+                                st.rerun()
+                        for i, ps in enumerate(kl_res_p["peserta"], 1):
+                            st.checkbox(
+                                f"{i}. {ps['nama']}",
+                                key=f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}",
+                                value=st.session_state.get(f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}", True),
+                            )
+            if not _kl_ada_terpilih:
+                st.caption("← Centang paket di atas untuk memuat peserta.")
 
     with _kl_col2:
-        st.markdown("### 3. Folder & Download")
+        st.markdown("#### 3. Folder & Aksi")
 
-        # ── Resolve folder otomatis dari Supabase ──────────────────────────
-        _kl_paket_aktif2 = st.session_state.get("kl_paket_aktif")
-        _kl_folder_auto = None
-        _kl_folder_info = ""
-
-        if _kl_paket_aktif2:
-            _kl_resolve = kualifikasi_engine.resolve_folder_paket(_kl_paket_aktif2["kode"])
-            if _kl_resolve["ok"]:
-                _kl_folder_auto = _kl_resolve["path"]
-                _kl_folder_info = _kl_resolve["pesan"]
-                st.success(f"📁 **Auto:** `...\\{_kl_folder_info}\\Dokumen Evaluasi`")
-            else:
-                st.warning(f"⚠️ Folder auto tidak ditemukan: {_kl_resolve['pesan']}")
-
-        # ── Fallback folder manual ─────────────────────────────────────────
-        with st.expander("📂 Override folder manual" if _kl_folder_auto else "📂 Pilih folder manual"):
-            _kl_default_dir = kualifikasi_engine.get_last_dir()
-            kl_folder_manual = st.text_input(
-                "Path folder tujuan",
-                key="kl_folder",
-                value=st.session_state.get("kl_folder_val", _kl_default_dir),
-                label_visibility="collapsed",
+        # ── Ringkasan paket terpilih + status folder ───────────────────────────
+        _kl_paket_dipilih = []
+        if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+            _kl_all_list = sorted(
+                [p for p in st.session_state["global_paket_draft"].get("paket", []) if p.get("kode") != "00000000000"],
+                key=lambda p: p.get("tanggal", ""),
+                reverse=True,
             )
-            if st.button("📁 Browse", key="kl_browse", use_container_width=True):
-                try:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.wm_attributes("-topmost", True)
-                    selected = filedialog.askdirectory(
-                        initialdir=st.session_state.get("kl_folder_val", _kl_default_dir),
-                        title="Pilih Folder Tujuan",
-                    )
-                    root.destroy()
-                    if selected:
-                        st.session_state["kl_folder_val"] = selected.replace("/", "\\")
-                        st.rerun()
-                except Exception as e:
-                    st.warning(f"Dialog tidak bisa dibuka: {e} — ketik path manual.")
+            for p in _kl_all_list:
+                if not st.session_state.get(f"kl_chk_{p['kode']}", False):
+                    continue
+                kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
+                if not kl_res_p or not kl_res_p["ok"]:
+                    continue
+                peserta_terpilih = [
+                    ps for ps in kl_res_p["peserta"]
+                    if st.session_state.get(f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}", True)
+                ]
+                resolve = kualifikasi_engine.resolve_folder_paket(p["kode"])
+                _kl_paket_dipilih.append({
+                    "paket": p,
+                    "peserta": peserta_terpilih,
+                    "folder": resolve["path"] if resolve["ok"] else None,
+                    "folder_info": resolve["pesan"] if resolve["ok"] else resolve["pesan"],
+                    "folder_ok": resolve["ok"],
+                })
 
-        # Folder efektif: auto (dari Supabase) → manual (dari text_input/browse)
-        _kl_folder_manual_val = kl_folder_manual.strip() if kl_folder_manual.strip() else st.session_state.get("kl_folder_val", "")
-        _kl_folder_efektif = _kl_folder_auto or _kl_folder_manual_val
-
-        if _kl_folder_efektif and os.path.isdir(_kl_folder_efektif):
-            if st.button("📂 Buka Folder", key="kl_open_folder", use_container_width=True):
-                os.startfile(_kl_folder_efektif)
-
-        # ── Preview peserta terpilih & tombol download ─────────────────────
-        kl_selected = []
-        kl_res2 = st.session_state.get("kl_peserta")
-        if kl_res2 and kl_res2["ok"]:
-            _kl_total2 = len(kl_res2["peserta"])
-            kl_selected = [
-                p for p in kl_res2["peserta"]
-                if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
-            ]
-
-            if kl_selected:
-                st.markdown(f"**{len(kl_selected)} peserta dipilih** (total {_kl_total2}):")
-                for i, p in enumerate(kl_selected, 1):
-                    st.caption(f"{i}. {p['nama']} → subfolder `{i}. {p['nama'][:30]}/`")
-
-                st.divider()
-
-                if st.button(
-                    f"⬇️ Download {len(kl_selected)} Dokumen Kualifikasi",
-                    key="kl_download",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not _kl_folder_efektif,
-                ):
-                    if not _kl_folder_efektif:
-                        st.error("Folder tidak ditemukan — pilih folder manual.")
+        if not _kl_paket_dipilih:
+            st.info("← Centang paket dan tunggu peserta dimuat.")
+        else:
+            # Tampilkan status folder tiap paket
+            _kl_semua_folder_ok = True
+            for item in _kl_paket_dipilih:
+                p = item["paket"]
+                fc1, fc2 = st.columns([4, 1])
+                with fc1:
+                    if item["folder_ok"]:
+                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\Dokumen Evaluasi`")
                     else:
-                        kualifikasi_engine.save_last_dir(_kl_folder_efektif)
+                        st.error(f"❌ **{p['kode']}** — {item['folder_info']}")
+                        _kl_semua_folder_ok = False
+                with fc2:
+                    if item["folder_ok"] and st.button("📂", key=f"kl_open_{p['kode']}", help="Buka folder", use_container_width=True):
+                        os.startfile(item["folder"])
 
-                        log_area = st.empty()
-                        log_lines = []
+                n_ps = len(item["peserta"])
+                st.caption(f"  → {n_ps} peserta dipilih" if n_ps else "  → ⚠️ Tidak ada peserta dipilih")
 
-                        def _log_cb(msg):
-                            log_lines.append(msg)
-                            log_area.code("\n".join(log_lines[-20:]))
+            st.divider()
 
-                        progress = st.progress(0, text="Memulai download...")
-                        hasil_kl = []
+            # Hitung total peserta
+            _kl_total_semua = sum(len(item["peserta"]) for item in _kl_paket_dipilih)
+            _kl_total_paket = len(_kl_paket_dipilih)
 
-                        for i, peserta in enumerate(kl_selected):
+            # ── Opsi aksi ──────────────────────────────────────────────────────
+            _kl_do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="kl_opt_download")
+            _kl_do_kk = st.checkbox("📋 Parse & simpan KK Evaluasi ke Supabase", value=True, key="kl_opt_kk")
+
+            _kl_btn_label = []
+            if _kl_do_download: _kl_btn_label.append("Download")
+            if _kl_do_kk: _kl_btn_label.append("Parse KK")
+            _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
+
+            _kl_disabled = (not _kl_btn_label) or (_kl_do_download and not _kl_semua_folder_ok) or (_kl_total_semua == 0)
+            if not _kl_semua_folder_ok and _kl_do_download:
+                st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
+
+            st.divider()
+
+            if st.button(
+                f"▶ Jalankan: {_kl_btn_text} — {_kl_total_paket} paket, {_kl_total_semua} peserta",
+                key="kl_jalankan",
+                type="primary",
+                use_container_width=True,
+                disabled=_kl_disabled,
+            ):
+                log_area = st.empty()
+                log_lines = []
+
+                def _log_cb(msg):
+                    log_lines.append(msg)
+                    log_area.code("\n".join(log_lines[-30:]))
+
+                progress = st.progress(0, text="Memulai...")
+                _kl_total_steps = _kl_total_paket * (2 if (_kl_do_download and _kl_do_kk) else 1)
+                _kl_step = 0
+
+                for item in _kl_paket_dipilih:
+                    p = item["paket"]
+                    folder_out = item["folder"]
+                    peserta_list = item["peserta"]
+                    kode_tender = p["kode"]
+                    n_ps = len(peserta_list)
+
+                    _log_cb(f"=== Paket {kode_tender}: {p['nama'][:50]} ({n_ps} peserta) ===")
+
+                    # ── Download dokumen ───────────────────────────────────────
+                    if _kl_do_download and folder_out:
+                        kualifikasi_engine.save_last_dir(folder_out)
+                        for i, ps in enumerate(peserta_list):
                             progress.progress(
-                                i / len(kl_selected),
-                                text=f"Downloading {peserta['nama']} ({i+1}/{len(kl_selected)})...",
+                                _kl_step / _kl_total_steps + (i / n_ps) / _kl_total_steps * (0.5 if _kl_do_kk else 1.0),
+                                text=f"[{kode_tender}] Download {i+1}/{n_ps}: {ps['nama'][:35]}...",
                             )
-                            res_dl = kualifikasi_engine.download_kualifikasi_peserta(
-                                peserta=peserta,
-                                folder_output=_kl_folder_efektif,
+                            kualifikasi_engine.download_kualifikasi_peserta(
+                                peserta=ps,
+                                folder_output=folder_out,
                                 urutan=i + 1,
-                                total_peserta=_kl_total2,
+                                total_peserta=n_ps,
                                 progress_cb=_log_cb,
                             )
-                            hasil_kl.append({**peserta, **res_dl})
+                        _log_cb(f"--- [{kode_tender}] Download selesai ---")
+                        _kl_step += 1
 
-                        progress.progress(1.0, text="Selesai!")
-
-                        sukses = [h for h in hasil_kl if h["ok"]]
-                        gagal = [h for h in hasil_kl if not h["ok"]]
-
-                        if sukses:
-                            st.success(f"✅ {len(sukses)} peserta selesai didownload ke `{_kl_folder_efektif}`")
-                            for h in sukses:
-                                st.caption(f"• {h['nama']}: {h['pesan']}")
-                        if gagal:
-                            st.error(f"❌ {len(gagal)} gagal:")
-                            for h in gagal:
-                                st.caption(f"• {h['nama']}: {h['pesan']}")
-            else:
-                st.info("Pilih peserta di kolom kiri.")
-
-            # ── Auto-Fill KK Evaluasi Kualifikasi ─────────────────────────────
-            st.divider()
-            st.markdown("### 4. Simpan Data KK Evaluasi ke Supabase")
-
-            _kl_paket_kk = st.session_state.get("kl_paket_aktif")
-            kl_res_kk = st.session_state.get("kl_peserta")
-
-            # kode_tender = field "kode" dari paket aktif (bukan "kode_tender")
-            _kl_kode_tender_kk = ""
-            if _kl_paket_kk:
-                _kl_kode_tender_kk = _kl_paket_kk.get("kode", "") or _kl_paket_kk.get("kode_tender", "")
-            # Izinkan input manual jika tidak ada dari paket terpilih
-            _kl_kt_manual = st.text_input("Kode Tender (manual, jika tidak pilih dari daftar):",
-                                           key="kl_kode_tender_kk_manual",
-                                           value=_kl_kode_tender_kk,
-                                           placeholder="contoh: 4794177")
-            if _kl_kt_manual.strip():
-                _kl_kode_tender_kk = _kl_kt_manual.strip()
-
-            if not kl_res_kk or not kl_res_kk.get("ok"):
-                st.info("Fetch peserta terlebih dahulu (langkah 1-2).")
-            elif not _kl_kode_tender_kk:
-                st.warning("Isi kode tender di atas terlebih dahulu.")
-            else:
-                st.caption(f"Kode Tender: `{_kl_kode_tender_kk}`")
-
-                _kl_total_kk = len(kl_res_kk["peserta"])
-                kl_selected_kk = [
-                    p for p in kl_res_kk["peserta"]
-                    if st.session_state.get(f"kl_cek_{p['kualifikasi_id']}", True)
-                ]
-
-                if st.button(
-                    f"📋 Parse & Simpan KK Evaluasi ({len(kl_selected_kk)} peserta)",
-                    key="kl_autofill_kk",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    log_area_kk = st.empty()
-                    log_kk = []
-
-                    def _log_kk(msg):
-                        log_kk.append(msg)
-                        log_area_kk.code("\n".join(log_kk[-25:]))
-
-                    progress_kk = st.progress(0, text="Memulai parsing...")
-                    semua_data_peserta = []
-
-                    for i, peserta in enumerate(kl_selected_kk):
-                        progress_kk.progress(
-                            i / len(kl_selected_kk),
-                            text=f"Parsing {peserta['nama']} ({i+1}/{len(kl_selected_kk)})...",
-                        )
-                        slug = re.sub(r'[\\/:*?"<>|]', "", peserta["nama"]).strip()[:80]
-                        folder_p = os.path.join(_kl_folder_efektif, f"{i+1}. {slug}")
-
-                        data_p = kualifikasi_parser.parse_peserta_lengkap(
-                            kualifikasi_id=peserta["kualifikasi_id"],
-                            folder_peserta=folder_p,
-                            progress_cb=_log_kk,
-                        )
-                        if data_p.get("skp_berbeda"):
-                            _log_kk(f"  ⚠️ {peserta['nama']}: SKP berbeda antara SPSE dan Formulir")
-                        semua_data_peserta.append(data_p)
-
-                    progress_kk.progress(0.85, text="Menyimpan ke Supabase...")
-                    _log_kk("Menyimpan ke Supabase tabel kk_evaluasi_peserta...")
-
-                    try:
-                        from config import sb as _sb_kk
-                        from datetime import datetime, timezone
-                        _db_kk = _sb_kk()
-                        rows = []
-                        for i, d in enumerate(semua_data_peserta):
-                            pgl = d.get("pengalaman", [])
-                            p1 = pgl[0] if len(pgl) > 0 else {}
-                            p2 = pgl[1] if len(pgl) > 1 else {}
-                            pemilik = d.get("pemilik", [])
-                            akta_p = d.get("akta_pendirian", {})
-                            akta_k = d.get("akta_perubahan", {})
-                            rows.append({
-                                "kode_tender": _kl_kode_tender_kk,
-                                "urutan": i + 1,
-                                "nama": d.get("nama"),
-                                "npwp": kk_evaluasi_engine._format_npwp(d.get("npwp", "")),
-                                "nib_nomor": d.get("nib_nomor"),
-                                "nib_berlaku": d.get("nib_berlaku"),
-                                "ss_nomor": d.get("ss_nomor"),
-                                "ss_berlaku": d.get("ss_berlaku"),
-                                "ss_terverifikasi": d.get("ss_terverifikasi"),
-                                "sbu_nomor": d.get("sbu_nomor"),
-                                "sbu_berlaku": d.get("sbu_berlaku"),
-                                "sbu_kualifikasi": d.get("sbu_kualifikasi"),
-                                "sbu_klasifikasi": d.get("sbu_klasifikasi"),
-                                "sbu_subklas_label": d.get("sbu_subklas_label"),
-                                "pgl1_nama": p1.get("nama"),
-                                "pgl1_instansi": p1.get("instansi"),
-                                "pgl1_nilai": p1.get("nilai"),
-                                "pgl1_tanggal": (f"{p1.get('tgl_mulai','')} s/d {p1.get('tgl_selesai','')}"
-                                                 if p1.get("tgl_mulai") else p1.get("tgl_selesai", "")),
-                                "pgl1_nomor": p1.get("nomor"),
-                                "pgl2_nama": p2.get("nama"),
-                                "pgl2_instansi": p2.get("instansi"),
-                                "pgl2_nilai": p2.get("nilai"),
-                                "pgl2_tanggal": (f"{p2.get('tgl_mulai','')} s/d {p2.get('tgl_selesai','')}"
-                                                 if p2.get("tgl_mulai") else p2.get("tgl_selesai", "")),
-                                "pgl2_nomor": p2.get("nomor"),
-                                "skp": d.get("skp"),
-                                "skp_catatan": d.get("skp_catatan"),
-                                "skp_berbeda": bool(d.get("skp_berbeda")),
-                                "kswp_status": d.get("kswp_status"),
-                                "akta_p_nomor": akta_p.get("nomor"),
-                                "akta_p_tanggal": akta_p.get("tanggal"),
-                                "akta_p_notaris": akta_p.get("notaris"),
-                                "akta_k_nomor": akta_k.get("nomor"),
-                                "akta_k_tanggal": akta_k.get("tanggal"),
-                                "akta_k_notaris": akta_k.get("notaris"),
-                                "pemilik_1": pemilik[0] if len(pemilik) > 0 else None,
-                                "pemilik_2": pemilik[1] if len(pemilik) > 1 else None,
-                                "pemilik_3": pemilik[2] if len(pemilik) > 2 else None,
-                                "pemilik_4": pemilik[3] if len(pemilik) > 3 else None,
-                                "kinerja_ada": bool(d.get("kinerja_ada")),
-                                "kinerja_nilai": d.get("kinerja_nilai"),
-                                "kinerja_kategori": d.get("kinerja_kategori"),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            })
-                        _db_kk.table("kk_evaluasi_peserta").upsert(rows).execute()
-                        _log_kk(f"✅ {len(rows)} peserta tersimpan ke kk_evaluasi_peserta.")
-                        progress_kk.progress(0.6, text="Serap harga penawaran...")
-
-                        # ── Serap Harga Penawaran (otomatis) ──
-                        try:
-                            import penawaran_engine
-                            _log_kk("Serap harga penawaran dari SPSE...")
-                            hasil_hp = penawaran_engine.scrape_dan_upsert_semua(
-                                _kl_kode_tender_kk, progress_cb=_log_kk
+                    # ── Parse & simpan KK Evaluasi ─────────────────────────────
+                    if _kl_do_kk:
+                        _log_cb(f"--- [{kode_tender}] Parse KK Evaluasi ---")
+                        semua_data = []
+                        for i, ps in enumerate(peserta_list):
+                            progress.progress(
+                                _kl_step / _kl_total_steps + (i / n_ps) / _kl_total_steps,
+                                text=f"[{kode_tender}] Parse KK {i+1}/{n_ps}: {ps['nama'][:35]}...",
                             )
-                            if hasil_hp["peserta"] > 0:
-                                _log_kk(f"✅ Harga penawaran: {hasil_hp['peserta']} peserta, {hasil_hp['items']} item")
-                            else:
-                                _log_kk("⚠️ Harga penawaran: belum ada peserta yang kirim")
-                        except Exception as e_hp:
-                            _log_kk(f"⚠️ Serap HP error (dilanjutkan): {e_hp}")
-
-                        progress_kk.progress(0.8, text="Serap identitas peserta...")
-
-                        # ── Serap Identitas Peserta (otomatis) ──
-                        try:
-                            import identitas_engine
-                            _log_kk("Serap identitas peserta dari /preview SPSE...")
-                            _peserta_override = [
-                                {"peserta_id": p.get("kualifikasi_id") or p.get("peserta_id", ""),
-                                 "nama_peserta": p.get("nama", "")}
-                                for p in kl_res_kk["peserta"]
-                                if p.get("kualifikasi_id") or p.get("peserta_id")
-                            ]
-                            hasil_id = identitas_engine.scrape_dan_upsert_semua(
-                                _kl_kode_tender_kk,
-                                progress_cb=_log_kk,
-                                peserta_override=_peserta_override or None,
+                            slug = re.sub(r'[\\/:*?"<>|]', "", ps["nama"]).strip()[:80]
+                            folder_p = os.path.join(folder_out or "", f"{i+1}. {slug}")
+                            data_p = kualifikasi_parser.parse_peserta_lengkap(
+                                kualifikasi_id=ps["kualifikasi_id"],
+                                folder_peserta=folder_p,
+                                progress_cb=_log_cb,
                             )
-                            if hasil_id["peserta"] > 0:
-                                _log_kk(f"✅ Identitas: {hasil_id['peserta']} peserta tersimpan")
-                            else:
-                                _log_kk("⚠️ Identitas: tidak ada peserta terkirim")
-                        except Exception as e_id:
-                            _log_kk(f"⚠️ Serap identitas error (dilanjutkan): {e_id}")
+                            if data_p.get("skp_berbeda"):
+                                _log_cb(f"  ⚠️ {ps['nama']}: SKP berbeda")
+                            semua_data.append(data_p)
 
-                        progress_kk.progress(1.0, text="Selesai!")
-                        st.success(
-                            f"✅ {len(rows)} peserta tersimpan. "
-                            "Buka Excel lalu klik **Muat KK Evaluasi**, **Muat Harga Penawaran**, dan **Muat Input BA**."
-                        )
+                        try:
+                            from config import sb as _sb_kk
+                            from datetime import datetime, timezone
+                            _db_kk = _sb_kk()
+                            rows = []
+                            for i, d in enumerate(semua_data):
+                                pgl = d.get("pengalaman", [])
+                                p1 = pgl[0] if len(pgl) > 0 else {}
+                                p2 = pgl[1] if len(pgl) > 1 else {}
+                                pemilik = d.get("pemilik", [])
+                                akta_p = d.get("akta_pendirian", {})
+                                akta_k = d.get("akta_perubahan", {})
+                                rows.append({
+                                    "kode_tender": kode_tender,
+                                    "urutan": i + 1,
+                                    "nama": d.get("nama"),
+                                    "npwp": kk_evaluasi_engine._format_npwp(d.get("npwp", "")),
+                                    "nib_nomor": d.get("nib_nomor"),
+                                    "nib_berlaku": d.get("nib_berlaku"),
+                                    "ss_nomor": d.get("ss_nomor"),
+                                    "ss_berlaku": d.get("ss_berlaku"),
+                                    "ss_terverifikasi": d.get("ss_terverifikasi"),
+                                    "sbu_nomor": d.get("sbu_nomor"),
+                                    "sbu_berlaku": d.get("sbu_berlaku"),
+                                    "sbu_kualifikasi": d.get("sbu_kualifikasi"),
+                                    "sbu_klasifikasi": d.get("sbu_klasifikasi"),
+                                    "sbu_subklas_label": d.get("sbu_subklas_label"),
+                                    "pgl1_nama": p1.get("nama"),
+                                    "pgl1_instansi": p1.get("instansi"),
+                                    "pgl1_nilai": p1.get("nilai"),
+                                    "pgl1_tanggal": (f"{p1.get('tgl_mulai','')} s/d {p1.get('tgl_selesai','')}"
+                                                     if p1.get("tgl_mulai") else p1.get("tgl_selesai", "")),
+                                    "pgl1_nomor": p1.get("nomor"),
+                                    "pgl2_nama": p2.get("nama"),
+                                    "pgl2_instansi": p2.get("instansi"),
+                                    "pgl2_nilai": p2.get("nilai"),
+                                    "pgl2_tanggal": (f"{p2.get('tgl_mulai','')} s/d {p2.get('tgl_selesai','')}"
+                                                     if p2.get("tgl_mulai") else p2.get("tgl_selesai", "")),
+                                    "pgl2_nomor": p2.get("nomor"),
+                                    "skp": d.get("skp"),
+                                    "skp_catatan": d.get("skp_catatan"),
+                                    "skp_berbeda": bool(d.get("skp_berbeda")),
+                                    "kswp_status": d.get("kswp_status"),
+                                    "akta_p_nomor": akta_p.get("nomor"),
+                                    "akta_p_tanggal": akta_p.get("tanggal"),
+                                    "akta_p_notaris": akta_p.get("notaris"),
+                                    "akta_k_nomor": akta_k.get("nomor"),
+                                    "akta_k_tanggal": akta_k.get("tanggal"),
+                                    "akta_k_notaris": akta_k.get("notaris"),
+                                    "pemilik_1": pemilik[0] if len(pemilik) > 0 else None,
+                                    "pemilik_2": pemilik[1] if len(pemilik) > 1 else None,
+                                    "pemilik_3": pemilik[2] if len(pemilik) > 2 else None,
+                                    "pemilik_4": pemilik[3] if len(pemilik) > 3 else None,
+                                    "kinerja_ada": bool(d.get("kinerja_ada")),
+                                    "kinerja_nilai": d.get("kinerja_nilai"),
+                                    "kinerja_kategori": d.get("kinerja_kategori"),
+                                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                                })
+                            _db_kk.table("kk_evaluasi_peserta").upsert(rows).execute()
+                            _log_cb(f"✅ [{kode_tender}] {len(rows)} peserta tersimpan ke Supabase.")
 
-                    except Exception as e_sb:
-                        progress_kk.progress(1.0, text="Error!")
-                        st.error(f"❌ Gagal simpan Supabase: {e_sb}")
-                        _log_kk(f"ERROR: {e_sb}")
+                            try:
+                                import penawaran_engine
+                                hasil_hp = penawaran_engine.scrape_dan_upsert_semua(kode_tender, progress_cb=_log_cb)
+                                _log_cb(f"✅ [{kode_tender}] HP: {hasil_hp['peserta']} peserta, {hasil_hp['items']} item"
+                                        if hasil_hp["peserta"] > 0 else f"⚠️ [{kode_tender}] HP: belum ada penawaran")
+                            except Exception as e_hp:
+                                _log_cb(f"⚠️ [{kode_tender}] HP error: {e_hp}")
 
-        else:
-            st.info("Fetch peserta terlebih dahulu dari kolom kiri.")
+                            try:
+                                import identitas_engine
+                                _po = [{"peserta_id": ps.get("kualifikasi_id", ""), "nama_peserta": ps.get("nama", "")}
+                                       for ps in peserta_list if ps.get("kualifikasi_id")]
+                                hasil_id = identitas_engine.scrape_dan_upsert_semua(kode_tender, progress_cb=_log_cb, peserta_override=_po or None)
+                                _log_cb(f"✅ [{kode_tender}] Identitas: {hasil_id['peserta']} peserta"
+                                        if hasil_id["peserta"] > 0 else f"⚠️ [{kode_tender}] Identitas: kosong")
+                            except Exception as e_id:
+                                _log_cb(f"⚠️ [{kode_tender}] Identitas error: {e_id}")
+
+                        except Exception as e_sb:
+                            _log_cb(f"ERROR [{kode_tender}] Supabase: {e_sb}")
+
+                        _kl_step += 1
+
+                progress.progress(1.0, text="Selesai!")
+                _parts = []
+                if _kl_do_download: _parts.append("dokumen didownload")
+                if _kl_do_kk: _parts.append("KK Evaluasi tersimpan")
+                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_kl_total_paket} paket, {_kl_total_semua} peserta. Buka Excel → **Muat KK Evaluasi**, **Muat Harga Penawaran**, **Muat Input BA**.")
 
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
