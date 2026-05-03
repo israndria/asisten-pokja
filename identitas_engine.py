@@ -9,7 +9,7 @@ Tabel target:
 import re
 import requests
 from bs4 import BeautifulSoup
-from config import sb as _sb, SPSE_BASE_URL
+from config import sb as _sb, SPSE_BASE_URL, sanitasi_nama_folder
 import spse_browser
 
 
@@ -228,11 +228,12 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                                 .eq("kode_tender", kode_tender).maybe_single().execute()
                     folder_dibuat = r2.data.get("folder_dibuat", "") if r2.data else ""
                     if folder_dibuat:
-                        import os, re as _re
-                        slug = _re.sub(r'[\\/:*?"<>|]', "", nama).strip()[:80]
+                        import os
+                        folder_safe = sanitasi_nama_folder(folder_dibuat)
+                        slug = sanitasi_nama_folder(nama)[:80]
                         urutan = peserta_list.index(p) + 1
-                        fp = os.path.join(POKJA_ROOT, folder_dibuat, "Dokumen Evaluasi",
-                                          f"{urutan}. {slug}")
+                        fp = os.path.join(POKJA_ROOT, folder_safe, "Dokumen Evaluasi",
+                                          f"{urutan}. {slug.strip('-')}")
                         if os.path.isdir(fp):
                             log(f"  Fallback PDF: {fp}")
                             res_dt = dokumen_teknis_engine.parse_dan_upsert(

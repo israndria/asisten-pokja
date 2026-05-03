@@ -589,7 +589,7 @@ with tab0:
                             try:
                                 inbox_engine._sb().table("draft_paket").update({
                                     "nomor_urut": int(_row_terpilih.get("nomor_urut") or _nomor_berikutnya),
-                                    "folder_dibuat": _nama_folder,
+                                    "folder_dibuat": _nama_folder_clean,
                                     "folder_dibuat_pada": datetime.now(_tz.utc).isoformat(),
                                 }).eq("kode_tender", _row_terpilih["kode_tender"]).execute()
                             except Exception as _e2:
@@ -651,7 +651,7 @@ with tab0:
                 _bulk_plan.append({
                     "kode_tender": _r["kode_tender"],
                     "nomor_urut": _n,
-                    "nama_folder": f"{_n}. {str(_r.get('nama_tender','')).strip()} - Pokja {str(_r.get('kode_pokja','')).strip()}",
+                    "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {str(_r.get('nama_tender','')).strip()} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
                 })
             with st.expander(f"📋 Preview {len(_bulk_plan)} folder yang akan dibuat"):
                 for _bp in _bulk_plan:

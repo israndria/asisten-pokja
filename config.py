@@ -1,6 +1,7 @@
 """Konfigurasi Asisten Pokja — SPSE Automation."""
 
 import os
+import re
 import pathlib
 
 # === Paths ===
@@ -20,6 +21,11 @@ KODE_LPSE = "266"
 # Pastikan folder download ada
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(BROWSER_SESSION_DIR, exist_ok=True)
+
+
+def sanitasi_nama_folder(nama: str) -> str:
+    """Sanitasi nama folder/path: karakter Windows-illegal → '-', strip spasi tepi."""
+    return re.sub(r'[/\\:*?"<>|]', "-", nama).strip()
 
 
 def sb():
