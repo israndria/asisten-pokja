@@ -6,10 +6,11 @@ Tabel target:
   - peserta_identitas : NPWP, alamat, direktur per peserta_id
 """
 
+import os
 import re
 import requests
 from bs4 import BeautifulSoup
-from config import sb as _sb, SPSE_BASE_URL, sanitasi_nama_folder
+from config import sb as _sb, SPSE_BASE_URL, POKJA_ROOT, sanitasi_nama_folder
 import spse_browser
 
 
@@ -149,7 +150,145 @@ def upsert_peserta_identitas(kode_tender: str, peserta_id: str, data: dict) -> N
 
 
 # ──────────────────────────────────────────────
-# 3. Entry point: scrape semua sekaligus
+# 3. Gabung PDF + parse Formulir Isian Kualifikasi
+# ──────────────────────────────────────────────
+
+def gabung_pdf_peserta(folder_peserta: str, nama_peserta: str, log=None) -> str:
+    """
+    Gabungkan semua PDF di folder_peserta menjadi satu file.
+    Output: DokumenFull_kualifikasi_{nama_peserta}.pdf di folder yang sama.
+    Return: path file output, atau "" jika gagal/tidak ada PDF.
+    """
+    def _log(m):
+        if log: log(m)
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        _log("  ⚠️ PyMuPDF tidak tersedia, skip gabung PDF")
+        return ""
+
+    pdf_files = sorted([
+        os.path.join(folder_peserta, f)
+        for f in os.listdir(folder_peserta)
+        if f.lower().endswith(".pdf")
+    ])
+    if not pdf_files:
+        _log("  ⚠️ Tidak ada PDF di folder peserta")
+        return ""
+
+    nama_safe = sanitasi_nama_folder(nama_peserta)[:80].strip("-")
+    out_path = os.path.join(folder_peserta, f"DokumenFull_kualifikasi_{nama_safe}.pdf")
+
+    try:
+        merged = fitz.open()
+        for fp in pdf_files:
+            # Skip file output itu sendiri jika sudah ada
+            if os.path.abspath(fp) == os.path.abspath(out_path):
+                continue
+            try:
+                doc = fitz.open(fp)
+                merged.insert_pdf(doc)
+                doc.close()
+            except Exception as e:
+                _log(f"  ⚠️ Skip {os.path.basename(fp)}: {e}")
+        merged.save(out_path)
+        merged.close()
+        _log(f"  PDF digabung: {len(pdf_files)} file -> {os.path.basename(out_path)}")
+        return out_path
+    except Exception as e:
+        _log(f"  ⚠️ Gagal gabung PDF: {e}")
+        return ""
+
+
+def parse_formulir_kualifikasi(folder_peserta: str) -> dict:
+    """
+    Parse personel & peralatan dari FORMULIR ISIAN KUALIFIKASI.pdf
+    (format SPSE standar nasional).
+    Return: {"personel": [...], "peralatan": [...]}
+    """
+    # Cari file dengan prioritas: FORMULIR ISIAN KUALIFIKASI → Kualifikasi *.pdf
+    kandidat = []
+    for f in os.listdir(folder_peserta):
+        fl = f.lower()
+        if "formulir isian kualifikasi" in fl and fl.endswith(".pdf"):
+            kandidat.insert(0, os.path.join(folder_peserta, f))
+        elif fl.startswith("kualifikasi") and fl.endswith(".pdf"):
+            kandidat.append(os.path.join(folder_peserta, f))
+
+    if not kandidat:
+        return {"personel": [], "peralatan": []}
+
+    try:
+        import pdfplumber
+    except ImportError:
+        return {"personel": [], "peralatan": []}
+
+    personel_list = []
+    peralatan_list = []
+
+    for pdf_path in kandidat:
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page in pdf.pages:
+                    for tbl in (page.extract_tables() or []):
+                        if not tbl or len(tbl) < 2:
+                            continue
+                        header = " ".join(str(c or "") for c in tbl[0]).upper()
+
+                        # Tabel personel: header mengandung "NAMA PERSONIL" atau "TENAGA AHLI"
+                        if not personel_list and ("NAMA PERSONIL" in header or "TENAGA AHLI" in header):
+                            # Data ada di baris ke-2 (baris 1 = nomor kolom SPSE)
+                            data_rows = tbl[2:] if len(tbl) > 2 and re.match(r"^[\d\s]+$", str(tbl[1][0] or "")) else tbl[1:]
+                            for row in data_rows:
+                                if not row or not row[0]:
+                                    continue
+                                # Kolom: No | Nama | Tgl Lahir | Pendidikan | Jabatan | ...
+                                # Multi-entry dalam satu cell dipisah "\n"
+                                nama_col  = str(row[1] or "").strip() if len(row) > 1 else ""
+                                jabatan_col = str(row[4] or "").strip() if len(row) > 4 else ""
+                                if not nama_col or nama_col.upper() in ("NAMA PERSONIL", "NAMA", "2"):
+                                    continue
+                                for nama_p, jabatan_p in zip(
+                                    nama_col.split("\n"),
+                                    jabatan_col.split("\n") if jabatan_col else [""] * len(nama_col.split("\n"))
+                                ):
+                                    nama_p = nama_p.strip()
+                                    jabatan_p = jabatan_p.strip()
+                                    if nama_p and nama_p not in ("Nihil", "-"):
+                                        personel_list.append(f"{nama_p} ({jabatan_p})" if jabatan_p else nama_p)
+
+                        # Tabel peralatan: header mengandung "JENIS PERALATAN" atau "PERALATAN/PERLENGKAPAN"
+                        if not peralatan_list and ("JENIS PERALATAN" in header or "PERALATAN" in header and "PERLENGKAPAN" in header):
+                            data_rows = tbl[2:] if len(tbl) > 2 and re.match(r"^[\d\s]+$", str(tbl[1][0] or "")) else tbl[1:]
+                            for row in data_rows:
+                                if not row or not row[0]:
+                                    continue
+                                # Kolom: No | Jenis Peralatan | Merk | Tahun | Lokasi | Kapasitas | Jumlah | ...
+                                jenis_col  = str(row[1] or "").strip() if len(row) > 1 else ""
+                                jumlah_col = str(row[6] or "").strip() if len(row) > 6 else ""
+                                if not jenis_col or jenis_col.upper() in ("JENIS PERALATAN/\nPERLENGKAPAN", "JENIS PERALATAN", "2"):
+                                    continue
+                                for jenis_p, jumlah_p in zip(
+                                    jenis_col.split("\n"),
+                                    jumlah_col.split("\n") if jumlah_col else [""] * len(jenis_col.split("\n"))
+                                ):
+                                    jenis_p = jenis_p.strip()
+                                    jumlah_p = jumlah_p.strip()
+                                    if jenis_p and jenis_p not in ("Nihil", "-"):
+                                        peralatan_list.append(f"{jenis_p} ({jumlah_p} unit)" if jumlah_p else jenis_p)
+
+        except Exception:
+            continue
+
+        if personel_list and peralatan_list:
+            break  # Sudah dapat keduanya, tidak perlu lanjut ke file berikutnya
+
+    return {"personel": personel_list, "peralatan": peralatan_list}
+
+
+# ──────────────────────────────────────────────
+# 4. Entry point: scrape semua sekaligus
 # ──────────────────────────────────────────────
 
 def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
@@ -217,33 +356,38 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                 personel_list  = []
                 peralatan_list = []
 
-            # Fallback ke dokumen teknis PDF jika /preview kosong
-            if not personel_list or not peralatan_list:
-                try:
-                    import dokumen_teknis_engine
-                    # Cari folder peserta dari session state tidak tersedia di sini,
-                    # coba tebak dari kode_tender + urutan
-                    from config import POKJA_ROOT, sb as _sb2
-                    r2 = _sb2().table("draft_paket").select("folder_dibuat") \
-                                .eq("kode_tender", kode_tender).maybe_single().execute()
-                    folder_dibuat = r2.data.get("folder_dibuat", "") if r2.data else ""
-                    if folder_dibuat:
-                        import os
-                        folder_safe = sanitasi_nama_folder(folder_dibuat)
-                        slug = sanitasi_nama_folder(nama)[:80]
-                        urutan = peserta_list.index(p) + 1
-                        fp = os.path.join(POKJA_ROOT, folder_safe, "Dokumen Evaluasi",
-                                          f"{urutan}. {slug.strip('-')}")
-                        if os.path.isdir(fp):
-                            log(f"  Fallback PDF: {fp}")
-                            res_dt = dokumen_teknis_engine.parse_dan_upsert(
-                                kode_tender, pid, fp, progress_cb=log
-                            )
-                            if res_dt["ok"]:
-                                personel_list  = personel_list  or res_dt["personel"]
-                                peralatan_list = peralatan_list or res_dt["alat"]
-                except Exception as ef:
-                    log(f"  ⚠️ fallback PDF error: {ef}")
+            # Fallback: cari folder peserta di disk → gabung PDF + parse Formulir Kualifikasi
+            folder_peserta = ""
+            try:
+                r2 = _sb().table("draft_paket").select("folder_dibuat") \
+                            .eq("kode_tender", kode_tender).maybe_single().execute()
+                folder_dibuat = r2.data.get("folder_dibuat", "") if r2.data else ""
+                if folder_dibuat:
+                    folder_safe = sanitasi_nama_folder(folder_dibuat)
+                    slug = sanitasi_nama_folder(nama)[:80].strip("-")
+                    urutan = peserta_list.index(p) + 1
+                    fp = os.path.join(POKJA_ROOT, folder_safe, "Dokumen Evaluasi",
+                                      f"{urutan}. {slug}")
+                    if os.path.isdir(fp):
+                        folder_peserta = fp
+            except Exception as ef:
+                log(f"  ⚠️ lookup folder peserta error: {ef}")
+
+            # Gabung semua PDF → DokumenFull_kualifikasi_{nama}.pdf (selalu dilakukan)
+            if folder_peserta:
+                gabung_pdf_peserta(folder_peserta, nama, log=log)
+
+            # Parse personel & alat dari Formulir Isian Kualifikasi jika /preview kosong
+            if folder_peserta and (not personel_list or not peralatan_list):
+                res_pdf = parse_formulir_kualifikasi(folder_peserta)
+                if res_pdf["personel"] or res_pdf["peralatan"]:
+                    log(f"  Formulir PDF → {len(res_pdf['personel'])} personel, {len(res_pdf['peralatan'])} alat")
+                    personel_list  = personel_list  or res_pdf["personel"]
+                    peralatan_list = peralatan_list or res_pdf["peralatan"]
+                else:
+                    log(f"  ⚠️ Personel/alat tidak ditemukan di /preview maupun PDF — isi manual")
+            elif not folder_peserta and (not personel_list or not peralatan_list):
+                log(f"  ⚠️ Folder peserta tidak ditemukan di disk — personel/alat kosong")
 
             data["personel_1"] = personel_list[0] if len(personel_list) > 0 else ""
             data["personel_2"] = personel_list[1] if len(personel_list) > 1 else ""
