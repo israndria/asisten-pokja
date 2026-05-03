@@ -40,10 +40,10 @@ DEFAULT_HADIR = (
 )
 
 # ── Konstanta kolom dt/paketpanitia ──────────────────────────────────────────
-_COL_KODE = 0       # kode paket / ID lelang
+_COL_KODE = 0       # ID row internal tabel (bukan kode tender resmi)
 _COL_NAMA = 1       # nama paket
 _COL_STATUS = 2     # status: "Draft" / "Tender Sudah Selesai" / dll
-_COL_ID_LELANG = 5  # ID lelang (untuk endpoint /lelang/[ID]/...)
+_COL_ID_LELANG = 5  # Kode Tender resmi SPSE (untuk /lelang/, /peserta/, /dokumen/)
 _COL_TANGGAL = 20   # tanggal format "YYYY-MM-DD HH:MM:SS" — untuk filter tahun
 _COL_POKJA = 21     # nama pokja
 
@@ -334,7 +334,7 @@ def fetch_paket_draft() -> dict:
             if not tgl.startswith(_FILTER_TAHUN):
                 continue
             paket.append({
-                "kode": str(r[_COL_KODE]),
+                "kode": str(r[_COL_ID_LELANG]),
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
@@ -394,7 +394,7 @@ def fetch_paket_semua() -> dict:
                 continue
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
             paket.append({
-                "kode": kode,
+                "kode": str(r[_COL_ID_LELANG]),
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
@@ -453,7 +453,7 @@ def fetch_paket_aktif() -> dict:
             if not tgl.startswith(_FILTER_TAHUN):
                 continue
             paket.append({
-                "kode": str(r[_COL_KODE]),
+                "kode": str(r[_COL_ID_LELANG]),
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",

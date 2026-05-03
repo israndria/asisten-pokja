@@ -415,9 +415,8 @@ with tab0:
             if st.button("🔄 Sinkronkan Paket", type="secondary", use_container_width=True, key="btn_sync_spse"):
                 with st.spinner("Mengambil daftar paket dari SPSE..."):
                     if _sync_semua:
-                        _all = kirimpesan_engine.fetch_paket_semua()
-                        st.session_state["global_paket_draft"] = _all
-                        st.session_state["global_paket_aktif"] = _all
+                        st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_semua()
+                        st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
                     else:
                         st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_draft()
                         st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
@@ -2183,14 +2182,14 @@ with tab_kual:
         st.markdown("### 1. Pilih Paket")
 
         # Menggunakan data paket yang sudah disinkronkan di Tab 0
-        if "global_paket_aktif" not in st.session_state:
+        if "global_paket_draft" not in st.session_state:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
-            _kl_draft = st.session_state["global_paket_aktif"]
+            _kl_draft = st.session_state["global_paket_draft"]
             if not _kl_draft.get("sukses"):
                 st.error(f"❌ {_kl_draft.get('pesan', 'Gagal memuat data paket')}")
             else:
-                _kl_paket_list = _kl_draft.get("paket", [])
+                _kl_paket_list = [p for p in _kl_draft.get("paket", []) if p.get("kode") != "00000000000"]
                 if not _kl_paket_list:
                     st.warning("⚠️ Tidak ada paket aktif ditemukan.")
                 else:
@@ -2238,7 +2237,8 @@ with tab_kual:
             st.markdown(f"### 2. Peserta — {_kl_paket_aktif['kode']}")
             if st.button("🔍 Fetch Peserta", key="kl_fetch", use_container_width=True):
                 with st.spinner("Mengambil daftar peserta..."):
-                    res = kualifikasi_engine.fetch_peserta_by_kode(_kl_paket_aktif["kode"])
+                    _id_lelang = _kl_paket_aktif.get("id_lelang") or _kl_paket_aktif["kode"]
+                    res = kualifikasi_engine.fetch_peserta_by_id_lelang(_id_lelang)
                 st.session_state["kl_peserta"] = res
                 for k in list(st.session_state.keys()):
                     if k.startswith("kl_cek_"):

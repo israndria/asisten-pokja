@@ -74,7 +74,8 @@ def fetch_peserta(url_penawaran: str) -> dict:
             timeout=15,
         )
         if r.status_code != 200:
-            return {"ok": False, "peserta": [], "pesan": f"HTTP {r.status_code}"}
+            pesan = "Paket belum memiliki data peserta di SPSE (belum tahap penawaran)" if r.status_code == 500 else f"HTTP {r.status_code}"
+            return {"ok": False, "peserta": [], "pesan": pesan}
 
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -120,6 +121,13 @@ def fetch_peserta_by_kode(kode_tender: str) -> dict:
     return fetch_peserta(url)
 
 
+def fetch_peserta_by_id_lelang(id_lelang: str) -> dict:
+    """Wrapper fetch_peserta dari id_lelang (kolom 5 dt/paketpanitia) — dipakai untuk URL /peserta/."""
+    base = SPSE_BASE_URL.rstrip("/")
+    url = f"{base}/peserta/{id_lelang}/penawaran"
+    return fetch_peserta(url)
+
+
 def resolve_folder_paket(kode_tender: str) -> dict:
     """
     Lookup folder paket dari Supabase draft_paket.folder_dibuat.
@@ -134,7 +142,9 @@ def resolve_folder_paket(kode_tender: str) -> dict:
         folder_dibuat = r.data.get("folder_dibuat")
         if not folder_dibuat:
             return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 0)"}
-        path = os.path.join(POKJA_ROOT, folder_dibuat, "Dokumen Evaluasi")
+        # Windows tidak izinkan '/' dalam nama folder — sanitasi sama seperti saat folder dibuat
+        folder_dibuat_safe = re.sub(r'[/\\:*?"<>|]', "-", folder_dibuat).strip()
+        path = os.path.join(POKJA_ROOT, folder_dibuat_safe, "Dokumen Evaluasi")
         os.makedirs(path, exist_ok=True)
         return {"ok": True, "path": path, "pesan": folder_dibuat}
     except Exception as e:
