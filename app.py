@@ -746,6 +746,32 @@ with tab0:
         } for i, r in enumerate(_rows_tampil)])
         st.dataframe(_df_tampil, use_container_width=True, hide_index=True,
                      height=min(400, 35 + len(_rows_tampil) * 35))
+
+        # ── Hapus paket dari Supabase ──
+        with st.expander("🗑️ Hapus Paket dari Database"):
+            st.caption("Pilih paket yang ingin dihapus dari tabel `draft_paket` Supabase.")
+            _opsi_hapus = {
+                f"Pokja {str(r.get('kode_pokja') or '').strip()} — {str(r.get('nama_tender') or '')[:60]}": r.get("kode_tender")
+                for r in _rows_tampil if r.get("kode_tender")
+            }
+            _pilih_hapus = st.multiselect("Pilih paket yang akan dihapus:", list(_opsi_hapus.keys()), key="ms_hapus_draft")
+            if _pilih_hapus:
+                st.warning(f"⚠️ {len(_pilih_hapus)} paket akan dihapus permanen dari Supabase.")
+                if st.button("🗑️ Hapus Sekarang", type="primary", key="btn_hapus_draft_confirm"):
+                    _kode_hapus = [_opsi_hapus[k] for k in _pilih_hapus]
+                    _hapus_ok, _hapus_err = 0, []
+                    for _kh in _kode_hapus:
+                        try:
+                            inbox_engine._sb().table("draft_paket").delete().eq("kode_tender", _kh).execute()
+                            _hapus_ok += 1
+                        except Exception as _eh:
+                            _hapus_err.append(f"{_kh}: {_eh}")
+                    if _hapus_ok:
+                        st.success(f"✅ {_hapus_ok} paket berhasil dihapus.")
+                    if _hapus_err:
+                        for _em in _hapus_err:
+                            st.error(_em)
+                    st.rerun()
     else:
         st.info("Belum ada data. Klik 'Update Inbox' untuk mulai.")
 
