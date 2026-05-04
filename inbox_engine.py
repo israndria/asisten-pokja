@@ -107,10 +107,17 @@ def ambil_list_inbox() -> list[dict]:
 
 
 def filter_delegasi(list_inbox: list[dict]) -> list[dict]:
-    """Filter hanya pesan Pengumuman Delegasi Pokja (strip HTML tags dulu)."""
+    """Filter pesan Delegasi Pokja tahun berjalan saja.
+    Cek di tanggal pesan DAN kode_paket_raw (format SPSE mengandung tahun di keduanya).
+    """
     def _strip(s):
         return re.sub(r"<[^>]+>", "", s)
-    return [p for p in list_inbox if SUBJEK_DELEGASI in _strip(p["subjek"])]
+    tahun = str(datetime.now().year)
+    return [
+        p for p in list_inbox
+        if SUBJEK_DELEGASI in _strip(p["subjek"])
+        and (tahun in p.get("tanggal", "") or tahun in p.get("kode_paket_raw", ""))
+    ]
 
 
 # ── Parse detail pesan (HTML) ──────────────────────────────────────────────────
