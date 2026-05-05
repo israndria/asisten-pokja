@@ -656,6 +656,7 @@ def download_dokumen_paket(
             progress_cb(msg)
 
     hasil = {"ok": [], "skip": [], "error": [], "draft_pdf": ""}
+    jangka_waktu_found = ""
     os.makedirs(folder_tujuan, exist_ok=True)
 
     async def _run():
