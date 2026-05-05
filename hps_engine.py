@@ -36,12 +36,26 @@ def _parse_rows_via_playwright(kode_tender: str) -> dict:
         # Pastikan halaman sudah selesai load
         spse_browser._run(page.wait_for_load_state("networkidle", timeout=15000))
 
+    # Scroll sampai semua baris tabel ter-render (lazy load)
+    JS_SCROLL = """async () => {
+        const tbl = document.querySelectorAll('table')[1];
+        if (!tbl) return;
+        let prev = 0;
+        for (let i = 0; i < 100; i++) {
+            window.scrollTo(0, document.body.scrollHeight);
+            await new Promise(r => setTimeout(r, 400));
+            const cur = tbl.querySelectorAll('tr').length;
+            if (cur === prev && i > 0) break;
+            prev = cur;
+        }
+    }"""
+    spse_browser._run(page.evaluate(JS_SCROLL))
+
     JS = """() => {
         const tbls = document.querySelectorAll('table');
         const allRows = (tbl) => Array.from(tbl.querySelectorAll('tr')).map(r =>
             Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.trim())
         );
-        // tbl[1] = item HPS, tbl[5] = rekap total (berdasarkan struktur yang sudah diverifikasi)
         const rekapTbl = Array.from(tbls).find(t => t.id === 'rekap');
         return {
             rows:  tbls.length > 1 ? allRows(tbls[1]) : [],
