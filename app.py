@@ -587,34 +587,40 @@ with tab0:
             if _kt2 and _ip2:
                 if st.button("📦 Download Dokumen SPSE + Lampiran", use_container_width=True, key="btn_dl_dokumen_saja"):
                     _dl_msgs2 = []
-                    _st_log = st.empty() # Placeholder untuk log real-time
+                    _dl_status2 = st.status("🔽 Mengunduh dokumen...", expanded=True)
+                    _dl_log_area2 = _dl_status2.empty()
                     def _dl_cb2(msg):
                         _dl_msgs2.append(msg)
-                        # Render log terbaru ke placeholder
-                        with _st_log.container():
-                            with st.status("🔽 Sedang mengunduh dokumen...", expanded=True) as _status:
-                                st.code("\n".join(_dl_msgs2[-10:])) # Tampilkan 10 log terakhir
-                                _status.update(label=f"🔽 Mengunduh... ({msg[:30]}...)", state="running")
+                        _dl_log_area2.code("\n".join(_dl_msgs2[-20:]))
+                        _dl_status2.update(label=f"🔽 {msg[:60]}...")
 
                     from streamlit.runtime.scriptrunner import get_script_run_ctx
                     _ctx = get_script_run_ctx()
 
                     _dl2 = inbox_engine.download_dokumen_paket(
-                        _kt2, _ip2, _target_path, 
-                        kode_pokja=_row_terpilih.get("kode_pokja",""), 
+                        _kt2, _ip2, _target_path,
+                        kode_pokja=_row_terpilih.get("kode_pokja",""),
                         progress_cb=_dl_cb2,
                         st_ctx=_ctx
                     )
-                    _st_log.empty() # Bersihkan placeholder setelah selesai
-                    st.success(
-                        f"✅ {len(_dl2['ok'])} file, ⏭ {len(_dl2['skip'])} sudah ada, ❌ {len(_dl2['error'])} gagal"
-                        + (f" | 📎 {_os.path.basename(_dl2['draft_pdf'])}" if _dl2.get('draft_pdf') else "")
-                    )
+                    _ringkasan2 = (f"✅ {len(_dl2['ok'])} file, ⏭ {len(_dl2['skip'])} sudah ada, ❌ {len(_dl2['error'])} gagal"
+                                   + (f" | 📎 {_os.path.basename(_dl2['draft_pdf'])}" if _dl2.get('draft_pdf') else " | ⚠ Draft PDF tidak terbuat"))
+                    _dl_status2.update(label=_ringkasan2, state="complete", expanded=False)
                     if _dl_msgs2:
-                        with st.expander("Log download lengkap"):
-                            st.text("\n".join(_dl_msgs2))
+                        with st.expander("📋 Log download lengkap", expanded=False):
+                            _grup2 = []; _grp_title2 = ""; _grp_lines2 = []
+                            for _m in _dl_msgs2:
+                                if any(_m.startswith(p) for p in ["📨","📄","📅","📎","🏁","⚠","✅ Supabase"]):
+                                    if _grp_title2: _grup2.append((_grp_title2, _grp_lines2))
+                                    _grp_title2 = _m; _grp_lines2 = []
+                                else:
+                                    _grp_lines2.append(_m)
+                            if _grp_title2: _grup2.append((_grp_title2, _grp_lines2))
+                            for _gt, _gl in _grup2:
+                                st.markdown(f"**{_gt}**")
+                                if _gl: st.code("\n".join(_gl))
                     if _dl2["error"]:
-                        with st.expander("Detail error"):
+                        with st.expander("❌ Detail error", expanded=True):
                             for _e4 in _dl2["error"]:
                                 st.error(_e4)
 
@@ -644,13 +650,12 @@ with tab0:
                             _ip = str(_row_terpilih.get("id_pesan", ""))
                             if _kt and _ip:
                                 _dl_msgs = []
-                                _st_log_f = st.empty()
+                                _dl_status_f = st.status("🔽 Mengunduh dokumen persiapan...", expanded=True)
+                                _dl_log_area_f = _dl_status_f.empty()
                                 def _dl_cb(msg):
                                     _dl_msgs.append(msg)
-                                    with _st_log_f.container():
-                                        with st.status("🔽 Mengunduh dokumen persiapan...", expanded=True) as _status:
-                                            st.code("\n".join(_dl_msgs[-10:]))
-                                            _status.update(label=f"🔽 Progress: {msg[:30]}...", state="running")
+                                    _dl_log_area_f.code("\n".join(_dl_msgs[-20:]))
+                                    _dl_status_f.update(label=f"🔽 {msg[:60]}...")
 
                                 from streamlit.runtime.scriptrunner import get_script_run_ctx
                                 _ctx_f = get_script_run_ctx()
@@ -661,18 +666,26 @@ with tab0:
                                     progress_cb=_dl_cb,
                                     st_ctx=_ctx_f
                                 )
-                                _st_log_f.empty()
-                                st.success(
-                                    f"Download selesai — ✅ {len(_dl_hasil['ok'])} file, "
-                                    f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
-                                    f"❌ {len(_dl_hasil['error'])} gagal"
-                                    + (f" | 📎 {_os.path.basename(_dl_hasil['draft_pdf'])}" if _dl_hasil.get('draft_pdf') else "")
-                                )
+                                _ringkasan_f = (f"✅ {len(_dl_hasil['ok'])} file, "
+                                                f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
+                                                f"❌ {len(_dl_hasil['error'])} gagal"
+                                                + (f" | 📎 {_os.path.basename(_dl_hasil['draft_pdf'])}" if _dl_hasil.get('draft_pdf') else " | ⚠ Draft PDF tidak terbuat"))
+                                _dl_status_f.update(label=_ringkasan_f, state="complete", expanded=False)
                                 if _dl_msgs:
-                                    with st.expander("Log download lengkap"):
-                                        st.text("\n".join(_dl_msgs))
+                                    with st.expander("📋 Log download lengkap", expanded=False):
+                                        _grup = []; _grp_title = ""; _grp_lines = []
+                                        for _m in _dl_msgs:
+                                            if any(_m.startswith(p) for p in ["📨","📄","📅","📎","🏁","⚠","✅ Supabase"]):
+                                                if _grp_title: _grup.append((_grp_title, _grp_lines))
+                                                _grp_title = _m; _grp_lines = []
+                                            else:
+                                                _grp_lines.append(_m)
+                                        if _grp_title: _grup.append((_grp_title, _grp_lines))
+                                        for _gt, _gl in _grup:
+                                            st.markdown(f"**{_gt}**")
+                                            if _gl: st.code("\n".join(_gl))
                                 if _dl_hasil["error"]:
-                                    with st.expander("Detail error download"):
+                                    with st.expander("❌ Detail error download", expanded=True):
                                         for _e3 in _dl_hasil["error"]:
                                             st.error(_e3)
                         # Scrape HPS ke Supabase
