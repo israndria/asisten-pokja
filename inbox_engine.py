@@ -939,7 +939,10 @@ def download_dokumen_paket(
         hasil["draft_pdf"] = merged
         log(f"📎 Draft PDF: {os.path.basename(merged)}")
     except Exception as e:
+        import traceback as _tb
+        _detail = _tb.format_exc()
         log(f"❌ Gagal buat draft PDF: {e}")
+        log(f"   Detail: {_detail[-300:]}")
         hasil["error"].append(f"Draft PDF: {e}")
 
     return hasil
