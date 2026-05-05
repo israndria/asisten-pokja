@@ -312,9 +312,28 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                     r"Nomor Surat\s*:\s*([^\n]+)", txt1
                 )
 
-                # Nama Dinas: ambil dari PDF lalu resolve ke nama lengkap via mapping
-                nama_dinas_raw = _re_extract(r"Surat Dari\s*[:\s]+([^\n]+)", txt1)
-                nama_dinas_raw = re.split(r"\s+(Diterima|Tanggal|Nomor|Paraf|Catatan)\b", nama_dinas_raw, flags=re.IGNORECASE)[0].strip()
+                # Nama Dinas: ambil dari PDF, bisa multiline (misal "RUMAH SAKIT UMUM DAERAH DATU\nSANGGUL")
+                # Tabel 2 kolom — pdfplumber extract per baris horizontal, konten kolom kanan ikut dalam baris yang sama.
+                # Strategi: per baris → buang konten setelah 2+ spasi + keyword kolom kanan → kumpulkan nilai "Surat Dari"
+                _STOP_LABEL = r"(?:Nomor Surat|Tanggal Surat|Nomor Agenda|Kode Pokja|Diteruskan)"
+                _RIGHT_COL  = r"(?:Diterima|No Agenda|Sifat|Paraf|Catatan)"
+                nama_parts = []
+                capturing_dinas = False
+                for _line in txt1.split("\n"):
+                    # Strip konten kolom kanan (setelah 2+ spasi diikuti keyword kanan)
+                    _line_l = re.split(r"\s{2,}" + _RIGHT_COL, _line, flags=re.IGNORECASE)[0]
+                    if re.search(r"Surat Dari\s*[:\s]+", _line_l, re.IGNORECASE):
+                        val = re.sub(r"^.*?Surat Dari\s*[:\s]+", "", _line_l, flags=re.IGNORECASE).strip()
+                        if val:
+                            nama_parts.append(val)
+                        capturing_dinas = True
+                    elif capturing_dinas:
+                        if re.search(r"^\s*" + _STOP_LABEL, _line_l, re.IGNORECASE):
+                            break
+                        val = _line_l.strip()
+                        if val:
+                            nama_parts.append(val)
+                nama_dinas_raw = " ".join(nama_parts)
                 hasil["nama_dinas"] = _resolve_nama_dinas(hasil["nomor_surat_dinas"], nama_dinas_raw)
 
                 # Bidang: hanya untuk PUPR — ambil dari kode surat (DPUPR-BM, PUPR-SDA, dst)
