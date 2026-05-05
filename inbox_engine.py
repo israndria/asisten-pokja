@@ -316,14 +316,15 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                 # Tabel 2 kolom — pdfplumber extract per baris horizontal, konten kolom kanan ikut dalam baris yang sama.
                 # Strategi: per baris → buang konten setelah 2+ spasi + keyword kolom kanan → kumpulkan nilai "Surat Dari"
                 _STOP_LABEL = r"(?:Nomor Surat|Tanggal Surat|Nomor Agenda|Kode Pokja|Diteruskan)"
-                _RIGHT_COL  = r"(?:Diterima|No Agenda|Sifat|Paraf|Catatan)"
+                # Keyword kolom kanan — bisa붙어 langsung (1 spasi) atau 2+ spasi
+                _RIGHT_COL  = r"\s+(?:Diterima\b|No Agenda\b|Sifat\b|Paraf\b|Catatan\b)"
                 nama_parts = []
                 capturing_dinas = False
                 for _line in txt1.split("\n"):
-                    # Strip konten kolom kanan (setelah 2+ spasi diikuti keyword kanan)
-                    _line_l = re.split(r"\s{2,}" + _RIGHT_COL, _line, flags=re.IGNORECASE)[0]
-                    if re.search(r"Surat Dari\s*[:\s]+", _line_l, re.IGNORECASE):
-                        val = re.sub(r"^.*?Surat Dari\s*[:\s]+", "", _line_l, flags=re.IGNORECASE).strip()
+                    # Strip konten kolom kanan
+                    _line_l = re.split(_RIGHT_COL, _line, flags=re.IGNORECASE)[0]
+                    if re.search(r"Surat Dari\s*:?\s*", _line_l, re.IGNORECASE):
+                        val = re.sub(r"^.*?Surat Dari\s*:?\s*", "", _line_l, flags=re.IGNORECASE).strip()
                         if val:
                             nama_parts.append(val)
                         capturing_dinas = True
@@ -331,7 +332,8 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                         if re.search(r"^\s*" + _STOP_LABEL, _line_l, re.IGNORECASE):
                             break
                         val = _line_l.strip()
-                        if val:
+                        # Abaikan baris yang hanya tanda baca/simbol (sisa format tabel)
+                        if val and re.search(r"[A-Za-z0-9]", val):
                             nama_parts.append(val)
                 nama_dinas_raw = " ".join(nama_parts)
                 hasil["nama_dinas"] = _resolve_nama_dinas(hasil["nomor_surat_dinas"], nama_dinas_raw)
@@ -365,7 +367,7 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
 
 _KOLOM_DRAFT_PAKET = {
     "kode_tender", "id_pesan", "mak", "nama_tender", "kode_rup",
-    "nilai_pagu", "nilai_hps", "kode_pokja", "nomor_pp", "nomor_surat_dinas",
+    "nilai_pagu", "nilai_hps", "link_pdf", "kode_pokja", "nomor_pp", "nomor_surat_dinas",
     "nama_dinas", "bidang", "nama_ppk", "jangka_waktu", "sumber_anggaran",
     "anggota_1", "anggota_2", "anggota_3",
     "diambil_pada", "nomor_urut", "folder_dibuat", "folder_dibuat_pada", "kode_unik",
