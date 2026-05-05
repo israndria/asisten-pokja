@@ -773,6 +773,32 @@ with tab0:
         st.dataframe(_df_tampil, use_container_width=True, hide_index=True,
                      height=min(400, 35 + len(_rows_tampil) * 35))
 
+        # ── Reset folder_dibuat ──
+        with st.expander("↩️ Reset Status Folder"):
+            st.caption("Kosongkan `folder_dibuat` agar paket muncul kembali di Bulk Create (folder fisik tidak dihapus).")
+            _opsi_reset = {
+                f"Pokja {str(r.get('kode_pokja') or '').strip()} — {str(r.get('nama_tender') or '')[:60]}": r.get("kode_tender")
+                for r in _rows_tampil if r.get("folder_dibuat") and r.get("kode_tender")
+            }
+            if _opsi_reset:
+                _pilih_reset = st.multiselect("Pilih paket:", list(_opsi_reset.keys()), key="ms_reset_folder")
+                if _pilih_reset:
+                    if st.button("↩️ Reset Sekarang", type="secondary", key="btn_reset_folder_confirm"):
+                        _reset_ok = 0
+                        for _kr in [_opsi_reset[k] for k in _pilih_reset]:
+                            try:
+                                inbox_engine._sb().table("draft_paket").update(
+                                    {"folder_dibuat": None, "folder_dibuat_pada": None}
+                                ).eq("kode_tender", _kr).execute()
+                                _reset_ok += 1
+                            except Exception as _er:
+                                st.error(f"{_kr}: {_er}")
+                        if _reset_ok:
+                            st.success(f"✅ {_reset_ok} paket berhasil direset.")
+                        st.rerun()
+            else:
+                st.info("Tidak ada paket dengan status folder yang bisa direset.")
+
         # ── Hapus paket dari Supabase ──
         with st.expander("🗑️ Hapus Paket dari Database"):
             st.caption("Pilih paket yang ingin dihapus dari tabel `draft_paket` Supabase.")
