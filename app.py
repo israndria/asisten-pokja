@@ -432,18 +432,13 @@ with tab0:
                     st.session_state["global_paket_aktif"] = _ga0
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
 
-        _sync_semua = st.checkbox("Termasuk paket selesai (untuk uji coba paket lama)", key="cb_sync_semua")
         _sync_col1, _sync_col2 = st.columns(2)
         with _sync_col1:
             if st.button("🔄 Refresh dari SPSE", type="secondary", use_container_width=True, key="btn_sync_spse"):
                 kirimpesan_engine.clear_paket_cache()
                 with st.spinner("Mengambil daftar paket dari SPSE..."):
-                    if _sync_semua:
-                        _gd_r = kirimpesan_engine.fetch_paket_semua()
-                        _ga_r = kirimpesan_engine.fetch_paket_aktif()
-                    else:
-                        _gd_r = kirimpesan_engine.fetch_paket_draft()
-                        _ga_r = kirimpesan_engine.fetch_paket_aktif()
+                    _gd_r = kirimpesan_engine.fetch_paket_draft()
+                    _ga_r = kirimpesan_engine.fetch_paket_aktif()
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
@@ -479,29 +474,17 @@ with tab0:
             st.balloons()
         st.caption("Buat satu folder atau semua sekaligus.")
 
-        _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
+        _tahun_skrg = str(datetime.now().year)
+        _rows_tahun_ini = [_r for _r in _draft_rows if _tahun_skrg in str(_r.get("nomor_pp") or "")]
+        _nomor_terakhir = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
         _nomor_berikutnya = _nomor_terakhir + 1
 
-        # Filter tahun untuk dropdown (sama dengan filter Section 3)
-        _tahun_dd_options = ["Semua"] + [str(t) for t in range(datetime.now().year, datetime.now().year - 5, -1)] + ["Belum Folder", "Sudah Folder"]
-        _tahun_dd = st.selectbox("Filter tahun:", _tahun_dd_options, key="filter_dd_tahun")
-
-        def _dd_match(r):
-            kt = str(r.get("kode_tender", ""))
-            if kt.startswith("_err_") or not r.get("nama_tender"):
-                return False
-            if _tahun_dd.isdigit():
-                return str(r.get("nomor_pp") or "").endswith(_tahun_dd)
-            if _tahun_dd == "Belum Folder":
-                return not bool(r.get("folder_dibuat"))
-            if _tahun_dd == "Sudah Folder":
-                return bool(r.get("folder_dibuat"))
-            return True
-
-        # Dropdown pilih paket (nama penuh, tanpa potong)
+        # Dropdown pilih paket — hanya tahun berjalan
         _opsi_map = {"(input manual)": None}
         for _r in _draft_rows:
-            if not _dd_match(_r):
+            if str(_r.get("kode_tender", "")).startswith("_err_") or not _r.get("nama_tender"):
+                continue
+            if _tahun_skrg not in str(_r.get("nomor_pp") or ""):
                 continue
             _pk = str(_r.get("kode_pokja") or "").strip()
             _nm = str(_r.get("nama_tender") or "").strip()
@@ -639,6 +622,18 @@ with tab0:
                                     with st.expander("Detail error download"):
                                         for _e3 in _dl_hasil["error"]:
                                             st.error(_e3)
+                        # Scrape HPS ke Supabase
+                        if _row_terpilih and _row_terpilih.get("kode_tender"):
+                            try:
+                                import hps_engine as _hps_eng
+                                with st.spinner("Scraping HPS dari SPSE..."):
+                                    _hps_res = _hps_eng.scrape_dan_upsert_hps(_row_terpilih["kode_tender"])
+                                if _hps_res.get("error") is None and _hps_res.get("count", 0) > 0:
+                                    st.success(f"✅ HPS tersimpan: {_hps_res['count']} item")
+                                else:
+                                    st.warning(f"HPS gagal/kosong: {_hps_res.get('error', '-')}")
+                            except Exception as _hps_e:
+                                st.warning(f"Scrape HPS error: {_hps_e}")
                         st.session_state["_folder_just_created"] = _nama_folder_clean
                         st.rerun()
                     else:
@@ -650,9 +645,10 @@ with tab0:
         # Bulk Create
         st.divider()
         _bulk_kandidat = [_r for _r in _draft_rows if not _r.get("folder_dibuat") and _r.get("nama_tender")
-                          and not str(_r.get("kode_tender","")).startswith("_err_")]
+                          and not str(_r.get("kode_tender","")).startswith("_err_")
+                          and _tahun_skrg in str(_r.get("nomor_pp") or "")]
         if _bulk_kandidat:
-            _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _draft_rows), default=0)
+            _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
             _bulk_plan, _ctr = [], _max_urut
             for _r in sorted(_bulk_kandidat, key=lambda x: x.get("diambil_pada") or ""):
                 _n = int(_r["nomor_urut"]) if _r.get("nomor_urut") else (_ctr := _ctr + 1) and _ctr
@@ -660,25 +656,31 @@ with tab0:
                     "kode_tender": _r["kode_tender"],
                     "nomor_urut": _n,
                     "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {str(_r.get('nama_tender','')).strip()} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
+                    "id_pesan": _r.get("id_pesan", ""),
+                    "kode_pokja": _r.get("kode_pokja", ""),
                 })
             with st.expander(f"📋 Preview {len(_bulk_plan)} folder yang akan dibuat"):
                 for _bp in _bulk_plan:
                     st.caption(_bp["nama_folder"])
+            _bulk_dl = st.checkbox("📦 Download dokumen SPSE + lampiran per paket", value=True, key="cb_bulk_dl")
             if st.button(f"📁 Buat Semua ({len(_bulk_plan)} folder)", type="secondary",
                          use_container_width=True, key="btn_bulk_buat"):
                 from datetime import timezone as _tz2
+                from streamlit.runtime.scriptrunner import get_script_run_ctx as _get_ctx
+                _ctx_bulk = _get_ctx()
                 _bp2 = st.progress(0.0)
                 _bs  = st.empty()
                 _ok, _fail = 0, 0
                 for _i, _bp in enumerate(_bulk_plan):
                     _bp2.progress((_i+1)/len(_bulk_plan))
-                    _bs.info(f"[{_i+1}/{len(_bulk_plan)}] {_bp['nama_folder'][:60]}")
+                    _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Membuat folder: {_bp['nama_folder'][:50]}")
                     try:
                         _r2 = _sp.run([_PY, _SCRIPT, _bp["nama_folder"]],
                                       capture_output=True, text=True, timeout=60,
                                       creationflags=_NO_WIN)
                         if _r2.returncode == 0:
                             _ok += 1
+                            _bp_target = os.path.join(_POKJA_ROOT, _bp["nama_folder"])
                             try:
                                 inbox_engine._sb().table("draft_paket").update({
                                     "nomor_urut": _bp["nomor_urut"],
@@ -687,6 +689,30 @@ with tab0:
                                 }).eq("kode_tender", _bp["kode_tender"]).execute()
                             except Exception:
                                 pass
+                            # Download dokumen SPSE per paket
+                            if _bulk_dl and _bp.get("id_pesan") and _bp.get("kode_tender"):
+                                _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Mengunduh dokumen: {_bp['nama_folder'][:40]}")
+                                _dl_log = []
+                                def _bulk_cb(msg, _log=_dl_log):
+                                    _log.append(msg)
+                                try:
+                                    inbox_engine.download_dokumen_paket(
+                                        _bp["kode_tender"], str(_bp["id_pesan"]),
+                                        _bp_target,
+                                        kode_pokja=_bp.get("kode_pokja", ""),
+                                        progress_cb=_bulk_cb,
+                                        st_ctx=_ctx_bulk,
+                                    )
+                                except Exception as _dl_e:
+                                    _dl_log.append(f"ERROR download: {_dl_e}")
+                            # Scrape HPS ke Supabase
+                            if _bp.get("kode_tender"):
+                                _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Scraping HPS: {_bp['nama_folder'][:40]}")
+                                try:
+                                    import hps_engine as _hps_eng2
+                                    _hps_eng2.scrape_dan_upsert_hps(_bp["kode_tender"])
+                                except Exception:
+                                    pass
                         else:
                             _fail += 1
                     except _sp.TimeoutExpired:
