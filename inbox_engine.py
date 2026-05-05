@@ -919,7 +919,7 @@ def download_dokumen_paket(
 
     # Fallback: jika tidak ada file baru didownload (CDP gagal/skip), scan folder
     if not files_didownload:
-        log("⚠ Tidak ada file baru — scan folder untuk gabung PDF...")
+        log("⚠ CDP tidak aktif / download skip — fallback scan folder...")
         all_pdf = sorted([
             f for f in _glob2.glob(os.path.join(folder_tujuan, "*.pdf"))
             if not os.path.basename(f).startswith("Draft_")
@@ -928,6 +928,10 @@ def download_dokumen_paket(
         inbox_f = [f for f in all_pdf if kode_pokja and f"PP" in os.path.basename(f)]
         others_f = [f for f in all_pdf if f not in inbox_f]
         files_didownload = inbox_f + others_f
+        if not files_didownload:
+            log("❌ FOLDER KOSONG — Chrome CDP tidak aktif saat download. Jalankan ulang setelah Chrome dibuka.")
+            hasil["error"].append("CDP tidak aktif, folder kosong, Draft tidak terbuat")
+            return hasil
 
     try:
         merged = _gabung_pdf_draft(draft_path, files_didownload, progress_cb)

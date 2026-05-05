@@ -773,10 +773,15 @@ with tab0:
                                         progress_cb=_bulk_cb,
                                         st_ctx=_ctx_bulk,
                                     )
-                                    _paket_log.append(
-                                        f"📎 Download: ✅{len(_dl_hasil_bulk['ok'])} file"
-                                        + (f" | Draft: {_os.path.basename(_dl_hasil_bulk['draft_pdf'])}" if _dl_hasil_bulk.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
-                                    )
+                                    _cdp_gagal = not _dl_hasil_bulk["ok"] and not _dl_hasil_bulk.get("draft_pdf")
+                                    if _cdp_gagal:
+                                        _paket_log.append("❌ Chrome CDP tidak aktif — buka Chrome dulu lalu jalankan ulang")
+                                        _fail += 1; _ok -= 1
+                                    else:
+                                        _paket_log.append(
+                                            f"📎 Download: ✅{len(_dl_hasil_bulk['ok'])} file"
+                                            + (f" | Draft: {_os.path.basename(_dl_hasil_bulk['draft_pdf'])}" if _dl_hasil_bulk.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
+                                        )
                                     for _e in _dl_hasil_bulk.get("error", []):
                                         _paket_log.append(f"  ❌ {_e}")
                                 except Exception as _dl_e:
