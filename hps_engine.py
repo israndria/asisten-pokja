@@ -16,111 +16,48 @@ def _parse_rp(s: str) -> float:
         return 0.0
 
 
-def _parse_rows_via_playwright(kode_tender: str) -> dict:
+def _fetch_data_var(kode_tender: str) -> list:
     """
-    Scrape tabel HPS via Playwright CDP — halaman di-render JS, requests biasa tidak cukup.
-    Return dict {"rows": [[...], ...], "rekap": [[...], ...]}
+    Ambil variabel JS `data` dari halaman HPS — berisi semua item sebagai JSON array.
+    Jauh lebih andal daripada parse DOM tabel yang dibatasi 20 baris.
     """
     import spse_browser
 
     url = f"{SPSE_BASE_URL}dokumen/{kode_tender}/hps"
     spse_browser.buka_browser(navigate=False)
 
-    # Cari tab yang sudah buka URL ini, atau navigate tab pertama
     page = next((p for p in spse_browser._context.pages if f"/{kode_tender}/hps" in p.url), None)
     if page is None:
-        # Buka di tab yang sudah ada (jangan buat tab baru)
         page = spse_browser._context.pages[0]
         spse_browser._run(page.goto(url, wait_until="networkidle", timeout=30000))
     else:
-        # Pastikan halaman sudah selesai load
-        spse_browser._run(page.wait_for_load_state("networkidle", timeout=15000))
+        spse_browser._run(page.reload(wait_until="networkidle", timeout=30000))
 
-    # Virtual scroll: akumulasi baris sambil scroll — DOM recycle baris di luar viewport
-    # Key pakai nomor urut (kolom pertama) agar baris divisi identik tidak tabrakan
-    JS_SCRAPE_ALL = """async () => {
-        const tbl = document.querySelectorAll('table')[1];
-        if (!tbl) return {rows: [], rekap: []};
-
-        // key = kolom-0 (nomor urut) + '|' + kolom-1 (nama pekerjaan awal 40 char)
-        // Fallback ke auto-increment jika kolom-0 kosong (baris header/divisi tanpa nomor)
-        let autoIdx = 0;
-        const seen = new Map();
-
-        const capture = () => {
-            Array.from(tbl.querySelectorAll('tr')).forEach(tr => {
-                const cells = Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim());
-                if (!cells.length) return;
-                const num = cells[0].trim();
-                const nama = (cells[1] || '').slice(0, 40);
-                // Baris dengan nomor urut → key = num|nama (unik per baris item)
-                // Baris tanpa nomor (divisi/header) → key = _auto_N|nama
-                const key = num ? (num + '|' + nama) : ('_auto_' + (++autoIdx) + '|' + nama);
-                if (!seen.has(key)) seen.set(key, cells);
-            });
-        };
-
-        // Scroll perlahan dari atas ke bawah, capture tiap langkah
-        const step = Math.max(window.innerHeight * 0.5, 150);
-        capture();
-        for (let y = step; y <= document.body.scrollHeight + step; y += step) {
-            window.scrollTo(0, y);
-            await new Promise(r => setTimeout(r, 400));
-            capture();
-            if (y > document.body.scrollHeight) break;
-        }
-        window.scrollTo(0, 0);
-        await new Promise(r => setTimeout(r, 300));
-
-        const rekapTbl = Array.from(document.querySelectorAll('table')).find(t => t.id === 'rekap');
-        const rekapRows = rekapTbl
-            ? Array.from(rekapTbl.querySelectorAll('tr')).map(r =>
-                Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.trim()))
-            : [];
-
-        return {
-            rows: Array.from(seen.values()),
-            rekap: rekapRows,
-        };
-    }"""
-    return spse_browser._run(page.evaluate(JS_SCRAPE_ALL))
+    return spse_browser._run(page.evaluate("() => typeof data !== 'undefined' ? data : []"))
 
 
 def scrape_hps(kode_tender: str, session=None) -> dict:
     """
-    Scrape halaman /dokumen/{kode_tender}/hps via Playwright (JS-rendered).
-    session diabaikan — dipertahankan untuk backward compat.
+    Scrape HPS dari variabel JS `data` di halaman /dokumen/{kode_tender}/hps.
     Return dict: {"items": [...], "total_nilai": float, "total_nilai_bulat": float}
     """
-    data = _parse_rows_via_playwright(kode_tender)
-    rows = data.get("rows", [])
-    rekap = data.get("rekap", [])
+    raw = _fetch_data_var(kode_tender)
 
-    if not rows:
+    if not raw:
         return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
     items = []
-    auto_urutan = 0  # counter untuk baris tanpa nomor urut
-    for row in rows[1:]:  # skip header
-        if len(row) < 7:
-            continue
+    auto_urutan = 0
+    for i, d in enumerate(raw):
+        jenis_bj  = (d.get("item") or "").strip()
+        satuan    = (d.get("unit") or "").strip()
+        vol       = float(d.get("vol") or 0)
+        harga     = float(d.get("harga") or 0)
+        pajak_pct = float(d.get("pajak") or 0)
+        total_spse = float(d.get("total_harga") or 0)
+        kbki      = (d.get("kbki") or "").strip()
 
-        # Kolom: [urutan, jenis_bj, satuan, vol, harga, pajak, total, ket, kunci, kbki]
-        urutan_raw = row[0]
-        jenis_bj   = row[1]
-        satuan     = row[2]
-        vol_raw    = row[3]
-        harga_raw  = row[4]
-        pajak_raw  = row[5]
-        total_raw  = row[6]
-        kbki       = row[9] if len(row) > 9 else ""
-
-        is_divisi = (satuan == "" and vol_raw == "" and harga_raw == "")
-
-        vol        = _parse_rp(vol_raw)
-        harga      = _parse_rp(harga_raw)
-        pajak_pct  = _parse_rp(pajak_raw)
-        total_spse = _parse_rp(total_raw)
+        is_divisi = (satuan == "" and harga == 0)
 
         if not is_divisi and vol > 0 and harga > 0:
             total_hitung = float(
@@ -134,12 +71,11 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
             selisih      = 0.0
             selisih_ok   = True
 
-        try:
-            urutan = int(float(urutan_raw)) if urutan_raw.strip() else None
-        except (ValueError, AttributeError):
-            urutan = None
-        if urutan is None:
-            auto_urutan -= 1  # nomor negatif agar tidak tabrakan dengan nomor asli
+        # Urutan: gunakan index+1, baris divisi pakai counter negatif agar tidak tabrakan
+        if not is_divisi:
+            urutan = i + 1
+        else:
+            auto_urutan -= 1
             urutan = auto_urutan
 
         items.append({
@@ -157,14 +93,10 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
             "selisih_ok":   selisih_ok,
         })
 
-    total_nilai       = 0.0
-    total_nilai_bulat = 0.0
-    for r in rekap:
-        if len(r) >= 2:
-            if "setelah pembulatan" in r[0].lower():
-                total_nilai_bulat = _parse_rp(r[1])
-            elif "TOTAL NILAI" in r[0]:
-                total_nilai = _parse_rp(r[1])
+    # Total nilai dari sum total_harga item (exclude divisi yang total_harga=0)
+    total_nilai = round(sum(float(d.get("total_harga") or 0) for d in raw), 2)
+    from math import ceil
+    total_nilai_bulat = float(ceil(total_nilai))
 
     return {
         "items":             items,
