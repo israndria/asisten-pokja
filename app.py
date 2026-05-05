@@ -418,8 +418,12 @@ with tab0:
         st.markdown("#### 🔁 Re-parse PDF Paket")
         st.caption("Parse ulang PDF Lembar Disposisi untuk paket yang sudah ada di DB — tanpa harus serap inbox ulang.")
 
+        _tahun_skrg_rp = str(datetime.now().year)
         _reparse_opts = {f"{_r.get('nomor_urut','?')}. {_r.get('nama_tender','?')} ({_r.get('kode_tender','')})": _r
-                        for _r in _draft_rows if _r.get("link_pdf") or _r.get("nomor_surat_dinas")}
+                        for _r in _draft_rows
+                        if (_r.get("link_pdf") or _r.get("nomor_surat_dinas"))
+                        and _tahun_skrg_rp in str(_r.get("nomor_pp") or "")
+                        and not str(_r.get("kode_tender", "")).startswith("_err_")}
         _reparse_opts_label = ["(pilih paket)"] + list(_reparse_opts.keys())
         _reparse_sel = st.selectbox("Pilih paket", _reparse_opts_label, key="sel_reparse_pdf")
 
