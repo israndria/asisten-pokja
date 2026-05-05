@@ -910,11 +910,24 @@ def download_dokumen_paket(
     # ════════════════════════════════
     # 3. Gabung semua jadi 1 PDF Draft
     # ════════════════════════════════
+    import glob as _glob2
     label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
     draft_path = os.path.join(folder_tujuan, f"Draft_{label}.pdf")
-    # Urutan sudah benar: lampiran inbox (bagian 1) masuk duluan ke hasil["ok"],
-    # lalu dokumen SPSE (bagian 2). File pertama = lampiran inbox, dikecualikan dari limit size.
+
+    # Urutan: lampiran inbox (bagian 1) duluan, lalu dokumen SPSE (bagian 2)
     files_didownload = hasil["ok"][:]
+
+    # Fallback: jika tidak ada file baru didownload (CDP gagal/skip), scan folder
+    if not files_didownload:
+        log("⚠ Tidak ada file baru — scan folder untuk gabung PDF...")
+        all_pdf = sorted([
+            f for f in _glob2.glob(os.path.join(folder_tujuan, "*.pdf"))
+            if not os.path.basename(f).startswith("Draft_")
+        ])
+        # Lampiran inbox (nama mengandung kode_pokja + PP) duluan
+        inbox_f = [f for f in all_pdf if kode_pokja and f"PP" in os.path.basename(f)]
+        others_f = [f for f in all_pdf if f not in inbox_f]
+        files_didownload = inbox_f + others_f
 
     try:
         merged = _gabung_pdf_draft(draft_path, files_didownload, progress_cb)
