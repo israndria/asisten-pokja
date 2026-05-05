@@ -735,57 +735,76 @@ with tab0:
                 from streamlit.runtime.scriptrunner import get_script_run_ctx as _get_ctx
                 _ctx_bulk = _get_ctx()
                 _bp2 = st.progress(0.0)
-                _bs  = st.empty()
+                _bulk_status = st.status(f"📁 Memproses {len(_bulk_plan)} paket...", expanded=True)
+                _bulk_status_line = _bulk_status.empty()
                 _ok, _fail = 0, 0
+                _bulk_semua_log = {}  # {nama_folder: [log lines]}
                 for _i, _bp in enumerate(_bulk_plan):
                     _bp2.progress((_i+1)/len(_bulk_plan))
-                    _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Membuat folder: {_bp['nama_folder'][:50]}")
+                    _nf = _bp["nama_folder"]
+                    _bulk_status.update(label=f"[{_i+1}/{len(_bulk_plan)}] {_nf[:60]}")
+                    _paket_log = []
                     try:
-                        _r2 = _sp.run([_PY, _SCRIPT, _bp["nama_folder"]],
+                        _r2 = _sp.run([_PY, _SCRIPT, _nf],
                                       capture_output=True, text=True, timeout=60,
                                       creationflags=_NO_WIN)
                         if _r2.returncode == 0:
                             _ok += 1
-                            _bp_target = os.path.join(_POKJA_ROOT, _bp["nama_folder"])
+                            _paket_log.append("✅ Folder dibuat")
+                            _bp_target = os.path.join(_POKJA_ROOT, _nf)
                             try:
                                 inbox_engine._sb().table("draft_paket").update({
                                     "nomor_urut": _bp["nomor_urut"],
-                                    "folder_dibuat": _bp["nama_folder"],
+                                    "folder_dibuat": _nf,
                                     "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
                                 }).eq("kode_tender", _bp["kode_tender"]).execute()
                             except Exception:
                                 pass
                             # Download dokumen SPSE per paket
                             if _bulk_dl and _bp.get("id_pesan") and _bp.get("kode_tender"):
-                                _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Mengunduh dokumen: {_bp['nama_folder'][:40]}")
-                                _dl_log = []
-                                def _bulk_cb(msg, _log=_dl_log):
+                                def _bulk_cb(msg, _log=_paket_log):
                                     _log.append(msg)
+                                    _bulk_status_line.code("\n".join(_log[-10:]))
                                 try:
-                                    inbox_engine.download_dokumen_paket(
+                                    _dl_hasil_bulk = inbox_engine.download_dokumen_paket(
                                         _bp["kode_tender"], str(_bp["id_pesan"]),
                                         _bp_target,
                                         kode_pokja=_bp.get("kode_pokja", ""),
                                         progress_cb=_bulk_cb,
                                         st_ctx=_ctx_bulk,
                                     )
+                                    _paket_log.append(
+                                        f"📎 Download: ✅{len(_dl_hasil_bulk['ok'])} file"
+                                        + (f" | Draft: {_os.path.basename(_dl_hasil_bulk['draft_pdf'])}" if _dl_hasil_bulk.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
+                                    )
+                                    for _e in _dl_hasil_bulk.get("error", []):
+                                        _paket_log.append(f"  ❌ {_e}")
                                 except Exception as _dl_e:
-                                    _dl_log.append(f"ERROR download: {_dl_e}")
+                                    _paket_log.append(f"❌ Download error: {_dl_e}")
                             # Scrape HPS ke Supabase
                             if _bp.get("kode_tender"):
-                                _bs.info(f"[{_i+1}/{len(_bulk_plan)}] Scraping HPS: {_bp['nama_folder'][:40]}")
                                 try:
                                     import hps_engine as _hps_eng2
-                                    _hps_eng2.scrape_dan_upsert_hps(_bp["kode_tender"])
-                                except Exception:
-                                    pass
+                                    _hps_res2 = _hps_eng2.scrape_dan_upsert_hps(_bp["kode_tender"])
+                                    _paket_log.append(f"📊 HPS: {_hps_res2.get('count',0)} item")
+                                except Exception as _hps_e2:
+                                    _paket_log.append(f"⚠ HPS gagal: {_hps_e2}")
                         else:
                             _fail += 1
+                            _paket_log.append(f"❌ Gagal buat folder: {_r2.stderr[:100]}")
                     except _sp.TimeoutExpired:
                         _fail += 1
-                _bs.success(f"Selesai — {_ok} berhasil, {_fail} gagal.")
+                        _paket_log.append("❌ Timeout buat folder")
+                    _bulk_semua_log[_nf] = _paket_log
+
+                _bulk_status_line.empty()
+                _ringkasan_bulk = f"✅ {_ok} folder berhasil, ❌ {_fail} gagal"
+                _bulk_status.update(label=_ringkasan_bulk, state="complete", expanded=False)
+                with st.expander("📋 Log detail per paket", expanded=_fail > 0):
+                    for _nf, _logs in _bulk_semua_log.items():
+                        st.markdown(f"**{_nf[:70]}**")
+                        st.code("\n".join(_logs))
                 st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil dibuat"
-                st.rerun()
         else:
             st.info("Semua paket sudah punya folder.")
 
