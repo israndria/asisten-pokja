@@ -527,6 +527,19 @@ with tab0:
             if _cb2.button("📂 Buka Explorer", use_container_width=True, key="btn_buka_folder"):
                 _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
 
+        # Tombol scrape HPS mandiri (untuk folder yang sudah ada)
+        if _folder_ada and _row_terpilih and _row_terpilih.get("kode_tender"):
+            if st.button("📊 Scrape HPS dari SPSE", use_container_width=True, key="btn_scrape_hps_saja"):
+                import hps_engine as _hps_eng3
+                with st.spinner("Scraping HPS... (scroll virtual, mungkin 30-60 detik)"):
+                    _hps_r = _hps_eng3.scrape_dan_upsert_hps(_row_terpilih["kode_tender"])
+                if _hps_r.get("error") is None and _hps_r.get("count", 0) > 0:
+                    st.success(f"✅ HPS tersimpan: {_hps_r['count']} item")
+                    if _hps_r.get("warning"):
+                        st.warning(f"⚠️ {len(_hps_r['warning'])} item ada selisih hitung")
+                else:
+                    st.warning(f"HPS gagal/kosong: {_hps_r.get('error', '-')}")
+
         # Tombol download dokumen mandiri (untuk folder yang sudah ada)
         if _folder_ada and _row_terpilih:
             _kt2 = _row_terpilih.get("kode_tender", "")

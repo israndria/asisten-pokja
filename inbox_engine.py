@@ -387,7 +387,9 @@ _SBU_RULES = [
     (
         "Subklasifikasi BG005 (KBLI 2020) Konstruksi Gedung Kesehatan",
         "Subklasifikasi BG008 (KBLI 2015) Jasa Pelaksana Konstruksi Bangunan Kesehatan",
-        ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik"],
+        ["rumah sakit", "puskesmas", "polindes", "posyandu", "klinik",
+         "bangunan kesehatan", "cytotoxic", "laboratorium kesehatan",
+         "instalasi farmasi", "apotek", "rsud", "rsu ", "rsup", "rskd"],
     ),
     # BG002 BG004 — gedung perkantoran/komersial
     (

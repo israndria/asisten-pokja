@@ -36,33 +36,48 @@ def _parse_rows_via_playwright(kode_tender: str) -> dict:
         # Pastikan halaman sudah selesai load
         spse_browser._run(page.wait_for_load_state("networkidle", timeout=15000))
 
-    # Scroll sampai semua baris tabel ter-render (lazy load)
-    JS_SCROLL = """async () => {
+    # Virtual scroll: akumulasi baris sambil scroll — DOM recycle baris di luar viewport
+    JS_SCRAPE_ALL = """async () => {
         const tbl = document.querySelectorAll('table')[1];
-        if (!tbl) return;
-        let prev = 0;
-        for (let i = 0; i < 100; i++) {
-            window.scrollTo(0, document.body.scrollHeight);
-            await new Promise(r => setTimeout(r, 400));
-            const cur = tbl.querySelectorAll('tr').length;
-            if (cur === prev && i > 0) break;
-            prev = cur;
-        }
-    }"""
-    spse_browser._run(page.evaluate(JS_SCROLL))
+        if (!tbl) return {rows: [], rekap: []};
 
-    JS = """() => {
-        const tbls = document.querySelectorAll('table');
-        const allRows = (tbl) => Array.from(tbl.querySelectorAll('tr')).map(r =>
-            Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.trim())
-        );
-        const rekapTbl = Array.from(tbls).find(t => t.id === 'rekap');
+        const rowKey = (tr) => Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim()).join('|');
+        const seen = new Map();  // key → cells array (urut insertion)
+
+        const capture = () => {
+            Array.from(tbl.querySelectorAll('tr')).forEach(tr => {
+                const cells = Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim());
+                const key = cells.join('|');
+                if (!seen.has(key)) seen.set(key, cells);
+            });
+        };
+
+        // Scroll perlahan dari atas ke bawah, capture tiap langkah
+        const step = Math.max(window.innerHeight * 0.6, 200);
+        capture();  // baris awal (header + visible rows)
+        for (let y = 0; y <= document.body.scrollHeight + step; y += step) {
+            window.scrollTo(0, y);
+            await new Promise(r => setTimeout(r, 350));
+            capture();
+            // Berhenti jika sudah di bawah
+            if (y > document.body.scrollHeight) break;
+        }
+        // Scroll balik ke atas untuk rekap
+        window.scrollTo(0, 0);
+        await new Promise(r => setTimeout(r, 300));
+
+        const rekapTbl = Array.from(document.querySelectorAll('table')).find(t => t.id === 'rekap');
+        const rekapRows = rekapTbl
+            ? Array.from(rekapTbl.querySelectorAll('tr')).map(r =>
+                Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.trim()))
+            : [];
+
         return {
-            rows:  tbls.length > 1 ? allRows(tbls[1]) : [],
-            rekap: rekapTbl      ? allRows(rekapTbl) : [],
+            rows: Array.from(seen.values()),
+            rekap: rekapRows,
         };
     }"""
-    return spse_browser._run(page.evaluate(JS))
+    return spse_browser._run(page.evaluate(JS_SCRAPE_ALL))
 
 
 def scrape_hps(kode_tender: str, session=None) -> dict:
