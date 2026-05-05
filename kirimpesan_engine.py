@@ -83,10 +83,7 @@ _COL_KODE = 0       # ID row internal tabel (bukan kode tender resmi)
 _COL_NAMA = 1       # nama paket
 _COL_STATUS = 2     # status: "Draft" / "Tender Sudah Selesai" / dll
 _COL_ID_LELANG = 5  # Kode Tender resmi SPSE (untuk /lelang/, /peserta/, /dokumen/)
-_COL_TANGGAL = 20   # tanggal format "YYYY-MM-DD HH:MM:SS" — untuk filter tahun
 _COL_POKJA = 21     # nama pokja
-
-_FILTER_TAHUN = "2025"  # hanya tampilkan paket tahun ini
 
 
 def _get_url(paket_id: str) -> str:
@@ -340,11 +337,9 @@ def fetch_paket_draft() -> dict:
     params = {
         "draw": 1,
         "start": 0,
-        "length": 200,
+        "length": 500,
         "order[0][column]": 3,
         "order[0][dir]": "desc",
-        "search[value]": "Draft",
-        "search[regex]": "false",
     }
     try:
         resp = requests.get(
@@ -364,23 +359,23 @@ def fetch_paket_draft() -> dict:
         data = resp.json()
         rows = data.get("data", [])
 
+        from datetime import datetime as _dt2
+        tahun = str(_dt2.now().year)
         paket = []
         for r in rows:
             status = r[_COL_STATUS] if len(r) > _COL_STATUS else ""
             if "draft" not in status.lower():
                 continue
-            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
-            if not tgl.startswith(_FILTER_TAHUN):
+            tgl = str(r[3]) if len(r) > 3 else ""
+            if tahun not in tgl:
                 continue
             paket.append({
                 "kode": str(r[_COL_ID_LELANG]),
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
-                "tanggal": tgl,
             })
 
-        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket Draft ditemukan"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
@@ -430,9 +425,6 @@ def fetch_paket_semua() -> dict:
             if kode in seen:
                 continue
             seen.add(kode)
-            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
-            if not tgl.startswith(_FILTER_TAHUN):
-                continue
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
             paket.append({
                 "kode": str(r[_COL_ID_LELANG]),
@@ -440,10 +432,8 @@ def fetch_paket_semua() -> dict:
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
                 "status": status,
-                "tanggal": tgl,
             })
 
-        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket ditemukan (semua status)"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
@@ -492,19 +482,14 @@ def fetch_paket_aktif() -> dict:
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
             if any(s in status.lower() for s in _SKIP_STATUS):
                 continue
-            tgl = str(r[_COL_TANGGAL]) if len(r) > _COL_TANGGAL else ""
-            if not tgl.startswith(_FILTER_TAHUN):
-                continue
             paket.append({
                 "kode": str(r[_COL_ID_LELANG]),
                 "nama": str(r[_COL_NAMA]),
                 "id_lelang": str(r[_COL_ID_LELANG]),
                 "pokja": str(r[_COL_POKJA]) if len(r) > _COL_POKJA else "",
                 "status": status,
-                "tanggal": tgl,
             })
 
-        paket.sort(key=lambda p: p["tanggal"], reverse=True)
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket aktif ditemukan"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
