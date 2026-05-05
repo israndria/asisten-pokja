@@ -527,8 +527,8 @@ with tab0:
             if _cb2.button("📂 Buka Explorer", use_container_width=True, key="btn_buka_folder"):
                 _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
 
-        # Tombol scrape HPS mandiri (untuk folder yang sudah ada)
-        if _folder_ada and _row_terpilih and _row_terpilih.get("kode_tender"):
+        # Tombol scrape HPS — muncul selama ada paket dipilih (tidak perlu folder ada)
+        if _row_terpilih and _row_terpilih.get("kode_tender"):
             if st.button("📊 Scrape HPS dari SPSE", use_container_width=True, key="btn_scrape_hps_saja"):
                 import hps_engine as _hps_eng3
                 with st.spinner("Scraping HPS... (scroll virtual, mungkin 30-60 detik)"):
