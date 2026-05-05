@@ -874,12 +874,68 @@ def download_dokumen_paket(
         pool.submit(_run_in_thread).result()
 
     # ════════════════════════════════
+    # 2c. Parse jangka_waktu dari PDF di folder jika belum ketemu dari download
+    # ════════════════════════════════
+    if not jangka_waktu_found:
+        import glob as _glob
+        import pdfplumber as _pdfplumber
+        for fpath in _glob.glob(os.path.join(folder_tujuan, "*.pdf")):
+            if os.path.basename(fpath).startswith("Draft_"):
+                continue
+            try:
+                with _pdfplumber.open(fpath) as _pdf:
+                    for _page in _pdf.pages:
+                        _txt = _page.extract_text() or ""
+                        _m = re.search(
+                            r"(\d+)\s*(?:\([^)]+\))?\s*(hari\s+kalender|hari\s+kerja|H\.K\.?)",
+                            _txt, re.IGNORECASE
+                        )
+                        if _m:
+                            jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
+                            log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
+                            break
+            except Exception:
+                pass
+            if jangka_waktu_found:
+                break
+        if jangka_waktu_found and kode_tender:
+            try:
+                _sb().table("draft_paket").update(
+                    {"jangka_waktu": jangka_waktu_found}
+                ).eq("kode_tender", kode_tender).execute()
+                log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
+            except Exception as _e:
+                log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
+
+    # ════════════════════════════════
     # 3. Gabung semua jadi 1 PDF Draft
     # ════════════════════════════════
     label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
     draft_path = os.path.join(folder_tujuan, f"Draft_{label}.pdf")
-    # Gabung hanya file yang baru didownload dari SPSE (bukan template paket)
+
+    # Gabung: lampiran inbox (link_pdf) dulu, lalu file yang didownload dari SPSE
     files_didownload = hasil["ok"][:]
+    try:
+        # Ambil link_pdf dari Supabase untuk paket ini
+        _r_lp = _sb().table("draft_paket").select("link_pdf").eq("kode_tender", kode_tender).execute()
+        _link_pdf = (_r_lp.data or [{}])[0].get("link_pdf") or ""
+        if _link_pdf:
+            # Download lampiran inbox ke folder
+            _nama_lampiran = f"{kode_pokja}PP_{kode_pokja}merged.pdf" if kode_pokja else "lampiran_inbox.pdf"
+            _dst_lampiran = os.path.join(folder_tujuan, _nama_lampiran)
+            if not os.path.exists(_dst_lampiran):
+                import requests as _req
+                _rr = _req.get(_link_pdf, headers=_headers(_link_pdf), timeout=30)
+                if _rr.status_code == 200 and b"%PDF" in _rr.content[:10]:
+                    with open(_dst_lampiran, "wb") as _f:
+                        _f.write(_rr.content)
+                    log(f"  📎 Lampiran inbox diunduh: {_nama_lampiran}")
+                    hasil["ok"].append(_dst_lampiran)
+            # Pastikan lampiran inbox jadi file pertama di draft
+            files_didownload = [_dst_lampiran] + [f for f in hasil["ok"] if f != _dst_lampiran]
+    except Exception as _e_lp:
+        log(f"  ⚠ Gagal ambil lampiran inbox: {_e_lp}")
+
     try:
         merged = _gabung_pdf_draft(draft_path, files_didownload, progress_cb)
         hasil["draft_pdf"] = merged
