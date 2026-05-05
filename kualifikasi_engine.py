@@ -41,7 +41,8 @@ def get_last_dir() -> str:
             return open(_LAST_DIR_FILE, encoding="utf-8").read().strip()
     except Exception:
         pass
-    return r"D:\Dokumen\@ POKJA 2026"
+    from config import POKJA_ROOT
+    return POKJA_ROOT
 
 
 def save_last_dir(path: str):

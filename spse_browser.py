@@ -46,7 +46,7 @@ def _run(coro, timeout=60):
 # ============================================================
 
 CHROME_EXE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-CHROME_PROFILE = r"C:\Users\MSI\AppData\Local\Google\Chrome\User Data"
+CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "Google", "Chrome", "User Data")
 CDP_PORT = 9222
 
 

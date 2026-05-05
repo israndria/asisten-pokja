@@ -12,7 +12,7 @@ BROWSER_SESSION_DIR = os.path.join(BASE_DIR, ".browser_session")
 
 # === Apendo ===
 APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
-PYTHON_SYS  = r"C:\Users\MSI\AppData\Local\Programs\Python\Python312\python.exe"
+PYTHON_SYS  = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "Programs", "Python", "Python312", "python.exe")
 
 # === SPSE ===
 SPSE_BASE_URL = "https://spse.inaproc.id/tapinkab/"

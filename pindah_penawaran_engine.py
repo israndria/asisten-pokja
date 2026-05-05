@@ -7,7 +7,7 @@ import re
 import shutil
 from config import sb as _sb, POKJA_ROOT, sanitasi_nama_folder
 
-APENDO_ROOT       = r"D:\data\biddings"
+APENDO_ROOT       = os.path.join(os.path.splitdrive(POKJA_ROOT)[0] + os.sep, "data", "biddings")
 DEST_SUBFOLDER    = "1. Dokumen Penawaran"
 TEKNIS_DIR        = "administrasi-dan-teknis"
 HARGA_DIR         = "harga"

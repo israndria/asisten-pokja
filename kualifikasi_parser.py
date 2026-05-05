@@ -20,7 +20,12 @@ import spse_browser
 from config import SPSE_BASE_URL
 
 # ── Tesseract ──────────────────────────────────────────────────────────────────
-_TESSERACT_PATH = r"D:\Tesseract OCR\tesseract.exe"
+_TESSERACT_CANDIDATES = [
+    r"D:\Tesseract OCR\tesseract.exe",
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Tesseract-OCR\tesseract.exe",
+]
+_TESSERACT_PATH = next((p for p in _TESSERACT_CANDIDATES if os.path.exists(p)), _TESSERACT_CANDIDATES[0])
 
 def _ocr_image(img):
     """OCR PIL Image → string. Lazy import pytesseract."""
