@@ -37,32 +37,38 @@ def _parse_rows_via_playwright(kode_tender: str) -> dict:
         spse_browser._run(page.wait_for_load_state("networkidle", timeout=15000))
 
     # Virtual scroll: akumulasi baris sambil scroll — DOM recycle baris di luar viewport
+    # Key pakai nomor urut (kolom pertama) agar baris divisi identik tidak tabrakan
     JS_SCRAPE_ALL = """async () => {
         const tbl = document.querySelectorAll('table')[1];
         if (!tbl) return {rows: [], rekap: []};
 
-        const rowKey = (tr) => Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim()).join('|');
-        const seen = new Map();  // key → cells array (urut insertion)
+        // key = kolom-0 (nomor urut) + '|' + kolom-1 (nama pekerjaan awal 40 char)
+        // Fallback ke auto-increment jika kolom-0 kosong (baris header/divisi tanpa nomor)
+        let autoIdx = 0;
+        const seen = new Map();
 
         const capture = () => {
             Array.from(tbl.querySelectorAll('tr')).forEach(tr => {
                 const cells = Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim());
-                const key = cells.join('|');
+                if (!cells.length) return;
+                const num = cells[0].trim();
+                const nama = (cells[1] || '').slice(0, 40);
+                // Baris dengan nomor urut → key = num|nama (unik per baris item)
+                // Baris tanpa nomor (divisi/header) → key = _auto_N|nama
+                const key = num ? (num + '|' + nama) : ('_auto_' + (++autoIdx) + '|' + nama);
                 if (!seen.has(key)) seen.set(key, cells);
             });
         };
 
         // Scroll perlahan dari atas ke bawah, capture tiap langkah
-        const step = Math.max(window.innerHeight * 0.6, 200);
-        capture();  // baris awal (header + visible rows)
-        for (let y = 0; y <= document.body.scrollHeight + step; y += step) {
+        const step = Math.max(window.innerHeight * 0.5, 150);
+        capture();
+        for (let y = step; y <= document.body.scrollHeight + step; y += step) {
             window.scrollTo(0, y);
-            await new Promise(r => setTimeout(r, 350));
+            await new Promise(r => setTimeout(r, 400));
             capture();
-            // Berhenti jika sudah di bawah
             if (y > document.body.scrollHeight) break;
         }
-        // Scroll balik ke atas untuk rekap
         window.scrollTo(0, 0);
         await new Promise(r => setTimeout(r, 300));
 
