@@ -28,7 +28,7 @@ def _headers(referer: str = "") -> dict:
     }
 
 
-def _get(url: str, referer: str = "", timeout: int = 20) -> requests.Response:
+def _get(url: str, referer: str = "", timeout: int = 10) -> requests.Response:
     return requests.get(url, headers=_headers(referer), timeout=timeout)
 
 
@@ -47,6 +47,9 @@ def ambil_list_inbox() -> list[dict]:
     Fetch semua pesan inbox via DataTables AJAX endpoint (POST).
     Return list of dict: {id_pesan, tanggal, kode_paket, metode, subjek, link_detail}
     """
+    cookie = spse_browser.get_spse_cookies()
+    if not cookie:
+        raise RuntimeError("Cookie SPSE kosong — buka Chrome SPSE dan login ulang dulu.")
     token = _ambil_authenticity_token()
     if not token:
         raise RuntimeError("authenticityToken tidak ditemukan — pastikan sudah login")
@@ -587,6 +590,20 @@ def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
 
 # ── Download Dokumen Paket (Lampiran Inbox + Dokumen SPSE) ────────────────────
 
+def _unique_dst(folder: str, fname: str) -> str:
+    """Jika fname sudah ada di folder, tambahkan suffix _2, _3, dst."""
+    dst = os.path.join(folder, fname)
+    if not os.path.exists(dst):
+        return dst
+    base, ext = os.path.splitext(fname)
+    n = 2
+    while True:
+        candidate = os.path.join(folder, f"{base}_{n}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        n += 1
+
+
 def download_dokumen_paket(
     kode_tender: str,
     id_pesan: str,
@@ -674,11 +691,7 @@ def download_dokumen_paket(
                     fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
                                        (await link.text_content() or ""), flags=re.IGNORECASE).strip()
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
-                    dst = os.path.join(folder_tujuan, fname)
-                    if os.path.exists(dst):
-                        log(f"  ({i}/{total_lamp}) ⏭ {fname}")
-                        hasil["skip"].append(fname)
-                        continue
+                    dst = _unique_dst(folder_tujuan, fname)
                     try:
                         async with worker_page.expect_download(timeout=30000) as dl_info:
                             await link.evaluate("el => el.click()")
@@ -686,7 +699,7 @@ def download_dokumen_paket(
                         tmp = await dl.path()
                         if tmp:
                             shutil.copy2(tmp, dst)
-                            log(f"  ({i}/{total_lamp}) ✅ {fname}")
+                            log(f"  ({i}/{total_lamp}) ✅ {os.path.basename(dst)}")
                             hasil["ok"].append(dst)
                     except Exception as e:
                         log(f"  ({i}/{total_lamp}) ❌ {fname}: {e}")
@@ -749,26 +762,33 @@ def download_dokumen_paket(
                         if r.status_code == 403: continue
                         r.raise_for_status()
                         soup = BeautifulSoup(r.text, "html.parser")
-                        file_links = soup.select("table#files a[href], table.table a[href*='/dl/']")
-                        num_f = len(file_links)
-                        for fi, a in enumerate(file_links, 1):
-                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", a.get_text(separator=" ", strip=True)).strip()
-                            href = a["href"]
-                            fname = re.sub(r'[<>:"/\\|?*]', "_", (fname_raw or urllib.parse.unquote(href.split("/")[-1].split("?")[0]))).strip() or f"file"
-                            dst = os.path.join(folder_tujuan, fname)
-                            if os.path.exists(dst):
-                                log(f"  ({fi}/{num_f}) ⏭ {fname}")
-                                hasil["skip"].append(fname)
-                                continue
+                        # Navigasi ke halaman section via Playwright agar link /dl/ punya session aktif
+                        await worker_page.goto(url_sec, wait_until="networkidle", timeout=20000)
+                        pw_links = await worker_page.query_selector_all(
+                            "table#files a[href*='/dl/'], table.table a[href*='/dl/']"
+                        )
+                        num_f = len(pw_links)
+                        for fi, link in enumerate(pw_links, 1):
+                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
+                                               (await link.text_content() or ""), flags=re.IGNORECASE).strip()
+                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_{fi}"
+                            dst = _unique_dst(folder_tujuan, fname)
                             try:
-                                saved = await _playwright_download(f"https://spse.inaproc.id{href}" if href.startswith("/") else href, dst, worker_page)
-                                if saved:
-                                    log(f"  ({fi}/{num_f}) ✅ {os.path.basename(saved)}")
-                                    hasil["ok"].append(saved)
+                                async with worker_page.expect_download(timeout=30000) as dl_info:
+                                    await link.evaluate("el => el.click()")
+                                dl = await dl_info.value
+                                server_fname = urllib.parse.unquote_plus(dl.suggested_filename or "")
+                                if server_fname:
+                                    dst = _unique_dst(folder_tujuan, re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip())
+                                tmp = await dl.path()
+                                if tmp:
+                                    shutil.copy2(tmp, dst)
+                                    log(f"  ({fi}/{num_f}) ✅ {os.path.basename(dst)}")
+                                    hasil["ok"].append(dst)
                                 else:
                                     hasil["error"].append(f"{fname}: gagal")
                             except Exception as e:
-                                log(f"  ❌ {fname}: {e}")
+                                log(f"  ({fi}/{num_f}) ❌ {fname}: {e}")
                                 hasil["error"].append(f"{fname}: {e}")
                     except Exception as e:
                         log(f"  ❌ Error: {e}")
