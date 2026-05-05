@@ -431,21 +431,26 @@ with tab0:
             _reparse_row = _reparse_opts[_reparse_sel]
             _reparse_link = _reparse_row.get("link_pdf") or ""
             if not _reparse_link:
-                st.warning("Paket ini tidak punya link PDF — tidak bisa re-parse.")
-            elif st.button("🔁 Re-parse PDF", type="secondary", use_container_width=True, key="btn_reparse_pdf"):
+                st.caption("⚠️ Link PDF belum tersimpan — akan di-fetch otomatis saat re-parse.")
+            if st.button("🔁 Re-parse PDF", type="secondary", use_container_width=True, key="btn_reparse_pdf"):
                 with st.spinner("Parsing PDF..."):
                     try:
-                        _rp_hasil = inbox_engine.parse_pdf_inmemory(_reparse_link)
-                        _rp_kode  = _reparse_row["kode_tender"]
-                        _rp_data  = {k: v for k, v in _rp_hasil.items() if k in inbox_engine._KOLOM_DRAFT_PAKET and v}
-                        if _rp_data:
+                        _rp_kode = _reparse_row["kode_tender"]
+                        # Jika link_pdf belum ada, fetch dari detail pesan
+                        if not _reparse_link:
+                            _rp_detail = inbox_engine.parse_detail_pesan(str(_reparse_row.get("id_pesan", "")))
+                            _reparse_link = _rp_detail.get("link_pdf") or ""
+                        if not _reparse_link:
+                            st.error("Tidak bisa mendapatkan link PDF untuk paket ini.")
+                        else:
+                            _rp_hasil = inbox_engine.parse_pdf_inmemory(_reparse_link)
+                            _rp_data  = {k: v for k, v in _rp_hasil.items() if k in inbox_engine._KOLOM_DRAFT_PAKET and v}
+                            _rp_data["link_pdf"] = _reparse_link  # simpan link agar tidak perlu fetch lagi
                             inbox_engine._sb().table("draft_paket").update(_rp_data).eq("kode_tender", _rp_kode).execute()
                             st.success(f"✅ Re-parse berhasil. Field diperbarui: {', '.join(_rp_data.keys())}")
                             with st.expander("Detail hasil parse"):
                                 for k, v in _rp_hasil.items():
                                     st.text(f"{k}: {v}")
-                        else:
-                            st.warning("Parse tidak menghasilkan data baru.")
                     except Exception as _rp_e:
                         st.error(f"Gagal re-parse: {_rp_e}")
 
