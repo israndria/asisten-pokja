@@ -656,7 +656,6 @@ def download_dokumen_paket(
             progress_cb(msg)
 
     hasil = {"ok": [], "skip": [], "error": [], "draft_pdf": ""}
-    jangka_waktu_found = ""
     os.makedirs(folder_tujuan, exist_ok=True)
 
     async def _run():
@@ -732,24 +731,6 @@ def download_dokumen_paket(
                 log(f"  ❌ Gagal buka inbox: {e}")
                 hasil["error"].append(f"Inbox: {e}")
 
-            # ════════════════════════════════
-            # 1b. Parse jangka_waktu
-            # ════════════════════════════════
-            jangka_waktu_found = ""
-            for fpath in hasil["ok"]:
-                if not fpath.lower().endswith(".pdf"): continue
-                try:
-                    import pdfplumber
-                    with pdfplumber.open(fpath) as _pdf:
-                        for _page in _pdf.pages:
-                            _txt = _page.extract_text() or ""
-                            _m = re.search(r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)", _txt, re.IGNORECASE)
-                            if _m:
-                                jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
-                                log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
-                                break
-                except Exception: pass
-                if jangka_waktu_found: break
 
             # ════════════════════════════════
             # 2. Dokumen SPSE
@@ -820,40 +801,6 @@ def download_dokumen_paket(
             else:
                 log("  ❌ Lewati scan dokumen")
 
-            # ════════════════════════════════
-            # 2b. Parse jangka_waktu dari dokumen SPSE jika belum ketemu
-            # ════════════════════════════════
-            if not jangka_waktu_found:
-                for fpath in hasil["ok"]:
-                    if not fpath.lower().endswith(".pdf"):
-                        continue
-                    try:
-                        import pdfplumber
-                        with pdfplumber.open(fpath) as _pdf:
-                            for _page in _pdf.pages:
-                                _txt = _page.extract_text() or ""
-                                _m = re.search(
-                                    r"(\d+)\s*(?:\([^)]+\)\s*)?(Hari\s+Kalender|Hari\s+Kerja|H\.K\.?)",
-                                    _txt, re.IGNORECASE
-                                )
-                                if _m:
-                                    jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
-                                    log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
-                                    break
-                    except Exception:
-                        pass
-                    if jangka_waktu_found:
-                        break
-
-                if jangka_waktu_found and kode_tender:
-                    try:
-                        _sb().table("draft_paket").update(
-                            {"jangka_waktu": jangka_waktu_found}
-                        ).eq("kode_tender", kode_tender).execute()
-                        log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
-                    except Exception as _e:
-                        log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
-
             await worker_page.close()
             log("🏁 Proses download dokumen selesai.")
 
@@ -873,40 +820,6 @@ def download_dokumen_paket(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(_run_in_thread).result()
-
-    # ════════════════════════════════
-    # 2c. Parse jangka_waktu dari PDF di folder jika belum ketemu dari download
-    # ════════════════════════════════
-    if not jangka_waktu_found:
-        import glob as _glob
-        import pdfplumber as _pdfplumber
-        for fpath in _glob.glob(os.path.join(folder_tujuan, "*.pdf")):
-            if os.path.basename(fpath).startswith("Draft_"):
-                continue
-            try:
-                with _pdfplumber.open(fpath) as _pdf:
-                    for _page in _pdf.pages:
-                        _txt = _page.extract_text() or ""
-                        _m = re.search(
-                            r"(\d+)\s*(?:\([^)]+\))?\s*(hari\s+kalender|hari\s+kerja|H\.K\.?)",
-                            _txt, re.IGNORECASE
-                        )
-                        if _m:
-                            jangka_waktu_found = f"{_m.group(1)} {_m.group(2).strip()}"
-                            log(f"  📅 Jangka waktu: {jangka_waktu_found} (dari {os.path.basename(fpath)})")
-                            break
-            except Exception:
-                pass
-            if jangka_waktu_found:
-                break
-        if jangka_waktu_found and kode_tender:
-            try:
-                _sb().table("draft_paket").update(
-                    {"jangka_waktu": jangka_waktu_found}
-                ).eq("kode_tender", kode_tender).execute()
-                log(f"  ✅ Supabase jangka_waktu diupdate: {jangka_waktu_found}")
-            except Exception as _e:
-                log(f"  ⚠ Gagal update jangka_waktu Supabase: {_e}")
 
     # ════════════════════════════════
     # 3. Gabung semua jadi 1 PDF Draft
