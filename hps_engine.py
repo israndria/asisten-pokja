@@ -47,7 +47,6 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
         return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
     items = []
-    auto_urutan = 0
     for i, d in enumerate(raw):
         jenis_bj  = (d.get("item") or "").strip()
         satuan    = (d.get("unit") or "").strip()
@@ -71,12 +70,7 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
             selisih      = 0.0
             selisih_ok   = True
 
-        # Urutan: gunakan index+1, baris divisi pakai counter negatif agar tidak tabrakan
-        if not is_divisi:
-            urutan = i + 1
-        else:
-            auto_urutan -= 1
-            urutan = auto_urutan
+        urutan = i + 1  # posisi asli 1-based, sama untuk item maupun divisi
 
         items.append({
             "urutan":       urutan,
