@@ -100,6 +100,7 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
         return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
     items = []
+    auto_urutan = 0  # counter untuk baris tanpa nomor urut
     for row in rows[1:]:  # skip header
         if len(row) < 7:
             continue
@@ -134,9 +135,12 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
             selisih_ok   = True
 
         try:
-            urutan = int(float(urutan_raw)) if urutan_raw else 0
-        except ValueError:
-            urutan = 0
+            urutan = int(float(urutan_raw)) if urutan_raw.strip() else None
+        except (ValueError, AttributeError):
+            urutan = None
+        if urutan is None:
+            auto_urutan -= 1  # nomor negatif agar tidak tabrakan dengan nomor asli
+            urutan = auto_urutan
 
         items.append({
             "urutan":       urutan,
