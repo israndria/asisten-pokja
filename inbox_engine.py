@@ -912,29 +912,9 @@ def download_dokumen_paket(
     # ════════════════════════════════
     label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
     draft_path = os.path.join(folder_tujuan, f"Draft_{label}.pdf")
-
-    # Gabung: lampiran inbox (link_pdf) dulu, lalu file yang didownload dari SPSE
+    # Urutan sudah benar: lampiran inbox (bagian 1) masuk duluan ke hasil["ok"],
+    # lalu dokumen SPSE (bagian 2). File pertama = lampiran inbox, dikecualikan dari limit size.
     files_didownload = hasil["ok"][:]
-    try:
-        # Ambil link_pdf dari Supabase untuk paket ini
-        _r_lp = _sb().table("draft_paket").select("link_pdf").eq("kode_tender", kode_tender).execute()
-        _link_pdf = (_r_lp.data or [{}])[0].get("link_pdf") or ""
-        if _link_pdf:
-            # Download lampiran inbox ke folder
-            _nama_lampiran = f"{kode_pokja}PP_{kode_pokja}merged.pdf" if kode_pokja else "lampiran_inbox.pdf"
-            _dst_lampiran = os.path.join(folder_tujuan, _nama_lampiran)
-            if not os.path.exists(_dst_lampiran):
-                import requests as _req
-                _rr = _req.get(_link_pdf, headers=_headers(_link_pdf), timeout=30)
-                if _rr.status_code == 200 and b"%PDF" in _rr.content[:10]:
-                    with open(_dst_lampiran, "wb") as _f:
-                        _f.write(_rr.content)
-                    log(f"  📎 Lampiran inbox diunduh: {_nama_lampiran}")
-                    hasil["ok"].append(_dst_lampiran)
-            # Pastikan lampiran inbox jadi file pertama di draft
-            files_didownload = [_dst_lampiran] + [f for f in hasil["ok"] if f != _dst_lampiran]
-    except Exception as _e_lp:
-        log(f"  ⚠ Gagal ambil lampiran inbox: {_e_lp}")
 
     try:
         merged = _gabung_pdf_draft(draft_path, files_didownload, progress_cb)
@@ -968,6 +948,9 @@ def _gabung_pdf_draft(output_path: str, file_list: list, progress_cb=None) -> st
     MAX_FILE_MB  = 5
     MAX_PDF_PAGES = 50
 
+    # File pertama dalam list = lampiran inbox — wajib masuk, bebas dari limit size
+    _lampiran_wajib = {file_list[0]} if file_list else set()
+
     # Filter: hanya file yang ada, didukung, dan tidak terlalu besar
     files = []
     for fpath in file_list:
@@ -977,7 +960,7 @@ def _gabung_pdf_draft(output_path: str, file_list: list, progress_cb=None) -> st
         if ext not in exts_pdf | exts_office | exts_img:
             continue
         size_mb = os.path.getsize(fpath) / 1024 / 1024
-        if size_mb > MAX_FILE_MB:
+        if size_mb > MAX_FILE_MB and fpath not in _lampiran_wajib:
             log(f"  ⏭ {os.path.basename(fpath)} ({size_mb:.1f}MB, skip)")
             continue
         files.append(fpath)
