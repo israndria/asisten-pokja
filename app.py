@@ -1750,16 +1750,25 @@ with tab9:
                             st.rerun()
 
                     for p in paket_list:
-                        key_chk = f"kp_chk_{p['id_lelang']}"
+                        key_chk        = f"kp_chk_{p['id_lelang']}"
                         key_lamp_bytes = f"kp_lamp_bytes_{p['id_lelang']}"
                         key_lamp_nama  = f"kp_lamp_nama_{p['id_lelang']}"
+                        key_kode_unik  = f"kp_kode_unik_{p['id_lelang']}"
 
-                        col_chk, col_lamp = st.columns([3, 2])
+                        col_chk, col_ku, col_lamp = st.columns([3, 1, 2])
                         with col_chk:
                             checked = st.checkbox(
                                 _pokja_label(p),
                                 value=st.session_state.get(key_chk, True),
                                 key=key_chk,
+                            )
+                        with col_ku:
+                            st.text_input(
+                                "Kode Unik",
+                                placeholder="mis. 001",
+                                key=key_kode_unik,
+                                label_visibility="collapsed",
+                                help="Nomor urut surat undangan reviu untuk paket ini",
                             )
                         with col_lamp:
                             # Tampilkan info lampiran yang sudah di-generate / diupload
@@ -1801,12 +1810,13 @@ with tab9:
                         if checked:
                             lamp_bytes_final = st.session_state.get(key_lamp_bytes)
                             lamp_nama_final  = st.session_state.get(key_lamp_nama, "")
-                            # Bungkus bytes ke objek file-like agar kompatibel dgn code lama
+                            kode_unik_final  = st.session_state.get(key_kode_unik, "").strip()
                             kp_selected.append({
                                 **p,
                                 "_lampiran_bytes": lamp_bytes_final,
                                 "_lampiran_nama":  lamp_nama_final,
-                                "_lampiran": None,  # legacy field (tidak dipakai lagi)
+                                "_lampiran":       None,
+                                "_kode_unik":      kode_unik_final,
                             })
 
                     st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
@@ -1880,18 +1890,6 @@ with tab9:
             height=100,
         )
 
-        # ── Kode Unik ──────────────────────────────────────────────────────────
-        kp_kode_unik = st.text_input(
-            "Kode Unik Surat",
-            placeholder="mis. 001, 002, 003",
-            key="kp_kode_unik",
-            help="Nomor urut surat undangan reviu — digunakan di nomor surat (opsional, bisa diisi nanti)",
-        )
-        if kp_selected and kp_kode_unik:
-            # Simpan kode_unik ke Supabase untuk tiap paket terpilih
-            for _kp in kp_selected:
-                _kp["_kode_unik"] = kp_kode_unik
-
         # Hardcode: Mekanisme = Offline, Dibawa & Hadir pakai default
         kp_is_online = False
         kp_link = ""
@@ -1920,10 +1918,15 @@ with tab9:
             waktu_str  = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
             sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
 
+            _kp_konfirm_lines = "\n".join(
+                f"- {'[' + p['_kode_unik'] + '] ' if p.get('_kode_unik') else ''}{p['kode']} — {p['nama'][:40]}"
+                for p in kp_selected
+            )
             st.warning(
                 f"Kirim ke **{len(kp_selected)} paket**\n\n"
+                f"{_kp_konfirm_lines}\n\n"
                 f"- Waktu: {waktu_str} s.d. {sampai_str}\n"
-                f"- Tempat: {kp_tempat.strip()[:60]}...\n\n"
+                f"- Tempat: {kp_tempat.strip()[:60]}\n\n"
                 f"**Tidak bisa dibatalkan setelah dikirim.**"
             )
 
@@ -1968,7 +1971,7 @@ with tab9:
                             "pesan": res["pesan"],
                         })
                         # Simpan kode_unik ke Supabase jika ada
-                        _ku = paket.get("_kode_unik") or kp_kode_unik
+                        _ku = paket.get("_kode_unik", "")
                         if res["sukses"] and _ku:
                             try:
                                 inbox_engine._sb().table("draft_paket").update({
