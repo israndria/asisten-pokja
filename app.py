@@ -1753,25 +1753,15 @@ with tab9:
                         key_chk        = f"kp_chk_{p['id_lelang']}"
                         key_lamp_bytes = f"kp_lamp_bytes_{p['id_lelang']}"
                         key_lamp_nama  = f"kp_lamp_nama_{p['id_lelang']}"
-                        key_kode_unik  = f"kp_kode_unik_{p['id_lelang']}"
 
-                        col_chk, col_ku, col_lamp = st.columns([3, 1, 2])
+                        col_chk, col_lamp = st.columns([3, 2])
                         with col_chk:
                             checked = st.checkbox(
                                 _pokja_label(p),
                                 value=st.session_state.get(key_chk, True),
                                 key=key_chk,
                             )
-                        with col_ku:
-                            st.text_input(
-                                "Kode Unik",
-                                placeholder="mis. 001",
-                                key=key_kode_unik,
-                                label_visibility="collapsed",
-                                help="Nomor urut surat undangan reviu untuk paket ini",
-                            )
                         with col_lamp:
-                            # Tampilkan info lampiran yang sudah di-generate / diupload
                             lamp_bytes = st.session_state.get(key_lamp_bytes)
                             lamp_nama  = st.session_state.get(key_lamp_nama, "")
                             if lamp_bytes:
@@ -1781,21 +1771,6 @@ with tab9:
                                     st.session_state[key_lamp_nama] = ""
                                     st.rerun()
                             else:
-                                if st.button(
-                                    "⚙️ Generate",
-                                    key=f"kp_gen_{p['id_lelang']}",
-                                    use_container_width=True,
-                                    help="Generate lampiran PDF dari Excel+Word (butuh folder paket sudah dibuat di Tab 0)",
-                                ):
-                                    with st.spinner(f"Generate PDF {p['kode']}..."):
-                                        res_gen = merge_engine.generate_undangan_pdf(p["kode"])
-                                    if res_gen["sukses"]:
-                                        st.session_state[key_lamp_bytes] = res_gen["pdf_bytes"]
-                                        st.session_state[key_lamp_nama]  = f"Undangan_{p['kode'].replace('/', '-')}.pdf"
-                                        st.success(res_gen["pesan"])
-                                        st.rerun()
-                                    else:
-                                        st.error(res_gen["pesan"])
                                 uploaded_lamp = st.file_uploader(
                                     "Upload",
                                     type=["pdf"],
@@ -1810,13 +1785,11 @@ with tab9:
                         if checked:
                             lamp_bytes_final = st.session_state.get(key_lamp_bytes)
                             lamp_nama_final  = st.session_state.get(key_lamp_nama, "")
-                            kode_unik_final  = st.session_state.get(key_kode_unik, "").strip()
                             kp_selected.append({
                                 **p,
                                 "_lampiran_bytes": lamp_bytes_final,
                                 "_lampiran_nama":  lamp_nama_final,
                                 "_lampiran":       None,
-                                "_kode_unik":      kode_unik_final,
                             })
 
                     st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
@@ -1919,7 +1892,7 @@ with tab9:
             sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
 
             _kp_konfirm_lines = "\n".join(
-                f"- {'[' + p['_kode_unik'] + '] ' if p.get('_kode_unik') else ''}{p['kode']} — {p['nama'][:40]}"
+                f"- {p['kode']} — {p['nama'][:40]}"
                 for p in kp_selected
             )
             st.warning(
@@ -1943,14 +1916,6 @@ with tab9:
                             (i + 1) / len(kp_selected),
                             text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
                         )
-                        lamp_bytes = paket.get("_lampiran_bytes")
-                        lamp_nama  = paket.get("_lampiran_nama", "")
-                        # Legacy fallback: file_uploader object
-                        if lamp_bytes is None:
-                            lamp_legacy = paket.get("_lampiran")
-                            if lamp_legacy:
-                                lamp_bytes = lamp_legacy.getvalue()
-                                lamp_nama  = lamp_legacy.name
                         res = kirimpesan_engine.kirim_undangan(
                             paket_id=paket["id_lelang"],
                             waktu=waktu_str,
@@ -1960,8 +1925,8 @@ with tab9:
                             hadir=kp_hadir.strip(),
                             is_online=False,
                             link_pembuktian="",
-                            lampiran_bytes=lamp_bytes,
-                            lampiran_nama=lamp_nama,
+                            lampiran_bytes=paket.get("_lampiran_bytes"),
+                            lampiran_nama=paket.get("_lampiran_nama", ""),
                         )
 
                         hasil_list.append({
@@ -1970,15 +1935,6 @@ with tab9:
                             "sukses": res["sukses"],
                             "pesan": res["pesan"],
                         })
-                        # Simpan kode_unik ke Supabase jika ada
-                        _ku = paket.get("_kode_unik", "")
-                        if res["sukses"] and _ku:
-                            try:
-                                inbox_engine._sb().table("draft_paket").update({
-                                    "kode_unik": _ku,
-                                }).eq("kode_tender", paket["kode"]).execute()
-                            except Exception:
-                                pass
 
                     progress.empty()
 

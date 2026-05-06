@@ -19,7 +19,7 @@ import glob
 import pathlib
 from typing import Optional
 
-from config import sb as _sb
+from config import sb as _sb, POKJA_ROOT as _POKJA_ROOT
 
 # ── Lokasi word_merge.py (satu level di atas Asisten_Pokja) ──────────────────
 _THIS_DIR = pathlib.Path(__file__).parent          # Asisten_Pokja/
@@ -37,8 +37,12 @@ def get_folder_by_kode_tender(kode_tender: str) -> Optional[str]:
         sb = _sb()
         r = sb.table("draft_paket").select("folder_dibuat").eq("kode_tender", kode_tender).single().execute()
         folder = (r.data or {}).get("folder_dibuat", "")
-        if folder and os.path.isdir(folder):
-            return folder
+        if folder:
+            # folder_dibuat bisa relatif (nama folder saja) atau absolut
+            if not os.path.isabs(folder):
+                folder = os.path.join(_POKJA_ROOT, folder)
+            if os.path.isdir(folder):
+                return folder
     except Exception:
         pass
     return None
