@@ -1771,16 +1771,62 @@ with tab9:
                                     st.session_state[key_lamp_nama] = ""
                                     st.rerun()
                             else:
-                                uploaded_lamp = st.file_uploader(
-                                    "Upload",
-                                    type=["pdf"],
-                                    key=f"kp_lamp_{p['id_lelang']}",
-                                    label_visibility="collapsed",
-                                )
-                                if uploaded_lamp:
-                                    st.session_state[key_lamp_bytes] = uploaded_lamp.read()
-                                    st.session_state[key_lamp_nama]  = uploaded_lamp.name
-                                    st.rerun()
+                                col_gen, col_up = st.columns(2)
+                                with col_gen:
+                                    if st.button(
+                                        "🖨 Generate",
+                                        key=f"kp_gen_{p['id_lelang']}",
+                                        use_container_width=True,
+                                        help="Generate lampiran undangan PDF otomatis dari data Supabase",
+                                    ):
+                                        st.session_state[f"kp_gen_trigger_{p['id_lelang']}"] = True
+                                        st.rerun()
+                                with col_up:
+                                    uploaded_lamp = st.file_uploader(
+                                        "Upload",
+                                        type=["pdf"],
+                                        key=f"kp_lamp_{p['id_lelang']}",
+                                        label_visibility="collapsed",
+                                    )
+                                    if uploaded_lamp:
+                                        st.session_state[key_lamp_bytes] = uploaded_lamp.read()
+                                        st.session_state[key_lamp_nama]  = uploaded_lamp.name
+                                        st.rerun()
+
+                            # Generate PDF otomatis jika tombol ditekan
+                            if st.session_state.pop(f"kp_gen_trigger_{p['id_lelang']}", False):
+                                with st.spinner(f"Generate PDF undangan {p['kode']}..."):
+                                    try:
+                                        import undangan_pdf_engine
+                                        _tgl_kirim = st.session_state.get("kp_tgl") or datetime.now().date()
+                                        _kp_tgl_r  = st.session_state.get("kp_tgl") or datetime.now().date()
+                                        _kp_jam_m  = st.session_state.get("kp_jam_mulai")
+                                        _kp_jam_s  = st.session_state.get("kp_jam_selesai")
+                                        _hari_tgl  = f"{_HARI_NAMA[_kp_tgl_r.weekday()]}, {_kp_tgl_r.day} {_BULAN_NAMA[_kp_tgl_r.month-1]} {_kp_tgl_r.year}"
+                                        _pukul_str = ""
+                                        if _kp_jam_m:
+                                            _pukul_str = f"{_kp_jam_m.strftime('%H.%M')} Wita"
+                                        if _kp_jam_s:
+                                            _pukul_str += f" s/d {_kp_jam_s.strftime('%H.%M')} Wita"
+                                        if not _pukul_str:
+                                            _pukul_str = "09.00 Wita s/d Selesai"
+                                        _tempat = st.session_state.get("kp_tempat") or kirimpesan_engine.DEFAULT_TEMPAT
+                                        gen_res = undangan_pdf_engine.generate_undangan_pdf(
+                                            kode_tender=p["kode"],
+                                            tanggal_kirim=_tgl_kirim,
+                                            hari_tgl_rapat=_hari_tgl,
+                                            pukul_rapat=_pukul_str,
+                                            tempat_rapat=_tempat,
+                                        )
+                                        if gen_res["sukses"]:
+                                            st.session_state[key_lamp_bytes] = gen_res["pdf_bytes"]
+                                            st.session_state[key_lamp_nama]  = os.path.basename(gen_res["pdf_path"])
+                                            st.success(gen_res["pesan"])
+                                        else:
+                                            st.error(f"Gagal generate: {gen_res['pesan']}")
+                                    except Exception as _e:
+                                        st.error(f"Error: {_e}")
+                                st.rerun()
 
                         if checked:
                             lamp_bytes_final = st.session_state.get(key_lamp_bytes)
