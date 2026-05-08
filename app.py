@@ -1750,92 +1750,30 @@ with tab9:
                             st.rerun()
 
                     for p in paket_list:
-                        key_chk        = f"kp_chk_{p['id_lelang']}"
-                        key_lamp_bytes = f"kp_lamp_bytes_{p['id_lelang']}"
-                        key_lamp_nama  = f"kp_lamp_nama_{p['id_lelang']}"
+                        key_chk     = f"kp_chk_{p['id_lelang']}"
+                        key_tgl_acara = f"kp_tgl_acara_{p['id_lelang']}"
 
-                        col_chk, col_lamp = st.columns([3, 2])
+                        col_chk, col_tgl_p = st.columns([3, 2])
                         with col_chk:
                             checked = st.checkbox(
                                 _pokja_label(p),
                                 value=st.session_state.get(key_chk, True),
                                 key=key_chk,
                             )
-                        with col_lamp:
-                            lamp_bytes = st.session_state.get(key_lamp_bytes)
-                            lamp_nama  = st.session_state.get(key_lamp_nama, "")
-                            if lamp_bytes:
-                                st.caption(f"📎 {lamp_nama}")
-                                if st.button("✖ Hapus", key=f"kp_hapus_{p['id_lelang']}", use_container_width=True):
-                                    del st.session_state[key_lamp_bytes]
-                                    st.session_state[key_lamp_nama] = ""
-                                    st.rerun()
-                            else:
-                                col_gen, col_up = st.columns(2)
-                                with col_gen:
-                                    if st.button(
-                                        "🖨 Generate",
-                                        key=f"kp_gen_{p['id_lelang']}",
-                                        use_container_width=True,
-                                        help="Generate lampiran undangan PDF otomatis dari data Supabase",
-                                    ):
-                                        st.session_state[f"kp_gen_trigger_{p['id_lelang']}"] = True
-                                        st.rerun()
-                                with col_up:
-                                    uploaded_lamp = st.file_uploader(
-                                        "Upload",
-                                        type=["pdf"],
-                                        key=f"kp_lamp_{p['id_lelang']}",
-                                        label_visibility="collapsed",
-                                    )
-                                    if uploaded_lamp:
-                                        st.session_state[key_lamp_bytes] = uploaded_lamp.read()
-                                        st.session_state[key_lamp_nama]  = uploaded_lamp.name
-                                        st.rerun()
-
-                            # Generate PDF otomatis jika tombol ditekan
-                            if st.session_state.pop(f"kp_gen_trigger_{p['id_lelang']}", False):
-                                with st.spinner(f"Generate PDF undangan {p['kode']}..."):
-                                    try:
-                                        import undangan_pdf_engine
-                                        _tgl_kirim = st.session_state.get("kp_tgl_kirim") or datetime.now().date()
-                                        _kp_tgl_r  = st.session_state.get("kp_tgl") or datetime.now().date()
-                                        _kp_jam_m  = st.session_state.get("kp_jam_mulai")
-                                        _kp_jam_s  = st.session_state.get("kp_jam_selesai")
-                                        _hari_tgl  = f"{_HARI_NAMA[_kp_tgl_r.weekday()]}, {_kp_tgl_r.day} {_BULAN_NAMA[_kp_tgl_r.month-1]} {_kp_tgl_r.year}"
-                                        _pukul_str = ""
-                                        if _kp_jam_m:
-                                            _pukul_str = f"{_kp_jam_m.strftime('%H.%M')} Wita"
-                                        if _kp_jam_s:
-                                            _pukul_str += f" s/d {_kp_jam_s.strftime('%H.%M')} Wita"
-                                        if not _pukul_str:
-                                            _pukul_str = "09.00 Wita s/d Selesai"
-                                        _tempat = st.session_state.get("kp_tempat") or kirimpesan_engine.DEFAULT_TEMPAT
-                                        gen_res = undangan_pdf_engine.generate_undangan_pdf(
-                                            kode_tender=p["kode"],
-                                            tanggal_kirim=_tgl_kirim,
-                                            hari_tgl_rapat=_hari_tgl,
-                                            pukul_rapat=_pukul_str,
-                                            tempat_rapat=_tempat,
-                                        )
-                                        if gen_res["sukses"]:
-                                            st.session_state[key_lamp_bytes] = gen_res["pdf_bytes"]
-                                            st.session_state[key_lamp_nama]  = os.path.basename(gen_res["pdf_path"])
-                                            st.success(gen_res["pesan"])
-                                        else:
-                                            st.error(f"Gagal generate: {gen_res['pesan']}")
-                                    except Exception as _e:
-                                        st.error(f"Error: {_e}")
-                                st.rerun()
+                        with col_tgl_p:
+                            tgl_acara_p = st.date_input(
+                                "Tanggal Acara",
+                                value=st.session_state.get(key_tgl_acara, datetime.now().date()),
+                                format="DD/MM/YYYY",
+                                key=key_tgl_acara,
+                                label_visibility="collapsed",
+                            )
+                            st.caption(f"{_HARI_NAMA[tgl_acara_p.weekday()]}, {tgl_acara_p.day} {_BULAN_NAMA[tgl_acara_p.month-1]} {tgl_acara_p.year}")
 
                         if checked:
-                            lamp_bytes_final = st.session_state.get(key_lamp_bytes)
-                            lamp_nama_final  = st.session_state.get(key_lamp_nama, "")
                             kp_selected.append({
                                 **p,
-                                "_lampiran_bytes": lamp_bytes_final,
-                                "_lampiran_nama":  lamp_nama_final,
-                                "_lampiran":       None,
+                                "_tgl_acara": tgl_acara_p,
                             })
 
                     st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
@@ -1865,28 +1803,10 @@ with tab9:
         st.divider()
         st.markdown("### 2. Detail Undangan")
 
-        _kp_HARI_NAMA  = _HARI_NAMA
-        _kp_BULAN_NAMA = _BULAN_NAMA
         _kp_libur_map = _LIBUR_MAP
 
-        kp_tgl_kirim = st.date_input(
-            "Tanggal Kirim Surat",
-            value=datetime.now().date(),
-            format="DD/MM/YYYY",
-            key="kp_tgl_kirim",
-            help="Tanggal surat undangan dikirim (tercetak di kop surat)",
-        )
-
-        st.markdown("**Tanggal & Waktu Acara**")
-        col_tgl, col_mulai, col_selesai = st.columns(3)
-        with col_tgl:
-            kp_tgl = st.date_input(
-                "Tanggal Acara",
-                value=datetime.now().date(),
-                format="DD/MM/YYYY",
-                key="kp_tgl",
-            )
-            st.markdown(f"**{_kp_HARI_NAMA[kp_tgl.weekday()]}, {kp_tgl.day} {_kp_BULAN_NAMA[kp_tgl.month-1]} {kp_tgl.year}**")
+        st.markdown("**Waktu Acara (berlaku semua paket)**")
+        col_mulai, col_selesai = st.columns(2)
         with col_mulai:
             kp_jam_mulai = st.time_input(
                 "Mulai",
@@ -1902,14 +1822,11 @@ with tab9:
                 step=1800,
             )
 
-        if kp_tgl in _kp_libur_map:
-            st.warning(f"⚠️ **{_kp_libur_map[kp_tgl]}**")
-
         with st.expander("ℹ️ Libur Nasional Tersisa"):
             _kp_hari_ini = datetime.now().date()
             _kp_sisa = sorted(d for d in _kp_libur_map if d >= _kp_hari_ini)
             for d in _kp_sisa:
-                st.write(f"• {_kp_HARI_NAMA[d.weekday()]}, {d.day} {_kp_BULAN_NAMA[d.month-1]} {d.year} — {_kp_libur_map[d]}")
+                st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_kp_libur_map[d]}")
 
         kp_tempat = st.text_area(
             "Tempat",
@@ -1943,18 +1860,16 @@ with tab9:
                     st.session_state["kp_konfirmasi"] = True
                     st.rerun()
         else:
-            waktu_str  = datetime.combine(kp_tgl, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
-            sampai_str = datetime.combine(kp_tgl, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
-
             _kp_konfirm_lines = "\n".join(
-                f"- {p['kode']} — {p['nama'][:40]}"
-                for p in kp_selected
+                f"{i+1}. Pokja {p.get('pokja', p['kode'])} - {p['nama']}  \n"
+                f"   📅 {_HARI_NAMA[p['_tgl_acara'].weekday()]}, {p['_tgl_acara'].day} {_BULAN_NAMA[p['_tgl_acara'].month-1]} {p['_tgl_acara'].year}"
+                for i, p in enumerate(kp_selected)
             )
             st.warning(
                 f"Kirim ke **{len(kp_selected)} paket**\n\n"
                 f"{_kp_konfirm_lines}\n\n"
-                f"- Waktu: {waktu_str} s.d. {sampai_str}\n"
-                f"- Tempat: {kp_tempat.strip()[:60]}\n\n"
+                f"- Pukul: {kp_jam_mulai.strftime('%H.%M')} s.d. {kp_jam_selesai.strftime('%H.%M')} Wita\n"
+                f"- Tempat: {kp_tempat.strip()[:80]}\n\n"
                 f"**Tidak bisa dibatalkan setelah dikirim.**"
             )
 
@@ -1963,14 +1878,37 @@ with tab9:
                 if st.button("✅ Ya, Kirim", key="kp_ya", type="primary", use_container_width=True):
                     st.session_state["kp_konfirmasi"] = False
 
+                    import undangan_pdf_engine
                     progress = st.progress(0, text="Memulai pengiriman...")
                     hasil_list = []
+                    _tgl_kirim = datetime.now().date()
 
                     for i, paket in enumerate(kp_selected):
                         progress.progress(
                             (i + 1) / len(kp_selected),
-                            text=f"Mengirim ke {paket['kode']} ({i+1}/{len(kp_selected)})..."
+                            text=f"Mengirim ke Pokja {paket.get('pokja', paket['kode'])} ({i+1}/{len(kp_selected)})..."
                         )
+
+                        # Generate PDF lampiran otomatis
+                        _tgl_acara = paket["_tgl_acara"]
+                        _hari_tgl  = f"{_HARI_NAMA[_tgl_acara.weekday()]}, {_tgl_acara.day} {_BULAN_NAMA[_tgl_acara.month-1]} {_tgl_acara.year}"
+                        _pukul_str = f"{kp_jam_mulai.strftime('%H.%M')} s.d. {kp_jam_selesai.strftime('%H.%M')} Wita"
+                        _kode_pokja = paket.get("pokja", "000")
+
+                        gen_res = undangan_pdf_engine.generate_undangan_pdf(
+                            kode_tender=paket["kode"],
+                            tanggal_kirim=_tgl_kirim,
+                            hari_tgl_rapat=_hari_tgl,
+                            pukul_rapat=_pukul_str,
+                            tempat_rapat=kp_tempat.strip(),
+                            output_path=None,
+                        )
+                        _lamp_bytes = gen_res["pdf_bytes"] if gen_res["sukses"] else None
+                        _lamp_nama  = f"Undangan_{_kode_pokja.zfill(3)}.pdf"
+
+                        waktu_str  = datetime.combine(_tgl_acara, kp_jam_mulai).strftime("%d-%m-%Y %H:%M")
+                        sampai_str = datetime.combine(_tgl_acara, kp_jam_selesai).strftime("%d-%m-%Y %H:%M")
+
                         res = kirimpesan_engine.kirim_undangan(
                             paket_id=paket["id_lelang"],
                             waktu=waktu_str,
@@ -1980,20 +1918,20 @@ with tab9:
                             hadir=kp_hadir.strip(),
                             is_online=False,
                             link_pembuktian="",
-                            lampiran_bytes=paket.get("_lampiran_bytes"),
-                            lampiran_nama=paket.get("_lampiran_nama", ""),
+                            lampiran_bytes=_lamp_bytes,
+                            lampiran_nama=_lamp_nama,
                         )
 
                         hasil_list.append({
-                            "kode": paket["kode"],
-                            "nama": paket["nama"][:50],
-                            "sukses": res["sukses"],
-                            "pesan": res["pesan"],
+                            "pokja": f"Pokja {_kode_pokja.zfill(3)}",
+                            "nama": paket["nama"],
+                            "pdf": "✅" if gen_res["sukses"] else f"❌ {gen_res['pesan']}",
+                            "kirim": "✅" if res["sukses"] else f"❌ {res['pesan']}",
                         })
 
                     progress.empty()
 
-                    sukses_n = sum(1 for h in hasil_list if h["sukses"])
+                    sukses_n = sum(1 for h in hasil_list if h["kirim"] == "✅")
                     gagal_n  = len(hasil_list) - sukses_n
                     if gagal_n == 0:
                         st.success(f"✅ Semua {sukses_n} undangan berhasil dikirim!")
@@ -2004,10 +1942,10 @@ with tab9:
                         hasil_list,
                         use_container_width=True,
                         column_config={
-                            "kode":   st.column_config.TextColumn("Kode", width="small"),
-                            "nama":   st.column_config.TextColumn("Nama Paket", width="large"),
-                            "sukses": st.column_config.CheckboxColumn("Sukses", width="small"),
-                            "pesan":  st.column_config.TextColumn("Pesan"),
+                            "pokja": st.column_config.TextColumn("Pokja", width="small"),
+                            "nama":  st.column_config.TextColumn("Nama Paket", width="large"),
+                            "pdf":   st.column_config.TextColumn("PDF", width="small"),
+                            "kirim": st.column_config.TextColumn("Kirim", width="small"),
                         },
                         hide_index=True,
                     )
