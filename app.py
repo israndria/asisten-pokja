@@ -1798,7 +1798,7 @@ with tab9:
                                 with st.spinner(f"Generate PDF undangan {p['kode']}..."):
                                     try:
                                         import undangan_pdf_engine
-                                        _tgl_kirim = st.session_state.get("kp_tgl") or datetime.now().date()
+                                        _tgl_kirim = st.session_state.get("kp_tgl_kirim") or datetime.now().date()
                                         _kp_tgl_r  = st.session_state.get("kp_tgl") or datetime.now().date()
                                         _kp_jam_m  = st.session_state.get("kp_jam_mulai")
                                         _kp_jam_s  = st.session_state.get("kp_jam_selesai")
@@ -1869,10 +1869,19 @@ with tab9:
         _kp_BULAN_NAMA = _BULAN_NAMA
         _kp_libur_map = _LIBUR_MAP
 
+        kp_tgl_kirim = st.date_input(
+            "Tanggal Kirim Surat",
+            value=datetime.now().date(),
+            format="DD/MM/YYYY",
+            key="kp_tgl_kirim",
+            help="Tanggal surat undangan dikirim (tercetak di kop surat)",
+        )
+
+        st.markdown("**Tanggal & Waktu Acara**")
         col_tgl, col_mulai, col_selesai = st.columns(3)
         with col_tgl:
             kp_tgl = st.date_input(
-                "Tanggal",
+                "Tanggal Acara",
                 value=datetime.now().date(),
                 format="DD/MM/YYYY",
                 key="kp_tgl",
