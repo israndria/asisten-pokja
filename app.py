@@ -2194,46 +2194,43 @@ with tab_ba:
                 st.session_state.pop("ba_pending_paket", None)
                 st.rerun()
 
-    # ── BA Lainnya ────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("#### 📁 BA Lainnya")
-    st.caption("Upload manual — gabungkan scan terlebih dahulu.")
-    _ba_l_c1, _ba_l_c2 = st.columns(2)
-    with _ba_l_c1:
-        st.date_input("Tanggal BA Lainnya", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
-        _dt_l = st.session_state.get("ba_tgl_date_lainnya", date.today())
-        if isinstance(_dt_l, date):
-            st.session_state["ba_tgl_lainnya"] = _dt_l.strftime("%d-%m-%Y")
-    with _ba_l_c2:
-        st.file_uploader("File PDF", type=["pdf"], key="ba_file_lainnya")
-    if st.button(
-        f"🚀 Upload BA Lainnya ({len(ba_selected)} paket)",
-        key="ba_lainnya_upload",
-        disabled=len(ba_selected) == 0 or not st.session_state.get("ba_file_lainnya"),
-        use_container_width=True,
-    ):
-        _file_up = st.session_state.get("ba_file_lainnya")
-        _tgl_l = st.session_state.get("ba_tgl_lainnya", "").strip()
-        if _file_up and _tgl_l:
-            _prog_l = st.progress(0, text="Uploading BA Lainnya...")
-            _hasil_l = []
-            for _il, _pl in enumerate(ba_selected):
-                try:
-                    _r = ba_engine.upload_ba(
-                        paket_id=_pl["id_lelang"], jenis_key="lainnya",
-                        nomor_ba="", tanggal_ba=_tgl_l,
-                        file_bytes=_file_up.getvalue(), file_name=_file_up.name,
-                        info="",
-                    )
-                    _hasil_l.append({"kode": _pl["kode"], "ok": _r["ok"]})
-                except Exception as _e:
-                    _hasil_l.append({"kode": _pl["kode"], "ok": False, "err": str(_e)})
-                _prog_l.progress((_il + 1) / len(ba_selected))
-            _prog_l.empty()
-            _sukses_l = sum(1 for h in _hasil_l if h["ok"])
-            st.success(f"✅ {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
-        else:
-            st.warning("⚠️ Lengkapi Tanggal dan File PDF.")
+    # ── BA Lainnya (per paket) ────────────────────────────────────────────
+    if ba_selected:
+        st.divider()
+        st.markdown("#### 📁 BA Lainnya")
+        st.caption("Upload scan manual — spesifik per paket.")
+        for _pl in ba_selected:
+            _pid = _pl["id_lelang"]
+            with st.expander(f"📁 {_pokja_label(_pl)}", expanded=False):
+                _tgl_key  = f"ba_tgl_date_lainnya_{_pid}"
+                _file_key = f"ba_file_lainnya_{_pid}"
+                _l_c1, _l_c2 = st.columns(2)
+                with _l_c1:
+                    st.date_input("Tanggal", value=date.today(), key=_tgl_key, format="DD/MM/YYYY")
+                with _l_c2:
+                    st.file_uploader("File PDF", type=["pdf"], key=_file_key)
+                _tgl_val_l = st.session_state.get(_tgl_key, date.today())
+                _tgl_str_l = _tgl_val_l.strftime("%d-%m-%Y") if isinstance(_tgl_val_l, date) else ""
+                _file_l = st.session_state.get(_file_key)
+                if st.button(
+                    "🚀 Upload BA Lainnya",
+                    key=f"ba_lainnya_upload_{_pid}",
+                    disabled=not _file_l or not _tgl_str_l,
+                    use_container_width=True,
+                ):
+                    try:
+                        _r = ba_engine.upload_ba(
+                            paket_id=_pid, jenis_key="lainnya",
+                            nomor_ba="", tanggal_ba=_tgl_str_l,
+                            file_bytes=_file_l.getvalue(), file_name=_file_l.name,
+                            info="",
+                        )
+                        if _r["ok"]:
+                            st.success(f"✅ BA Lainnya berhasil di-upload.")
+                        else:
+                            st.error(f"❌ Upload gagal: {_r.get('status')}")
+                    except Exception as _e:
+                        st.error(f"❌ {_e}")
 
     # ── Proses Cetak & Auto-Upload ───────────────────────────────────────
     _FILE_LABEL_BA = {
