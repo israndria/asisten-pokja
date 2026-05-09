@@ -984,7 +984,7 @@ with tab_setup:
 
     with _sp_col_kiri:
         st.markdown("### 2. Upload Dokumen Pemilihan")
-        st.caption("Menggunakan file DOKPIL yang sudah diupload di atas. Isi nomor BA dan tanggal, lalu klik Upload.")
+        st.caption("Menggunakan file DOKPIL yang sudah diupload di atas. Tanggal upload, lalu klik Upload.")
 
         _dp_dengan_file = [p for p in sp_selected if p.get("_dokpil")]
         _dp_tanpa_file  = [p for p in sp_selected if not p.get("_dokpil")]
@@ -996,17 +996,20 @@ with tab_setup:
             if _dp_dengan_file:
                 st.caption(f"✅ **{len(_dp_dengan_file)} paket** siap diupload:")
                 for _p in _dp_dengan_file:
-                    st.markdown(f"- {_pokja_label(_p)[:80]}  \n  📄 `{_p['_dokpil'].name}`")
+                    _ku = _p.get("kode_unik") or "?"
+                    _kp = _p.get("kode_pokja") or "?"
+                    _nomor_auto = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
+                    st.markdown(f"- {_pokja_label(_p)[:80]}  \n  📄 `{_p['_dokpil'].name}`  \n  📋 `{_nomor_auto}`")
             if _dp_tanpa_file:
                 st.caption(f"⚠️ **{len(_dp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
                 for _p in _dp_tanpa_file:
                     st.markdown(f"- {_pokja_label(_p)[:80]}")
 
-        dp_nomor_ba = st.text_input(
-            "Nomor BA",
-            placeholder="Contoh: 001/BA-DPP/POKJA/2026",
-            key="dp_nomor_ba",
-        )
+        # Cek apakah ada paket terpilih dengan kode_unik null
+        _dp_tanpa_kode_unik = [p for p in _dp_dengan_file if not p.get("kode_unik")]
+        if _dp_tanpa_kode_unik:
+            st.warning(f"⚠️ **{len(_dp_tanpa_kode_unik)} paket** belum punya Kode Unik — generate dulu via tombol 'Kode Unik Surat' di Excel.")
+
         _dp_col_tgl, _dp_col_btn = st.columns([2, 3])
         with _dp_col_tgl:
             dp_tgl = st.date_input(
@@ -1030,11 +1033,16 @@ with tab_setup:
                     "⚠️ **Fitur ini belum aktif.** Endpoint upload Dokumen Pemilihan di SPSE "
                     "baru bisa dibedah setelah ada paket yang sudah upload BA Reviu dan semua syarat terpenuhi."
                 )
-                st.info(
-                    f"**Siap diupload:** {_dp_n_file} file  \n"
-                    f"**Nomor BA:** {dp_nomor_ba or '(belum diisi)'}  \n"
-                    f"**Tanggal:** {dp_tgl.strftime('%d-%m-%Y')}"
-                )
+                for _p in dp_selected:
+                    _ku = _p.get("kode_unik") or "?"
+                    _kp = _p.get("kode_pokja") or "?"
+                    _nomor_auto = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
+                    st.info(
+                        f"**{_pokja_label(_p)[:60]}**  \n"
+                        f"📄 `{_p['_dokpil'].name}`  \n"
+                        f"📋 Nomor BA: `{_nomor_auto}`  \n"
+                        f"📅 Tanggal: {dp_tgl.strftime('%d-%m-%Y')}"
+                    )
 
     with _sp_col_kanan:
         st.markdown("### 3. Konfigurasi")
