@@ -495,6 +495,28 @@ def fetch_paket_aktif() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
+def enrich_paket_supabase(paket_list: list[dict]) -> list[dict]:
+    """
+    Enrich daftar paket dengan kode_unik + kode_pokja dari Supabase draft_paket.
+    Query bulk 1x — match by kode_tender (= id_lelang).
+    Return: paket_list yang sama, tiap dict ditambah field kode_unik + kode_pokja.
+    """
+    if not paket_list:
+        return paket_list
+    try:
+        from config import sb as _sb
+        kode_list = [p["id_lelang"] for p in paket_list]
+        rows = _sb().table("draft_paket").select("kode_tender,kode_unik,kode_pokja").in_("kode_tender", kode_list).execute().data or []
+        lookup = {r["kode_tender"]: r for r in rows}
+        for p in paket_list:
+            sb_row = lookup.get(p["id_lelang"], {})
+            p["kode_unik"] = sb_row.get("kode_unik") or ""
+            p["kode_pokja"] = sb_row.get("kode_pokja") or ""
+    except Exception:
+        pass
+    return paket_list
+
+
 def kirim_undangan_batch(
     paket_list: list[dict],
     waktu: str,

@@ -468,6 +468,9 @@ with tab0:
                 with st.spinner("Memuat daftar paket dari SPSE..."):
                     _gd0 = kirimpesan_engine.fetch_paket_draft()
                     _ga0 = kirimpesan_engine.fetch_paket_aktif()
+                    # Enrich dengan kode_unik + kode_pokja dari Supabase
+                    kirimpesan_engine.enrich_paket_supabase(_gd0.get("paket", []))
+                    kirimpesan_engine.enrich_paket_supabase(_ga0.get("paket", []))
                     st.session_state["global_paket_draft"] = _gd0
                     st.session_state["global_paket_aktif"] = _ga0
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
@@ -479,6 +482,8 @@ with tab0:
                 with st.spinner("Mengambil daftar paket dari SPSE..."):
                     _gd_r = kirimpesan_engine.fetch_paket_draft()
                     _ga_r = kirimpesan_engine.fetch_paket_aktif()
+                    kirimpesan_engine.enrich_paket_supabase(_gd_r.get("paket", []))
+                    kirimpesan_engine.enrich_paket_supabase(_ga_r.get("paket", []))
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
@@ -2127,18 +2132,24 @@ with tab_ba:
             if f"ba_info_{jenis_key}" not in st.session_state:
                 st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
 
-        # ── Auto-populate nomor BA dari dokpil paket pertama yang dipilih ──
-        if ba_selected and st.button("🔄 Auto Nomor dari Dokpil", key="ba_auto_nomor", use_container_width=True):
-            with st.spinner("Mengambil nomor dokpil..."):
-                _nomor_dokpil = ba_engine.get_nomor_dokpil(ba_selected[0]["id_lelang"])
-            if _nomor_dokpil:
+        # ── Auto-generate nomor BA dari Supabase (kode_unik + kode_pokja) ──
+        # Trigger setiap kali paket pertama yang dipilih berubah — tanpa hit SPSE
+        _ba_paket_id = ba_selected[0]["id_lelang"] if ba_selected else None
+        if _ba_paket_id and st.session_state.get("_ba_last_paket_id") != _ba_paket_id:
+            _p0 = ba_selected[0]
+            _ku = _p0.get("kode_unik") or ""
+            _kp = _p0.get("kode_pokja") or ""
+            if _ku and _kp:
+                _nomor_dokpil = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
                 for jenis_key in ba_config.JENIS_KEYS:
                     _urut = ba_config.NOMOR_URUT[jenis_key]
                     st.session_state[f"ba_no_{jenis_key}"] = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
-                st.success(f"✅ Nomor BA berhasil di-generate dari: `{_nomor_dokpil}`")
-            else:
-                st.warning("⚠️ Nomor dokpil tidak ditemukan di halaman SPSE.")
-            st.rerun()
+            st.session_state["_ba_last_paket_id"] = _ba_paket_id
+
+        if ba_selected:
+            _p0 = ba_selected[0]
+            if not _p0.get("kode_unik"):
+                st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
 
         # ── Auto-detect tanggal BA dari Google Calendar ───────────────────
         if ba_selected and st.button("📅 Auto Tanggal dari GCal", key="ba_auto_tgl_gcal", use_container_width=True):
