@@ -30,13 +30,23 @@ def _headers(referer: str = "") -> dict:
 
 
 def _get_cookies() -> str:
-    """Ambil cookie SPSE dari Chrome CDP yang sedang login."""
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
-        ctx = browser.contexts[0]
-        cookies = ctx.cookies(["https://spse.inaproc.id"])
-    return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    """Ambil cookie SPSE via Playwright di thread terpisah (isolasi dari event loop Streamlit)."""
+    import concurrent.futures, asyncio
+
+    async def _fetch():
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
+            ctx = browser.contexts[0]
+            cookies = await ctx.cookies(["https://spse.inaproc.id"])
+            return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+
+    def _run_in_thread():
+        return asyncio.run(_fetch())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_run_in_thread)
+        return future.result(timeout=15)
 
 
 def fetch_dokumen_endpoint(kode_tender: str, jenis: str, cookie_str: str) -> list[dict]:
@@ -129,24 +139,25 @@ def cek_update_dokumen(kode_tender: str) -> dict:
         lama_list = snapshot_lama.get(key, [])
         baru_list = snapshot_baru.get(key, [])
 
-        lama_urls = {f["url_dl"] for f in lama_list}
-        baru_urls = {f["url_dl"] for f in baru_list}
+        # Track by (nama, tanggal) — URL /dl/ tidak stabil (session token berubah tiap request)
+        def _key(f):
+            return (f["nama"].strip().lower(), f["tanggal"].strip())
 
-        lama_by_url = {f["url_dl"]: f for f in lama_list}
-        baru_by_url = {f["url_dl"]: f for f in baru_list}
+        lama_keys = {_key(f): f for f in lama_list}
+        baru_keys  = {_key(f): f for f in baru_list}
 
-        # File benar-benar baru (URL tidak ada di snapshot lama SAMA SEKALI)
-        url_baru_murni = baru_urls - lama_urls
-        # File lama yang URL-nya tidak ada di baru = diganti
-        url_hilang = lama_urls - baru_urls
+        lama_set = set(lama_keys)
+        baru_set  = set(baru_keys)
+
+        hilang = lama_set - baru_set   # ada di lama, tidak di baru = diganti/dihapus
+        masuk  = baru_set - lama_set   # ada di baru, tidak di lama = baru/pengganti
 
         ada_perubahan = False
 
-        # Deteksi: ada file hilang DAN ada file baru → kemungkinan REPLACE (nama/url beda)
-        if url_hilang and url_baru_murni:
-            # Cocokkan berdasarkan urutan (satu endpoint biasanya 1-3 file)
-            hilang_list = [lama_by_url[u] for u in url_hilang]
-            masuk_list = [baru_by_url[u] for u in url_baru_murni]
+        if hilang and masuk:
+            # Replace: cocokkan berdasarkan urutan
+            hilang_list = [lama_keys[k] for k in hilang]
+            masuk_list  = [baru_keys[k] for k in masuk]
             for i, f_lama in enumerate(hilang_list):
                 f_baru = masuk_list[i] if i < len(masuk_list) else None
                 if f_baru:
@@ -159,15 +170,14 @@ def cek_update_dokumen(kode_tender: str) -> dict:
                         "url_dl": f_baru["url_dl"],
                     })
                     ada_perubahan = True
-            # Sisa file baru yang tidak bisa dicocokkan = benar-benar tambahan
             for f_baru in masuk_list[len(hilang_list):]:
                 baru.append({"jenis": key, **f_baru})
                 ada_perubahan = True
 
-        elif url_baru_murni and not url_hilang:
-            # Tambahan file baru di endpoint yang sebelumnya sudah ada atau kosong
-            for u in url_baru_murni:
-                baru.append({"jenis": key, **baru_by_url[u]})
+        elif masuk and not hilang:
+            # Tambahan murni (endpoint sebelumnya kosong atau bertambah)
+            for k in masuk:
+                baru.append({"jenis": key, **baru_keys[k]})
                 ada_perubahan = True
 
         if not ada_perubahan:

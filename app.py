@@ -561,6 +561,13 @@ with tab0:
         _nama_folder_clean = re.sub(r'[/<>:"\|?*]', "-", _nama_folder).strip() if _nama_folder else ""
         _target_path = _os.path.join(_POKJA_ROOT, _nama_folder_clean) if _nama_folder_clean else ""
         _folder_ada  = bool(_target_path and _os.path.exists(_target_path))
+        # Fallback: pakai folder_dibuat dari Supabase jika input kosong
+        if not _folder_ada and _row_terpilih and _row_terpilih.get("folder_dibuat"):
+            _fd = _row_terpilih["folder_dibuat"]
+            _fd_path = _os.path.join(_POKJA_ROOT, _fd)
+            if _os.path.exists(_fd_path):
+                _target_path = _fd_path
+                _folder_ada = True
         if _folder_ada:
             st.warning(f"Folder sudah ada: `{_target_path}`")
 
