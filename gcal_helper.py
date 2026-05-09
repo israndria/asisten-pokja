@@ -12,7 +12,7 @@ TOKEN_PATH = os.path.join(
 # Mapping jenis_key → keyword yang dicari di judul event GCal
 _TAHAP_KEYWORD = {
     "penjelasan":      "Pemberian Penjelasan",
-    "evaluasi":        "Evaluasi Penawaran",
+    "evaluasi":        "Evaluasi Administrasi, Kualifikasi, Teknis, dan Harga",
     "hasil_pemilihan": "Penetapan Pemenang",
     "negosiasi":       "Pembuktian Kualifikasi",
 }

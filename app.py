@@ -2072,212 +2072,150 @@ with tab9:
 
 with tab_ba:
 
-    _ba_col1, _ba_col2, _ba_col3, _ba_col4, _ba_col5 = st.columns([2.2, 1.7, 1.7, 1.7, 1.7])
+    ba_selected = []
 
-
-    with _ba_col1:
-        st.markdown("### 1. Pilih Paket")
-
-        ba_selected = []
-
-        # Menggunakan data paket yang sudah disinkronkan di Tab 0
-        if "global_paket_draft" not in st.session_state:
-            st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
+    # ── Pilih Paket ──────────────────────────────────────────────────────
+    st.markdown("### Pilih Paket")
+    if "global_paket_draft" not in st.session_state:
+        st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
+    else:
+        _ba_r = st.session_state["global_paket_draft"]
+        if not _ba_r.get("sukses"):
+            st.error(f"❌ {_ba_r.get('pesan', 'Gagal memuat data paket')}")
         else:
-            r = st.session_state["global_paket_draft"]
-            if not r.get("sukses"):
-                st.error(f"❌ {r.get('pesan', 'Gagal memuat data paket')}")
+            paket_list_ba = _ba_r.get("paket", [])
+            if not paket_list_ba:
+                st.warning("⚠️ Tidak ada paket draft ditemukan.")
             else:
-                paket_list_ba = r.get("paket", [])
-                if not paket_list_ba:
-                    st.warning("⚠️ Tidak ada paket draft ditemukan.")
-                else:
-                    st.caption(f"📋 {len(paket_list_ba)} paket draft tersedia — pilih:")
-                    
-                    _ba_sel_col1, _ba_sel_col2 = st.columns(2)
-                    with _ba_sel_col1:
-                        if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
-                            for p in paket_list_ba:
-                                st.session_state[f"ba_chk_{p['id_lelang']}"] = True
-                            st.rerun()
-                    with _ba_sel_col2:
-                        if st.button("⬜ Kosong", key="ba_sel_none", use_container_width=True):
-                            for p in paket_list_ba:
-                                st.session_state[f"ba_chk_{p['id_lelang']}"] = False
-                            st.rerun()
-
-
-                    for p in paket_list_ba:
-                        key_chk = f'ba_chk_{p["id_lelang"]}'
-                        _chk_col, _super_col = st.columns([3, 1])
-                        with _chk_col:
-                            checked = st.checkbox(
-                                _pokja_label(p),
-                                value=st.session_state.get(key_chk, True), key=key_chk,
-                            )
-                        with _super_col:
-                            if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
-                                st.session_state["ba_auto_target"] = "SEMUA"
-                                st.session_state["ba_super_paket"] = [p]
-                        if checked:
-                            ba_selected.append(p)
-
-                    st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
-
-
-        # ── Inisialisasi session state BA ─────────────────────────────────
-        for jenis_key in ba_config.JENIS_KEYS:
-            if f"ba_tgl_{jenis_key}" not in st.session_state:
-                st.session_state[f"ba_tgl_{jenis_key}"] = datetime.today().strftime("%d-%m-%Y")
-            if f"ba_info_{jenis_key}" not in st.session_state:
-                st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
-
-        # ── Auto-generate nomor BA dari Supabase (kode_unik + kode_pokja) ──
-        # Trigger setiap kali paket pertama yang dipilih berubah — tanpa hit SPSE
-        _ba_paket_id = ba_selected[0]["id_lelang"] if ba_selected else None
-        if _ba_paket_id and st.session_state.get("_ba_last_paket_id") != _ba_paket_id:
-            _p0 = ba_selected[0]
-            _ku = _p0.get("kode_unik") or ""
-            _kp = _p0.get("kode_pokja") or ""
-            if _ku and _kp:
-                _nomor_dokpil = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
-                for jenis_key in ba_config.JENIS_KEYS:
-                    _urut = ba_config.NOMOR_URUT[jenis_key]
-                    st.session_state[f"ba_no_{jenis_key}"] = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
-            st.session_state["_ba_last_paket_id"] = _ba_paket_id
-
-        if ba_selected:
-            _p0 = ba_selected[0]
-            if not _p0.get("kode_unik"):
-                st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
-
-        # ── Auto-detect tanggal BA dari Google Calendar ───────────────────
-        if ba_selected and st.button("📅 Auto Tanggal dari GCal", key="ba_auto_tgl_gcal", use_container_width=True):
-            with st.spinner("Mencari tanggal di Google Calendar..."):
-                try:
-                    import gcal_helper
-                    _nama_paket = ba_selected[0]["nama"]
-                    _tgl_map = gcal_helper.get_tanggal_ba_dari_gcal(_nama_paket)
-                    _found = []
-                    for _jk, _d in _tgl_map.items():
-                        if _d is not None:
-                            st.session_state[f"ba_tgl_date_{_jk}"] = _d
-                            st.session_state[f"ba_tgl_{_jk}"] = _d.strftime("%d-%m-%Y")
-                            _found.append(ba_config.JENIS_LABEL.get(_jk, _jk))
-                    if _found:
-                        st.success(f"✅ Tanggal ditemukan: {', '.join(_found)}")
-                    else:
-                        st.warning(f"⚠️ Tidak ada event GCal yang cocok dengan paket:\n**{_nama_paket}**")
-                except Exception as _e:
-                    st.error(f"❌ GCal error: {_e}")
-            st.rerun()
-
-    with _ba_col2:
-
-        st.markdown("### 2. Konfigurasi BA")
-        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['penjelasan']}")
-        _nd = st.session_state.get("ba_no_penjelasan", "")
-        if _nd:
-            st.code(_nd, language=None)
-        else:
-            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
-        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_penjelasan", format="DD/MM/YYYY", label_visibility="collapsed")
-        _dt = st.session_state.get("ba_tgl_date_penjelasan", date.today())
-        if isinstance(_dt, date):
-            st.session_state["ba_tgl_penjelasan"] = _dt.strftime("%d-%m-%Y")
-        st.text_area("Keterangan (opsional)", key="ba_info_penjelasan", height=100, label_visibility="collapsed")
-        if st.button("⚡ Cetak & Upload", key="btn_cetak_penjelasan", use_container_width=True, disabled=len(ba_selected) == 0):
-            st.session_state["ba_auto_target"] = "penjelasan"
-
-    with _ba_col3:
-
-        st.markdown("### &nbsp;")
-        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['evaluasi']}")
-        _nd = st.session_state.get("ba_no_evaluasi", "")
-        if _nd:
-            st.code(_nd, language=None)
-        else:
-            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
-        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_evaluasi", format="DD/MM/YYYY", label_visibility="collapsed")
-        _dt = st.session_state.get("ba_tgl_date_evaluasi", date.today())
-        if isinstance(_dt, date):
-            st.session_state["ba_tgl_evaluasi"] = _dt.strftime("%d-%m-%Y")
-        st.text_area("Keterangan (opsional)", key="ba_info_evaluasi", height=100, label_visibility="collapsed")
-        if st.button("⚡ Cetak & Upload", key="btn_cetak_evaluasi", use_container_width=True, disabled=len(ba_selected) == 0):
-            st.session_state["ba_auto_target"] = "evaluasi"
-
-    with _ba_col4:
-
-        st.markdown("### &nbsp;")
-        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['hasil_pemilihan']}")
-        _nd = st.session_state.get("ba_no_hasil_pemilihan", "")
-        if _nd:
-            st.code(_nd, language=None)
-        else:
-            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
-        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_hasil_pemilihan", format="DD/MM/YYYY", label_visibility="collapsed")
-        _dt = st.session_state.get("ba_tgl_date_hasil_pemilihan", date.today())
-        if isinstance(_dt, date):
-            st.session_state["ba_tgl_hasil_pemilihan"] = _dt.strftime("%d-%m-%Y")
-        st.text_area("Keterangan (opsional)", key="ba_info_hasil_pemilihan", height=100, label_visibility="collapsed")
-        if st.button("⚡ Cetak & Upload", key="btn_cetak_hasil_pemilihan", use_container_width=True, disabled=len(ba_selected) == 0):
-            st.session_state["ba_auto_target"] = "hasil_pemilihan"
-
-    with _ba_col5:
-
-        st.markdown("### &nbsp;")
-        st.markdown(f"#### 📋 {ba_config.JENIS_LABEL['negosiasi']}")
-        _nd = st.session_state.get("ba_no_negosiasi", "")
-        if _nd:
-            st.code(_nd, language=None)
-        else:
-            st.caption("Nomor: klik 🔄 _Auto Nomor_ di kolom kiri")
-        st.date_input("Tanggal", value=date.today(), key="ba_tgl_date_negosiasi", format="DD/MM/YYYY", label_visibility="collapsed")
-        _dt = st.session_state.get("ba_tgl_date_negosiasi", date.today())
-        if isinstance(_dt, date):
-            st.session_state["ba_tgl_negosiasi"] = _dt.strftime("%d-%m-%Y")
-        st.text_area("Keterangan (opsional)", key="ba_info_negosiasi", height=100, label_visibility="collapsed")
-        if st.button("⚡ Cetak & Upload", key="btn_cetak_negosiasi", use_container_width=True, disabled=len(ba_selected) == 0):
-            st.session_state["ba_auto_target"] = "negosiasi"
-
-
-    # ── BA Lainnya (manual: scan dulu) ────────────────────────────────────
-    with _ba_col2:
-        st.markdown("#### 📁 BA Lainnya")
-        st.caption("Upload manual — gabungkan scan terlebih dahulu.")
-        st.date_input("Tanggal BA Lainnya", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
-        _dt = st.session_state.get("ba_tgl_date_lainnya", date.today())
-        if isinstance(_dt, date):
-            st.session_state["ba_tgl_lainnya"] = _dt.strftime("%d-%m-%Y")
-        st.file_uploader("File PDF", type=["pdf"], key="ba_file_lainnya")
-        if st.button(
-            f"🚀 Upload BA Lainnya ({len(ba_selected)} paket)",
-            key="ba_lainnya_upload",
-            disabled=len(ba_selected) == 0 or not st.session_state.get("ba_file_lainnya"),
-            use_container_width=True,
-        ):
-            _file_up = st.session_state.get("ba_file_lainnya")
-            _tgl_l = st.session_state.get("ba_tgl_lainnya", "").strip()
-            if _file_up and _tgl_l:
-                _prog_l = st.progress(0, text="Uploading BA Lainnya...")
-                _hasil_l = []
-                for _il, _pl in enumerate(ba_selected):
-                    try:
-                        _r = ba_engine.upload_ba(
-                            paket_id=_pl["id_lelang"], jenis_key="lainnya",
-                            nomor_ba="", tanggal_ba=_tgl_l,
-                            file_bytes=_file_up.getvalue(), file_name=_file_up.name,
-                            info="",
+                st.caption(f"📋 {len(paket_list_ba)} paket draft tersedia — pilih:")
+                _ba_sel_c1, _ba_sel_c2 = st.columns(2)
+                with _ba_sel_c1:
+                    if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
+                        for p in paket_list_ba:
+                            st.session_state[f"ba_chk_{p['id_lelang']}"] = True
+                        st.rerun()
+                with _ba_sel_c2:
+                    if st.button("⬜ Kosong", key="ba_sel_none", use_container_width=True):
+                        for p in paket_list_ba:
+                            st.session_state[f"ba_chk_{p['id_lelang']}"] = False
+                        st.rerun()
+                for p in paket_list_ba:
+                    key_chk = f'ba_chk_{p["id_lelang"]}'
+                    _chk_col, _super_col = st.columns([3, 1])
+                    with _chk_col:
+                        checked = st.checkbox(
+                            _pokja_label(p),
+                            value=st.session_state.get(key_chk, True), key=key_chk,
                         )
-                        _hasil_l.append({"kode": _pl["kode"], "ok": _r["ok"]})
-                    except Exception as _e:
-                        _hasil_l.append({"kode": _pl["kode"], "ok": False, "err": str(_e)})
-                    _prog_l.progress((_il + 1) / len(ba_selected))
-                _prog_l.empty()
-                _sukses_l = sum(1 for h in _hasil_l if h["ok"])
-                st.success(f"✅ {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
-            else:
-                st.warning("⚠️ Lengkapi Tanggal dan File PDF.")
+                    with _super_col:
+                        if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
+                            st.session_state["ba_auto_target"] = "SEMUA"
+                            st.session_state["ba_super_paket"] = [p]
+                    if checked:
+                        ba_selected.append(p)
+                st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
+
+    # ── Inisialisasi session state BA ─────────────────────────────────────
+    for jenis_key in ba_config.JENIS_KEYS:
+        if f"ba_tgl_{jenis_key}" not in st.session_state:
+            st.session_state[f"ba_tgl_{jenis_key}"] = datetime.today().strftime("%d-%m-%Y")
+        if f"ba_info_{jenis_key}" not in st.session_state:
+            st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
+
+    # ── Auto-generate nomor BA + tanggal dari GCal saat paket berubah ─────
+    _ba_paket_id = ba_selected[0]["id_lelang"] if ba_selected else None
+    if _ba_paket_id and st.session_state.get("_ba_last_paket_id") != _ba_paket_id:
+        _p0 = ba_selected[0]
+        # Nomor BA dari kode_unik + kode_pokja
+        _ku = _p0.get("kode_unik") or ""
+        _kp = _p0.get("kode_pokja") or ""
+        if _ku and _kp:
+            _nomor_dokpil = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
+            for jenis_key in ba_config.JENIS_KEYS:
+                _urut = ba_config.NOMOR_URUT[jenis_key]
+                st.session_state[f"ba_no_{jenis_key}"] = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
+        # Tanggal dari GCal otomatis
+        try:
+            import gcal_helper as _gcal
+            _tgl_map = _gcal.get_tanggal_ba_dari_gcal(_p0["nama"])
+            for _jk, _d in _tgl_map.items():
+                if _d is not None:
+                    st.session_state[f"ba_tgl_date_{_jk}"] = _d
+                    st.session_state[f"ba_tgl_{_jk}"] = _d.strftime("%d-%m-%Y")
+        except Exception:
+            pass
+        st.session_state["_ba_last_paket_id"] = _ba_paket_id
+
+    if ba_selected and not ba_selected[0].get("kode_unik"):
+        st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
+
+    # ── Tampilkan status nomor + tanggal per BA ───────────────────────────
+    if ba_selected:
+        st.divider()
+        st.markdown("### Status BA")
+        _JENIS_TAMPIL = [k for k in ba_config.JENIS_KEYS if k != "lainnya"]
+        for _jk in _JENIS_TAMPIL:
+            _no = st.session_state.get(f"ba_no_{_jk}", "")
+            _tgl = st.session_state.get(f"ba_tgl_{_jk}", "")
+            _c1, _c2, _c3 = st.columns([3, 2, 2])
+            with _c1:
+                st.caption(ba_config.JENIS_LABEL[_jk])
+                if _no:
+                    st.code(_no, language=None)
+                else:
+                    st.caption("_(nomor belum tersedia — cek kode unik)_")
+            with _c2:
+                _tgl_val = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
+                _new_tgl = st.date_input(
+                    "Tanggal", value=_tgl_val, key=f"ba_tgl_date_{_jk}",
+                    format="DD/MM/YYYY", label_visibility="collapsed",
+                )
+                if isinstance(_new_tgl, date):
+                    st.session_state[f"ba_tgl_{_jk}"] = _new_tgl.strftime("%d-%m-%Y")
+            with _c3:
+                if st.button(f"⚡ Cetak & Upload", key=f"btn_cetak_{_jk}", use_container_width=True, disabled=len(ba_selected) == 0):
+                    st.session_state["ba_auto_target"] = _jk
+
+    # ── BA Lainnya ────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 📁 BA Lainnya")
+    st.caption("Upload manual — gabungkan scan terlebih dahulu.")
+    _ba_l_c1, _ba_l_c2 = st.columns(2)
+    with _ba_l_c1:
+        st.date_input("Tanggal BA Lainnya", value=date.today(), key="ba_tgl_date_lainnya", format="DD/MM/YYYY")
+        _dt_l = st.session_state.get("ba_tgl_date_lainnya", date.today())
+        if isinstance(_dt_l, date):
+            st.session_state["ba_tgl_lainnya"] = _dt_l.strftime("%d-%m-%Y")
+    with _ba_l_c2:
+        st.file_uploader("File PDF", type=["pdf"], key="ba_file_lainnya")
+    if st.button(
+        f"🚀 Upload BA Lainnya ({len(ba_selected)} paket)",
+        key="ba_lainnya_upload",
+        disabled=len(ba_selected) == 0 or not st.session_state.get("ba_file_lainnya"),
+        use_container_width=True,
+    ):
+        _file_up = st.session_state.get("ba_file_lainnya")
+        _tgl_l = st.session_state.get("ba_tgl_lainnya", "").strip()
+        if _file_up and _tgl_l:
+            _prog_l = st.progress(0, text="Uploading BA Lainnya...")
+            _hasil_l = []
+            for _il, _pl in enumerate(ba_selected):
+                try:
+                    _r = ba_engine.upload_ba(
+                        paket_id=_pl["id_lelang"], jenis_key="lainnya",
+                        nomor_ba="", tanggal_ba=_tgl_l,
+                        file_bytes=_file_up.getvalue(), file_name=_file_up.name,
+                        info="",
+                    )
+                    _hasil_l.append({"kode": _pl["kode"], "ok": _r["ok"]})
+                except Exception as _e:
+                    _hasil_l.append({"kode": _pl["kode"], "ok": False, "err": str(_e)})
+                _prog_l.progress((_il + 1) / len(ba_selected))
+            _prog_l.empty()
+            _sukses_l = sum(1 for h in _hasil_l if h["ok"])
+            st.success(f"✅ {_sukses_l}/{len(_hasil_l)} BA Lainnya berhasil di-upload.")
+        else:
+            st.warning("⚠️ Lengkapi Tanggal dan File PDF.")
 
     # ── Proses Cetak & Auto-Upload ───────────────────────────────────────
     _FILE_LABEL_BA = {
@@ -2288,7 +2226,9 @@ with tab_ba:
     }
     if st.session_state.get("ba_auto_target"):
         import os as _os
+        import re as _re
         from config import POKJA_ROOT as _POKJA_ROOT
+        from config import sb as _sb_ba
         jenis_target = st.session_state["ba_auto_target"]
         target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
         _JENIS_AUTO = [k for k in ba_config.JENIS_KEYS if k != "lainnya"]
@@ -2301,8 +2241,17 @@ with tab_ba:
         for i, p in enumerate(target_paket):
             pid = p["id_lelang"]
             paket_hasil = {"kode": p["kode"], "nama": p["nama"][:50], "ba": []}
-            folder_name = f"Cetak_BA_{p['kode']}"
-            target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", folder_name)
+            # Resolve folder paket dari Supabase → subfolder "BA + Summary"
+            try:
+                _sb_row = _sb_ba().table("draft_paket").select("folder_dibuat").eq("kode_tender", p["kode"]).maybe_single().execute()
+                _folder_dibuat = (_sb_row.data or {}).get("folder_dibuat", "")
+                if _folder_dibuat:
+                    _folder_safe = _re.sub(r'[/\\:*?"<>|]', "-", _folder_dibuat).strip()
+                    target_dir = _os.path.join(_POKJA_ROOT, _folder_safe, "BA + Summary")
+                else:
+                    target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
+            except Exception:
+                target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
             _os.makedirs(target_dir, exist_ok=True)
             for jenis_key in jenis_list:
                 op_idx += 1
@@ -2330,7 +2279,7 @@ with tab_ba:
                 paket_hasil["ba"].append(ba_result)
             hasil_auto.append(paket_hasil)
         progress.empty()
-        st.success(f"✅ Selesai! {label_target} telah dikirim ke SPSE dan backup PDF disimpan.")
+        st.success(f"✅ Selesai! {label_target} telah dikirim ke SPSE dan backup PDF disimpan ke folder paket.")
         del st.session_state["ba_auto_target"]
         for h in hasil_auto:
             st.markdown(f"**{h['kode']}** — {h['nama']}")
