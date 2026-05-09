@@ -2109,8 +2109,9 @@ with tab_ba:
                         )
                     with _super_col:
                         if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
-                            st.session_state["ba_auto_target"] = "SEMUA"
-                            st.session_state["ba_super_paket"] = [p]
+                            st.session_state["ba_pending_target"] = "SEMUA"
+                            st.session_state["ba_pending_paket"] = [p]
+                            st.rerun()
                     if checked:
                         ba_selected.append(p)
                 st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
@@ -2149,32 +2150,49 @@ with tab_ba:
     if ba_selected and not ba_selected[0].get("kode_unik"):
         st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
 
-    # ── Tampilkan status nomor + tanggal per BA ───────────────────────────
-    if ba_selected:
+    # ── Konfirmasi sebelum cetak ──────────────────────────────────────────
+    if st.session_state.get("ba_pending_target"):
         st.divider()
-        st.markdown("### Status BA")
-        _JENIS_TAMPIL = [k for k in ba_config.JENIS_KEYS if k != "lainnya"]
-        for _jk in _JENIS_TAMPIL:
-            _no = st.session_state.get(f"ba_no_{_jk}", "")
+        _pending_target = st.session_state["ba_pending_target"]
+        _pending_paket  = st.session_state.get("ba_pending_paket") or ba_selected
+        _JENIS_AUTO = [k for k in ba_config.JENIS_KEYS if k != "lainnya"]
+        _jenis_konfirm = _JENIS_AUTO if _pending_target == "SEMUA" else [_pending_target]
+        _label_target = "Semua BA" if _pending_target == "SEMUA" else ba_config.JENIS_BA[_pending_target]
+
+        _konfirm_lines = []
+        _ada_kosong = []
+        for _jk in _jenis_konfirm:
+            _no  = st.session_state.get(f"ba_no_{_jk}", "")
             _tgl = st.session_state.get(f"ba_tgl_{_jk}", "")
-            _c1, _c2, _c3 = st.columns([3, 2, 2])
-            with _c1:
-                st.caption(ba_config.JENIS_LABEL[_jk])
-                if _no:
-                    st.code(_no, language=None)
-                else:
-                    st.caption("_(nomor belum tersedia — cek kode unik)_")
-            with _c2:
-                _tgl_val = st.session_state.get(f"ba_tgl_date_{_jk}", date.today())
-                _new_tgl = st.date_input(
-                    "Tanggal", value=_tgl_val, key=f"ba_tgl_date_{_jk}",
-                    format="DD/MM/YYYY", label_visibility="collapsed",
-                )
-                if isinstance(_new_tgl, date):
-                    st.session_state[f"ba_tgl_{_jk}"] = _new_tgl.strftime("%d-%m-%Y")
-            with _c3:
-                if st.button(f"⚡ Cetak & Upload", key=f"btn_cetak_{_jk}", use_container_width=True, disabled=len(ba_selected) == 0):
-                    st.session_state["ba_auto_target"] = _jk
+            _label = ba_config.JENIS_LABEL[_jk]
+            if _no and _tgl:
+                _konfirm_lines.append(f"**{_label}**  \n`{_no}`  \n📅 {_tgl}")
+            else:
+                _konfirm_lines.append(f"**{_label}**  \n⚠️ _(nomor/tanggal kosong — akan dilewati)_")
+                _ada_kosong.append(_label)
+
+        _paket_lines = "\n".join(f"- {_pokja_label(p)}" for p in _pending_paket)
+        _detail = "\n\n".join(_konfirm_lines)
+        _warn_msg = (
+            f"**Konfirmasi Cetak & Upload — {_label_target}**\n\n"
+            f"Paket:\n{_paket_lines}\n\n"
+            f"---\n\n{_detail}"
+        )
+        if _ada_kosong:
+            _warn_msg += f"\n\n⚠️ **{len(_ada_kosong)} jenis akan dilewati** (tanggal tidak ditemukan di GCal): {', '.join(_ada_kosong)}"
+
+        st.warning(_warn_msg)
+        _konfirm_c1, _konfirm_c2 = st.columns(2)
+        with _konfirm_c1:
+            if st.button("✅ Ya, Cetak & Upload", key="ba_konfirm_ya", type="primary", use_container_width=True):
+                st.session_state["ba_auto_target"] = st.session_state.pop("ba_pending_target")
+                st.session_state["ba_super_paket"]  = st.session_state.pop("ba_pending_paket", None)
+                st.rerun()
+        with _konfirm_c2:
+            if st.button("❌ Batal", key="ba_konfirm_batal", use_container_width=True):
+                st.session_state.pop("ba_pending_target", None)
+                st.session_state.pop("ba_pending_paket", None)
+                st.rerun()
 
     # ── BA Lainnya ────────────────────────────────────────────────────────
     st.divider()
