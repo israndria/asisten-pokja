@@ -2115,6 +2115,17 @@ with tab_ba:
                     if checked:
                         ba_selected.append(p)
                 st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
+                st.divider()
+                if st.button(
+                    f"🚀 Cetak & Upload SEMUA BA — {len(ba_selected)} Paket",
+                    key="ba_super_all",
+                    disabled=len(ba_selected) == 0,
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state["ba_pending_target"] = "SEMUA"
+                    st.session_state["ba_pending_paket"] = ba_selected[:]
+                    st.rerun()
 
     # ── Inisialisasi session state BA ─────────────────────────────────────
     for jenis_key in ba_config.JENIS_KEYS:
@@ -2123,29 +2134,35 @@ with tab_ba:
         if f"ba_info_{jenis_key}" not in st.session_state:
             st.session_state[f"ba_info_{jenis_key}"] = ba_config.DEFAULT_INFO.get(jenis_key, "")
 
-    # ── Auto-generate nomor BA + tanggal dari GCal saat paket berubah ─────
-    _ba_paket_id = ba_selected[0]["id_lelang"] if ba_selected else None
-    if _ba_paket_id and st.session_state.get("_ba_last_paket_id") != _ba_paket_id:
-        _p0 = ba_selected[0]
-        # Nomor BA dari kode_unik + kode_pokja
-        _ku = _p0.get("kode_unik") or ""
-        _kp = _p0.get("kode_pokja") or ""
-        if _ku and _kp:
-            _nomor_dokpil = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
-            for jenis_key in ba_config.JENIS_KEYS:
-                _urut = ba_config.NOMOR_URUT[jenis_key]
-                st.session_state[f"ba_no_{jenis_key}"] = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
-        # Tanggal dari GCal otomatis
+    # ── Auto-generate nomor BA + tanggal GCal untuk semua paket di ba_selected ──
+    # Key per-paket: ba_no_{jenis}_{id}, ba_tgl_{jenis}_{id}, ba_tgl_date_{jenis}_{id}
+    # Key global (paket pertama): ba_no_{jenis}, ba_tgl_{jenis} — untuk kompatibilitas
+    _ba_sel_ids = tuple(p["id_lelang"] for p in ba_selected)
+    if _ba_sel_ids and st.session_state.get("_ba_last_sel_ids") != _ba_sel_ids:
         try:
             import gcal_helper as _gcal
-            _tgl_map = _gcal.get_tanggal_ba_dari_gcal(_p0["nama"])
-            for _jk, _d in _tgl_map.items():
-                if _d is not None:
-                    st.session_state[f"ba_tgl_date_{_jk}"] = _d
-                    st.session_state[f"ba_tgl_{_jk}"] = _d.strftime("%d-%m-%Y")
         except Exception:
-            pass
-        st.session_state["_ba_last_paket_id"] = _ba_paket_id
+            _gcal = None
+        for _px in ba_selected:
+            _pid_x = _px["id_lelang"]
+            _ku = _px.get("kode_unik") or ""
+            _kp = _px.get("kode_pokja") or ""
+            if _ku and _kp:
+                _nomor_dokpil = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
+                for jenis_key in ba_config.JENIS_KEYS:
+                    _urut = ba_config.NOMOR_URUT[jenis_key]
+                    _no = ba_engine.derive_nomor_ba(_nomor_dokpil, _urut)
+                    st.session_state[f"ba_no_{jenis_key}_{_pid_x}"] = _no
+            if _gcal:
+                try:
+                    _tgl_map = _gcal.get_tanggal_ba_dari_gcal(_px["nama"])
+                    for _jk, _d in _tgl_map.items():
+                        if _d is not None:
+                            st.session_state[f"ba_tgl_date_{_jk}_{_pid_x}"] = _d
+                            st.session_state[f"ba_tgl_{_jk}_{_pid_x}"] = _d.strftime("%d-%m-%Y")
+                except Exception:
+                    pass
+        st.session_state["_ba_last_sel_ids"] = _ba_sel_ids
 
     if ba_selected and not ba_selected[0].get("kode_unik"):
         st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
@@ -2159,27 +2176,34 @@ with tab_ba:
         _jenis_konfirm = _JENIS_AUTO if _pending_target == "SEMUA" else [_pending_target]
         _label_target = "Semua BA" if _pending_target == "SEMUA" else ba_config.JENIS_BA[_pending_target]
 
-        _konfirm_lines = []
-        _ada_kosong = []
-        for _jk in _jenis_konfirm:
-            _no  = st.session_state.get(f"ba_no_{_jk}", "")
-            _tgl = st.session_state.get(f"ba_tgl_{_jk}", "")
-            _label = ba_config.JENIS_LABEL[_jk]
-            if _no and _tgl:
-                _konfirm_lines.append(f"**{_label}**  \n`{_no}`  \n📅 {_tgl}")
-            else:
-                _konfirm_lines.append(f"**{_label}**  \n⚠️ _(nomor/tanggal kosong — akan dilewati)_")
-                _ada_kosong.append(_label)
+        _paket_blocks = []
+        _total_kosong = []
+        for _pp in _pending_paket:
+            _pid_k = _pp["id_lelang"]
+            _blok_lines = [f"**{_pokja_label(_pp)}**"]
+            for _jk in _jenis_konfirm:
+                _no  = st.session_state.get(f"ba_no_{_jk}_{_pid_k}", "")
+                _tgl = st.session_state.get(f"ba_tgl_{_jk}_{_pid_k}", "")
+                _label = ba_config.JENIS_LABEL[_jk]
+                if _no and _tgl:
+                    _tgl_date = st.session_state.get(f"ba_tgl_date_{_jk}_{_pid_k}")
+                    if isinstance(_tgl_date, date):
+                        _tgl_fmt = f"{_HARI_NAMA[_tgl_date.weekday()]}, {_tgl_date.day} {_BULAN_NAMA[_tgl_date.month-1]} {_tgl_date.year}"
+                    else:
+                        _tgl_fmt = _tgl
+                    _blok_lines.append(f"- {_label}: `{_no}` — 📅 {_tgl_fmt}")
+                else:
+                    _blok_lines.append(f"- {_label}: ⚠️ _(akan dilewati — tanggal tidak ada di GCal)_")
+                    _total_kosong.append(f"{_pokja_label(_pp)} / {_label}")
+            _paket_blocks.append("\n".join(_blok_lines))
 
-        _paket_lines = "\n".join(f"- {_pokja_label(p)}" for p in _pending_paket)
-        _detail = "\n\n".join(_konfirm_lines)
+        _detail = "\n\n".join(_paket_blocks)
         _warn_msg = (
             f"**Konfirmasi Cetak & Upload — {_label_target}**\n\n"
-            f"Paket:\n{_paket_lines}\n\n"
-            f"---\n\n{_detail}"
+            f"{_detail}"
         )
-        if _ada_kosong:
-            _warn_msg += f"\n\n⚠️ **{len(_ada_kosong)} jenis akan dilewati** (tanggal tidak ditemukan di GCal): {', '.join(_ada_kosong)}"
+        if _total_kosong:
+            _warn_msg += f"\n\n⚠️ **{len(_total_kosong)} jenis akan dilewati** (tanggal tidak ditemukan di GCal)"
 
         st.warning(_warn_msg)
         _konfirm_c1, _konfirm_c2 = st.columns(2)
@@ -2202,22 +2226,16 @@ with tab_ba:
         for _pl in ba_selected:
             _pid = _pl["id_lelang"]
             with st.expander(f"📁 {_pokja_label(_pl)}", expanded=False):
-                _tgl_key  = f"ba_tgl_date_lainnya_{_pid}"
                 _file_key = f"ba_file_lainnya_{_pid}"
-                _l_c1, _l_c2 = st.columns(2)
-                with _l_c1:
-                    st.date_input("Tanggal", value=date.today(), key=_tgl_key, format="DD/MM/YYYY")
-                with _l_c2:
-                    st.file_uploader("File PDF", type=["pdf"], key=_file_key)
-                _tgl_val_l = st.session_state.get(_tgl_key, date.today())
-                _tgl_str_l = _tgl_val_l.strftime("%d-%m-%Y") if isinstance(_tgl_val_l, date) else ""
+                st.file_uploader("File PDF", type=["pdf"], key=_file_key)
                 _file_l = st.session_state.get(_file_key)
                 if st.button(
                     "🚀 Upload BA Lainnya",
                     key=f"ba_lainnya_upload_{_pid}",
-                    disabled=not _file_l or not _tgl_str_l,
+                    disabled=not _file_l,
                     use_container_width=True,
                 ):
+                    _tgl_str_l = date.today().strftime("%d-%m-%Y")
                     try:
                         _r = ba_engine.upload_ba(
                             paket_id=_pid, jenis_key="lainnya",
@@ -2271,9 +2289,9 @@ with tab_ba:
             for jenis_key in jenis_list:
                 op_idx += 1
                 progress.progress(op_idx / total_ops, text=f"Proses {p['kode']} — {ba_config.JENIS_BA[jenis_key]} ({op_idx}/{total_ops})...")
-                nomor = st.session_state.get(f"ba_no_{jenis_key}", "").strip()
-                tanggal = st.session_state.get(f"ba_tgl_{jenis_key}", "").strip()
-                info = st.session_state.get(f"ba_info_{jenis_key}", "").strip()
+                nomor = st.session_state.get(f"ba_no_{jenis_key}_{pid}", "").strip()
+                tanggal = st.session_state.get(f"ba_tgl_{jenis_key}_{pid}", "").strip()
+                info = ba_config.DEFAULT_INFO.get(jenis_key, "")
                 ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati (nomor/tanggal kosong)"}
                 if nomor and tanggal:
                     try:
