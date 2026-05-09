@@ -629,6 +629,86 @@ with tab0:
                             for _e4 in _dl2["error"]:
                                 st.error(_e4)
 
+        # Tombol Cek Update Dokumen PPK (muncul jika folder sudah ada + ada snapshot)
+        if _folder_ada and _row_terpilih and _row_terpilih.get("kode_tender"):
+            _kt_cek = _row_terpilih["kode_tender"]
+            _snap_ada = bool(_row_terpilih.get("dokumen_snapshot"))
+            if not _snap_ada:
+                # Cek dari Supabase langsung
+                _snap_r = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_cek).execute()
+                _snap_ada = bool(_snap_r.data and _snap_r.data[0].get("dokumen_snapshot"))
+
+            if _snap_ada:
+                if st.button("🔍 Cek Update Dokumen PPK", use_container_width=True, key="btn_cek_update_dok"):
+                    import dokumen_ppk_engine as _dpk2
+                    with st.spinner("Memeriksa update dokumen di SPSE..."):
+                        _diff = _dpk2.cek_update_dokumen(_kt_cek)
+
+                    _berubah = _diff["berubah"]
+                    _baru = _diff["baru"]
+                    _sama = _diff["sama"]
+
+                    if not _berubah and not _baru:
+                        st.success("✅ Tidak ada update — semua dokumen PPK masih sama.")
+                    else:
+                        if _berubah:
+                            st.warning(f"⚠️ {len(_berubah)} file diperbarui PPK:")
+                            for _itm in _berubah:
+                                st.markdown(f"- **[{_itm['jenis']}]** `{_itm['nama_lama']}` → `{_itm['nama_baru']}` *(upload: {_itm['tanggal_baru']})*")
+                        if _baru:
+                            st.info(f"🆕 {len(_baru)} file baru (belum ada di snapshot awal):")
+                            for _itm2 in _baru:
+                                st.markdown(f"- **[{_itm2['jenis']}]** `{_itm2['nama']}` *(upload: {_itm2['tanggal']})*")
+
+                        st.session_state["_diff_update_dok"] = _diff
+                        st.session_state["_diff_folder_paket"] = _target_path
+                        st.session_state["_diff_kode_tender"] = _kt_cek
+
+            # Tombol download muncul setelah cek menunjukkan ada update
+            if st.session_state.get("_diff_update_dok") and st.session_state.get("_diff_kode_tender") == _kt_cek:
+                _diff_cached = st.session_state["_diff_update_dok"]
+                if _diff_cached["berubah"] or _diff_cached["baru"]:
+                    if st.button("⬇️ Download & Update File Lokal", type="primary", use_container_width=True, key="btn_dl_update_dok"):
+                        import dokumen_ppk_engine as _dpk3
+                        _dl_log3 = []
+                        _dl_st3 = st.status("⬇️ Mengunduh file update...", expanded=True)
+                        _dl_area3 = _dl_st3.empty()
+                        def _dl_cb3(msg):
+                            _dl_log3.append(msg)
+                            _dl_area3.code("\n".join(_dl_log3[-15:]))
+                            _dl_st3.update(label=f"⬇️ {msg[:60]}...")
+
+                        # Ambil snapshot lama untuk referensi
+                        _sn_r = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_cek).execute()
+                        _sn_lama = {}
+                        if _sn_r.data and _sn_r.data[0].get("dokumen_snapshot"):
+                            _sn_lama = _sn_r.data[0]["dokumen_snapshot"]
+                            if isinstance(_sn_lama, str):
+                                import json as _json3
+                                _sn_lama = _json3.loads(_sn_lama)
+
+                        _dl_res3 = _dpk3.download_update_dokumen(
+                            _kt_cek,
+                            st.session_state["_diff_folder_paket"],
+                            _diff_cached["berubah"],
+                            _diff_cached["baru"],
+                            _sn_lama,
+                            progress_cb=_dl_cb3,
+                        )
+                        # Update snapshot Supabase ke yang terbaru
+                        _dpk3.simpan_snapshot(_kt_cek, _diff_cached["snapshot_baru"])
+                        _dl_st3.update(
+                            label=f"✅ {len(_dl_res3['ok'])} file diupdate, ❌ {len(_dl_res3['error'])} gagal",
+                            state="complete", expanded=False,
+                        )
+                        if _dl_res3["error"]:
+                            for _e5 in _dl_res3["error"]:
+                                st.error(_e5)
+                        else:
+                            st.success("✅ File lokal sudah up-to-date. Klik **Parse Draft** di Excel untuk update data.")
+                        # Hapus cache diff setelah selesai
+                        del st.session_state["_diff_update_dok"]
+
         _dl_dokumen = st.checkbox("📦 Download dokumen SPSE + lampiran surat", value=True, key="cb_dl_dokumen")
 
         if _buat_btn and _nama_folder:
@@ -705,6 +785,17 @@ with tab0:
                                     st.warning(f"HPS gagal/kosong: {_hps_res.get('error', '-')}")
                             except Exception as _hps_e:
                                 st.warning(f"Scrape HPS error: {_hps_e}")
+                        # Simpan snapshot dokumen PPK saat folder dibuat
+                        if _row_terpilih and _row_terpilih.get("kode_tender") and _target_path:
+                            try:
+                                import dokumen_ppk_engine as _dpk
+                                with st.spinner("📸 Menyimpan snapshot dokumen PPK..."):
+                                    _snap = _dpk.ambil_snapshot(_row_terpilih["kode_tender"])
+                                    _dpk.simpan_snapshot(_row_terpilih["kode_tender"], _snap)
+                                _total_snap = sum(len(v) for v in _snap.values())
+                                st.success(f"✅ Snapshot dokumen PPK tersimpan: {_total_snap} file")
+                            except Exception as _snap_e:
+                                st.warning(f"Snapshot dokumen PPK gagal: {_snap_e}")
                         st.session_state["_folder_just_created"] = _nama_folder_clean
                         st.rerun()
                     else:
