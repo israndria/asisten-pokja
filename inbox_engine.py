@@ -480,6 +480,48 @@ def upsert_draft_paket(data: dict) -> dict:
     return r
 
 
+def set_kualifikasi_usaha(kode_tender: str, kualifikasi_id: str = "21") -> bool:
+    """
+    SET kualifikasi usaha di SPSE via POST /lelang/{kode}/simpan.
+    kualifikasi_id: "21"=Kecil, "24"=Menengah, "25"=Besar (default Kecil).
+    Return True jika sukses (302 redirect), False jika gagal.
+    Butuh Playwright/CDP aktif untuk ambil cookie.
+    """
+    try:
+        cookie_str = spse_browser.get_spse_cookies()
+        # Ambil authenticityToken dari halaman /edit
+        edit_resp = requests.get(
+            f"{BASE_URL}/lelang/{kode_tender}/edit",
+            headers={**_headers(f"{BASE_URL}/lelang/{kode_tender}/edit"), "Cookie": cookie_str},
+            timeout=10,
+        )
+        m = re.search(r'name=["\']authenticityToken["\'][^>]*value=["\']([a-f0-9]+)["\']', edit_resp.text)
+        if not m:
+            m = re.search(r'value=["\']([a-f0-9]+)["\'][^>]*name=["\']authenticityToken["\']', edit_resp.text)
+        if not m:
+            return False
+        token = m.group(1)
+
+        resp = requests.post(
+            f"{BASE_URL}/lelang/{kode_tender}/simpan",
+            data={
+                "authenticityToken": token,
+                "kualifikasiId": kualifikasi_id,
+                "lelang.oap": "1",
+                "lelang.lls_penetapan_pemenang": "LELANG_NON_ITEMIZE",
+            },
+            headers={
+                **_headers(f"{BASE_URL}/lelang/{kode_tender}/edit"),
+                "Cookie": cookie_str,
+            },
+            allow_redirects=False,
+            timeout=10,
+        )
+        return resp.status_code == 302
+    except Exception:
+        return False
+
+
 # ── Fungsi utama (dipanggil dari app.py Tab 0) ─────────────────────────────────
 
 def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
@@ -606,6 +648,15 @@ def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
                 log(pct, f"[{done}/{total}] ✅ {record.get('nama_tender','')[:45]}")
             except Exception as e:
                 errors.append(f"Upsert {record.get('kode_tender')}: {e}")
+
+    # Set kualifikasi usaha "Kecil" untuk semua paket baru (1x per paket, setelah thread selesai)
+    kode_baru = [r["kode_tender"] for r in hasil_data if r.get("status") == "baru" and r.get("kode_tender")]
+    if kode_baru:
+        log(0.97, f"⚙️ Set kualifikasi usaha Kecil untuk {len(kode_baru)} paket baru...")
+        for _kt in kode_baru:
+            ok = set_kualifikasi_usaha(_kt)
+            if not ok:
+                errors.append(f"set_kualifikasi gagal: {_kt}")
 
     log(1.0, f"Selesai — {baru} baru, {diperbarui} diperbarui, ⏭️ {skip} dilewati, {len(errors)} error")
     return {"baru": baru, "diperbarui": diperbarui, "skip": skip, "error": errors, "data": hasil_data}
