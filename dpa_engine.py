@@ -647,7 +647,7 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
 
         # ── Deteksi masuk rincian ─────────────────────────────────────────────
         if "Kode Rekening" in line_s and any(
-            kw in line_s for kw in ("Uraian", "Berkurang", "Setelah", "Jumlah")
+            kw in line_s for kw in ("Uraian", "Berkurang", "Setelah", "Jumlah", "Koefisien", "Volume")
         ):
             in_rincian = True
             continue
@@ -765,6 +765,95 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             })
 
     _flush_sk()
+
+    # Fallback: PDF DPA-SKPD lama tanpa header "Sub Kegiatan" eksplisit
+    # Buat 1 SK dummy dari nama file, kumpulkan semua item yang berhasil di-parse
+    if not result["subkegiatan"]:
+        _sk_dummy = _make_sk("UNKNOWN", nama_file.replace(".pdf", "").strip())
+        # Re-parse: aktifkan in_rincian dari awal, kumpulkan semua item
+        _in_rin = False
+        _cur_rek2: Optional[dict] = None
+        _cur_src2 = ""
+        for line in lines:
+            line_s = line.strip()
+            if not line_s:
+                continue
+            # Trigger rincian lebih longgar
+            if "Kode Rekening" in line_s:
+                _in_rin = True
+                continue
+            if "BELANJA MODAL" in line_s or "BELANJA OPERASI" in line_s:
+                _in_rin = True
+            if not _in_rin:
+                continue
+            # Jumlah total
+            m_j = _RE_SCAN_JUMLAH.search(line_s)
+            if m_j:
+                val = _parse_rp_ocr(m_j.group(1))
+                if val > 0:
+                    _sk_dummy["alokasi_sebelum"] = val
+                    _sk_dummy["alokasi_sesudah"] = val
+                continue
+            # Sumber dana
+            m_src = _RE_SCAN_SUMBER.search(line_s)
+            if m_src:
+                _cur_src2 = _clean(m_src.group(1))
+                _cur_src2 = re.sub(r"\s+[a-z]{2,}[aeiou]{3,}.*$", "", _cur_src2).strip()
+                if not _sk_dummy["sumber_pendanaan"]:
+                    _sk_dummy["sumber_pendanaan"] = _cur_src2
+                continue
+            # Kode rekening
+            m_rek2 = re.match(r"^(5(?:\.\d+){1,6})\s+(.+?)\s+Rp([\d\.,]+)", line_s, re.I)
+            if not m_rek2:
+                m_rek2 = re.match(r"^[^\d\s]{0,3}(\d[\d\.]+)\s+(.+?)\s+Rp([\d\.,]+)", line_s, re.I)
+            if m_rek2:
+                kode = m_rek2.group(1)
+                if not kode.startswith("5"):
+                    kode = "5." + kode.lstrip("5.")
+                uraian = _clean(m_rek2.group(2))
+                jumlah = _parse_rp_ocr(m_rek2.group(3))
+                _item2 = {
+                    "tipe": "rekening",
+                    "kode_rekening": kode,
+                    "level": len(kode.split(".")),
+                    "uraian": uraian,
+                    "koefisien": None, "satuan": None,
+                    "harga_sebelum": None, "jumlah_sebelum": jumlah,
+                    "harga_sesudah": None, "jumlah_sesudah": jumlah,
+                    "selisih": 0.0, "spesifikasi": None,
+                    "sumber_dana_item": _cur_src2,
+                }
+                _sk_dummy["items"].append(_item2)
+                if len(kode.split(".")) >= 5:
+                    _cur_rek2 = _item2
+                continue
+            # Item koef+satuan+Rp
+            m_it2 = re.search(
+                r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh|Pekerjaan|pekerjaan)\s+"
+                r"Rp([\d\.,]+)\s+(\d+)%\s+Rp([\d\.,]+)",
+                line_s, re.I
+            )
+            if m_it2 and _cur_rek2 is not None:
+                koef_raw = re.sub(r"\s+", "", m_it2.group(1))
+                satuan = m_it2.group(2)
+                harga = _parse_rp_ocr(m_it2.group(3))
+                jumlah = _parse_rp_ocr(m_it2.group(5))
+                uraian_item = re.sub(
+                    r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh|Pekerjaan|pekerjaan)\s+.*",
+                    "", line_s, flags=re.I
+                ).strip() or _cur_rek2["uraian"]
+                _sk_dummy["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": _cur_rek2["kode_rekening"],
+                    "level": None, "uraian": uraian_item,
+                    "koefisien": koef_raw, "satuan": satuan,
+                    "harga_sebelum": harga, "jumlah_sebelum": jumlah,
+                    "harga_sesudah": harga, "jumlah_sesudah": jumlah,
+                    "selisih": 0.0, "spesifikasi": None,
+                    "sumber_dana_item": _cur_src2,
+                })
+        result["subkegiatan"].append(_sk_dummy)
+
     return result
 
 

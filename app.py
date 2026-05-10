@@ -417,12 +417,13 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     with st.expander(_label, expanded=True):
                         if _sk:
                             _i1, _i2, _i3 = st.columns(3)
-                            _i1.markdown(f"**Kegiatan**  \n{_sk['kegiatan_kode']} — {_sk['kegiatan_nama']}")
-                            _i2.markdown(f"**Alokasi SK**  \n{_alokasi_fmt}")
-                            _i3.markdown(f"**Sumber Dana**  \n{_sk['sumber_pendanaan'] or '-'}")
+                            _i1.caption("Kegiatan")
+                            _i1.write(f"{_sk['kegiatan_kode']} — {_sk['kegiatan_nama']}")
+                            _i2.metric("Alokasi SK", _alokasi_fmt)
+                            _i3.metric("Sumber Dana", _sk['sumber_pendanaan'] or '-')
                             _i4, _i5 = st.columns(2)
-                            _i4.markdown(f"**Satker**  \n{_sk['satker'] or '-'}")
-                            _i5.markdown(f"**Tahun**  \n{_sk['tahun_anggaran'] or '-'}")
+                            _i4.metric("Satker", _sk['satker'] or '-')
+                            _i5.metric("Tahun", _sk['tahun_anggaran'] or '-')
                             st.markdown("---")
 
                         # Tabel item yang cocok
