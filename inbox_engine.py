@@ -761,23 +761,52 @@ def download_dokumen_paket(
                 lamp_links = await worker_page.query_selector_all('a[href*="/dl/"]')
                 total_lamp = len(lamp_links)
                 log(f"  {total_lamp} lampiran ditemukan")
-                for i, link in enumerate(lamp_links, 1):
+
+                # Kumpulkan semua (href, fname) dulu — async, lalu download parallel via requests
+                lamp_items = []
+                for link in lamp_links:
                     fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
                                        (await link.text_content() or ""), flags=re.IGNORECASE).strip()
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
+                    href = await link.get_attribute("href") or ""
+                    url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
                     dst = _unique_dst(folder_tujuan, fname)
+                    lamp_items.append((url_dl, fname, dst))
+
+                import concurrent.futures as _cf_dl
+                import threading as _th_dl
+                _hasil_lock = _th_dl.Lock()
+
+                def _dl_one_lamp(args):
+                    url_dl, fname, dst = args
                     try:
-                        async with worker_page.expect_download(timeout=30000) as dl_info:
-                            await link.evaluate("el => el.click()")
-                        dl = await dl_info.value
-                        tmp = await dl.path()
-                        if tmp:
-                            shutil.copy2(tmp, dst)
-                            log(f"  ({i}/{total_lamp}) ✅ {os.path.basename(dst)}")
+                        r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
+                        r_dl.raise_for_status()
+                        # Nama file dari Content-Disposition jika ada
+                        cd = r_dl.headers.get("Content-Disposition", "")
+                        m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                        if m_cd:
+                            clean_cd = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
+                            if clean_cd:
+                                dst = os.path.join(os.path.dirname(dst), clean_cd)
+                                dst = _unique_dst(os.path.dirname(dst), os.path.basename(dst))
+                        with open(dst, "wb") as f_out:
+                            for chunk in r_dl.iter_content(65536):
+                                f_out.write(chunk)
+                        with _hasil_lock:
                             hasil["ok"].append(dst)
+                        return ("ok", os.path.basename(dst))
                     except Exception as e:
-                        log(f"  ({i}/{total_lamp}) ❌ {fname}: {e}")
-                        hasil["error"].append(f"{fname}: {e}")
+                        with _hasil_lock:
+                            hasil["error"].append(f"{fname}: {e}")
+                        return ("err", f"{fname}: {e}")
+
+                with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_lamp:
+                    futs = {_pool_lamp.submit(_dl_one_lamp, item): item for item in lamp_items}
+                    for i, fut in enumerate(_cf_dl.as_completed(futs), 1):
+                        status, msg = fut.result()
+                        icon = "✅" if status == "ok" else "❌"
+                        log(f"  ({i}/{total_lamp}) {icon} {msg}")
             except Exception as e:
                 log(f"  ❌ Gagal buka inbox: {e}")
                 hasil["error"].append(f"Inbox: {e}")
@@ -824,28 +853,45 @@ def download_dokumen_paket(
                             "table#files a[href*='/dl/'], table.table a[href*='/dl/']"
                         )
                         num_f = len(pw_links)
+                        # Kumpulkan href+fname async, lalu download parallel via requests
+                        spse_items = []
                         for fi, link in enumerate(pw_links, 1):
                             fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
                                                (await link.text_content() or ""), flags=re.IGNORECASE).strip()
                             fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_{fi}"
+                            href_spse = await link.get_attribute("href") or ""
+                            url_spse = f"https://spse.inaproc.id{href_spse}" if href_spse.startswith("/") else href_spse
                             dst = _unique_dst(folder_tujuan, fname)
+                            spse_items.append((url_spse, fname, dst))
+
+                        def _dl_one_spse(args):
+                            url_spse, fname, dst = args
                             try:
-                                async with worker_page.expect_download(timeout=30000) as dl_info:
-                                    await link.evaluate("el => el.click()")
-                                dl = await dl_info.value
-                                server_fname = urllib.parse.unquote_plus(dl.suggested_filename or "")
-                                if server_fname:
-                                    dst = _unique_dst(folder_tujuan, re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip())
-                                tmp = await dl.path()
-                                if tmp:
-                                    shutil.copy2(tmp, dst)
-                                    log(f"  ({fi}/{num_f}) ✅ {os.path.basename(dst)}")
+                                r_spse = requests.get(url_spse, headers=hdrs, timeout=30, stream=True)
+                                r_spse.raise_for_status()
+                                cd = r_spse.headers.get("Content-Disposition", "")
+                                m_cd2 = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                                if m_cd2:
+                                    clean_cd2 = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd2.group(1).strip())).strip()
+                                    if clean_cd2:
+                                        dst = _unique_dst(folder_tujuan, clean_cd2)
+                                with open(dst, "wb") as f_out2:
+                                    for chunk in r_spse.iter_content(65536):
+                                        f_out2.write(chunk)
+                                with _hasil_lock:
                                     hasil["ok"].append(dst)
-                                else:
-                                    hasil["error"].append(f"{fname}: gagal")
+                                return ("ok", os.path.basename(dst))
                             except Exception as e:
-                                log(f"  ({fi}/{num_f}) ❌ {fname}: {e}")
-                                hasil["error"].append(f"{fname}: {e}")
+                                with _hasil_lock:
+                                    hasil["error"].append(f"{fname}: {e}")
+                                return ("err", f"{fname}: {e}")
+
+                        with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_spse:
+                            futs2 = {_pool_spse.submit(_dl_one_spse, item): item for item in spse_items}
+                            for fi2, fut2 in enumerate(_cf_dl.as_completed(futs2), 1):
+                                status2, msg2 = fut2.result()
+                                icon2 = "✅" if status2 == "ok" else "❌"
+                                log(f"  ({fi2}/{num_f}) {icon2} {msg2}")
                     except Exception as e:
                         log(f"  ❌ Error: {e}")
                         hasil["error"].append(f"{target['label']}: {e}")

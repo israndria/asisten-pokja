@@ -2478,11 +2478,12 @@ with tab_kual:
                     st.caption(f"📋 {len(_kl_paket_list)} paket — centang satu atau lebih:")
                     for p in _kl_paket_list:
                         _kl_chk_key = f"kl_chk_{p['kode']}"
-                        _was = st.session_state.get(_kl_chk_key, False)
+                        # auto-centang pertama kali (session key belum ada)
+                        if _kl_chk_key not in st.session_state:
+                            st.session_state[_kl_chk_key] = True
                         _checked = st.checkbox(
                             f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
                             key=_kl_chk_key,
-                            value=_was,
                         )
 
         st.divider()

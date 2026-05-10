@@ -339,11 +339,26 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
             errors.append(f"fetch_peserta_ids: {e}")
             log(f"  ERROR fetch peserta: {e}")
 
-    for p in peserta_list:
+    import concurrent.futures as _cf_id
+    import threading as _th_id
+
+    _errors_lock = _th_id.Lock()
+
+    # Fetch folder_dibuat sekali (shared, read-only per peserta)
+    _folder_dibuat_shared = ""
+    try:
+        _r_fd = _sb().table("draft_paket").select("folder_dibuat") \
+                     .eq("kode_tender", kode_tender).maybe_single().execute()
+        _folder_dibuat_shared = _r_fd.data.get("folder_dibuat", "") if _r_fd.data else ""
+    except Exception as _e_fd:
+        log(f"  ⚠️ lookup folder_dibuat error: {_e_fd}")
+
+    def _scrape_satu_peserta(p_item):
+        p, urutan = p_item
         pid  = p.get("peserta_id") or p.get("kualifikasi_id", "")
         nama = p.get("nama_peserta") or p.get("nama", "")
         if not pid:
-            continue
+            return
         try:
             log(f"Scraping preview: {nama} ({pid})...")
             data = scrape_preview(pid)
@@ -362,20 +377,17 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
 
             # Fallback: cari folder peserta di disk → gabung PDF + parse Formulir Kualifikasi
             folder_peserta = ""
-            try:
-                r2 = _sb().table("draft_paket").select("folder_dibuat") \
-                            .eq("kode_tender", kode_tender).maybe_single().execute()
-                folder_dibuat = r2.data.get("folder_dibuat", "") if r2.data else ""
-                if folder_dibuat:
+            folder_dibuat = _folder_dibuat_shared
+            if folder_dibuat:
+                try:
                     folder_safe = sanitasi_nama_folder(folder_dibuat)
                     slug = sanitasi_nama_folder(nama)[:80].strip("-")
-                    urutan = peserta_list.index(p) + 1
                     fp = os.path.join(POKJA_ROOT, folder_safe, "1. Dokumen Kualifikasi",
                                       f"{urutan}. {slug}")
                     if os.path.isdir(fp):
                         folder_peserta = fp
-            except Exception as ef:
-                log(f"  ⚠️ lookup folder peserta error: {ef}")
+                except Exception as ef:
+                    log(f"  ⚠️ lookup folder peserta error: {ef}")
 
             # Gabung semua PDF → DokkualifFull_{nama}_{nomor_pokja}.pdf (selalu dilakukan)
             if folder_peserta:
@@ -408,7 +420,15 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
             upsert_peserta_identitas(kode_tender, pid, data)
             log(f"  OK: {data['nama_perusahaan']} | direktur: {data['nama_direktur']}")
         except Exception as e:
-            errors.append(f"{nama} ({pid}): {e}")
+            with _errors_lock:
+                errors.append(f"{nama} ({pid}): {e}")
             log(f"  ERROR {nama}: {e}")
+
+    # max_workers=3: aman untuk concurrent HTTP ke SPSE (tidak trigger rate limit)
+    with _cf_id.ThreadPoolExecutor(max_workers=3) as _pool_id:
+        futs_id = [_pool_id.submit(_scrape_satu_peserta, (p, i + 1))
+                   for i, p in enumerate(peserta_list)]
+        for fut_id in _cf_id.as_completed(futs_id):
+            fut_id.result()  # re-raise exceptions (sudah di-catch di dalam)
 
     return {"peserta": len(peserta_list), "errors": errors}
