@@ -736,62 +736,81 @@ with tab0:
                                 }).eq("kode_tender", _row_terpilih["kode_tender"]).execute()
                             except Exception as _e2:
                                 st.warning(f"Gagal update riwayat: {_e2}")
-                        # Download dokumen jika checkbox aktif
-                        if _dl_dokumen and _row_terpilih and _target_path:
-                            _kt = _row_terpilih.get("kode_tender", "")
-                            _ip = str(_row_terpilih.get("id_pesan", ""))
-                            if _kt and _ip:
-                                _dl_msgs = []
-                                _dl_status_f = st.status("🔽 Mengunduh dokumen persiapan...", expanded=True)
-                                _dl_log_area_f = _dl_status_f.empty()
-                                def _dl_cb(msg):
-                                    _dl_msgs.append(msg)
-                                    _dl_log_area_f.code("\n".join(_dl_msgs[-20:]))
-                                    _dl_status_f.update(label=f"🔽 {msg[:60]}...")
+                        # Download dokumen + Scrape HPS secara PARALEL
+                        import concurrent.futures as _cf
+                        _do_dl = _dl_dokumen and _row_terpilih and _target_path
+                        _do_hps = bool(_row_terpilih and _row_terpilih.get("kode_tender"))
+                        _dl_msgs = []
+                        _hps_res = None
+                        _dl_hasil = None
+                        _kt_par = _row_terpilih.get("kode_tender", "") if _row_terpilih else ""
+                        _ip_par = str(_row_terpilih.get("id_pesan", "")) if _row_terpilih else ""
 
-                                from streamlit.runtime.scriptrunner import get_script_run_ctx
-                                _ctx_f = get_script_run_ctx()
+                        def _run_dl():
+                            if not (_do_dl and _kt_par and _ip_par):
+                                return None
+                            from streamlit.runtime.scriptrunner import get_script_run_ctx as _grc
+                            _ctx_par = _grc()
+                            def _dl_cb_par(msg):
+                                _dl_msgs.append(msg)
+                            return inbox_engine.download_dokumen_paket(
+                                _kt_par, _ip_par, _target_path,
+                                kode_pokja=_row_terpilih.get("kode_pokja",""),
+                                progress_cb=_dl_cb_par,
+                                st_ctx=_ctx_par
+                            )
 
-                                _dl_hasil = inbox_engine.download_dokumen_paket(
-                                    _kt, _ip, _target_path,
-                                    kode_pokja=_row_terpilih.get("kode_pokja",""),
-                                    progress_cb=_dl_cb,
-                                    st_ctx=_ctx_f
-                                )
-                                _ringkasan_f = (f"✅ {len(_dl_hasil['ok'])} file, "
-                                                f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
-                                                f"❌ {len(_dl_hasil['error'])} gagal"
-                                                + (f" | 📎 {_os.path.basename(_dl_hasil['draft_pdf'])}" if _dl_hasil.get('draft_pdf') else " | ⚠ Draft PDF tidak terbuat"))
-                                _dl_status_f.update(label=_ringkasan_f, state="complete", expanded=False)
-                                if _dl_msgs:
-                                    with st.expander("📋 Log download lengkap", expanded=False):
-                                        _grup = []; _grp_title = ""; _grp_lines = []
-                                        for _m in _dl_msgs:
-                                            if any(_m.startswith(p) for p in ["📨","📄","📅","📎","🏁","⚠","✅ Supabase"]):
-                                                if _grp_title: _grup.append((_grp_title, _grp_lines))
-                                                _grp_title = _m; _grp_lines = []
-                                            else:
-                                                _grp_lines.append(_m)
-                                        if _grp_title: _grup.append((_grp_title, _grp_lines))
-                                        for _gt, _gl in _grup:
-                                            st.markdown(f"**{_gt}**")
-                                            if _gl: st.code("\n".join(_gl))
-                                if _dl_hasil["error"]:
-                                    with st.expander("❌ Detail error download", expanded=True):
-                                        for _e3 in _dl_hasil["error"]:
-                                            st.error(_e3)
-                        # Scrape HPS ke Supabase
-                        if _row_terpilih and _row_terpilih.get("kode_tender"):
-                            try:
-                                import hps_engine as _hps_eng
-                                with st.spinner("Scraping HPS dari SPSE..."):
-                                    _hps_res = _hps_eng.scrape_dan_upsert_hps(_row_terpilih["kode_tender"])
-                                if _hps_res.get("error") is None and _hps_res.get("count", 0) > 0:
-                                    st.success(f"✅ HPS tersimpan: {_hps_res['count']} item")
-                                else:
-                                    st.warning(f"HPS gagal/kosong: {_hps_res.get('error', '-')}")
-                            except Exception as _hps_e:
-                                st.warning(f"Scrape HPS error: {_hps_e}")
+                        def _run_hps():
+                            if not _do_hps:
+                                return None
+                            import hps_engine as _hps_eng_par
+                            return _hps_eng_par.scrape_dan_upsert_hps(_kt_par)
+
+                        with st.spinner("⏳ Mengunduh dokumen + scraping HPS secara paralel..."):
+                            with _cf.ThreadPoolExecutor(max_workers=2) as _pool:
+                                _fut_dl = _pool.submit(_run_dl)
+                                _fut_hps = _pool.submit(_run_hps)
+                                try:
+                                    _dl_hasil = _fut_dl.result()
+                                except Exception as _dl_exc:
+                                    st.warning(f"Download error: {_dl_exc}")
+                                try:
+                                    _hps_res = _fut_hps.result()
+                                except Exception as _hps_exc:
+                                    st.warning(f"Scrape HPS error: {_hps_exc}")
+
+                        # Tampilkan hasil download
+                        if _dl_hasil is not None:
+                            _ringkasan_f = (f"✅ {len(_dl_hasil['ok'])} file, "
+                                            f"⏭ {len(_dl_hasil['skip'])} sudah ada, "
+                                            f"❌ {len(_dl_hasil['error'])} gagal"
+                                            + (f" | 📎 {_os.path.basename(_dl_hasil['draft_pdf'])}" if _dl_hasil.get('draft_pdf') else " | ⚠ Draft PDF tidak terbuat"))
+                            _dl_status_f = st.status(_ringkasan_f, expanded=False)
+                            _dl_status_f.update(state="complete", expanded=False)
+                            if _dl_msgs:
+                                with st.expander("📋 Log download lengkap", expanded=False):
+                                    _grup = []; _grp_title = ""; _grp_lines = []
+                                    for _m in _dl_msgs:
+                                        if any(_m.startswith(p) for p in ["📨","📄","📅","📎","🏁","⚠","✅ Supabase"]):
+                                            if _grp_title: _grup.append((_grp_title, _grp_lines))
+                                            _grp_title = _m; _grp_lines = []
+                                        else:
+                                            _grp_lines.append(_m)
+                                    if _grp_title: _grup.append((_grp_title, _grp_lines))
+                                    for _gt, _gl in _grup:
+                                        st.markdown(f"**{_gt}**")
+                                        if _gl: st.code("\n".join(_gl))
+                            if _dl_hasil["error"]:
+                                with st.expander("❌ Detail error download", expanded=True):
+                                    for _e3 in _dl_hasil["error"]:
+                                        st.error(_e3)
+
+                        # Tampilkan hasil HPS
+                        if _hps_res is not None:
+                            if _hps_res.get("error") is None and _hps_res.get("count", 0) > 0:
+                                st.success(f"✅ HPS tersimpan: {_hps_res['count']} item")
+                            else:
+                                st.warning(f"HPS gagal/kosong: {_hps_res.get('error', '-')}")
                         # Simpan snapshot dokumen PPK saat folder dibuat
                         if _row_terpilih and _row_terpilih.get("kode_tender") and _target_path:
                             try:
