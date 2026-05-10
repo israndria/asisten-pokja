@@ -171,16 +171,186 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4 = st.tabs([
-        "0️⃣ Draft Paket PL",
-        "1️⃣ Undangan",
-        "2️⃣ Evaluasi",
-        "3️⃣ Negosiasi",
-        "4️⃣ BA & Laporan",
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5 = st.tabs([
+        "0️⃣ Import DPA",
+        "1️⃣ Draft Paket PL",
+        "2️⃣ Undangan",
+        "3️⃣ Evaluasi",
+        "4️⃣ Negosiasi",
+        "5️⃣ BA & Laporan",
     ])
 
-    # ── Tab 0: Draft Paket PL ──────────────────────────────────────────────────
+    # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
     with _pl_tab0:
+        import dpa_engine as _dpa
+
+        st.markdown("### 📄 Import DPA / RKA ke Database")
+        st.caption("Upload PDF DPA/RKA SKPD — ekstrak semua sub kegiatan dan rincian belanja ke Supabase.")
+
+        _dpa_file = st.file_uploader(
+            "Upload PDF DPA:",
+            type=["pdf"],
+            key="dpa_uploader",
+            help="Format standar RKA-BELANJA SKPD Kemendagri. Kompatibel semua tahun.",
+        )
+
+        if _dpa_file:
+            _dpa_bytes = _dpa_file.read()
+            _dpa_nama = _dpa_file.name
+
+            with st.spinner(f"Parsing {_dpa_nama}..."):
+                _dpa_result = _dpa.parse_dpa_pdf(_dpa_bytes, _dpa_nama)
+                _dpa_sk_list = _dpa.deduplicate_subkegiatan(_dpa_result["subkegiatan"])
+                _dpa_rows = _dpa.flatten_to_rows(_dpa_result)
+
+            _dpa_meta = _dpa_result["meta"]
+            _dpa_col1, _dpa_col2, _dpa_col3 = st.columns(3)
+            _dpa_col1.metric("Satker", _dpa_meta["satker"] or "-")
+            _dpa_col2.metric("Tahun", _dpa_meta["tahun_anggaran"] or "-")
+            _dpa_col3.metric("Sub Kegiatan", len(_dpa_sk_list))
+
+            _dpa_col4, _dpa_col5 = st.columns(2)
+            _dpa_col4.metric("Total Baris Item", len(_dpa_rows))
+            _total_alokasi = sum(sk["alokasi_sesudah"] for sk in _dpa_sk_list)
+            _dpa_col5.metric("Total Alokasi", f"Rp {_total_alokasi:,.0f}")
+
+            st.divider()
+            st.markdown("#### Preview Sub Kegiatan")
+
+            _dpa_preview_data = []
+            for sk in _dpa_sk_list:
+                _item_count = sum(1 for it in sk["items"] if it["tipe"] == "item")
+                _dpa_preview_data.append({
+                    "Kode": sk["subkegiatan_kode"],
+                    "Nama Sub Kegiatan": sk["subkegiatan_nama"][:60],
+                    "Sumber Dana": sk["sumber_pendanaan"],
+                    "Alokasi (Rp)": f"{sk['alokasi_sesudah']:,.0f}",
+                    "Jml Item": _item_count,
+                })
+            st.dataframe(_dpa_preview_data, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.markdown("#### Simpan ke Supabase")
+
+            _dpa_is_ocr = _dpa_meta.get("sumber") == "ocr"
+            if _dpa_is_ocr:
+                st.info("⚠️ PDF scan terdeteksi (OCR). Kode/nama sub kegiatan mungkin perlu dikoreksi manual.")
+
+            _dpa_satker_override = st.text_input(
+                "Nama Satker (opsional override):",
+                value=_dpa_meta["satker"],
+                key="dpa_satker_override",
+            )
+            _dpa_tahun_override = st.text_input(
+                "Tahun Anggaran:",
+                value=_dpa_meta["tahun_anggaran"],
+                key="dpa_tahun_override",
+            )
+
+            # Override kode/nama sub kegiatan jika UNKNOWN (hasil OCR tidak bisa parse)
+            if _dpa_is_ocr and any(sk["subkegiatan_kode"] == "UNKNOWN" for sk in _dpa_sk_list):
+                st.markdown("**Koreksi Sub Kegiatan (OCR tidak bisa parse otomatis):**")
+                _dpa_sk_kode_override = st.text_input(
+                    "Kode Sub Kegiatan:",
+                    placeholder="Contoh: 1.02.02.2.02.0003",
+                    key="dpa_sk_kode_override",
+                )
+                _dpa_sk_nama_override = st.text_input(
+                    "Nama Sub Kegiatan:",
+                    placeholder="Contoh: Pembangunan Gedung Cytotoxic",
+                    key="dpa_sk_nama_override",
+                )
+            else:
+                _dpa_sk_kode_override = None
+                _dpa_sk_nama_override = None
+
+            if st.button("💾 Simpan ke Supabase", type="primary", key="dpa_simpan"):
+                from config import sb as _sb_dpa_factory
+                _dpa_sb = _sb_dpa_factory()
+                _dpa_ok = 0
+                _dpa_err = 0
+
+                with st.status("Menyimpan data DPA...", expanded=True) as _dpa_status:
+                    for sk in _dpa_sk_list:
+                        _satker_val = _dpa_satker_override.strip() or _dpa_meta["satker"]
+                        _tahun_val = _dpa_tahun_override.strip() or _dpa_meta["tahun_anggaran"]
+                        # Terapkan override kode/nama jika UNKNOWN
+                        _sk_kode = sk["subkegiatan_kode"]
+                        _sk_nama = sk["subkegiatan_nama"]
+                        if _sk_kode == "UNKNOWN" and _dpa_sk_kode_override:
+                            _sk_kode = _dpa_sk_kode_override.strip()
+                        if (_sk_nama == sk["subkegiatan_nama"] and
+                                _dpa_sk_nama_override and sk["subkegiatan_kode"] == "UNKNOWN"):
+                            _sk_nama = _dpa_sk_nama_override.strip()
+                        _sk_id = f"{_satker_val}|{_tahun_val}|{_sk_kode}"
+
+                        _sk_row = {
+                            "id": _sk_id,
+                            "satker": _satker_val,
+                            "subkegiatan_kode": _sk_kode,
+                            "subkegiatan_nama": _sk_nama,
+                            "tahun_anggaran": _tahun_val,
+                            "urusan": _dpa_meta["urusan"],
+                            "bidang_urusan": _dpa_meta["bidang_urusan"],
+                            "unit_organisasi": _dpa_meta["unit_organisasi"],
+                            "nama_file": _dpa_nama,
+                            "program_kode": sk["program_kode"],
+                            "program_nama": sk["program_nama"],
+                            "kegiatan_kode": sk["kegiatan_kode"],
+                            "kegiatan_nama": sk["kegiatan_nama"],
+                            "sumber_pendanaan": sk["sumber_pendanaan"],
+                            "lokasi": sk["lokasi"],
+                            "waktu_pelaksanaan": sk["waktu_pelaksanaan"],
+                            "alokasi_sebelum": sk["alokasi_sebelum"],
+                            "alokasi_sesudah": sk["alokasi_sesudah"],
+                            "selisih": sk["selisih"],
+                        }
+
+                        try:
+                            # Upsert sub kegiatan (hapus items lama via CASCADE)
+                            _dpa_sb.table("dpa_subkegiatan").upsert(_sk_row).execute()
+
+                            # Hapus items lama (CASCADE seharusnya, tapi explicit untuk upsert)
+                            _dpa_sb.table("dpa_item_belanja").delete().eq("subkegiatan_id", _sk_id).execute()
+
+                            # Insert items baru
+                            _item_rows = []
+                            for it in sk["items"]:
+                                _item_rows.append({
+                                    "subkegiatan_id": _sk_id,
+                                    "tipe": it["tipe"],
+                                    "kode_rekening": it["kode_rekening"],
+                                    "level_rekening": it["level"],
+                                    "uraian": it["uraian"],
+                                    "koefisien": it["koefisien"],
+                                    "satuan": it["satuan"],
+                                    "harga_sebelum": it["harga_sebelum"],
+                                    "jumlah_sebelum": it["jumlah_sebelum"],
+                                    "harga_sesudah": it["harga_sesudah"],
+                                    "jumlah_sesudah": it["jumlah_sesudah"],
+                                    "selisih": it["selisih"],
+                                    "spesifikasi": it["spesifikasi"],
+                                    "sumber_dana_item": it["sumber_dana_item"],
+                                })
+                            if _item_rows:
+                                _dpa_sb.table("dpa_item_belanja").insert(_item_rows).execute()
+
+                            st.write(f"✅ {sk['subkegiatan_kode']} — {sk['subkegiatan_nama'][:50]} ({len(_item_rows)} item)")
+                            _dpa_ok += 1
+                        except Exception as _dpa_ex:
+                            st.write(f"❌ {sk['subkegiatan_kode']}: {_dpa_ex}")
+                            _dpa_err += 1
+
+                    if _dpa_err == 0:
+                        _dpa_status.update(label=f"✅ Selesai — {_dpa_ok} sub kegiatan tersimpan.", state="complete")
+                    else:
+                        _dpa_status.update(label=f"⚠️ Selesai — {_dpa_ok} OK, {_dpa_err} gagal.", state="error")
+
+        else:
+            st.info("Upload PDF DPA untuk memulai parsing.")
+
+    # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
+    with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT
 
@@ -332,17 +502,17 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
 
-    # ── Tab 1–4: Placeholder ──────────────────────────────────────────────────
-    with _pl_tab1:
+    # ── Tab 2–5: Placeholder ──────────────────────────────────────────────────
+    with _pl_tab2:
         st.info("🚧 Tab Undangan belum tersedia — akan dikembangkan.")
 
-    with _pl_tab2:
+    with _pl_tab3:
         st.info("🚧 Tab Evaluasi belum tersedia — akan dikembangkan.")
 
-    with _pl_tab3:
+    with _pl_tab4:
         st.info("🚧 Tab Negosiasi belum tersedia — akan dikembangkan.")
 
-    with _pl_tab4:
+    with _pl_tab5:
         st.info("🚧 Tab BA & Laporan belum tersedia — akan dikembangkan.")
 
     st.stop()  # Jangan render tab Tender jika mode PL
