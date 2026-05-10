@@ -349,6 +349,96 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         else:
             st.info("Upload PDF DPA untuk memulai parsing.")
 
+        # ── Dashboard / Search DPA ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔍 Cari Paket di DPA")
+        st.caption("Ketik nama pekerjaan → sistem cari di seluruh item belanja DPA yang tersimpan.")
+
+        _dpa_search_q = st.text_input(
+            "Nama pekerjaan / uraian belanja:",
+            placeholder="Contoh: Pemeliharaan Bangunan Gedung",
+            key="dpa_search_q",
+        )
+
+        if _dpa_search_q and len(_dpa_search_q.strip()) >= 3:
+            from config import sb as _sb_search
+            _sb_s = _sb_search()
+
+            with st.spinner("Mencari..."):
+                # Query item belanja dengan ilike, join data SK via subkegiatan_id
+                _search_items = (
+                    _sb_s.table("dpa_item_belanja")
+                    .select("uraian, kode_rekening, jumlah_sesudah, subkegiatan_id, sumber_dana_item, spesifikasi")
+                    .ilike("uraian", f"%{_dpa_search_q.strip()}%")
+                    .eq("tipe", "item")
+                    .order("jumlah_sesudah", desc=True)
+                    .limit(50)
+                    .execute()
+                    .data
+                )
+
+            if not _search_items:
+                st.warning("Tidak ada item belanja yang cocok.")
+            else:
+                # Kumpulkan semua subkegiatan_id unik → batch fetch SK
+                _sk_ids = list({it["subkegiatan_id"] for it in _search_items})
+                _sk_map = {}
+                for _chunk_start in range(0, len(_sk_ids), 20):
+                    _chunk = _sk_ids[_chunk_start:_chunk_start+20]
+                    _sk_rows = (
+                        _sb_s.table("dpa_subkegiatan")
+                        .select("id, subkegiatan_kode, subkegiatan_nama, kegiatan_kode, kegiatan_nama, program_nama, alokasi_sesudah, sumber_pendanaan, satker, tahun_anggaran")
+                        .in_("id", _chunk)
+                        .execute()
+                        .data
+                    )
+                    for _sk in _sk_rows:
+                        _sk_map[_sk["id"]] = _sk
+
+                st.markdown(f"**{len(_search_items)} item ditemukan** (maks 50)")
+
+                # Grup hasil per sub kegiatan
+                _groups: dict = {}
+                for it in _search_items:
+                    _sid = it["subkegiatan_id"]
+                    if _sid not in _groups:
+                        _groups[_sid] = {"sk": _sk_map.get(_sid), "items": []}
+                    _groups[_sid]["items"].append(it)
+
+                for _sid, _grp in _groups.items():
+                    _sk = _grp["sk"]
+                    if _sk:
+                        _label = f"📌 {_sk['subkegiatan_kode']} — {_sk['subkegiatan_nama']}"
+                        _alokasi_fmt = f"Rp {_sk['alokasi_sesudah']:,.0f}" if _sk['alokasi_sesudah'] else "-"
+                    else:
+                        _label = f"📌 {_sid}"
+                        _alokasi_fmt = "-"
+
+                    with st.expander(_label, expanded=True):
+                        if _sk:
+                            _i1, _i2, _i3 = st.columns(3)
+                            _i1.markdown(f"**Kegiatan**  \n{_sk['kegiatan_kode']} — {_sk['kegiatan_nama']}")
+                            _i2.markdown(f"**Alokasi SK**  \n{_alokasi_fmt}")
+                            _i3.markdown(f"**Sumber Dana**  \n{_sk['sumber_pendanaan'] or '-'}")
+                            _i4, _i5 = st.columns(2)
+                            _i4.markdown(f"**Satker**  \n{_sk['satker'] or '-'}")
+                            _i5.markdown(f"**Tahun**  \n{_sk['tahun_anggaran'] or '-'}")
+                            st.markdown("---")
+
+                        # Tabel item yang cocok
+                        _tbl = []
+                        for it in _grp["items"]:
+                            _tbl.append({
+                                "Kode Rek": it["kode_rekening"] or "-",
+                                "Uraian": it["uraian"],
+                                "Jumlah (Rp)": f"{it['jumlah_sesudah']:,.0f}" if it["jumlah_sesudah"] else "-",
+                                "Sumber Dana": it["sumber_dana_item"] or "-",
+                            })
+                        st.dataframe(_tbl, use_container_width=True, hide_index=True)
+
+        elif _dpa_search_q and len(_dpa_search_q.strip()) < 3:
+            st.caption("Ketik minimal 3 karakter.")
+
     # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
