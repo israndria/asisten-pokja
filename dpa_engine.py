@@ -1,11 +1,14 @@
 """
 DPA Engine — Parser PDF Dokumen Pelaksanaan Anggaran (DPA/RKA) Pemda.
 
-2 pola yang didukung:
+3 pola yang didukung:
   1. DPA TEKS (RKA-BELANJA Sebelum/Sesudah) — pdfplumber, multi sub kegiatan
   2. DPA SCAN (gambar, format ringkas DPA-SKPD) — OCR Tesseract, 1 sub kegiatan per file
+  3. DPPA-SKPD (font corrupt dari SIPD) — chars > 0 tapi teks rusak → fallback OCR
 
-Deteksi otomatis: jika chars==0 → pakai OCR.
+Deteksi:
+  - chars==0 → scan murni → OCR
+  - chars>0 tapi parse menghasilkan 0 sub kegiatan → font corrupt → retry OCR
 Kompatibel lintas tahun selama format Kemendagri tidak berubah.
 """
 
@@ -22,11 +25,13 @@ _TESSDATA_PREFIX = r"D:\Tesseract OCR\tessdata"
 
 # ── Regex Patterns ────────────────────────────────────────────────────────────
 
+# Separator toleran: ':', '+', '=', atau spasi langsung
+# Kode toleran: digit, huruf kapital (O/I sering OCR-error untuk 0/1), titik, koma, dash
 _RE_SUBKEG_HEADER = re.compile(
-    r"Sub Kegiatan\s*:\s*([A-Z0-9X\.]+)\s+(.+)"
+    r"Sub\s+Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I
 )
-_RE_PROGRAM = re.compile(r"Program\s*:\s*([A-Z0-9X\.]+)\s+(.+)")
-_RE_KEGIATAN = re.compile(r"Kegiatan\s*:\s*([A-Z0-9X\.]+)\s+(.+)")
+_RE_PROGRAM = re.compile(r"Program\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
+_RE_KEGIATAN = re.compile(r"Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
 _RE_URUSAN = re.compile(r"Urusan Pemerintahan\s*:\s*(.+)")
 _RE_BIDANG = re.compile(r"Bidang Urusan\s*:\s*(.+)")
 _RE_UNIT_ORG = re.compile(r"Unit Organisasi\s*:\s*(.+)")
@@ -48,6 +53,11 @@ _RE_ITEM_SPEK = re.compile(
 _RE_JUMLAH_SUBKEG = re.compile(
     r"Jumlah Anggaran Sub Kegiatan (?:Sebelum|Sesudah)\s*:\s*([\d\.]+,\d{2})"
 )
+
+
+def _normalize_kode(kode: str) -> str:
+    """Normalisasi kode sub kegiatan dari OCR: ganti koma → titik, buang spasi."""
+    return re.sub(r",", ".", kode.strip())
 
 
 def _parse_rp(s: str) -> float:
@@ -86,6 +96,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
     Auto-detect format PDF DPA lalu parse:
       - PDF teks (pdfplumber)  → format RKA-BELANJA Sebelum/Sesudah
       - PDF scan (OCR Tesseract) → format DPA-SKPD ringkas
+      - DPPA-SKPD font corrupt (SIPD) → chars>0 tapi 0 subkegiatan → fallback OCR
 
     Return dict:
       - meta: info dokumen (satker, tahun, dll.)
@@ -379,6 +390,13 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
     if current_sk is not None:
         result["subkegiatan"].append(current_sk)
 
+    # Fallback: jika teks pdfplumber tidak menghasilkan sub kegiatan (font corrupt SIPD),
+    # coba OCR — PDF dengan embedded font rusak tetap punya chars > 0
+    if not result["subkegiatan"]:
+        ocr_result = parse_dpa_scan_pdf(file_bytes, nama_file)
+        ocr_result["meta"]["sumber"] = "ocr_fallback"
+        return ocr_result
+
     return result
 
 
@@ -413,9 +431,9 @@ _RE_SCAN_URUSAN   = re.compile(r"URUSAN PEMERINTAHAN\s*[:\=]\s*(.+)", re.I)
 _RE_SCAN_BIDANG   = re.compile(r"BIDANG URUSAN\s*[:\=]\s*(.+)", re.I)
 _RE_SCAN_ORG      = re.compile(r"ORGANISASI\s*[:\=]\s*(.+)", re.I)
 _RE_SCAN_TAHUN    = re.compile(r"TAHUN ANGGARAN\s+(\d{4})", re.I)
-_RE_SCAN_PROGRAM  = re.compile(r"Program\s*[:\=]\s*([0-9X\.]+)\s+(.+)", re.I)
-_RE_SCAN_KEGIATAN = re.compile(r"Kegiatan\s*[:\=]\s*([0-9X\.]+)\s+(.+)", re.I)
-_RE_SCAN_SUBKEG   = re.compile(r"Sub Kegiatan\s*[:\=]\s*([0-9X\.]+)\s+(.+)", re.I)
+_RE_SCAN_PROGRAM  = re.compile(r"Program\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
+_RE_SCAN_KEGIATAN = re.compile(r"Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
+_RE_SCAN_SUBKEG   = re.compile(r"Sub\s+Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
 _RE_SCAN_SUMBER   = re.compile(r"Sumber Dana\s*[:\=]\s*(.+)", re.I)
 _RE_SCAN_JUMLAH   = re.compile(r"Jumlah Anggaran Sub Kegiatan\s+Rp([\d\.,]+)", re.I)
 
@@ -528,35 +546,8 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                     start += 1
                 result["meta"]["satker"] = " ".join(parts[start:]) if start < len(parts) else val
 
-    # ── Strategi parse sub kegiatan untuk format scan ─────────────────────────
-    # Format DPA-SKPD scan memiliki 2 varian:
-    #   A) Ada "Sub Kegiatan :" berulang di halaman rincian (seperti DPA teks)
-    #   B) "Sub Kegiatan :" hanya muncul di halaman cover — halaman rincian
-    #      berisi kode rekening langsung tanpa header sub kegiatan
-
-    # Kumpulkan semua sub kegiatan dari seluruh teks
-    sk_headers = []
-    for line in lines:
-        m = _RE_SCAN_SUBKEG.match(line.strip())
-        if m:
-            sk_headers.append({
-                "kode": m.group(1).strip(),
-                "nama": _clean(m.group(2)),
-            })
-
-    # Jika tidak ditemukan, coba lebih toleran (OCR kadang ada spasi ekstra)
-    if not sk_headers:
-        for line in lines:
-            m = re.search(r"Sub\s+Kegiatan\s*[:\=]\s*([0-9X\.]+)\s+(.+)", line.strip(), re.I)
-            if m:
-                sk_headers.append({
-                    "kode": m.group(1).strip(),
-                    "nama": _clean(m.group(2)),
-                })
-
-    # Ambil info tambahan (program/kegiatan) dari teks awal
+    # ── Ambil info program/kegiatan global dari teks awal ────────────────────
     prog_kode, prog_nama, keg_kode, keg_nama = "", "", "", ""
-    sumber_pendanaan = ""
     for line in lines:
         line_s = line.strip()
         if not prog_kode:
@@ -569,13 +560,9 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             if m and "Sub" not in line_s:
                 keg_kode = m.group(1).strip()
                 keg_nama = _clean(m.group(2))
-        if not sumber_pendanaan:
-            m = _RE_SCAN_SUMBER.search(line_s)
-            if m:
-                sumber_pendanaan = _clean(m.group(1))
 
     # ── Buat template sub kegiatan ────────────────────────────────────────────
-    def _make_sk(kode, nama):
+    def _make_sk(kode, nama, sumber=""):
         return {
             "subkegiatan_kode": kode,
             "subkegiatan_nama": nama,
@@ -583,7 +570,7 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             "program_nama": prog_nama,
             "kegiatan_kode": keg_kode,
             "kegiatan_nama": keg_nama,
-            "sumber_pendanaan": sumber_pendanaan,
+            "sumber_pendanaan": sumber,
             "lokasi": "",
             "waktu_pelaksanaan": "",
             "alokasi_sebelum": 0.0,
@@ -592,78 +579,113 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             "items": [],
         }
 
-    # ── Parse kode rekening dan item dari seluruh teks ────────────────────────
-    # Gunakan 1 sub kegiatan sebagai container (varian B: 1 sub keg per file)
-    # atau bagi per sub kegiatan (varian A: multi sub keg)
+    # ── Parse multi sub kegiatan ─────────────────────────────────────────────
+    # Iterasi baris: setiap "Sub Kegiatan ..." mulai blok baru.
+    # "Kode Rekening ... Uraian/Berkurang" → aktifkan rincian.
+    # Item bisa berupa kode rekening 5.x.x atau baris [#] nama Rp...
 
-    if sk_headers:
-        # Varian B atau A: buat sk dari header yang ditemukan
-        # Karena format scan sering 1 sub keg per file, pakai sk pertama sebagai container
-        current_sk = _make_sk(sk_headers[0]["kode"], sk_headers[0]["nama"])
-        if len(sk_headers) > 1:
-            # Multi sub kegiatan — tandai untuk parse lanjut
-            pass
-    else:
-        # Fallback: buat sk placeholder dari nama file
-        kode_fallback = "UNKNOWN"
-        nama_fallback = re.sub(r"\.pdf$", "", nama_file, flags=re.I)
-        current_sk = _make_sk(kode_fallback, nama_fallback)
-
+    current_sk: Optional[dict] = None
     current_rekening: Optional[dict] = None
+    current_sumber = ""
+    pending_alokasi = 0.0  # alokasi buffer — muncul sebelum header SK di halaman ini
     in_rincian = False
+
+    def _flush_sk():
+        if current_sk is not None:
+            result["subkegiatan"].append(current_sk)
 
     for line in lines:
         line_s = line.strip()
         if not line_s:
             continue
 
-        # Deteksi masuk rincian (setelah "Kode Rekening" header atau "Sumber Dana")
-        if "Kode Rekening" in line_s and "Uraian" in line_s:
+        # ── Alokasi — bisa muncul sebelum header SK di halaman yang sama ─────
+        m_alok = re.search(r"Alokasi\s+Tah[uo]n\s*[;:+]?\s*(?:1\s+)?Rp([\d\.,]+)", line_s, re.I)
+        if m_alok and "-1" not in line_s and "+1" not in line_s and "+4" not in line_s:
+            val = _parse_rp_ocr(m_alok.group(1))
+            if val > 0:
+                if current_sk is not None and not in_rincian:
+                    current_sk["alokasi_sebelum"] = val
+                    current_sk["alokasi_sesudah"] = val
+                else:
+                    pending_alokasi = val  # simpan buffer, akan dipakai SK berikutnya
+            continue
+
+        # ── Deteksi header sub kegiatan baru ─────────────────────────────────
+        m_sk = _RE_SCAN_SUBKEG.search(line_s)
+        if m_sk and "Keluaran" not in line_s:
+            _flush_sk()
+            current_sk = _make_sk(
+                _normalize_kode(m_sk.group(1)),
+                _clean(m_sk.group(2)),
+            )
+            # Terapkan alokasi yang sudah di-buffer
+            if pending_alokasi > 0:
+                current_sk["alokasi_sebelum"] = pending_alokasi
+                current_sk["alokasi_sesudah"] = pending_alokasi
+                pending_alokasi = 0.0
+            current_rekening = None
+            in_rincian = False
+            current_sumber = ""
+            continue
+
+        if current_sk is None:
+            # Sebelum SK pertama — ambil sumber global jika ada
+            m_s = _RE_SCAN_SUMBER.search(line_s)
+            if m_s:
+                current_sumber = _clean(m_s.group(1))
+            continue
+
+        # ── Sumber pendanaan per sub kegiatan ─────────────────────────────────
+        m_s = _RE_SCAN_SUMBER.search(line_s)
+        if m_s and not in_rincian:
+            sumber_raw = _clean(m_s.group(1))
+            sumber_raw = re.sub(r"\s+[a-z]{2,}[aeiou]{3,}.*$", "", sumber_raw)
+            current_sumber = sumber_raw.strip()
+            current_sk["sumber_pendanaan"] = current_sumber
+            continue
+
+        # ── Deteksi masuk rincian ─────────────────────────────────────────────
+        if "Kode Rekening" in line_s and any(
+            kw in line_s for kw in ("Uraian", "Berkurang", "Setelah", "Jumlah")
+        ):
             in_rincian = True
             continue
 
         if not in_rincian:
             continue
 
-        # Jumlah total sub kegiatan
+        # ── Jumlah total sub kegiatan ─────────────────────────────────────────
         m = _RE_SCAN_JUMLAH.search(line_s)
         if m:
             val = _parse_rp_ocr(m.group(1))
-            current_sk["alokasi_sebelum"] = val
-            current_sk["alokasi_sesudah"] = val
+            if val > 0:
+                current_sk["alokasi_sebelum"] = val
+                current_sk["alokasi_sesudah"] = val
+            in_rincian = False
             continue
 
-        # Skip baris noise / header berulang
+        # ── Skip baris noise / header berulang ───────────────────────────────
         if any(kw in line_s for kw in [
-            "Kode Rekening", "Uraian", "Koefisien", "Volume", "Satuan", "Harga",
-            "Rencana Realisasi", "Januari", "Februari", "Maret", "April",
-            "Rantau", "KEPALA", "NIP", "PPKD", "Mengesahkan", "Disetujui",
+            "Kode Rekening", "Koefisien", "Volume", "Satuan", "Harga",
+            "Rencana Realisasi", "Januari", "Februari", "Maret",
+            "KEPALA", "NIP", "PPKD", "Mengesahkan", "Disetujui",
             "Jumlah (Rp)", "Spesifikasi:",
         ]):
             continue
 
-        # Kode rekening — parse toleran OCR noise
-        # Coba pola bersih dulu: "5.x.xx..." di awal baris
-        m_rek = re.match(
-            r"^(5(?:\.\d+){1,6})\s+(.+?)\s+Rp([\d\._\,]+)",
-            line_s, re.I
-        )
+        # ── Kode rekening (5.x.x...) ─────────────────────────────────────────
+        m_rek = re.match(r"^(5(?:\.\d+){1,6})\s+(.+?)\s+Rp([\d\._\,]+)", line_s, re.I)
         if not m_rek:
-            # Toleran: kode awalan rusak OCR (misal "�.2.03.01.001")
             m_rek = re.match(
                 r"^[^\d\s]{0,3}(\d[\d\.]+(?:\.\d{3}){0,5})\s+(.+?)\s+Rp([\d\._\,]+)",
                 line_s, re.I
             )
-
         if m_rek:
             kode_raw = m_rek.group(1)
-            # Perbaiki kode yang mungkin diawali digit bukan 5 (OCR error)
             kode = kode_raw if kode_raw.startswith("5") else "5." + kode_raw.lstrip("5.")
             uraian = _clean(m_rek.group(2))
-            # Hapus noise "_" dari angka (OCR artefak)
-            jumlah_str = m_rek.group(3).replace("_", "")
-            jumlah = _parse_rp_ocr(jumlah_str)
-
+            jumlah = _parse_rp_ocr(m_rek.group(3).replace("_", ""))
             item = {
                 "tipe": "rekening",
                 "kode_rekening": kode,
@@ -677,16 +699,43 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                 "jumlah_sesudah": jumlah,
                 "selisih": 0.0,
                 "spesifikasi": None,
-                "sumber_dana_item": sumber_pendanaan,
+                "sumber_dana_item": current_sumber or current_sk["sumber_pendanaan"],
             }
             current_sk["items"].append(item)
             if len(kode.split(".")) >= 5:
                 current_rekening = item
             continue
 
-        # Item detail — pola: angka koef + satuan + Rpx + % + Rpjumlah
+        # ── Baris [#] nama item Rp0,00 Rp0,00 Rpjumlah ──────────────────────
+        # Format DPPA: "[ # ] Nama Barang/Jasa Rp0,00 Rp70.164.000,00 Rp70.164.000,00"
+        if line_s.startswith("[") and "#" in line_s[:5]:
+            # Ambil nilai Rp terakhir sebagai jumlah sesudah
+            rp_vals = re.findall(r"Rp([\d\.,]+)", line_s)
+            jumlah = _parse_rp_ocr(rp_vals[-1]) if rp_vals else 0.0
+            # Nama item: strip "[#]" dan nilai Rp di belakang
+            uraian_raw = re.sub(r"\[.*?\]", "", line_s)
+            uraian_raw = re.sub(r"\s*Rp[\d\.,]+.*$", "", uraian_raw).strip()
+            if uraian_raw:
+                current_sk["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": current_rekening["kode_rekening"] if current_rekening else None,
+                    "level": None,
+                    "uraian": uraian_raw,
+                    "koefisien": None,
+                    "satuan": None,
+                    "harga_sebelum": None,
+                    "jumlah_sebelum": 0.0,
+                    "harga_sesudah": None,
+                    "jumlah_sesudah": jumlah,
+                    "selisih": jumlah,
+                    "spesifikasi": None,
+                    "sumber_dana_item": current_sumber or current_sk["sumber_pendanaan"],
+                })
+            continue
+
+        # ── Item detail — pola koef + satuan + Rp + % + Rp ──────────────────
         m_item = re.search(
-            r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh)\s+"
+            r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh|Pekerjaan|pekerjaan)\s+"
             r"Rp([\d\.,]+)\s+(\d+)%\s+Rp([\d\.,]+)",
             line_s, re.I
         )
@@ -695,12 +744,10 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             satuan = m_item.group(2)
             harga = _parse_rp_ocr(m_item.group(3))
             jumlah = _parse_rp_ocr(m_item.group(5))
-
             uraian_item = re.sub(
-                r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh)\s+.*",
+                r"([\d\s\.]+)\s+(M2|m2|Unit|unit|Ls|ls|Paket|paket|Buah|buah|Bh|bh|Pekerjaan|pekerjaan)\s+.*",
                 "", line_s, flags=re.I
             ).strip() or current_rekening["uraian"]
-
             current_sk["items"].append({
                 "tipe": "item",
                 "kode_rekening": current_rekening["kode_rekening"],
@@ -714,10 +761,10 @@ def parse_dpa_scan_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                 "jumlah_sesudah": jumlah,
                 "selisih": 0.0,
                 "spesifikasi": None,
-                "sumber_dana_item": sumber_pendanaan,
+                "sumber_dana_item": current_sumber or current_sk["sumber_pendanaan"],
             })
 
-    result["subkegiatan"].append(current_sk)
+    _flush_sk()
     return result
 
 
