@@ -3013,6 +3013,22 @@ with tab_kual:
                             except Exception as e_id:
                                 _log_cb(f"⚠️ [{kode_tender}] Identitas error: {e_id}")
 
+                            # ── Conflict detection: sync personil & alat dari PDF
+                            try:
+                                import conflict_engine
+                                for i, d in enumerate(semua_data):
+                                    pid  = peserta_list[i].get("kualifikasi_id", "")
+                                    nama = d.get("nama", "")
+                                    conflict_engine.sync_from_pdf(
+                                        kode_tender, pid, nama,
+                                        d.get("personel_list", []),
+                                        d.get("peralatan_list", []),
+                                        log=_log_cb,
+                                    )
+                                _log_cb(f"✅ [{kode_tender}] Conflict sync selesai.")
+                            except Exception as e_cf:
+                                _log_cb(f"⚠️ [{kode_tender}] Conflict sync error: {e_cf}")
+
                         except Exception as e_sb:
                             _log_cb(f"ERROR [{kode_tender}] Supabase: {e_sb}")
 
@@ -3023,6 +3039,71 @@ with tab_kual:
                 if _kl_do_download: _parts.append("dokumen didownload")
                 if _kl_do_kk: _parts.append("KK Evaluasi tersimpan")
                 st.success(f"✅ Selesai: {' + '.join(_parts)} — {_kl_total_paket} paket, {_kl_total_semua} peserta. Buka Excel → **Muat KK Evaluasi**, **Muat Harga Penawaran**, **Muat Input BA**.")
+
+                # ── Tampilkan konflik personil & alat lintas paket
+                if _kl_do_kk:
+                    try:
+                        import conflict_engine as _ce
+                        for _kt in [item["paket"]["kode"] for item in _kl_paket_dipilih]:
+                            _kf_p = _ce.get_konflik_personil(_kt)
+                            _kf_a = _ce.get_konflik_alat(_kt)
+                            if _kf_p or _kf_a:
+                                with st.expander(f"⚠️ Konflik Lintas Paket — {_kt}", expanded=True):
+                                    if _kf_p:
+                                        st.markdown("**Personil digunakan di >1 paket:**")
+                                        for k in _kf_p:
+                                            paket_str = ", ".join(
+                                                f"{e['kode_tender']} ({e['nama_penyedia']})"
+                                                for e in k["paket"]
+                                            )
+                                            st.error(f"🔴 {k['nama_personil']} → {paket_str}")
+                                    if _kf_a:
+                                        st.markdown("**Alat digunakan di >1 paket:**")
+                                        for k in _kf_a:
+                                            paket_str = ", ".join(
+                                                f"{e['kode_tender']} ({e['nama_penyedia']})"
+                                                for e in k["paket"]
+                                            )
+                                            st.warning(f"🟡 {k['nama_alat']} → {paket_str}")
+                    except Exception as _e_kf:
+                        st.caption(f"Conflict check error: {_e_kf}")
+
+        # ── Dashboard Konflik Personil & Alat (semua paket) ──────────────────
+        st.divider()
+        st.markdown("### ⚠️ Konflik Personil & Alat Lintas Paket")
+        st.caption("Personil atau alat yang diajukan penyedia di >1 paket aktif (berdasarkan Draft Paket).")
+        if st.button("🔄 Cek Konflik", key="kual_cek_konflik"):
+            try:
+                import conflict_engine as _ce_dash
+                _kf_p_all = _ce_dash.get_konflik_personil()
+                _kf_a_all = _ce_dash.get_konflik_alat()
+                if not _kf_p_all and not _kf_a_all:
+                    st.success("✅ Tidak ada konflik ditemukan.")
+                else:
+                    if _kf_p_all:
+                        st.markdown(f"**Personil konflik: {len(_kf_p_all)} nama**")
+                        _rows_kf = []
+                        for k in _kf_p_all:
+                            for e in k["paket"]:
+                                _rows_kf.append({
+                                    "Nama Personil": k["nama_personil"],
+                                    "Kode Tender": e["kode_tender"],
+                                    "Penyedia": e["nama_penyedia"] or "-",
+                                })
+                        st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
+                    if _kf_a_all:
+                        st.markdown(f"**Alat konflik: {len(_kf_a_all)} nama**")
+                        _rows_ka = []
+                        for k in _kf_a_all:
+                            for e in k["paket"]:
+                                _rows_ka.append({
+                                    "Nama Alat": k["nama_alat"],
+                                    "Kode Tender": e["kode_tender"],
+                                    "Penyedia": e["nama_penyedia"] or "-",
+                                })
+                        st.dataframe(_rows_ka, use_container_width=True, hide_index=True)
+            except Exception as _e_dash:
+                st.error(f"Error: {_e_dash}")
 
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
