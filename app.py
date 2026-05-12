@@ -331,6 +331,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     "selisih": it["selisih"],
                                     "spesifikasi": it["spesifikasi"],
                                     "sumber_dana_item": it["sumber_dana_item"],
+                                    "nama_paket": it.get("nama_paket"),
                                 })
                             if _item_rows:
                                 _dpa_sb.table("dpa_item_belanja").insert(_item_rows).execute()
@@ -365,17 +366,38 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _sb_s = _sb_search()
 
             with st.spinner("Mencari..."):
-                # Query item belanja dengan ilike, join data SK via subkegiatan_id
-                _search_items = (
+                _q = _dpa_search_q.strip()
+                _cols = "uraian, kode_rekening, jumlah_sesudah, subkegiatan_id, sumber_dana_item, spesifikasi, nama_paket"
+                _r1 = (
                     _sb_s.table("dpa_item_belanja")
-                    .select("uraian, kode_rekening, jumlah_sesudah, subkegiatan_id, sumber_dana_item, spesifikasi")
-                    .ilike("uraian", f"%{_dpa_search_q.strip()}%")
+                    .select(_cols)
+                    .ilike("uraian", f"%{_q}%")
                     .eq("tipe", "item")
                     .order("jumlah_sesudah", desc=True)
                     .limit(50)
                     .execute()
                     .data
-                )
+                ) or []
+                _r2 = (
+                    _sb_s.table("dpa_item_belanja")
+                    .select(_cols)
+                    .ilike("nama_paket", f"%{_q}%")
+                    .eq("tipe", "item")
+                    .order("jumlah_sesudah", desc=True)
+                    .limit(50)
+                    .execute()
+                    .data
+                ) or []
+                # Merge deduplicate by (subkegiatan_id, uraian, jumlah_sesudah)
+                _seen = set()
+                _search_items = []
+                for _it in _r1 + _r2:
+                    _key = (_it["subkegiatan_id"], _it["uraian"], _it["jumlah_sesudah"])
+                    if _key not in _seen:
+                        _seen.add(_key)
+                        _search_items.append(_it)
+                _search_items.sort(key=lambda x: x["jumlah_sesudah"] or 0, reverse=True)
+                _search_items = _search_items[:50]
 
             if not _search_items:
                 st.warning("Tidak ada item belanja yang cocok.")
@@ -432,6 +454,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             _tbl.append({
                                 "Kode Rek": it["kode_rekening"] or "-",
                                 "Uraian": it["uraian"],
+                                "Nama Paket": it.get("nama_paket") or "-",
                                 "Jumlah (Rp)": f"{it['jumlah_sesudah']:,.0f}" if it["jumlah_sesudah"] else "-",
                                 "Sumber Dana": it["sumber_dana_item"] or "-",
                             })

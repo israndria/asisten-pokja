@@ -157,6 +157,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
     skip_header_lines = 0  # skip baris header tabel rincian
     current_rekening: Optional[dict] = None  # rekening level 6 terakhir
     current_item_nama: Optional[str] = None  # nama item dari baris [ - ] terakhir
+    current_paket_nama: Optional[str] = None  # nama paket dari baris [ # ] terakhir
     alokasi_buf: dict = {}
 
     i = 0
@@ -308,9 +309,11 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                     "selisih": selisih,
                     "spesifikasi": None,
                     "sumber_dana_item": None,
+                    "nama_paket": current_paket_nama,
                 }
                 current_sk["items"].append(item)
                 current_item_nama = None
+                current_paket_nama = None
 
                 # Simpan rekening level 6 sebagai parent item spesifikasi
                 if len(kode.split(".")) >= 6:
@@ -342,17 +345,21 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                     "selisih": 0.0,
                     "spesifikasi": None,
                     "sumber_dana_item": None,
+                    "nama_paket": current_paket_nama,
                 }
                 current_sk["items"].append(item)
                 current_item_nama = None
+                current_paket_nama = None
 
                 if len(kode.split(".")) >= 6:
                     current_rekening = item
                 i += 1
                 continue
 
-            # Baris [ # ] nama grup
+            # Baris [ # ] nama paket/pekerjaan
             if line.startswith("[ # ]"):
+                raw_paket = _clean(line[5:].strip())
+                current_paket_nama = re.sub(r"\s+Rp[\d\.,]+\s*$", "", raw_paket).strip()
                 i += 1
                 continue
 
@@ -396,6 +403,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                     "selisih": 0.0,
                     "spesifikasi": None,
                     "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
+                    "nama_paket": current_paket_nama,
                 })
                 i += 1
                 continue
@@ -452,6 +460,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                         "selisih": selisih_item,
                         "spesifikasi": spek,
                         "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
+                        "nama_paket": current_paket_nama,
                     })
 
         i += 1
