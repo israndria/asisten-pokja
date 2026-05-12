@@ -38,7 +38,7 @@ _RE_UNIT_ORG = re.compile(r"Unit Organisasi\s*:\s*(.+)")
 _RE_SUMBER = re.compile(r"Sumber Pendanaan\s*:\s*(.+)")
 _RE_LOKASI = re.compile(r"^Lokasi\s*:\s*(.+)", re.MULTILINE)
 _RE_WAKTU = re.compile(r"Waktu Pelaksanaan\s*:\s*(.+)")
-_RE_ALOKASI = re.compile(r"Alokasi (\d{4})\s*:\s*Rp\.\s*([\d\.,]+)")
+_RE_ALOKASI = re.compile(r"Alokasi (\d{4}|Tahun)\s*:\s*Rp\.?\s*([\d\.,]+)")
 _RE_TAHUN_ANGGARAN = re.compile(r"Tahun Anggaran(?:\s+Pergeseran)?\s+(\d{4})")
 
 # Kode rekening: 5 atau 5.1 atau 5.1.02 dll (level 1-7)
@@ -51,7 +51,7 @@ _RE_ITEM_SPEK = re.compile(
 )
 # Jumlah akhir sub kegiatan
 _RE_JUMLAH_SUBKEG = re.compile(
-    r"Jumlah Anggaran Sub Kegiatan (?:Sebelum|Sesudah)\s*:\s*([\d\.]+,\d{2})"
+    r"Jumlah Anggaran Sub Kegiatan(?:\s+(?:Sebelum|Sesudah)\s*:)?\s*Rp?([\d\.]+,\d{2})"
 )
 
 
@@ -156,6 +156,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
     in_rincian = False  # True setelah baris "Rincian Anggaran Belanja Sub Kegiatan"
     skip_header_lines = 0  # skip baris header tabel rincian
     current_rekening: Optional[dict] = None  # rekening level 6 terakhir
+    current_item_nama: Optional[str] = None  # nama item dari baris [ - ] terakhir
     alokasi_buf: dict = {}
 
     i = 0
@@ -216,28 +217,31 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             if m:
                 current_sk["waktu_pelaksanaan"] = _clean(m.group(1))
 
-            # Alokasi — mungkin muncul beberapa baris
-            for mm in _RE_ALOKASI.finditer(line):
-                tahun_a = mm.group(1)
-                nilai_a = _parse_rp(mm.group(2))
-                alokasi_buf[tahun_a] = nilai_a
+        # ── Alokasi — di luar blok current_sk agar tertangkap meski muncul sebelum header SK ──
+        for mm in _RE_ALOKASI.finditer(line):
+            tahun_a = mm.group(1)
+            nilai_a = _parse_rp(mm.group(2))
+            alokasi_buf[tahun_a] = nilai_a
 
         # ── Deteksi masuk ke bagian rincian ───────────────────────────────────
-        if "Rincian Anggaran Belanja Sub Kegiatan" in line and current_sk is not None:
+        _trigger_rincian = (
+            "Rincian Anggaran Belanja Sub Kegiatan" in line
+            or "Rincian Perhitungan Jumlah" in line
+        )
+        if _trigger_rincian and current_sk is not None and not in_rincian:
             in_rincian = True
-            skip_header_lines = 4  # skip baris "Satuan Kerja...", "Rincian Perhitungan...", dll
+            skip_header_lines = 1 if "Rincian Perhitungan Jumlah" in line else 4
 
             # Assign alokasi dari buf ke sub kegiatan
             tahun_dok = result["meta"]["tahun_anggaran"] or "2024"
-            tahun_prev = str(int(tahun_dok) - 1)
-            tahun_next = str(int(tahun_dok) + 1)
             sebelum = alokasi_buf.get(tahun_dok, 0.0)
-            sesudah = alokasi_buf.get(tahun_dok, 0.0)
-            # Jika ada dua nilai berbeda (pergeseran), ambil dari Alokasi X sesudah
-            # PDF ini duplicate "Sesudah" di kolom kanan tapi Alokasi label sama
+            # Format baru: alokasi_buf pakai key "Tahun" jika tidak ada tahun eksplisit
+            if sebelum == 0.0:
+                sebelum = alokasi_buf.get("Tahun", 0.0)
+            sesudah = sebelum
             current_sk["alokasi_sebelum"] = sebelum
             current_sk["alokasi_sesudah"] = sesudah
-            current_sk["selisih"] = sesudah - sebelum
+            current_sk["selisih"] = 0.0
 
         # ── Parse baris dalam tabel rincian ───────────────────────────────────
         if in_rincian and current_sk is not None:
@@ -306,8 +310,42 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                     "sumber_dana_item": None,
                 }
                 current_sk["items"].append(item)
+                current_item_nama = None
 
                 # Simpan rekening level 6 sebagai parent item spesifikasi
+                if len(kode.split(".")) >= 6:
+                    current_rekening = item
+                i += 1
+                continue
+
+            # Format 1-kolom: "5.x.x Uraian Rp1.234.567,00" (tanpa kolom sebelum/selisih)
+            m_rek1 = re.match(
+                r"^(5(?:\.\d+){1,6})\s+(.+?)\s+Rp([\d\.]+,\d{2})\s*$",
+                line
+            )
+            if m_rek1:
+                kode = m_rek1.group(1)
+                uraian = _clean(m_rek1.group(2))
+                jumlah = _parse_rp(m_rek1.group(3))
+
+                item = {
+                    "tipe": "rekening",
+                    "kode_rekening": kode,
+                    "level": len(kode.split(".")),
+                    "uraian": uraian,
+                    "koefisien": None,
+                    "satuan": None,
+                    "harga_sebelum": None,
+                    "jumlah_sebelum": jumlah,
+                    "harga_sesudah": None,
+                    "jumlah_sesudah": jumlah,
+                    "selisih": 0.0,
+                    "spesifikasi": None,
+                    "sumber_dana_item": None,
+                }
+                current_sk["items"].append(item)
+                current_item_nama = None
+
                 if len(kode.split(".")) >= 6:
                     current_rekening = item
                 i += 1
@@ -319,14 +357,46 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                 continue
 
             # Baris sumber dana item
-            if line.startswith("Sumber Dana :"):
+            if line.startswith("Sumber Dana :") or line.startswith("Sumber Dana:"):
                 if current_rekening is not None:
                     current_rekening["sumber_dana_item"] = _clean(line.split(":", 1)[1])
                 i += 1
                 continue
 
-            # Baris [ - ] Disediakan untuk
+            # Baris [ - ] nama item — simpan nama untuk baris koef berikutnya
             if line.startswith("[ - ]"):
+                current_item_nama = _clean(line[5:].strip())
+                # Hapus jumlah Rp di akhir jika ada (format: "[ - ] Nama Item Rp1.234,00")
+                current_item_nama = re.sub(r"\s+Rp[\d\.,]+\s*$", "", current_item_nama).strip()
+                i += 1
+                continue
+
+            # Baris item koef 1-kolom: "100 Buah Buah Rp12.700,00 0% Rp1.270.000,00"
+            m_koef1 = re.match(
+                r"^([\d\s\.]+)\s+(\S+)\s+\S+\s+Rp([\d\.]+,\d{2})\s+\d+%\s+Rp([\d\.]+,\d{2})\s*$",
+                line
+            )
+            if m_koef1 and current_sk is not None:
+                koef = m_koef1.group(1).strip()
+                satuan = m_koef1.group(2)
+                harga = _parse_rp(m_koef1.group(3))
+                jumlah = _parse_rp(m_koef1.group(4))
+                parent_kode = current_rekening["kode_rekening"] if current_rekening else None
+                current_sk["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": parent_kode,
+                    "level": None,
+                    "uraian": current_item_nama or "—",
+                    "koefisien": koef,
+                    "satuan": satuan,
+                    "harga_sebelum": harga,
+                    "jumlah_sebelum": jumlah,
+                    "harga_sesudah": harga,
+                    "jumlah_sesudah": jumlah,
+                    "selisih": 0.0,
+                    "spesifikasi": None,
+                    "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
+                })
                 i += 1
                 continue
 
