@@ -916,7 +916,7 @@ with tab0:
                     _baru = _diff["baru"]
                     _sama = _diff["sama"]
 
-                    if not _berubah and not _baru:
+                    if not _berubah and not _baru and not _diff.get("hilang"):
                         st.success("✅ Tidak ada update — semua dokumen PPK masih sama.")
                     else:
                         if _berubah:
@@ -927,6 +927,11 @@ with tab0:
                             st.info(f"🆕 {len(_baru)} file baru (belum ada di snapshot awal):")
                             for _itm2 in _baru:
                                 st.markdown(f"- **[{_itm2['jenis']}]** `{_itm2['nama']}` *(upload: {_itm2['tanggal']})*")
+                        _hilang = _diff.get("hilang", [])
+                        if _hilang:
+                            st.error(f"🗑 {len(_hilang)} file dihapus dari SPSE:")
+                            for _itm3 in _hilang:
+                                st.markdown(f"- **[{_itm3['jenis']}]** `{_itm3['nama']}` *(upload: {_itm3['tanggal']})*")
 
                         st.session_state["_diff_update_dok"] = _diff
                         st.session_state["_diff_folder_paket"] = _target_path

@@ -133,6 +133,7 @@ def cek_update_dokumen(kode_tender: str) -> dict:
 
     berubah = []
     baru = []
+    hilang_global = []
     sama = []
 
     for key in ENDPOINTS:
@@ -170,9 +171,17 @@ def cek_update_dokumen(kode_tender: str) -> dict:
                         "url_dl": f_baru["url_dl"],
                     })
                     ada_perubahan = True
+            for f_hilang in hilang_list[len(masuk_list):]:
+                hilang_global.append({"jenis": key, "nama": f_hilang["nama"], "tanggal": f_hilang["tanggal"], "url_dl": f_hilang.get("url_dl", "")})
+                ada_perubahan = True
             for f_baru in masuk_list[len(hilang_list):]:
                 baru.append({"jenis": key, **f_baru})
                 ada_perubahan = True
+
+        elif hilang and not masuk:
+            for k in hilang:
+                hilang_global.append({"jenis": key, **lama_keys[k]})
+            ada_perubahan = True
 
         elif masuk and not hilang:
             # Tambahan murni (endpoint sebelumnya kosong atau bertambah)
@@ -186,6 +195,7 @@ def cek_update_dokumen(kode_tender: str) -> dict:
     return {
         "berubah": berubah,
         "baru": baru,
+        "hilang": hilang_global,
         "sama": sama,
         "snapshot_baru": snapshot_baru,
     }
