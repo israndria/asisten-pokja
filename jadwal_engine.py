@@ -128,6 +128,66 @@ def geser_ke_jam_kerja(dt: datetime) -> datetime:
     return dt
 
 
+def geser_hindari_jumat(dt: datetime) -> datetime:
+    """Jika Jumat, geser mundur ke Kamis. Jika Kamis libur, geser maju ke Senin (via geser_ke_hari_kerja)."""
+    if dt.weekday() == 4:  # Jumat
+        kamis = dt - timedelta(days=1)
+        if is_hari_kerja(kamis):
+            return kamis
+        # Kamis libur → maju ke Senin (atau hari kerja berikutnya)
+        senin = dt + timedelta(days=3)
+        return geser_ke_hari_kerja(senin)
+    return dt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: Hitung T3 Pemberian Penjelasan
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hitung_t3(t1_mulai: datetime) -> datetime:
+    """
+    Hitung tanggal Pemberian Penjelasan (T3) berdasarkan hari tayang (T1).
+
+    Senin  (+3=Kamis): Kamis libur→Rabu; Rabu+Kamis libur→Jumat; semua libur→maju
+    Selasa (+3=Jumat): Jumat hari kerja→Kamis (diblok mundur); Jumat libur→Kamis;
+                       Kamis+Jumat libur→Senin
+    Rabu   (+2=Jumat): Jumat hari kerja→Jumat; Jumat libur→maju (Senin, dst)
+    Kamis/Jumat: geser_ke_hari_kerja maju biasa dari +3
+    """
+    jam = {"hour": JAM_KERJA_MULAI, "minute": 0, "second": 0, "microsecond": 0}
+    hari_tayang = t1_mulai.weekday()  # 0=Sen, 1=Sel, 2=Rab, 3=Kam, 4=Jum
+
+    if hari_tayang == 0:  # Senin → target Kamis
+        kamis = (t1_mulai + timedelta(days=3)).replace(**jam)
+        if is_hari_kerja(kamis):
+            return kamis
+        rabu = (t1_mulai + timedelta(days=2)).replace(**jam)
+        if is_hari_kerja(rabu):
+            return rabu
+        # Rabu+Kamis libur → Jumat atau maju
+        jumat = (t1_mulai + timedelta(days=4)).replace(**jam)
+        return geser_ke_hari_kerja(jumat)
+
+    elif hari_tayang == 1:  # Selasa → target Jumat, tapi diblok ke Kamis
+        jumat = (t1_mulai + timedelta(days=3)).replace(**jam)
+        kamis = (t1_mulai + timedelta(days=2)).replace(**jam)
+        if is_hari_kerja(kamis):
+            return kamis  # Jumat diblok → Kamis (libur atau tidak)
+        # Kamis libur → Senin maju
+        senin = (t1_mulai + timedelta(days=6)).replace(**jam)
+        return geser_ke_hari_kerja(senin)
+
+    elif hari_tayang == 2:  # Rabu → target Jumat (+2)
+        jumat = (t1_mulai + timedelta(days=2)).replace(**jam)
+        if is_hari_kerja(jumat):
+            return jumat
+        # Jumat libur → maju (Senin, dst)
+        return geser_ke_hari_kerja((t1_mulai + timedelta(days=3)).replace(**jam))
+
+    else:  # Kamis/Jumat → +3, geser maju biasa
+        return geser_ke_hari_kerja((t1_mulai + timedelta(days=3)).replace(**jam))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Hitung 12 Tahapan Jadwal
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,13 +208,13 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
     hasil.append({"nama": TAHAPAN[0]["nama"], "mulai": t1_mulai, "selesai": t1_selesai})
 
     # ── Hitung T3 mulai (dibutuhkan untuk T4) ────────────────────────────────
-    # T3 mulai = T1 mulai + 3 hari kalender → hari kerja jam 08:00.
-    # (7/8 paket = +3 hari, 1 paket = +2 hari karena berbeda hari input)
-    t3_hari = t1_mulai + timedelta(days=3)
-    t3_mulai = geser_ke_hari_kerja(
-        t3_hari.replace(hour=JAM_KERJA_MULAI, minute=0, second=0, microsecond=0),
-        jam_mulai=JAM_KERJA_MULAI
-    )
+    # Rule per hari tayang:
+    #   Senin  (+3=Kamis): Kamis libur→Rabu, Rabu+Kamis libur→Jumat, semua libur→Senin
+    #   Selasa (+3=Jumat): Jumat hari kerja→Kamis (diblok), Jumat libur→Kamis,
+    #                      Kamis+Jumat libur→Senin
+    #   Rabu   (+2=Jumat): Jumat hari kerja→Jumat, Jumat libur→Senin, dst maju
+    #   Kamis/Jumat (+3=Minggu/Senin): geser_ke_hari_kerja maju biasa
+    t3_mulai = _hitung_t3(t1_mulai)
     t3_selesai = t3_mulai + timedelta(hours=2)
 
     # ── T4 mulai = T3 selesai + 1 jam (pola dari data real) ──────────────────
@@ -195,16 +255,19 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
 
     # ── Tahap 6: Evaluasi ─────────────────────────────────────────────────────
     # Mulai: T5 mulai + 1 menit.
-    # Selesai: +3 hari kalender, diakhiri hari kerja jam 16:00.
+    # Selesai: +3 hari kalender, hari kerja jam 16:00.
+    # Rule tambahan: hindari Jumat — mundur ke Kamis, jika Kamis libur maju ke Senin.
     t6_mulai = t5_mulai + timedelta(minutes=1)
     t6_selesai_kandidat = t6_mulai + timedelta(days=3)
-    t6_selesai = geser_ke_hari_kerja(t6_selesai_kandidat)
-    t6_selesai = t6_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
+    t6_selesai_hari = geser_ke_hari_kerja(t6_selesai_kandidat)
+    t6_selesai_hari = geser_hindari_jumat(t6_selesai_hari)
+    t6_selesai = t6_selesai_hari.replace(hour=16, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[5]["nama"], "mulai": t6_mulai, "selesai": t6_selesai})
 
     # ── Tahap 7: Pembuktian Kualifikasi ───────────────────────────────────────
-    # Mulai: hari SAMA dengan T6 selesai, jam 09:00 (7/8 paket konsisten).
-    # T7 overlap T6 adalah normal (T6 selesai 16:00, T7 09:00 hari yang sama).
+    # Mulai: hari SAMA dengan T6 selesai, jam 09:00.
+    # T7 overlap T6 normal (T6 selesai 16:00, T7 09:00 hari sama).
+    # T6 sudah dijamin bukan Jumat, jadi T7 tidak perlu cek Jumat lagi.
     t7_mulai = t6_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
     if not is_hari_kerja(t7_mulai):
         t7_mulai = geser_ke_hari_kerja(t7_mulai, jam_mulai=9)
