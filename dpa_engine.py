@@ -469,12 +469,254 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
     if current_sk is not None:
         result["subkegiatan"].append(current_sk)
 
+    # Deteksi format SIPD Ringkasan Paket — teks bisa dibaca tapi struktur berbeda
+    _all_empty = all(len(sk["items"]) == 0 for sk in result["subkegiatan"]) if result["subkegiatan"] else True
+    if _all_empty and "RINGKASAN PAKET" in full_text.upper():
+        sipd_result = parse_sipd_ringkasan(all_lines, nama_file)
+        if sipd_result["subkegiatan"] and any(len(sk["items"]) > 0 for sk in sipd_result["subkegiatan"]):
+            return sipd_result
+
     # Fallback: jika teks pdfplumber tidak menghasilkan sub kegiatan (font corrupt SIPD),
     # coba OCR — PDF dengan embedded font rusak tetap punya chars > 0
     if not result["subkegiatan"]:
         ocr_result = parse_dpa_scan_pdf(file_bytes, nama_file)
         ocr_result["meta"]["sumber"] = "ocr_fallback"
         return ocr_result
+
+    return result
+
+
+def parse_sipd_ringkasan(all_lines: list[str], nama_file: str = "") -> dict:
+    """
+    Parser format SIPD 'Ringkasan Paket / Pengelompokan Belanja'.
+    Struktur:
+      Sub Kegiatan : KODE Nama
+      Jumlah YYYY  : Rp. xxx
+      [ # ] Nama Paket
+      Rp. xxx
+      Sumber Dana : ...
+      [ - ] Uraian Item Rp. xxx
+    """
+    _RE_RP = re.compile(r"Rp\.?\s*([\d\.]+,\d{2})")
+    _RE_JUMLAH_TAHUN = re.compile(r"Jumlah\s+(\d{4})\s*:\s*Rp\.?\s*([\d\.]+,\d{2})")
+    _RE_ITEM_INLINE = re.compile(r"^\[\s*-\s*\]\s*(.+?)\s+Rp\.?\s*([\d\.]+,\d{2})\s*$")
+    _RE_ITEM_MULTILINE = re.compile(r"^\[\s*-\s*\]\s*(.+)")
+
+    result = {
+        "meta": {
+            "nama_file": nama_file,
+            "satker": "", "tahun_anggaran": "",
+            "urusan": "", "bidang_urusan": "", "unit_organisasi": "",
+            "sumber": "sipd_ringkasan",
+        },
+        "subkegiatan": [],
+    }
+
+    full_text = "\n".join(all_lines)
+
+    # Meta global
+    m = _RE_URUSAN.search(full_text)
+    if m: result["meta"]["urusan"] = _clean(m.group(1))
+    m = _RE_BIDANG.search(full_text)
+    if m: result["meta"]["bidang_urusan"] = _clean(m.group(1))
+    m = _RE_UNIT_ORG.search(full_text)
+    if m:
+        val = _clean(m.group(1))
+        result["meta"]["unit_organisasi"] = val
+        parts = val.split()
+        result["meta"]["satker"] = " ".join(parts[1:]) if parts and re.match(r"[\d\.]+", parts[0]) else val
+
+    # Ambil tahun dari "Pemerintahan ... Tahun Anggaran YYYY" atau "Jumlah YYYY"
+    m = re.search(r"Tahun Anggaran\s+(\d{4})", full_text)
+    if m: result["meta"]["tahun_anggaran"] = m.group(1)
+
+    current_sk: Optional[dict] = None
+    current_paket: Optional[str] = None
+    current_sumber: Optional[str] = None
+    pending_rp: Optional[float] = None  # nilai Rp. setelah baris [ # ]
+    pending_item_nama: Optional[str] = None  # nama [ - ] multiline yang belum ada Rp
+
+    def _new_sk(kode, nama):
+        return {
+            "subkegiatan_kode": kode,
+            "subkegiatan_nama": nama,
+            "program_kode": "", "program_nama": "",
+            "kegiatan_kode": "", "kegiatan_nama": "",
+            "sumber_pendanaan": "",
+            "lokasi": "", "waktu_pelaksanaan": "",
+            "alokasi_sebelum": 0.0, "alokasi_sesudah": 0.0, "selisih": 0.0,
+            "items": [],
+        }
+
+    tahun_dok = result["meta"]["tahun_anggaran"] or "2026"
+
+    i = 0
+    while i < len(all_lines):
+        line = all_lines[i].strip()
+
+        # Program / Kegiatan
+        if not current_sk:
+            m = _RE_PROGRAM.match(line)
+            if m and not line.startswith("Sub"):
+                pass  # simpan jika perlu
+            m = re.match(r"Program\s*:\s*([^\s]+)\s+(.+)", line)
+            if m:
+                _prog_kode = m.group(1).strip()
+                _prog_nama = _clean(m.group(2))
+            m = re.match(r"Kegiatan\s*:\s*([^\s]+)\s+(.+)", line)
+            if m and not line.startswith("Sub"):
+                _keg_kode = m.group(1).strip()
+                _keg_nama = _clean(m.group(2))
+
+        # Header Sub Kegiatan — format "Sub Kegiatan : KODE Nama" (spasi sebagai separator)
+        m_sk = _RE_SUBKEG_HEADER.match(line)
+        if not m_sk:
+            m_sk = re.match(r"Sub\s+Kegiatan\s*[:\s]+([0-9][0-9\.]+)\s+(.+)", line, re.I)
+        if m_sk:
+            if current_sk is not None:
+                result["subkegiatan"].append(current_sk)
+            current_sk = _new_sk(m_sk.group(1).strip(), _clean(m_sk.group(2)))
+            current_paket = None
+            pending_rp = None
+            pending_item_nama = None
+            i += 1
+            continue
+
+        if current_sk is None:
+            # Alokasi dari "Jumlah YYYY : Rp. xxx" di header (sebelum SK terdeteksi)
+            # — ambil saja, assign ke SK pertama nanti
+            i += 1
+            continue
+
+        # Alokasi "Jumlah YYYY : Rp. xxx"
+        m_j = _RE_JUMLAH_TAHUN.search(line)
+        if m_j and m_j.group(1) == tahun_dok:
+            current_sk["alokasi_sesudah"] = _parse_rp(m_j.group(2))
+            current_sk["alokasi_sebelum"] = current_sk["alokasi_sesudah"]
+            i += 1
+            continue
+
+        # Sumber pendanaan global SK
+        if line.startswith("Sumber Pendanaan :") and not current_sk["sumber_pendanaan"]:
+            current_sk["sumber_pendanaan"] = _clean(line.split(":", 1)[1])
+            i += 1
+            continue
+
+        # Lokasi / Waktu
+        m_lok = _RE_LOKASI.match(line)
+        if m_lok and not current_sk["lokasi"]:
+            current_sk["lokasi"] = _clean(m_lok.group(1))
+            i += 1
+            continue
+        m_wkt = _RE_WAKTU.match(line)
+        if m_wkt:
+            current_sk["waktu_pelaksanaan"] = _clean(m_wkt.group(1))
+            i += 1
+            continue
+
+        # [ # ] Nama Paket — bisa inline "[ # ] Nama\nRp. xxx" atau "[ # ] Nama Rp. xxx"
+        if re.match(r"^\[\s*#\s*\]", line):
+            raw = re.sub(r"^\[\s*#\s*\]\s*", "", line)
+            # Cek apakah Rp ada di baris ini
+            m_rp = _RE_RP.search(raw)
+            if m_rp:
+                current_paket = re.sub(r"\s+Rp\.?\s*[\d\.]+,\d{2}\s*$", "", raw).strip()
+                pending_rp = _parse_rp(m_rp.group(1))
+            else:
+                current_paket = _clean(raw)
+                pending_rp = None
+            current_sumber = None
+            i += 1
+            continue
+
+        # Baris "Rp. xxx" setelah [ # ] (nilai paket)
+        if pending_rp is None and current_paket is not None:
+            m_rp2 = re.match(r"^Rp\.?\s*([\d\.]+,\d{2})\s*$", line)
+            if m_rp2:
+                pending_rp = _parse_rp(m_rp2.group(1))
+                i += 1
+                continue
+
+        # Sumber Dana item
+        if line.startswith("Sumber Dana :") or line.startswith("Sumber Dana:"):
+            current_sumber = _clean(line.split(":", 1)[1])
+            i += 1
+            continue
+
+        # [ - ] Uraian Item — inline: "[ - ] Nama Rp. xxx" atau multiline
+        if re.match(r"^\[\s*-\s*\]", line):
+            raw_item = re.sub(r"^\[\s*-\s*\]\s*", "", line)
+            m_inline = re.match(r"^(.+?)\s+Rp\.?\s*([\d\.]+,\d{2})\s*$", raw_item)
+            if m_inline:
+                uraian = _clean(m_inline.group(1))
+                jumlah = _parse_rp(m_inline.group(2))
+                current_sk["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": None,
+                    "level": None,
+                    "uraian": uraian,
+                    "koefisien": None,
+                    "satuan": None,
+                    "harga_sebelum": None,
+                    "jumlah_sebelum": jumlah,
+                    "harga_sesudah": None,
+                    "jumlah_sesudah": jumlah,
+                    "selisih": 0.0,
+                    "spesifikasi": None,
+                    "sumber_dana_item": current_sumber,
+                    "nama_paket": current_paket,
+                })
+                pending_item_nama = None
+            else:
+                # Multiline — nama di baris ini, lanjut ke baris berikutnya
+                pending_item_nama = _clean(raw_item)
+            i += 1
+            continue
+
+        # Lanjutan multiline [ - ]: baris dengan Rp
+        if pending_item_nama is not None:
+            m_rp3 = re.match(r"^(.+?)\s+Rp\.?\s*([\d\.]+,\d{2})\s*$", line)
+            if m_rp3:
+                uraian = pending_item_nama + " " + _clean(m_rp3.group(1))
+                jumlah = _parse_rp(m_rp3.group(2))
+                current_sk["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": None,
+                    "level": None,
+                    "uraian": uraian.strip(),
+                    "koefisien": None,
+                    "satuan": None,
+                    "harga_sebelum": None,
+                    "jumlah_sebelum": jumlah,
+                    "harga_sesudah": None,
+                    "jumlah_sesudah": jumlah,
+                    "selisih": 0.0,
+                    "spesifikasi": None,
+                    "sumber_dana_item": current_sumber,
+                    "nama_paket": current_paket,
+                })
+                pending_item_nama = None
+            else:
+                # Masih lanjutan nama
+                pending_item_nama += " " + line
+            i += 1
+            continue
+
+        i += 1
+
+    if current_sk is not None:
+        result["subkegiatan"].append(current_sk)
+
+    # Fix alokasi dari "Jumlah YYYY" di header (sebelum SK loop, ambil dari full_text)
+    for sk in result["subkegiatan"]:
+        if sk["alokasi_sesudah"] == 0.0:
+            m_j2 = _RE_JUMLAH_TAHUN.search(full_text)
+            while m_j2:
+                if m_j2.group(1) == tahun_dok:
+                    sk["alokasi_sesudah"] = _parse_rp(m_j2.group(2))
+                    sk["alokasi_sebelum"] = sk["alokasi_sesudah"]
+                    break
+                m_j2 = _RE_JUMLAH_TAHUN.search(full_text, m_j2.end())
 
     return result
 
