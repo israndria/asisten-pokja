@@ -30,23 +30,9 @@ def _headers(referer: str = "") -> dict:
 
 
 def _get_cookies() -> str:
-    """Ambil cookie SPSE via Playwright di thread terpisah (isolasi dari event loop Streamlit)."""
-    import concurrent.futures, asyncio
-
-    async def _fetch():
-        from playwright.async_api import async_playwright
-        async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
-            ctx = browser.contexts[0]
-            cookies = await ctx.cookies(["https://spse.inaproc.id"])
-            return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-
-    def _run_in_thread():
-        return asyncio.run(_fetch())
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_run_in_thread)
-        return future.result(timeout=15)
+    """Ambil cookie SPSE via spse_browser (ProactorEventLoop dedicated thread)."""
+    from spse_browser import get_spse_cookies
+    return get_spse_cookies()
 
 
 def fetch_dokumen_endpoint(kode_tender: str, jenis: str, cookie_str: str) -> list[dict]:
@@ -210,104 +196,102 @@ def download_update_dokumen(
     progress_cb=None,
 ) -> dict:
     """
-    Download file update dari SPSE:
-    - items_berubah: replace file lama di root, simpan baru dengan _REV{n} di File Baru/
-    - items_baru: simpan di File Baru/ saja (file benar-benar baru)
-
+    Download file update dari SPSE via requests (tanpa Playwright).
+    - items_berubah: simpan _REV{n} di File Baru/ + root, hapus file lama di root
+    - items_baru: simpan di File Baru/ saja
     Return: {"ok": [...], "error": [...]}
     """
     import urllib.parse
-    from playwright.sync_api import sync_playwright
 
     def log(msg):
         if progress_cb:
             progress_cb(msg)
 
+    cookie_str = _get_cookies()
     folder_baru = os.path.join(folder_paket, "File Baru")
     os.makedirs(folder_baru, exist_ok=True)
-
     hasil = {"ok": [], "error": []}
 
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
-        ctx = browser.contexts[0]
-        page = ctx.new_page()
+    def _download_file(url_dl: str, dst_path: str) -> str | None:
+        hdrs = {**_headers(BASE_URL), "Cookie": cookie_str}
+        r = requests.get(url_dl, headers=hdrs, timeout=60, stream=True, allow_redirects=True)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        # Ambil nama file dari Content-Disposition jika ada
+        cd = r.headers.get("Content-Disposition", "")
+        fname = ""
+        if "filename" in cd:
+            fname = re.findall(r'filename[^;=\n]*=([^;\n]*)', cd)
+            fname = fname[0].strip().strip('"\'') if fname else ""
+            fname = urllib.parse.unquote_plus(fname)
+        if fname:
+            clean = re.sub(r'[<>:"/\\|?*]', "_", fname).strip()
+            dst_path = os.path.join(os.path.dirname(dst_path), clean)
+        with open(dst_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                f.write(chunk)
+        return dst_path
 
-        def _download_file(url_dl: str, dst_path: str) -> str | None:
-            try:
-                with page.expect_download(timeout=30000) as dl_info:
-                    page.goto(url_dl, wait_until="commit")
-                dl = dl_info.value
-                server_fname = urllib.parse.unquote_plus(dl.suggested_filename or "")
-                if server_fname:
-                    clean = re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip()
-                    dst_path = os.path.join(os.path.dirname(dst_path), clean)
-                tmp = dl.path()
-                if tmp:
-                    shutil.copy2(tmp, dst_path)
-                    return dst_path
-                return None
-            except Exception as e:
-                raise e
+    # ── File BERUBAH ─────────────────────────────────────────────
+    for item in items_berubah:
+        jenis = item["jenis"]
+        nama_lama = item["nama_lama"]
+        nama_baru_raw = item["nama_baru"]
+        url_dl = item["url_dl"]
 
-        # ── File BERUBAH (replace endpoint) ─────────────────────────
-        for item in items_berubah:
-            jenis = item["jenis"]
-            nama_lama = item["nama_lama"]
-            nama_baru_raw = item["nama_baru"]
-            url_dl = item["url_dl"]
+        # Arsip REV di File Baru/
+        n_rev = _hitung_rev(folder_baru, nama_lama)
+        ext = os.path.splitext(nama_baru_raw)[1] or os.path.splitext(nama_lama)[1]
+        stem_lama = os.path.splitext(nama_lama)[0]
+        nama_rev = f"{stem_lama}_REV{n_rev}{ext}"
+        dst_arsip = os.path.join(folder_baru, nama_rev)
 
-            # Hitung nomor REV — berapa kali sudah diupdate
-            n_rev = _hitung_rev(folder_baru, nama_lama)
-            ext = os.path.splitext(nama_baru_raw)[1] or os.path.splitext(nama_lama)[1]
-            stem_lama = os.path.splitext(nama_lama)[0]
-            nama_rev = f"{stem_lama}_REV{n_rev}{ext}"
-
-            dst_file_baru = os.path.join(folder_baru, nama_rev)
-            dst_root = os.path.join(folder_paket, nama_rev)
-
-            log(f"⬇️ [{jenis}] {nama_lama} → {nama_rev}")
-            try:
-                downloaded = _download_file(url_dl, dst_file_baru)
-                if downloaded:
-                    # Juga simpan ke root (replace file lama)
-                    shutil.copy2(downloaded, os.path.join(folder_paket, os.path.basename(downloaded)))
-                    # Hapus file LAMA di root jika masih ada
-                    path_lama = os.path.join(folder_paket, nama_lama)
-                    if os.path.exists(path_lama):
-                        os.remove(path_lama)
-                        log(f"  🗑 File lama dihapus: {nama_lama}")
-                    log(f"  ✅ Tersimpan: {os.path.basename(downloaded)}")
-                    hasil["ok"].append(downloaded)
-                else:
-                    hasil["error"].append(f"{jenis}: download gagal (no tmp)")
-            except Exception as e:
-                log(f"  ❌ Error: {e}")
-                hasil["error"].append(f"{jenis}/{nama_rev}: {e}")
-
-        # ── File BARU MURNI ──────────────────────────────────────────
-        for item in items_baru:
-            jenis = item["jenis"]
-            nama = item["nama"]
-            url_dl = item["url_dl"]
-            dst = os.path.join(folder_baru, nama)
-
-            log(f"🆕 [{jenis}] File baru: {nama}")
-            try:
-                downloaded = _download_file(url_dl, dst)
-                if downloaded:
-                    log(f"  ✅ Tersimpan di File Baru/: {os.path.basename(downloaded)}")
-                    hasil["ok"].append(downloaded)
-                else:
-                    hasil["error"].append(f"{jenis}/{nama}: download gagal")
-            except Exception as e:
-                log(f"  ❌ Error: {e}")
-                hasil["error"].append(f"{jenis}/{nama}: {e}")
-
+        log(f"⬇️ [{jenis}] {nama_lama} → {nama_baru_raw}")
         try:
-            page.close()
-        except Exception:
-            pass
+            # Download ke File Baru/ dengan nama REV (arsip)
+            downloaded = _download_file(url_dl, dst_arsip)
+            if downloaded:
+                # Copy ke root dengan nama baru asli (untuk parse_reviu)
+                nama_root = re.sub(r'[<>:"/\\|?*]', "_", nama_baru_raw).strip()
+                dst_root = os.path.join(folder_paket, nama_root)
+                shutil.copy2(downloaded, dst_root)
+                # Pindahkan file lama ke File Lama/
+                path_lama = os.path.join(folder_paket, nama_lama)
+                if os.path.exists(path_lama):
+                    folder_lama_dir = os.path.join(folder_paket, "File Lama")
+                    os.makedirs(folder_lama_dir, exist_ok=True)
+                    shutil.move(path_lama, os.path.join(folder_lama_dir, nama_lama))
+                    log(f"  📦 File lama diarsip: File Lama/{nama_lama}")
+                log(f"  ✅ Root: {nama_root} | Arsip: {nama_rev}")
+                hasil["ok"].append(dst_root)
+            else:
+                hasil["error"].append(f"{jenis}: download gagal")
+        except Exception as e:
+            log(f"  ❌ Error: {e}")
+            hasil["error"].append(f"{jenis}/{nama_baru_raw}: {e}")
+
+    # ── File BARU MURNI ──────────────────────────────────────────
+    for item in items_baru:
+        jenis = item["jenis"]
+        nama = item["nama"]
+        url_dl = item["url_dl"]
+
+        log(f"🆕 [{jenis}] File baru: {nama}")
+        try:
+            # Download ke File Baru/ sekaligus copy ke root
+            dst_arsip2 = os.path.join(folder_baru, nama)
+            downloaded = _download_file(url_dl, dst_arsip2)
+            if downloaded:
+                nama_root2 = re.sub(r'[<>:"/\\|?*]', "_", nama).strip()
+                dst_root2 = os.path.join(folder_paket, nama_root2)
+                shutil.copy2(downloaded, dst_root2)
+                log(f"  ✅ Root: {nama_root2} | Arsip di File Baru/")
+                hasil["ok"].append(dst_root2)
+            else:
+                hasil["error"].append(f"{jenis}/{nama}: download gagal")
+        except Exception as e:
+            log(f"  ❌ Error: {e}")
+            hasil["error"].append(f"{jenis}/{nama}: {e}")
 
     return hasil
 
