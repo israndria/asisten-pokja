@@ -1,8 +1,10 @@
 """
 Mode Pengadaan Langsung — Tab 0: Draft Paket PL
 Input manual paket PL (JKK atau PK), simpan ke Supabase tabel draft_paket_pl.
+Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 """
 
+import re
 from datetime import datetime, timezone
 from config import sb as _sb
 
@@ -70,3 +72,109 @@ def tandai_folder_dibuat(kode_paket: str) -> dict:
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ============================================================
+# Scrape otomatis dari SPSE
+# ============================================================
+
+def _parse_hps_dari_edit(html: str) -> str:
+    """Ekstrak nilai HPS dari halaman nontender/{kode}/edit."""
+    import re
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    teks = soup.get_text(" ", strip=True)
+    m = re.search(r"Nilai HPS\s*Rp\.\s*([\d.,]+)", teks)
+    return m.group(1) if m else ""
+
+
+def _parse_jenis_kontrak_dari_edit(html: str) -> str:
+    """Ekstrak Jenis Kontrak dari halaman nontender/{kode}/edit."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    teks = soup.get_text(" ", strip=True)
+    m = re.search(r"Jenis Kontrak\s+([\w\s]+?)(?:Dokumen|Jadwal|Survey|\Z)", teks)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
+    """
+    Scrape daftar paket non-tender dari SPSE /dt/paketpp,
+    fetch detail tiap paket dari /nontender/{kode}/edit,
+    upsert ke Supabase draft_paket_pl.
+
+    cookie_str : hasil get_spse_cookies()
+    base_url   : SPSE_BASE_URL (diakhiri /)
+    log_fn     : callable(str) untuk log progres, opsional
+    Returns    : {"ok": True, "scraped": N, "errors": [...]}
+    """
+    import requests
+
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    headers = {"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"}
+
+    # 1. Fetch daftar paket
+    try:
+        resp = requests.get(f"{base_url}dt/paketpp", headers=headers, timeout=15)
+        rows = resp.json().get("data", [])
+    except Exception as e:
+        return {"ok": False, "scraped": 0, "errors": [f"Gagal fetch dt/paketpp: {e}"]}
+
+    log(f"Ditemukan {len(rows)} paket di SPSE")
+    errors = []
+    scraped = 0
+
+    for row in rows:
+        id_nontender = str(row[0])   # ID internal
+        nama_paket   = row[1]
+        status_spse  = row[2]
+        satker       = row[4]
+        kode_paket   = str(row[5])   # kode resmi non-tender
+
+        log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
+
+        # 2. Fetch detail dari halaman edit
+        jenis_kontrak = ""
+        hps_str = ""
+        try:
+            r_edit = requests.get(
+                f"{base_url}nontender/{kode_paket}/edit",
+                headers=headers, timeout=15
+            )
+            hps_str = _parse_hps_dari_edit(r_edit.text)
+            jenis_kontrak = _parse_jenis_kontrak_dari_edit(r_edit.text)
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal fetch edit — {e}")
+
+        # 3. Deteksi jenis PL
+        nama_lower = nama_paket.lower()
+        if any(k in nama_lower for k in ["konsultan", "perencanaan", "pengawasan", "supervisi", "manajemen konstruksi"]):
+            jenis_pl = "JKK"
+        else:
+            jenis_pl = "PK"
+
+        data = {
+            "kode_paket":      kode_paket,
+            "id_nontender":    id_nontender,
+            "nama_paket":      nama_paket,
+            "satker":          satker,
+            "nilai_hps":       hps_str,
+            "jenis_pl":        jenis_pl,
+            "jenis_kontrak":   jenis_kontrak,
+            "status":          status_spse.lower() if status_spse else "draft",
+            "diambil_pada":    datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()
+            scraped += 1
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal upsert — {e}")
+
+    log(f"Selesai: {scraped} paket disimpan, {len(errors)} error")
+    return {"ok": True, "scraped": scraped, "errors": errors}
