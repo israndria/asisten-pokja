@@ -1549,20 +1549,39 @@ with tab_setup:
                 disabled=_dp_n_file == 0,
                 use_container_width=True,
             ):
-                st.warning(
-                    "⚠️ **Fitur ini belum aktif.** Endpoint upload Dokumen Pemilihan di SPSE "
-                    "baru bisa dibedah setelah ada paket yang sudah upload BA Reviu dan semua syarat terpenuhi."
-                )
-                for _p in dp_selected:
-                    _ku = _p.get("kode_unik") or "?"
-                    _kp = _p.get("kode_pokja") or "?"
-                    _nomor_auto = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
-                    st.info(
-                        f"**{_pokja_label(_p)[:60]}**  \n"
-                        f"📄 `{_p['_dokpil'].name}`  \n"
-                        f"📋 Nomor BA: `{_nomor_auto}`  \n"
-                        f"📅 Tanggal: {dp_tgl.strftime('%d-%m-%Y')}"
-                    )
+                import dokpil_engine
+                with st.status(f"Mengupload {_dp_n_file} Dokumen Pemilihan...", expanded=True) as status:
+                    sukses_count = 0
+                    for _p in dp_selected:
+                        _kode = str(_p.get("kode", ""))
+                        if not _kode:
+                            st.error(f"❌ Paket {_pokja_label(_p)} tidak memiliki kode tender valid.")
+                            continue
+                            
+                        _ku = _p.get("kode_unik") or "?"
+                        _kp = _p.get("kode_pokja") or "?"
+                        _nomor_auto = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
+                        _tgl_str = dp_tgl.strftime('%d-%m-%Y')
+                        _file = _p['_dokpil']
+                        
+                        st.write(f"⏳ Uploading: `{_file.name}` untuk **{_pokja_label(_p)[:60]}** ...")
+                        try:
+                            _res = dokpil_engine.upload_dokumen_pemilihan(
+                                paket_id=_kode,
+                                nomor_sdp=_nomor_auto,
+                                tanggal_sdp=_tgl_str,
+                                file_bytes=_file.getvalue(),
+                                file_name=_file.name
+                            )
+                            if _res["ok"]:
+                                st.success(f"✅ Berhasil upload: `{_file.name}`")
+                                sukses_count += 1
+                            else:
+                                st.error(f"❌ Gagal upload: `{_file.name}` (Status: {_res['status']})")
+                        except Exception as e:
+                            st.error(f"❌ Error upload `{_file.name}`: {e}")
+                    
+                    status.update(label=f"Selesai! {sukses_count}/{_dp_n_file} dokumen berhasil diupload.", state="complete" if sukses_count == _dp_n_file else "error")
 
     with _sp_col_kanan:
         st.markdown("### 3. Konfigurasi")
@@ -1759,7 +1778,7 @@ with tab_setup:
         )
 
         if sp_push:
-            import tempfile, ldk_pdf_extractor as _ldk_ext
+            import tempfile
 
             # Simpan pilihan SBU terakhir (persisten lintas restart Streamlit)
             _save_sbu_last(
@@ -1784,33 +1803,12 @@ with tab_setup:
 
                 row_result = {"kode": p["kode"], "nama": p["nama"][:50], "ldk": "—", "checklist": "—", "masa_berlaku": "—"}
 
-                # Extract DOKPIL per paket jika diupload
+                # Sesuai instruksi: Seluruh konfigurasi LDK (SBU, Izin, Kinerja)
+                # mutlak menggunakan input manual dari UI Streamlit (Tab 3 Konfigurasi).
+                # Tidak ada lagi parsing otomatis dari file DOKPIL PDF.
                 ijin_rows   = _default_ijin
                 kinerja_txt = _default_kinerja
-                dokpil_file = p.get("_dokpil")
-                if dokpil_file:
-                    try:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                            tmp.write(dokpil_file.getvalue())
-                            tmp_path = tmp.name
-                        ldk_data = _ldk_ext.extract_ldk_from_pdf(tmp_path)
-                        try:
-                            os.unlink(tmp_path)
-                        except:
-                            pass
-                        if ldk_data.extracted:
-                            if ldk_data.izin_usaha_rows:
-                                ijin_rows = [
-                                    {"jenis_izin": r.jenis_izin, "klasifikasi": r.klasifikasi}
-                                    for r in ldk_data.izin_usaha_rows
-                                ]
-                            if ldk_data.kinerja_required and ldk_data.kinerja_penyedia:
-                                kinerja_txt = ldk_data.kinerja_penyedia
-                        row_result["ldk"] = row_result["ldk"]  # akan diisi di bawah
-                    except Exception as e:
-                        row_result["ldk"] = f"❌ Extract DOKPIL gagal: {e}"
-                        hasil_sp.append(row_result)
-                        continue
+                row_result["ldk"] = "—"
 
                 try:
                     r_ldk = ldk_engine.submit_ldk(pid, ijin_usaha_rows=ijin_rows, kinerja_text=kinerja_txt)
