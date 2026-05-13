@@ -4,9 +4,12 @@ Input manual paket PL (JKK atau PK), simpan ke Supabase tabel draft_paket_pl.
 Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 """
 
+import os
 import re
 from datetime import datetime, timezone
 from config import sb as _sb
+
+BASE_URL = "https://spse.inaproc.id/tapinkab"
 
 SATKER_LIST = [
     "Dinas Perdagangan",
@@ -178,3 +181,111 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
     log(f"Selesai: {scraped} paket disimpan, {len(errors)} error")
     return {"ok": True, "scraped": scraped, "errors": errors}
+
+
+# ============================================================
+# Download Dokumen Paket PL dari SPSE
+# ============================================================
+
+def download_dokumen_paket_pl(
+    kode_paket: str,
+    folder_tujuan: str,
+    progress_cb=None,
+) -> dict:
+    """
+    Download dokumen dari endpoint non-tender PP ke folder_tujuan:
+      - /dokumennontender/{kode}/spek  → KAK, Daftar Personil, RAB
+      - /dokumennontender/{kode}/docsskk → Rancangan SPK/SPMK/SSUK/SSKK
+
+    Pakai cookie PP via spse_browser.get_spse_cookies().
+    Return: {"ok": [...], "error": [...]}
+    """
+    import requests
+    import urllib.parse
+    from bs4 import BeautifulSoup
+    import spse_browser
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    os.makedirs(folder_tujuan, exist_ok=True)
+    hasil = {"ok": [], "error": []}
+
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        hasil["error"].append("Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
+        return hasil
+
+    hdrs = {
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0",
+        "Referer": f"{BASE_URL}/admin/pegawai",
+    }
+
+    def _unique_dst(folder, fname):
+        dst = os.path.join(folder, fname)
+        if not os.path.exists(dst):
+            return dst
+        base, ext = os.path.splitext(fname)
+        n = 2
+        while True:
+            candidate = os.path.join(folder, f"{base}_{n}{ext}")
+            if not os.path.exists(candidate):
+                return candidate
+            n += 1
+
+    def _download_links_dari_endpoint(endpoint_url, label):
+        """Scrape link /dl/ dari endpoint, download semua file."""
+        try:
+            r = requests.get(endpoint_url, headers=hdrs, timeout=15)
+            if r.status_code == 403:
+                log(f"  ⏭ {label}: 403 Forbidden")
+                return
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/dl/" not in href:
+                    continue
+                fname_raw = a.get_text(strip=True)
+                fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname_raw, re.IGNORECASE).strip()
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "dokumen"
+                url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+                links.append((url_dl, fname))
+
+            log(f"  📂 {label}: {len(links)} file")
+            for url_dl, fname in links:
+                try:
+                    r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
+                    r_dl.raise_for_status()
+                    cd = r_dl.headers.get("Content-Disposition", "")
+                    m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                    if m_cd:
+                        clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
+                        if clean:
+                            fname = clean
+                    dst = _unique_dst(folder_tujuan, fname)
+                    with open(dst, "wb") as f:
+                        for chunk in r_dl.iter_content(65536):
+                            f.write(chunk)
+                    hasil["ok"].append(dst)
+                    log(f"    ✅ {os.path.basename(dst)}")
+                except Exception as e:
+                    hasil["error"].append(f"{fname}: {e}")
+                    log(f"    ❌ {fname}: {e}")
+        except Exception as e:
+            hasil["error"].append(f"{label}: {e}")
+            log(f"  ❌ {label}: {e}")
+
+    ENDPOINTS = [
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",    "KAK & Personil"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/docsskk", "Rancangan Kontrak"),
+    ]
+
+    for url_ep, label_ep in ENDPOINTS:
+        _download_links_dari_endpoint(url_ep, label_ep)
+
+    log(f"🏁 Download selesai: {len(hasil['ok'])} file OK, {len(hasil['error'])} error")
+    return hasil

@@ -1,6 +1,7 @@
 """Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
+import pathlib
 import re
 import sys
 import threading
@@ -468,70 +469,48 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT
 
-        _PL_PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
-        _PL_SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+        _PL_PY     = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "python" / "python.exe")
+        _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        st.markdown("### Draft Paket Pengadaan Langsung")
-        st.caption("Input manual paket PL (JKK atau PK), simpan ke database, dan buat folder paket.")
-
-        # Load data
         _pl_rows = pl_engine.load_draft_pl()
-
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
-        # ── Kolom Kiri: Form Input Paket Baru ──
+        # ══════════════════════════════════════════════════════
+        # KOLOM KIRI — Serap SPSE + Daftar Paket
+        # ══════════════════════════════════════════════════════
         with _pl_col_kiri:
-            st.markdown("#### 1. Tambah / Edit Paket PL")
+            st.markdown("#### 1. Serap Paket dari SPSE")
+            st.caption("Fetch `/dt/paketpp` (login PP) → scrape HPS + Jenis Kontrak → simpan ke Supabase.")
 
-            with st.form("form_paket_pl", clear_on_submit=True):
-                _f_jenis = st.selectbox("Jenis PL:", ["JKK", "PK"], key="f_jenis_pl")
-                _f_kode  = st.text_input("Kode Paket *", placeholder="Contoh: PL-JKK-001-2026")
-                _f_nama  = st.text_input("Nama Paket *", placeholder="Perencanaan Pembangunan ...")
-                _f_hps   = st.text_input("Nilai HPS", placeholder="85.000.000")
-                _f_pagu  = st.text_input("Nilai Pagu", placeholder="90.000.000")
-                _f_rup   = st.text_input("Kode RUP", placeholder="12345678")
-                _f_mak   = st.text_input("MAK / Kode Akun", placeholder="5.2.02.01.01")
-                _f_satker = st.selectbox("Satker:", pl_engine.SATKER_LIST)
-                _f_satker_manual = ""
-                if _f_satker == "Lainnya":
-                    _f_satker_manual = st.text_input("Nama satker (manual):")
-                _f_ppk   = st.text_input("Nama PPK", placeholder="...")
-                _f_bidang = st.text_input("Bidang Pekerjaan", placeholder="Bina Marga / Cipta Karya / ...")
-                _f_jangka = st.text_input("Jangka Waktu", placeholder="30 hari kalender")
-                _f_sumber = st.text_input("Sumber Anggaran", placeholder="APBD 2026")
-                _f_catatan = st.text_area("Catatan", height=80)
-
-                _f_submit = st.form_submit_button("💾 Simpan Paket", type="primary", use_container_width=True)
-
-            if _f_submit:
-                if not _f_kode or not _f_nama:
-                    st.error("Kode Paket dan Nama Paket wajib diisi.")
+            _pl_serap_btn = st.button("📥 Serap dari SPSE", type="primary", use_container_width=True, key="btn_serap_pl")
+            if _pl_serap_btn:
+                import spse_browser as _sb_pl
+                _pl_cookie = _sb_pl.get_spse_cookies()
+                if not _pl_cookie:
+                    st.error("Cookie SPSE kosong — buka Chrome SPSE dan login sebagai PP.")
                 else:
-                    _satker_val = _f_satker_manual if _f_satker == "Lainnya" else _f_satker
-                    _hasil_simpan = pl_engine.simpan_paket_pl({
-                        "kode_paket": _f_kode.strip(),
-                        "jenis_pl": _f_jenis,
-                        "nama_paket": _f_nama.strip(),
-                        "nilai_hps": _f_hps.strip(),
-                        "nilai_pagu": _f_pagu.strip(),
-                        "kode_rup": _f_rup.strip(),
-                        "mak": _f_mak.strip(),
-                        "satker": _satker_val.strip(),
-                        "nama_ppk": _f_ppk.strip(),
-                        "bidang": _f_bidang.strip(),
-                        "jangka_waktu": _f_jangka.strip(),
-                        "sumber_anggaran": _f_sumber.strip(),
-                        "catatan": _f_catatan.strip(),
-                    })
-                    if _hasil_simpan["ok"]:
-                        st.success(f"Paket `{_f_kode}` berhasil disimpan.")
-                        st.rerun()
-                    else:
-                        st.error(f"Gagal simpan: {_hasil_simpan['error']}")
+                    _pl_pb = st.progress(0.0)
+                    _pl_st = st.empty()
+                    _pl_logs = []
+                    def _pl_log(msg):
+                        _pl_logs.append(msg)
+                        _pl_st.info(msg)
+                    from config import SPSE_BASE_URL as _SPSE_BASE
+                    _pl_hasil = pl_engine.serap_paket_pl_dari_spse(
+                        _pl_cookie, _SPSE_BASE, log_fn=_pl_log
+                    )
+                    _pl_pb.progress(1.0)
+                    _pl_c1, _pl_c2 = st.columns(2)
+                    _pl_c1.metric("✅ Tersimpan", _pl_hasil.get("scraped", 0))
+                    _pl_c2.metric("❌ Error", len(_pl_hasil.get("errors", [])))
+                    if _pl_hasil.get("errors"):
+                        with st.expander("Detail Error"):
+                            for _e in _pl_hasil["errors"]:
+                                st.error(_e)
+                    _pl_rows = pl_engine.load_draft_pl()
 
-        # ── Kolom Kanan: Daftar Paket + Buat Folder ──
-        with _pl_col_kanan:
+            st.divider()
             st.markdown("#### 2. Daftar Paket PL")
 
             _pl_filter = st.selectbox(
@@ -541,80 +520,166 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             )
 
             def _pl_match(r):
-                if _pl_filter == "JKK":
-                    return r.get("jenis_pl") == "JKK"
-                if _pl_filter == "PK":
-                    return r.get("jenis_pl") == "PK"
-                if _pl_filter == "Belum Folder":
-                    return not bool(r.get("folder_dibuat"))
-                if _pl_filter == "Sudah Folder":
-                    return bool(r.get("folder_dibuat"))
+                if _pl_filter == "JKK":    return r.get("jenis_pl") == "JKK"
+                if _pl_filter == "PK":     return r.get("jenis_pl") == "PK"
+                if _pl_filter == "Belum Folder": return not bool(r.get("folder_dibuat"))
+                if _pl_filter == "Sudah Folder": return bool(r.get("folder_dibuat"))
                 return True
 
             _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
 
             if not _pl_filtered:
-                st.info("Belum ada paket PL. Tambah via form di sebelah kiri.")
+                st.info("Belum ada paket PL. Klik 'Serap dari SPSE' atau tambah manual.")
             else:
                 for _pr in _pl_filtered:
-                    _pr_kode  = _pr.get("kode_paket", "")
-                    _pr_nama  = _pr.get("nama_paket", "-")
-                    _pr_jenis = _pr.get("jenis_pl", "")
-                    _pr_hps   = _pr.get("nilai_hps", "-")
+                    _pr_kode   = _pr.get("kode_paket", "")
+                    _pr_nama   = _pr.get("nama_paket", "-")
+                    _pr_jenis  = _pr.get("jenis_pl", "")
+                    _pr_hps    = _pr.get("nilai_hps", "-")
                     _pr_status = _pr.get("status", "draft")
-                    _pr_folder = _pr.get("folder_dibuat", False)
+                    _pr_folder = bool(_pr.get("folder_dibuat"))
+                    _pr_icon   = "✅" if _pr_folder else "📋"
+                    _pr_label  = f"{_pr_icon} [{_pr_jenis}] {_pr_nama[:50]}"
 
-                    _pr_label = f"{'✅' if _pr_folder else '📋'} [{_pr_jenis}] {_pr_nama}"
                     with st.expander(_pr_label):
-                        st.caption(f"Kode: `{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
                         st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
                         _pr_c1, _pr_c2, _pr_c3 = st.columns(3)
-
-                        # Tombol buat folder
-                        if not _pr_folder:
-                            _pr_no = _pr.get("nomor_urut") or (len(_pl_rows) + 1)
-                            _pr_nama_folder_default = f"{_pr_no}. PL {_pr_jenis} - {_pr_nama}"
-                            _pr_nama_folder = st.text_input(
-                                "Nama folder:",
-                                value=_pr_nama_folder_default,
-                                key=f"pl_nama_folder_{_pr_kode}",
-                            )
-                            if _pr_c1.button("📁 Buat Folder", key=f"pl_buat_{_pr_kode}", use_container_width=True):
-                                _pr_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pr_nama_folder).strip()
-                                _pr_target = _pl_os.path.join(_PL_POKJA_ROOT, _pr_nama_clean)
-                                if _pl_os.path.exists(_pr_target):
-                                    st.warning(f"Folder sudah ada: `{_pr_target}`")
-                                else:
-                                    try:
-                                        _pl_sp.run(
-                                            [_PL_PY, _PL_SCRIPT, _pr_nama_clean],
-                                            creationflags=_PL_NO_WIN,
-                                            check=True,
-                                        )
-                                        pl_engine.tandai_folder_dibuat(_pr_kode)
-                                        st.success(f"Folder `{_pr_nama_clean}` berhasil dibuat.")
-                                        st.rerun()
-                                    except Exception as _pe:
-                                        st.error(f"Gagal buat folder: {_pe}")
-                        else:
-                            _pr_c1.success("Folder sudah dibuat ✅")
-
-                        # Update status
                         _pr_status_baru = _pr_c2.selectbox(
                             "Status:",
                             pl_engine.STATUS_LIST,
                             index=pl_engine.STATUS_LIST.index(_pr_status) if _pr_status in pl_engine.STATUS_LIST else 0,
                             key=f"pl_status_{_pr_kode}",
                         )
-                        if _pr_c2.button("💾 Update", key=f"pl_upd_status_{_pr_kode}", use_container_width=True):
+                        if _pr_c2.button("💾 Update", key=f"pl_upd_{_pr_kode}", use_container_width=True):
                             pl_engine.update_status(_pr_kode, _pr_status_baru)
                             st.rerun()
-
-                        # Hapus
                         if _pr_c3.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
+
+        # ══════════════════════════════════════════════════════
+        # KOLOM KANAN — Buat Folder + Download Dokumen
+        # ══════════════════════════════════════════════════════
+        with _pl_col_kanan:
+            st.markdown("#### 3. Buat Folder Paket")
+
+            if "pl_folder_just_created" in st.session_state:
+                _msg = st.session_state.pop("pl_folder_just_created")
+                st.toast(f"✅ {_msg}", icon="📁")
+                st.success(f"✅ {_msg}")
+                st.balloons()
+
+            # Dropdown pilih paket
+            _pl_opsi_map = {"(pilih paket)": None}
+            for _r in _pl_rows:
+                if not _r.get("nama_paket"):
+                    continue
+                _lbl = f"[{_r.get('jenis_pl','')}] {_r.get('nama_paket','')}"
+                if _r.get("folder_dibuat"):
+                    _lbl += " ✅"
+                _pl_opsi_map[_lbl] = _r
+
+            _pl_pilihan = st.selectbox("Pilih paket:", list(_pl_opsi_map.keys()), key="sel_pl_folder")
+            _pl_row_sel = _pl_opsi_map.get(_pl_pilihan)
+
+            # Auto-generate nama folder
+            _pl_default_folder = ""
+            if _pl_row_sel:
+                _pl_no_urut = _pl_row_sel.get("nomor_urut") or len(_pl_rows)
+                _pl_jenis   = _pl_row_sel.get("jenis_pl", "PLJKK")
+                _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis, f"PL{_pl_jenis}")
+                _pl_nm      = _pl_row_sel.get("nama_paket", "")
+                _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
+
+            _pl_nama_folder = st.text_input(
+                "Nama folder:",
+                value=_pl_default_folder,
+                placeholder="1. PLJKK - Perencanaan Pembangunan Jalan ...",
+                key="pl_input_nama_folder",
+            )
+
+            _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
+            _pl_target = _pl_os.path.join(_PL_POKJA_ROOT, _pl_nama_clean) if _pl_nama_clean else ""
+            _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
+
+            if _pl_folder_ada:
+                st.warning(f"Folder sudah ada: `{_pl_target}`")
+
+            _pl_cb1, _pl_cb2 = st.columns(2)
+            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl")
+
+            _pl_buat_btn = _pl_cb1.button(
+                "📁 Buat Folder",
+                type="primary",
+                disabled=not bool(_pl_nama_folder),
+                use_container_width=True,
+                key="pl_btn_buat_folder",
+            )
+            if _pl_folder_ada:
+                if _pl_cb2.button("📂 Buka Explorer", use_container_width=True, key="pl_btn_explorer"):
+                    _pl_sp.Popen(f'explorer "{_pl_target.replace("/", chr(92))}"')
+
+            # Tombol download mandiri (jika folder sudah ada)
+            if _pl_folder_ada and _pl_row_sel:
+                _pl_kode_dl = _pl_row_sel.get("kode_paket", "")
+                if _pl_kode_dl and st.button("📦 Download Dokumen SPSE", use_container_width=True, key="pl_btn_dl_saja"):
+                    _pl_dl_logs = []
+                    _pl_dl_status = st.status("🔽 Mengunduh dokumen...", expanded=True)
+                    _pl_dl_area = _pl_dl_status.empty()
+                    def _pl_dl_cb(msg):
+                        _pl_dl_logs.append(msg)
+                        _pl_dl_area.code("\n".join(_pl_dl_logs[-20:]))
+                        _pl_dl_status.update(label=f"🔽 {msg[:60]}")
+                    _pl_dl_res = pl_engine.download_dokumen_paket_pl(_pl_kode_dl, _pl_target, _pl_dl_cb)
+                    _pl_dl_status.update(
+                        label=f"✅ {len(_pl_dl_res['ok'])} file, ❌ {len(_pl_dl_res['error'])} error",
+                        state="complete", expanded=False,
+                    )
+
+            if _pl_buat_btn and _pl_nama_folder:
+                with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
+                    try:
+                        _pl_res = _pl_sp.run(
+                            [_PL_PY, _PL_SCRIPT, "--mode", "pl", _pl_nama_clean],
+                            capture_output=True, text=True, timeout=60,
+                            creationflags=_PL_NO_WIN,
+                        )
+                        if _pl_res.returncode == 0:
+                            if _pl_row_sel:
+                                from datetime import timezone as _pl_tz
+                                pl_engine.tandai_folder_dibuat(_pl_row_sel["kode_paket"])
+                                try:
+                                    pl_engine._sb().table("draft_paket_pl").update({
+                                        "folder_dibuat": True,
+                                        "folder_dibuat_pada": datetime.now(_pl_tz.utc).isoformat(),
+                                    }).eq("kode_paket", _pl_row_sel["kode_paket"]).execute()
+                                except Exception:
+                                    pass
+                            # Download dokumen jika dicentang
+                            if _pl_dl_dokumen and _pl_row_sel:
+                                _pl_kp = _pl_row_sel.get("kode_paket", "")
+                                if _pl_kp:
+                                    _pl_dl_msgs = []
+                                    _pl_dl_st2 = st.status("📦 Download dokumen...", expanded=True)
+                                    _pl_dl_area2 = _pl_dl_st2.empty()
+                                    def _pl_dl_cb2(msg):
+                                        _pl_dl_msgs.append(msg)
+                                        _pl_dl_area2.code("\n".join(_pl_dl_msgs[-20:]))
+                                    _pl_dl_r2 = pl_engine.download_dokumen_paket_pl(
+                                        _pl_kp, _pl_target, _pl_dl_cb2
+                                    )
+                                    _pl_dl_st2.update(
+                                        label=f"✅ {len(_pl_dl_r2['ok'])} file, ❌ {len(_pl_dl_r2['error'])} error",
+                                        state="complete", expanded=False,
+                                    )
+                            st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
+                            st.rerun()
+                        else:
+                            st.error(f"Gagal buat folder:\n{_pl_res.stderr[:300]}")
+                    except Exception as _pe:
+                        st.error(f"Error: {_pe}")
 
     # ── Tab 2–5: Placeholder ──────────────────────────────────────────────────
     with _pl_tab2:
