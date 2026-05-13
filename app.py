@@ -1603,9 +1603,27 @@ with tab_setup:
                 st.session_state["sbu_2015_1"] = _last["sbu_2015"]
             st.session_state["sbu_last_loaded"] = True
 
-        # Opsi SBU dropdown — tambah kosong di awal
-        _sbu_opts_2020 = [""] + ldk_config.SBU_KBLI_2020
-        _sbu_opts_2015 = [""] + ldk_config.SBU_KBLI_2015
+        # Opsi SBU dropdown — dari _SBU_RULES inbox_engine (cached per session)
+        if "sbu_opts_cache" not in st.session_state:
+            _sbu_cache = ldk_config.load_sbu_dari_rules()
+            st.session_state["sbu_opts_cache"] = _sbu_cache
+        else:
+            _sbu_cache = st.session_state["sbu_opts_cache"]
+
+        _sbu_opts_2020 = [""] + _sbu_cache["kbli_2020"]
+        _sbu_opts_2015 = [""] + _sbu_cache["kbli_2015"]
+
+        # Validasi: nilai tersimpan harus ada di opsi — reset jika tidak ada
+        if st.session_state.get("sbu_2020_1", "") not in _sbu_opts_2020:
+            st.session_state["sbu_2020_1"] = ""
+        if st.session_state.get("sbu_2015_1", "") not in _sbu_opts_2015:
+            st.session_state["sbu_2015_1"] = ""
+
+        _sbu_sumber = _sbu_cache.get("sumber", "rules")
+        st.caption(
+            f"📋 {len(_sbu_cache['kbli_2020'])} SBU 2020 · {len(_sbu_cache['kbli_2015'])} SBU 2015 "
+            f"(sumber: {_sbu_sumber})"
+        )
 
         for i, row in enumerate(st.session_state["ijin_rows"]):
             st.caption(f"Row {i+1}")

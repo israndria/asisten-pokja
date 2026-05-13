@@ -5,6 +5,8 @@ Kata kunci (keyword) dipakai untuk mencocokkan label checkbox dari HTML
 menggunakan substring match, case-insensitive.
 """
 
+import re as _re
+
 # ── Item yang HARUS di-check (checkbox saja, tanpa isi teks) ─────────────────
 AUTO_CHECK_KEYWORDS = [
     "Memiliki pengalaman paling kurang 1 Pekerjaan Konstruksi",
@@ -70,8 +72,10 @@ IJIN_USAHA_DEFAULT = {
     ]
 }
 
-# ── Daftar SBU untuk dropdown (KBLI 2020 dan KBLI 2015) ─────────────────────
+# ── Daftar SBU untuk dropdown (KBLI 2020 dan KBLI 2015) ─────────────────
 # Format: "KODE — Nama Subklasifikasi"
+# Sumber utama: Supabase tabel master_sbu
+# Fallback    : list hardcode di bawah ini
 SBU_KBLI_2020 = [
     "BS001 — Konstruksi Bangunan Sipil Jalan",
     "BS002 — Konstruksi Bangunan Sipil Jembatan",
@@ -173,37 +177,101 @@ SBU_KBLI_2015 = [
 ]
 
 
+def load_sbu_dari_rules() -> dict:
+    """
+    Ambil daftar SBU unik langsung dari _SBU_RULES di inbox_engine.
+    Ini sumber yang sama dengan detect_sbu() — nama lengkap, rapi, konsisten.
+
+    Return dict:
+      {
+        "kbli_2020": ["Subklasifikasi BS001 (KBLI 2020) Konstruksi ...", ...],
+        "kbli_2015": ["Subklasifikasi SI003 (KBLI 2015) Jasa Pelaksana ...", ...],
+        "sumber": "rules",
+      }
+    """
+    from inbox_engine import _SBU_RULES
+
+    _pat_kode = _re.compile(r"Subklasifikasi\s+[A-Z]{2}\d{3}\s+\(KBLI\s+(\d{4})\)")
+
+    seen_2020: dict = {}  # kode -> string penuh
+    seen_2015: dict = {}
+
+    for rule in _SBU_RULES:
+        sbu_baru, sbu_lama = rule[0], rule[1]
+        for field in (sbu_baru, sbu_lama):
+            if not field:
+                continue
+            m = _re.search(
+                r"Subklasifikasi\s+([A-Z]{2}\d{3})\s+\(KBLI\s+(\d{4})\)", field
+            )
+            if not m:
+                continue
+            kode, tahun = m.group(1), m.group(2)
+            if tahun == "2020":
+                seen_2020.setdefault(kode, field.strip())
+            else:
+                seen_2015.setdefault(kode, field.strip())
+
+    return {
+        "kbli_2020": sorted(seen_2020.values()),
+        "kbli_2015": sorted(seen_2015.values()),
+        "sumber": "rules",
+    }
+
+
 def build_sbu_klasifikasi(sbu_2020: str, sbu_2015: str) -> str:
     """
-    Bangun teks klasifikasi SBU dari pilihan dropdown.
-    - Hanya 2020 terisi   → "...serta disyaratkan: a) Subklasifikasi XXX..."
-    - Hanya 2015 terisi   → "...serta disyaratkan: a) Subklasifikasi XXX..."
-    - Keduanya terisi     → "...serta disyaratkan: a) 2020 atau; b) 2015."
+    Bangun teks klasifikasi SBU untuk field Izin Usaha di SPSE LDK.
+
+    Menerima 2 format input (otomatis terdeteksi):
+      A) Format penuh  : "Subklasifikasi BS001 (KBLI 2020) Konstruksi Bangunan Sipil Jalan"
+      B) Format pendek : "BS001 — Konstruksi Bangunan Sipil Jalan"
+
+    Output:
+      - Hanya 2020   → "...serta disyaratkan: Subklasifikasi BS001 (KBLI 2020) Nama."
+      - Hanya 2015   → "...serta disyaratkan: Subklasifikasi SI003 (KBLI 2015) Nama."
+      - Keduanya     → "...serta disyaratkan: a) ... atau; b) ...."
     """
-    kode_2020 = sbu_2020.split(" — ")[0].strip() if sbu_2020 else ""
-    nama_2020 = sbu_2020.split(" — ")[1].strip() if sbu_2020 and " — " in sbu_2020 else ""
-    kode_2015 = sbu_2015.split(" — ")[0].strip() if sbu_2015 else ""
-    nama_2015 = sbu_2015.split(" — ")[1].strip() if sbu_2015 and " — " in sbu_2015 else ""
+    _pat_full = _re.compile(
+        r"Subklasifikasi\s+([A-Z]{2}\d{3})\s+\(KBLI\s+\d{4}\)\s+(.+)"
+    )
+
+    def _parse(s: str):
+        """Return (kode, nama_dalam_format_penuh) atau ("", "") jika kosong."""
+        if not s:
+            return "", ""
+        m = _pat_full.match(s.strip())
+        if m:
+            # Format A: sudah penuh — pakai as-is
+            return m.group(1), s.strip()
+        if " — " in s:
+            # Format B: pendek — bangun string penuh
+            kode = s.split(" — ")[0].strip()
+            nama = s.split(" — ", 1)[1].strip()
+            # Tentukan tahun dari konteks (2020 jika dipanggil untuk sbu_2020)
+            return kode, None   # sinyal: perlu reconstruct di bawah
+        return "", ""
+
+    # Parse masing-masing
+    kode_2020, full_2020 = _parse(sbu_2020)
+    kode_2015, full_2015 = _parse(sbu_2015)
+
+    # Reconstruct format pendek (Format B) jika perlu
+    if kode_2020 and full_2020 is None:
+        nama_2020 = sbu_2020.split(" — ", 1)[1].strip()
+        full_2020 = f"Subklasifikasi {kode_2020} (KBLI 2020) {nama_2020}"
+    if kode_2015 and full_2015 is None:
+        nama_2015 = sbu_2015.split(" — ", 1)[1].strip()
+        full_2015 = f"Subklasifikasi {kode_2015} (KBLI 2015) {nama_2015}"
 
     prefix = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan: "
 
     if kode_2020 and kode_2015:
-        return (
-            f"{prefix}"
-            f"a) Subklasifikasi {kode_2020} (KBLI 2020) {nama_2020} atau; "
-            f"b) Subklasifikasi {kode_2015} (KBLI 2015) {nama_2015}."
-        )
+        return f"{prefix}a) {full_2020} atau; b) {full_2015}."
     elif kode_2020:
-        return (
-            f"{prefix}"
-            f"Subklasifikasi {kode_2020} (KBLI 2020) {nama_2020}."
-        )
+        return f"{prefix}{full_2020}."
     elif kode_2015:
-        return (
-            f"{prefix}"
-            f"Subklasifikasi {kode_2015} (KBLI 2015) {nama_2015}."
-        )
-    return ""
+        return f"{prefix}{full_2015}."
 
 
 # ── Kinerja Penyedia (opsional tapi direkomendasikan) ────────────────────────
