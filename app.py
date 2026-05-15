@@ -2254,6 +2254,178 @@ with tab8:
                 hide_index=True,
             )
 
+        st.divider()
+        st.markdown("### 3. Sinkronisasi Google Calendar")
+        st.caption("Update acara di Google Calendar berdasarkan data jadwal terbaru SPSE.")
+        
+        col_gcal1, col_gcal2 = st.columns(2)
+        
+        with col_gcal1:
+            gcal_sync_btn = st.button(
+                "📅 Sync Jadwal ke GCalendar",
+                type="primary",
+                use_container_width=True,
+                key="jd_sync_gcal"
+            )
+            
+        with col_gcal2:
+            gcal_login_btn = st.button(
+                "🔑 Re-Login Google Calendar",
+                type="secondary",
+                help="Gunakan tombol ini JIKA proses sinkronisasi gagal karena Token Expired.",
+                use_container_width=True,
+                key="jd_login_gcal"
+            )
+        
+        if gcal_sync_btn:
+            if not jd_selected:
+                st.warning("Pilih minimal satu paket di daftar sebelah kiri untuk didaftarkan dan disinkronkan.")
+            else:
+                import subprocess as _sp
+                import pathlib as _pathlib
+                import os as _os
+                import pandas as _pd
+                from config import POKJA_ROOT as _POKJA_ROOT, SPSE_BASE_URL as _SPSE_BASE_URL
+                
+                _v19_dir = _pathlib.Path(_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110"
+                _db_path = _v19_dir / "database_tender.csv"
+                _py_exe = _v19_dir / "python" / "python.exe"
+                _script = _v19_dir / "sync_jadwal.py"
+                _no_win = 0x08000000
+                
+                # Memastikan encoding output UTF-8 untuk print emoji
+                _env = _os.environ.copy()
+                _env["PYTHONIOENCODING"] = "utf-8"
+                
+                with st.status("🔄 Menyiapkan data Sinkronisasi...", expanded=True) as sync_status:
+                    # 1. Update database_tender.csv V19
+                    st.write("Mendaftarkan URL paket ke database V19...")
+                    try:
+                        if _db_path.exists():
+                            df_db = _pd.read_csv(_db_path)
+                        else:
+                            df_db = _pd.DataFrame(columns=['url', 'members', 'nama_paket', 'last_sync', 'content_hash'])
+                            
+                        # Pastikan kolom wajib ada
+                        for _col in ['url', 'members', 'nama_paket', 'last_sync', 'content_hash']:
+                            if _col not in df_db.columns:
+                                df_db[_col] = ''
+                                
+                        df_db.set_index('url', inplace=True)
+                        
+                        for p in jd_selected:
+                            _url = f"{_SPSE_BASE_URL.rstrip('/')}/lelang/{p['id_lelang']}/jadwal"
+                            _members = p.get('pokja') or p.get('kode', 'Pokja')
+                            _nama = p.get('nama', f"Paket {p['id_lelang']}")
+                            
+                            df_db.loc[_url, 'members'] = _members
+                            df_db.loc[_url, 'nama_paket'] = _nama
+                            if 'content_hash' not in df_db.loc[_url] or _pd.isna(df_db.loc[_url, 'content_hash']):
+                                df_db.loc[_url, 'content_hash'] = ''
+                            if 'last_sync' not in df_db.loc[_url] or _pd.isna(df_db.loc[_url, 'last_sync']):
+                                df_db.loc[_url, 'last_sync'] = ''
+                                
+                        df_db.reset_index(inplace=True)
+                        df_db.to_csv(_db_path, index=False)
+                        
+                        _list_paket_str = "\n".join([f"{i+1}. {p.get('nama', p['id_lelang'])}" for i, p in enumerate(jd_selected)])
+                        st.success(f"✅ Berhasil mendaftarkan {len(jd_selected)} paket ke radar V19:\n\n{_list_paket_str}")
+                    except Exception as e:
+                        st.error(f"Gagal mengupdate database: {e}")
+                
+                    # 2. Jalankan sync_jadwal.py
+                    st.write("Memanggil script `sync_jadwal.py`...")
+                    log_container = st.empty()
+                    try:
+                        res = _sp.run(
+                            [str(_py_exe), str(_script)],
+                            cwd=str(_v19_dir),
+                            env=_env,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            creationflags=_no_win,
+                            timeout=300
+                        )
+                        
+                        if res.stdout:
+                            log_container.code(res.stdout, language="text")
+                        if res.stderr:
+                            if "RefreshError" in res.stderr or "invalid_grant" in res.stderr:
+                                st.error("🔐 **Token Google Calendar Kedaluwarsa!**\n\nSistem Google menolak akses karena sesi login sudah *expired*. Silakan klik tombol **🔑 Re-Login Google Calendar** di sebelah kanan untuk menyegarkan sesi.")
+                            else:
+                                st.error(f"Error output:\n{res.stderr}")
+                            
+                        if res.returncode == 0:
+                            sync_status.update(label="✅ Sinkronisasi GCalendar Selesai", state="complete")
+                        else:
+                            sync_status.update(label="⚠️ Sinkronisasi GCalendar Selesai dengan Error", state="error")
+                            
+                    except Exception as e:
+                        st.error(f"Gagal menjalankan script: {e}")
+                        sync_status.update(label="⚠️ Terjadi Kesalahan", state="error")
+                    
+        if gcal_login_btn:
+            import subprocess as _sp
+            import pathlib as _pathlib
+            from config import POKJA_ROOT as _POKJA_ROOT
+            
+            _v19_dir = _pathlib.Path(_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110"
+            _py_exe = _v19_dir / "python" / "python.exe"
+            
+            _auth_code = f"""
+import os
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+cred_path = r"{_v19_dir / 'credentials.json'}"
+token_path = r"{_v19_dir / 'token.json'}"
+scopes = ['https://www.googleapis.com/auth/calendar']
+
+if os.path.exists(token_path):
+    os.remove(token_path)
+
+print("Membuka browser... Silakan login di browser Anda.")
+try:
+    flow = InstalledAppFlow.from_client_secrets_file(cred_path, scopes)
+    creds = flow.run_local_server(port=0)
+    with open(token_path, 'w') as f:
+        f.write(creds.to_json())
+    print("Login berhasil! Token tersimpan.")
+except Exception as e:
+    print(f"Error: {{e}}", file=sys.stderr)
+    sys.exit(1)
+"""
+            with st.status("🔑 Menunggu Otorisasi Browser...", expanded=True) as auth_status:
+                st.write("Jendela browser Google Login akan segera terbuka. Silakan login...")
+                try:
+                    res = _sp.run(
+                        [str(_py_exe), "-c", _auth_code], 
+                        cwd=str(_v19_dir),
+                        capture_output=True, 
+                        text=True, 
+                        encoding="utf-8",
+                        creationflags=0x08000000,
+                        timeout=300
+                    )
+                    
+                    if res.returncode == 0:
+                        auth_status.update(label="✅ Login Google Calendar berhasil!", state="complete")
+                        st.success("Autentikasi selesai. Kamu bisa menggunakan fitur Sync Jadwal sekarang.")
+                    else:
+                        auth_status.update(label="⚠️ Login Dibatalkan atau Error", state="error")
+                        st.error(res.stderr or "Gagal mendapatkan otorisasi.")
+                except _sp.TimeoutExpired:
+                    auth_status.update(label="⌛ Waktu tunggu login habis", state="error")
+                    st.error("Proses login ditutup karena tidak ada aktivitas lebih dari 5 menit.")
+                except Exception as e:
+                    auth_status.update(label="⚠️ Terjadi Kesalahan", state="error")
+                    st.error(str(e))
+
 # ============================================================
 # Tab 9: Kirim Undangan
 # ============================================================

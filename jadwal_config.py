@@ -68,7 +68,7 @@ TAHAPAN = [
         "field_selesai": "jadwalList[5].dtj_tglakhir",
         "input_id_mulai": "mulai5",
         "input_id_selesai": "akhir5",
-        "aturan": "1 menit setelah Tahap 5 dimulai, durasi 4 hari (skip weekend/libur di akhir)",
+        "aturan": "1 menit setelah Tahap 5 dimulai, durasi 4 hari (T6 diatur agar tidak selesai di hari Senin atau Jumat)",
     },
     {
         "id": 7,
@@ -77,7 +77,7 @@ TAHAPAN = [
         "field_selesai": "jadwalList[6].dtj_tglakhir",
         "input_id_mulai": "mulai6",
         "input_id_selesai": "akhir6",
-        "aturan": "Hari sama dengan akhir Tahap 6, jam 09:00-15:30",
+        "aturan": "2 hari kerja, mulai H-1 dari T6_selesai jam 09:00, berakhir bersamaan hari T6_selesai jam 15:30",
     },
     {
         "id": 8,

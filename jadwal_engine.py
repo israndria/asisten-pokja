@@ -140,6 +140,42 @@ def geser_hindari_jumat(dt: datetime) -> datetime:
     return dt
 
 
+def h_min_1_hari_kerja(dt: datetime) -> datetime:
+    """Mundur 1 hari kerja (skip weekend/libur)."""
+    res = dt - timedelta(days=1)
+    attempts = 0
+    while (is_weekend(res) or is_libur_nasional(res)) and attempts < 30:
+        res = res - timedelta(days=1)
+        attempts += 1
+    return res
+
+
+def paskan_t6_selesai(dt: datetime) -> datetime:
+    """
+    Pastikan T6 selesai BUKAN Jumat, BUKAN Senin.
+    Supaya T7 (Mulai H-1) jatuh utuh 2 hari kerja dalam seminggu (misal Senin-Selasa).
+    """
+    dt = geser_ke_hari_kerja(dt)
+    
+    if dt.weekday() == 4:  # Jumat mundur ke Kamis
+        dt = dt - timedelta(days=1)
+        
+    attempts = 0
+    while attempts < 30:
+        if not is_hari_kerja(dt):
+            dt = dt + timedelta(days=1)
+        elif dt.weekday() == 4:  # Batal Jumat
+            dt = dt + timedelta(days=1)
+        else:
+            h_min = h_min_1_hari_kerja(dt)
+            if h_min.weekday() == 4:  # Jika H-1 Jumat (dt berarti Senin)
+                dt = dt + timedelta(days=1)
+            else:
+                return dt
+        attempts += 1
+    return dt
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: Hitung T3 Pemberian Penjelasan
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,22 +292,20 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
     # ── Tahap 6: Evaluasi ─────────────────────────────────────────────────────
     # Mulai: T5 mulai + 1 menit.
     # Selesai: +3 hari kalender, hari kerja jam 16:00.
-    # Rule tambahan: hindari Jumat — mundur ke Kamis, jika Kamis libur maju ke Senin.
+    # Rule T6: Selesai harus di hari kerja yang H-1 nya bukan Jumat (tidak boleh Senin).
     t6_mulai = t5_mulai + timedelta(minutes=1)
     t6_selesai_kandidat = t6_mulai + timedelta(days=3)
-    t6_selesai_hari = geser_ke_hari_kerja(t6_selesai_kandidat)
-    t6_selesai_hari = geser_hindari_jumat(t6_selesai_hari)
+    t6_selesai_hari = paskan_t6_selesai(t6_selesai_kandidat)
     t6_selesai = t6_selesai_hari.replace(hour=16, minute=0, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[5]["nama"], "mulai": t6_mulai, "selesai": t6_selesai})
 
     # ── Tahap 7: Pembuktian Kualifikasi ───────────────────────────────────────
-    # Mulai: hari SAMA dengan T6 selesai, jam 09:00.
-    # T7 overlap T6 normal (T6 selesai 16:00, T7 09:00 hari sama).
-    # T6 sudah dijamin bukan Jumat, jadi T7 tidak perlu cek Jumat lagi.
-    t7_mulai = t6_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
-    if not is_hari_kerja(t7_mulai):
-        t7_mulai = geser_ke_hari_kerja(t7_mulai, jam_mulai=9)
-    t7_selesai = t7_mulai.replace(hour=15, minute=30, second=0, microsecond=0)
+    # Mulai: 1 hari kerja sebelum T6 selesai, jam 09:00.
+    # Selesai: hari SAMA dengan T6 selesai, jam 15:30.
+    # Total durasi 2 hari kerja berturut-turut.
+    t7_mulai_kandidat = h_min_1_hari_kerja(t6_selesai)
+    t7_mulai = t7_mulai_kandidat.replace(hour=9, minute=0, second=0, microsecond=0)
+    t7_selesai = t6_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
     hasil.append({"nama": TAHAPAN[6]["nama"], "mulai": t7_mulai, "selesai": t7_selesai})
 
     # ── Tahap 8: Penetapan Pemenang ───────────────────────────────────────────
