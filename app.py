@@ -467,7 +467,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
-        from config import POKJA_ROOT as _PL_POKJA_ROOT
+        from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
 
         _PL_PY     = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "python" / "python.exe")
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
@@ -586,10 +586,11 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
             # Auto-generate nama folder
             _pl_default_folder = ""
+            _pl_jenis_sel = "JKK"
             if _pl_row_sel:
                 _pl_no_urut = _pl_row_sel.get("nomor_urut") or len(_pl_rows)
-                _pl_jenis   = _pl_row_sel.get("jenis_pl", "PLJKK")
-                _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis, f"PL{_pl_jenis}")
+                _pl_jenis_sel = _pl_row_sel.get("jenis_pl", "JKK")
+                _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis_sel, f"PL{_pl_jenis_sel}")
                 _pl_nm      = _pl_row_sel.get("nama_paket", "")
                 _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
 
@@ -600,9 +601,13 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 key="pl_input_nama_folder",
             )
 
+            # Output base dir: JKK → @ Pengadaan Langsung JKK, PK → @ Pengadaan Langsung PK
+            _pl_output_base = _PL_DIR_JKK if _pl_jenis_sel == "JKK" else _PL_DIR_PK
             _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
-            _pl_target = _pl_os.path.join(_PL_POKJA_ROOT, _pl_nama_clean) if _pl_nama_clean else ""
+            _pl_target = _pl_os.path.join(_pl_output_base, _pl_nama_clean) if _pl_nama_clean else ""
             _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
+
+            st.caption(f"📂 Output: `{_pl_output_base}`")
 
             if _pl_folder_ada:
                 st.warning(f"Folder sudah ada: `{_pl_target}`")
@@ -642,7 +647,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
                     try:
                         _pl_res = _pl_sp.run(
-                            [_PL_PY, _PL_SCRIPT, "--mode", "pl", _pl_nama_clean],
+                            [_PL_PY, _PL_SCRIPT, "--mode", "pl",
+                             "--output-dir", _pl_output_base, _pl_nama_clean],
                             capture_output=True, text=True, timeout=60,
                             creationflags=_PL_NO_WIN,
                         )
