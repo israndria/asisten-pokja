@@ -38,6 +38,7 @@ import kualifikasi_engine
 import kualifikasi_parser
 import kk_evaluasi_engine
 import pl_engine
+import parse_kak_pl
 
 st.set_page_config(
     page_title="Asisten Pokja",
@@ -650,6 +651,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         label=f"✅ {len(_pl_dl_res['ok'])} file, ❌ {len(_pl_dl_res['error'])} error",
                         state="complete", expanded=False,
                     )
+                    # Parse KAK PDF → upsert Supabase
+                    _kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target)
+                    if _kak_p:
+                        _kak_d = parse_kak_pl.parse_kak(_kak_p)
+                        _kak_u = {k: v for k, v in _kak_d.items() if v}
+                        if _kak_u:
+                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kode_dl, **_kak_u})
+                            st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
 
             if _pl_buat_btn and _pl_nama_folder:
                 with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
@@ -680,6 +689,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                         label=f"✅ {len(_pl_dl_r2['ok'])} file, ❌ {len(_pl_dl_r2['error'])} error",
                                         state="complete", expanded=False,
                                     )
+                                    # Parse KAK PDF → upsert ke Supabase
+                                    _pl_kak_path = parse_kak_pl.cari_kak_di_folder(_pl_target)
+                                    if _pl_kak_path:
+                                        _pl_kak_data = parse_kak_pl.parse_kak(_pl_kak_path)
+                                        _pl_kak_update = {k: v for k, v in _pl_kak_data.items() if v}
+                                        if _pl_kak_update:
+                                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kp, **_pl_kak_update})
+                                            st.info(f"📋 KAK ter-parse: {', '.join(_pl_kak_update.keys())}")
                             st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
                             st.rerun()
                         else:
