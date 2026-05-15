@@ -995,7 +995,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ── Tab 4: Setup Paket PL ─────────────────────────────────────────────────
     with _pl_tab4:
         st.markdown("### Setup Paket Pengadaan Langsung")
-        st.caption("Buat folder paket, copy template BAPLJKK, dan merge Word dari data Supabase.")
+        st.caption("Upload Dokumen Pemilihan (Dokpil) ke SPSE untuk paket PL.")
 
         _plsp_rows = pl_engine.load_draft_pl()
         if not _plsp_rows:
@@ -1004,90 +1004,93 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _plsp_col_list, _plsp_col_kanan = st.columns([2, 3])
 
             with _plsp_col_list:
-                st.markdown("#### Pilih Paket")
-                _plsp_sel = None
-                for _rr in _plsp_rows:
-                    _folder_ada = bool(_rr.get("folder_dibuat"))
-                    _icon = "✅" if _folder_ada else "📦"
-                    if st.button(
-                        f"{_icon} {_rr['nama_paket'][:55]}",
-                        key=f"plsp_sel_{_rr['kode_paket']}",
-                        use_container_width=True,
-                        help=f"Folder: {'Ada' if _folder_ada else 'Belum dibuat'}",
-                    ):
-                        st.session_state["plsp_kode_sel"] = _rr["kode_paket"]
+                st.markdown("### 1. Pilih Paket")
+                _plsp_sel_all, _plsp_sel_none = st.columns(2)
+                with _plsp_sel_all:
+                    if st.button("✅ Semua", key="plsp_sel_all", use_container_width=True):
+                        for _rr in _plsp_rows:
+                            st.session_state[f"plsp_chk_{_rr['kode_paket']}"] = True
                         st.rerun()
-                    if st.session_state.get("plsp_kode_sel") == _rr["kode_paket"]:
-                        _plsp_sel = _rr
+                with _plsp_sel_none:
+                    if st.button("⬜ Kosong", key="plsp_sel_none", use_container_width=True):
+                        for _rr in _plsp_rows:
+                            st.session_state[f"plsp_chk_{_rr['kode_paket']}"] = False
+                        st.rerun()
+
+                _plsp_selected = []
+                for _rr in _plsp_rows:
+                    _plsp_chk_key    = f"plsp_chk_{_rr['kode_paket']}"
+                    _plsp_dokpil_key = f"plsp_dokpil_{_rr['kode_paket']}"
+                    _col_chk, _col_dokpil = st.columns([3, 2])
+                    with _col_chk:
+                        _chk = st.checkbox(
+                            f"{_rr['nama_paket'][:55]}",
+                            value=st.session_state.get(_plsp_chk_key, True),
+                            key=_plsp_chk_key,
+                        )
+                    with _col_dokpil:
+                        _up = st.file_uploader(
+                            "DOKPIL",
+                            type=["pdf"],
+                            key=_plsp_dokpil_key,
+                            label_visibility="collapsed",
+                        )
+                        if _up:
+                            st.caption(f"📄 {_up.name}")
+                    if _chk:
+                        _plsp_selected.append({**_rr, "_dokpil": _up})
+
+                st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
 
             with _plsp_col_kanan:
-                if not _plsp_sel:
-                    st.info("Pilih paket di sebelah kiri.")
+                st.markdown("### 2. Upload Dokumen Pemilihan")
+                st.caption("Upload file PDF Dokpil ke SPSE untuk masing-masing paket.")
+
+                _plsp_dengan_file = [p for p in _plsp_selected if p.get("_dokpil")]
+                _plsp_tanpa_file  = [p for p in _plsp_selected if not p.get("_dokpil")]
+
+                if not _plsp_selected:
+                    st.info("Pilih paket dan upload DOKPIL di sebelah kiri terlebih dahulu.")
                 else:
-                    st.markdown(f"**{_plsp_sel['nama_paket']}**")
-                    st.caption(f"Kode: {_plsp_sel['kode_paket']} | HPS: {_plsp_sel.get('nilai_hps', '-')} | Jenis: {_plsp_sel.get('jenis_pl', '-')}")
+                    if _plsp_dengan_file:
+                        st.caption(f"✅ **{len(_plsp_dengan_file)} paket** siap diupload:")
+                        for _p in _plsp_dengan_file:
+                            _ku = _p.get("kode_unik") or "DPP"
+                            _nomor_auto = f"000.3.3/PP/Dokpil-{_ku}/{datetime.now().year}"
+                            st.markdown(
+                                f"- **{_p['nama_paket'][:60]}**  \n"
+                                f"  📄 `{_p['_dokpil'].name}`  \n"
+                                f"  📋 `{_nomor_auto}`"
+                            )
+                    if _plsp_tanpa_file:
+                        st.caption(f"⚠️ **{len(_plsp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
+                        for _p in _plsp_tanpa_file:
+                            st.markdown(f"- {_p['nama_paket'][:60]}")
 
-                    _plsp_folder_ada = bool(_plsp_sel.get("folder_dibuat"))
-                    if _plsp_folder_ada:
-                        st.success(f"✅ Folder sudah dibuat: `{_plsp_sel['folder_dibuat']}`")
-                    else:
-                        st.warning("⚠️ Folder belum dibuat.")
+                    _plsp_tanpa_ku = [p for p in _plsp_dengan_file if not p.get("kode_unik")]
+                    if _plsp_tanpa_ku:
+                        st.warning(f"⚠️ **{len(_plsp_tanpa_ku)} paket** belum punya Kode Unik — klik tombol 'Kode Unik PL' di Excel BAPLJKK dulu.")
 
-                    st.divider()
-
-                    # Buat folder
-                    if not _plsp_folder_ada:
-                        if st.button("📁 Buat Folder Paket", key="plsp_buat_folder", type="primary", use_container_width=True):
-                            _plsp_jenis = _plsp_sel.get("jenis_pl", "JKK")
-                            _plsp_dir   = _PL_DIR_JKK if _plsp_jenis == "JKK" else _PL_DIR_PK
-                            _plsp_existing = [d for d in _pl_os.listdir(_plsp_dir) if _pl_os.path.isdir(_pl_os.path.join(_plsp_dir, d))] if _pl_os.path.isdir(_plsp_dir) else []
-                            _plsp_no = len(_plsp_existing) + 1
-                            _plsp_prefix = "PLJKK" if _plsp_jenis == "JKK" else "PLPK"
-                            _plsp_nama_clean = re.sub(r'[<>:"/\\|?*]', '-', _plsp_sel["nama_paket"])
-                            _plsp_folder_name = f"{_plsp_no}. {_plsp_prefix} - {_plsp_nama_clean}"
-
-                            with st.status(f"Membuat folder `{_plsp_folder_name}`...", expanded=True) as _plsp_st:
-                                try:
-                                    _plsp_sp.run(
-                                        [_PL_PY, _PL_SCRIPT, "--mode", "pl", _plsp_folder_name],
-                                        check=True,
-                                        capture_output=True,
-                                        creationflags=_PL_NO_WIN,
-                                    )
-                                    _plsp_target = _pl_os.path.join(_plsp_dir, _plsp_folder_name)
-                                    pl_engine.tandai_folder_dibuat(_plsp_sel["kode_paket"])
-                                    _plsp_st.update(label="✅ Folder berhasil dibuat!", state="complete")
-                                    st.rerun()
-                                except Exception as _plsp_ex:
-                                    _plsp_st.update(label=f"❌ Gagal: {_plsp_ex}", state="error")
-
-                    # Word Merge
-                    st.markdown("#### Word Merge (Isi Data ke Template)")
-                    _plsp_merge_paket = _plsp_sel.get("folder_dibuat", "")
-                    if not _plsp_merge_paket:
-                        st.info("Buat folder paket terlebih dahulu.")
-                    else:
-                        _plsp_jenis2 = _plsp_sel.get("jenis_pl", "JKK")
-                        _plsp_dir2   = _PL_DIR_JKK if _plsp_jenis2 == "JKK" else _PL_DIR_PK
-                        _plsp_folder_path = _pl_os.path.join(_plsp_dir2, _plsp_merge_paket)
-
-                        if st.button("🔄 Jalankan Word Merge", key="plsp_merge", use_container_width=True):
-                            with st.spinner("Menjalankan word_merge.py mode PL..."):
-                                try:
-                                    import word_merge as _wm
-                                    from config import EXCEL_TEMPLATE_PL as _EXCEL_PL, WORD_SHEET_MAP_PL as _WSM_PL
-                                    _excel_path = _pl_os.path.join(_plsp_folder_path, _pl_os.path.basename(_EXCEL_PL).replace("Template", _plsp_merge_paket[:20]))
-                                    # Fallback: cari .xlsm di folder
-                                    if not _pl_os.path.exists(_excel_path):
-                                        _xlsm_files = [f for f in _pl_os.listdir(_plsp_folder_path) if f.endswith(".xlsm")]
-                                        _excel_path = _pl_os.path.join(_plsp_folder_path, _xlsm_files[0]) if _xlsm_files else None
-                                    if _excel_path:
-                                        _wm.run_merge_mode_pl(_plsp_folder_path, _excel_path)
-                                        st.success("✅ Word Merge selesai.")
-                                    else:
-                                        st.error("❌ File Excel (.xlsm) tidak ditemukan di folder paket.")
-                                except Exception as _wm_ex:
-                                    st.error(f"❌ {_wm_ex}")
+                    _plsp_tgl_col, _plsp_btn_col = st.columns([2, 3])
+                    with _plsp_tgl_col:
+                        _plsp_tgl = st.date_input(
+                            "Tanggal Dokumen",
+                            value=datetime.now().date(),
+                            key="plsp_tgl_dokpil",
+                            format="DD/MM/YYYY",
+                            label_visibility="collapsed",
+                        )
+                        st.caption(f"{_HARI_NAMA[_plsp_tgl.weekday()]}, {_plsp_tgl.day} {_BULAN_NAMA[_plsp_tgl.month-1]} {_plsp_tgl.year}")
+                    with _plsp_btn_col:
+                        _plsp_n = len(_plsp_dengan_file)
+                        if st.button(
+                            f"📤 Upload Dokpil PL ({_plsp_n} file)",
+                            key="plsp_upload_btn",
+                            type="primary",
+                            disabled=_plsp_n == 0,
+                            use_container_width=True,
+                        ):
+                            st.info("⚠️ Endpoint upload DOKPIL nontender belum dipetakan. Fitur ini akan diaktifkan setelah endpoint ditemukan via browser inspection.")
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
