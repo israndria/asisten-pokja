@@ -61,6 +61,25 @@ def _extract_sbu(teks: str) -> str:
     return m.group(1) if m else ""
 
 
+def _extract_jabatan_k3(teks: str) -> str:
+    """
+    Dari tabel personil KAK, baris K3:
+    - 'Petugas K3 Konstruksi' (konsultan kecil/PL)
+    - 'Ahli K3 Konstruksi' (risiko tinggi)
+    """
+    m = re.search(r"(Ahli K3 Konstruksi|Petugas K3(?:\s+Konstruksi)?|Petugas Keselamatan Konstruksi)",
+                  teks, re.IGNORECASE)
+    if m:
+        raw = m.group(1).strip()
+        # Normalisasi ke nama lengkap
+        if re.search(r"Ahli K3", raw, re.IGNORECASE):
+            return "Ahli K3 Konstruksi"
+        if re.search(r"Petugas K3", raw, re.IGNORECASE):
+            return "Petugas K3 Konstruksi"
+        return raw.title()
+    return ""
+
+
 def _extract_jabatan_teknis(teks: str) -> str:
     """
     Baris pertama tabel personil = Ketua Tim.
@@ -102,11 +121,11 @@ def parse_kak(pdf_path: str) -> dict:
     if not teks:
         return {}
 
-    sbu = _extract_sbu(teks)
     return {
         "nama_ppk":     _extract_nama_ppk(teks),
         "jangka_waktu": _extract_jangka_waktu(teks),
-        "sbu_baru":     sbu,
+        "sbu_baru":     _extract_sbu(teks),
+        "jabatan_k3":   _extract_jabatan_k3(teks),
         "lokasi":       _extract_lokasi(teks),
     }
 
