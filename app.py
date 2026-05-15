@@ -784,7 +784,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 "Yang Harus Hadir",
                 value="Pejabat Pengadaan",
                 key="kd_hadir",
-                height=60,
+                height=68,
             )
 
             _kd_lampiran = st.file_uploader(
