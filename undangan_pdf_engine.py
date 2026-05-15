@@ -287,9 +287,10 @@ def generate_undangan_pdf_pl(
     nama_ppk     = data.get("nama_ppk", "")
     nomor_sd     = data.get("nomor_surat_dinas", "")
     nomor_pp_val = data.get("id_nontender", kode_paket)
+    kode_unik    = data.get("kode_unik") or "DPP"
 
     if not nomor_surat:
-        nomor_surat = f"000.3.3/PP/Reviu-DPP/{tanggal_kirim.year}"
+        nomor_surat = f"000.3.3/PP/Reviu-{kode_unik}/{tanggal_kirim.year}"
 
     replacements = {
         "«TANGGAL_KIRIM»":     _fmt_tanggal(tanggal_kirim),
