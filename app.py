@@ -572,13 +572,21 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 st.balloons()
 
             # Dropdown pilih paket
+            def _pl_no_dari_nama(nama: str, fallback: int) -> int:
+                """Ekstrak nomor dari nama paket, misal 'Paket 1' → 1."""
+                import re as _re
+                m = _re.search(r"Paket\s+(\d+)", nama, _re.IGNORECASE)
+                return int(m.group(1)) if m else fallback
+
             _pl_opsi_map = {"(pilih paket)": None}
-            for _r in _pl_rows:
+            for _i, _r in enumerate(_pl_rows, 1):
                 if not _r.get("nama_paket"):
                     continue
-                _lbl = f"[{_r.get('jenis_pl','')}] {_r.get('nama_paket','')}"
-                if _r.get("folder_dibuat"):
-                    _lbl += " ✅"
+                _nm = _r.get("nama_paket", "")
+                _no = _pl_no_dari_nama(_nm, _i)
+                _jenis = _r.get("jenis_pl", "")
+                _sudah = " ✅" if _r.get("folder_dibuat") else ""
+                _lbl = f"{_no}. {_nm} - {_jenis}{_sudah}"
                 _pl_opsi_map[_lbl] = _r
 
             _pl_pilihan = st.selectbox("Pilih paket:", list(_pl_opsi_map.keys()), key="sel_pl_folder")
@@ -588,10 +596,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _pl_default_folder = ""
             _pl_jenis_sel = "JKK"
             if _pl_row_sel:
-                _pl_no_urut = _pl_row_sel.get("nomor_urut") or len(_pl_rows)
+                _pl_nm      = _pl_row_sel.get("nama_paket", "")
                 _pl_jenis_sel = _pl_row_sel.get("jenis_pl", "JKK")
                 _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis_sel, f"PL{_pl_jenis_sel}")
-                _pl_nm      = _pl_row_sel.get("nama_paket", "")
+                _pl_no_urut = _pl_no_dari_nama(_pl_nm, len(_pl_rows))
                 _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
 
             _pl_nama_folder = st.text_input(
