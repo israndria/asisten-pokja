@@ -648,15 +648,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         )
                         if _pl_res.returncode == 0:
                             if _pl_row_sel:
-                                from datetime import timezone as _pl_tz
                                 pl_engine.tandai_folder_dibuat(_pl_row_sel["kode_paket"])
-                                try:
-                                    pl_engine._sb().table("draft_paket_pl").update({
-                                        "folder_dibuat": True,
-                                        "folder_dibuat_pada": datetime.now(_pl_tz.utc).isoformat(),
-                                    }).eq("kode_paket", _pl_row_sel["kode_paket"]).execute()
-                                except Exception:
-                                    pass
                             # Download dokumen jika dicentang
                             if _pl_dl_dokumen and _pl_row_sel:
                                 _pl_kp = _pl_row_sel.get("kode_paket", "")
