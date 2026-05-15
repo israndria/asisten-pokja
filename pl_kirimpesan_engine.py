@@ -15,6 +15,21 @@ from config import SPSE_BASE_URL
 import spse_browser
 
 
+DEFAULT_TEMPAT = (
+    "Ruang Aula Rapat Lantai 2 Kantor UKPBJ Kabupaten Tapin, "
+    "Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, "
+    "Kecamatan Tapin Utara, Rantau, Kabupaten Tapin. Kode Pos : 71111"
+)
+DEFAULT_DIBAWA = (
+    "Dokumen Persiapan Pengadaan yang tidak terbatas pada :\n"
+    "1. Spesifikasi Teknis 2. Dokumen HPS. 3. Rancangan Kontrak. 4. Dokumen Anggaran Belanja"
+)
+DEFAULT_HADIR = (
+    "Pejabat Pembuat Komitmen (PPK), Tim Teknis PPK, "
+    "dan Konsultan Perancana/Konsultan Perencanaan"
+)
+
+
 def _get_url(kode: str) -> str:
     return f"{SPSE_BASE_URL}nontender/{kode}/kirimpesan"
 

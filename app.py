@@ -729,83 +729,73 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                 _kd_selected = []
                 for _rr in _pl_rows_kd:
-                    _kd_key = f"kd_chk_{_rr['kode_paket']}"
-                    _kd_tgl_key = f"kd_tgl_{_rr['kode_paket']}"
+                    _kd_key     = f"kd_chk_{_rr['kode_paket']}"
+                    _kd_tgl_key = f"kd_tgl_acara_{_rr['kode_paket']}"
                     _col_chk, _col_tgl = st.columns([3, 2])
                     with _col_chk:
                         _kd_chk = st.checkbox(
-                            f"{_rr['nama_paket'][:50]}",
-                            value=st.session_state.get(_kd_key, False),
+                            f"{_rr['nama_paket'][:55]}",
+                            value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
                     with _col_tgl:
                         _kd_tgl_acara = st.date_input(
-                            "Tgl Acara",
+                            "Tanggal Acara",
                             value=st.session_state.get(_kd_tgl_key, datetime.now().date()),
                             format="DD/MM/YYYY",
                             key=_kd_tgl_key,
                             label_visibility="collapsed",
                         )
                         st.caption(f"{_HARI_NAMA[_kd_tgl_acara.weekday()]}, {_kd_tgl_acara.day} {_BULAN_NAMA[_kd_tgl_acara.month-1]} {_kd_tgl_acara.year}")
+                        if _kd_tgl_acara in _LIBUR_MAP:
+                            st.caption(f"⚠️ {_LIBUR_MAP[_kd_tgl_acara]}")
                     if _kd_chk:
                         _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara})
 
                 st.caption(f"**{len(_kd_selected)}** dari **{len(_pl_rows_kd)}** paket dipilih")
 
-        with _kd_col_detail:
-            st.markdown("### 2. Detail Undangan DPP")
+            st.divider()
+            st.markdown("### 2. Detail Undangan")
             st.caption("Pesan dikirim PP ke PPK — meminta reviu Dokumen Persiapan Pengadaan.")
 
-            _kd_jam_mulai = st.time_input(
-                "Mulai",
-                value=datetime.strptime("09:00", "%H:%M").time(),
-                key="kd_jam_mulai",
-                step=1800,
-            )
-            _kd_jam_selesai = st.time_input(
-                "Selesai",
-                value=datetime.strptime("11:00", "%H:%M").time(),
-                key="kd_jam_selesai",
-                step=1800,
-            )
+            st.markdown("**Waktu Acara (berlaku semua paket)**")
+            _kd_col_mulai, _kd_col_selesai = st.columns(2)
+            with _kd_col_mulai:
+                _kd_jam_mulai = st.time_input(
+                    "Mulai",
+                    value=datetime.strptime("09:00", "%H:%M").time(),
+                    key="kd_jam_mulai",
+                    step=1800,
+                )
+            with _kd_col_selesai:
+                _kd_jam_selesai = st.time_input(
+                    "Selesai",
+                    value=datetime.strptime("11:00", "%H:%M").time(),
+                    key="kd_jam_selesai",
+                    step=1800,
+                )
+
+            with st.expander("ℹ️ Libur Nasional Tersisa"):
+                _kd_hari_ini = datetime.now().date()
+                for _kd_d in sorted(d for d in _LIBUR_MAP if d >= _kd_hari_ini):
+                    st.write(f"• {_HARI_NAMA[_kd_d.weekday()]}, {_kd_d.day} {_BULAN_NAMA[_kd_d.month-1]} {_kd_d.year} — {_LIBUR_MAP[_kd_d]}")
+
             _kd_tempat = st.text_area(
                 "Tempat",
-                value=kirimpesan_engine.DEFAULT_TEMPAT,
+                value=pl_kirimpesan_engine.DEFAULT_TEMPAT,
                 key="kd_tempat",
-                height=80,
-            )
-            _kd_dibawa = st.text_area(
-                "Dokumen yang Dibawa",
-                value="Dokumen Persiapan Pengadaan (DPP)",
-                key="kd_dibawa",
-                height=80,
-            )
-            _kd_hadir = st.text_area(
-                "Yang Harus Hadir",
-                value="Pejabat Pengadaan",
-                key="kd_hadir",
-                height=68,
-            )
-
-            _kd_lampiran = st.file_uploader(
-                "Lampiran PDF (opsional)",
-                type=["pdf"],
-                key="kd_lampiran",
+                height=100,
             )
 
             st.divider()
             st.caption("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
 
-            _kd_n = len(_kd_selected) if "_kd_selected" in dir() else 0
-            # Recompute karena _kd_selected ada di scope luar
-            _kd_selected_final = _kd_selected if "_kd_selected" in dir() else []
-
             if not st.session_state.get("kd_konfirmasi"):
                 if st.button(
-                    f"📨 Kirim Undangan DPP ke {len(_kd_selected_final)} Paket",
+                    f"📨 Kirim Undangan DPP ke {len(_kd_selected)} Paket",
                     key="kd_kirim",
                     type="primary",
-                    disabled=len(_kd_selected_final) == 0,
+                    disabled=len(_kd_selected) == 0,
                     use_container_width=True,
                 ):
                     if not _kd_tempat.strip():
@@ -815,12 +805,12 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         st.rerun()
             else:
                 _kd_konfirm_lines = "\n".join(
-                    f"{i+1}. {p['nama_paket'][:50]}  \n"
+                    f"{i+1}. {p['nama_paket'][:55]}  \n"
                     f"   📅 {_HARI_NAMA[p['_tgl_acara'].weekday()]}, {p['_tgl_acara'].day} {_BULAN_NAMA[p['_tgl_acara'].month-1]} {p['_tgl_acara'].year}"
-                    for i, p in enumerate(_kd_selected_final)
+                    for i, p in enumerate(_kd_selected)
                 )
                 st.warning(
-                    f"Kirim ke **{len(_kd_selected_final)} paket**\n\n"
+                    f"Kirim ke **{len(_kd_selected)} paket**\n\n"
                     f"{_kd_konfirm_lines}\n\n"
                     f"- Pukul: {_kd_jam_mulai.strftime('%H.%M')} s.d. {_kd_jam_selesai.strftime('%H.%M')} Wita\n"
                     f"- Tempat: {_kd_tempat.strip()[:80]}\n\n"
@@ -832,44 +822,85 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         st.session_state["kd_konfirmasi"] = False
                         _kd_progress = st.progress(0, text="Memulai pengiriman...")
                         _kd_hasil = []
-                        _kd_lamp_bytes = _kd_lampiran.getvalue() if _kd_lampiran else None
-                        _kd_lamp_nama  = _kd_lampiran.name if _kd_lampiran else ""
+                        _tgl_kirim_kd = datetime.now().date()
 
-                        for _ki, _kp in enumerate(_kd_selected_final):
+                        for _ki, _kp in enumerate(_kd_selected):
                             _kd_progress.progress(
-                                (_ki + 1) / len(_kd_selected_final),
-                                text=f"Mengirim {_ki+1}/{len(_kd_selected_final)}...",
+                                (_ki + 1) / len(_kd_selected),
+                                text=f"Mengirim {_ki+1}/{len(_kd_selected)}...",
                             )
-                            _waktu_str  = datetime.combine(_kp["_tgl_acara"], _kd_jam_mulai).strftime("%d-%m-%Y %H:%M")
-                            _sampai_str = datetime.combine(_kp["_tgl_acara"], _kd_jam_selesai).strftime("%d-%m-%Y %H:%M")
+                            _kd_tgl_a  = _kp["_tgl_acara"]
+                            _kd_hari_tgl = f"{_HARI_NAMA[_kd_tgl_a.weekday()]}, {_kd_tgl_a.day} {_BULAN_NAMA[_kd_tgl_a.month-1]} {_kd_tgl_a.year}"
+                            _kd_pukul    = f"{_kd_jam_mulai.strftime('%H.%M')} s.d. {_kd_jam_selesai.strftime('%H.%M')} Wita"
+
+                            # Generate PDF lampiran otomatis
+                            import undangan_pdf_engine as _upe
+                            _gen = _upe.generate_undangan_pdf_pl(
+                                kode_paket=_kp["kode_paket"],
+                                tanggal_kirim=_tgl_kirim_kd,
+                                hari_tgl_rapat=_kd_hari_tgl,
+                                pukul_rapat=_kd_pukul,
+                                tempat_rapat=_kd_tempat.strip(),
+                            )
+                            _lamp_bytes = _gen["pdf_bytes"] if _gen["sukses"] else None
+                            _lamp_nama  = f"Undangan_DPP_{_kp['kode_paket']}.pdf"
+
+                            _waktu_str  = datetime.combine(_kd_tgl_a, _kd_jam_mulai).strftime("%d-%m-%Y %H:%M")
+                            _sampai_str = datetime.combine(_kd_tgl_a, _kd_jam_selesai).strftime("%d-%m-%Y %H:%M")
+
                             _res = pl_kirimpesan_engine.kirim_undangan_pl(
                                 kode=_kp["kode_paket"],
                                 waktu=_waktu_str,
                                 sampai=_sampai_str,
                                 tempat=_kd_tempat.strip(),
-                                dibawa=_kd_dibawa.strip(),
-                                hadir=_kd_hadir.strip(),
-                                lampiran_bytes=_kd_lamp_bytes,
-                                lampiran_nama=_kd_lamp_nama,
+                                dibawa=pl_kirimpesan_engine.DEFAULT_DIBAWA,
+                                hadir=pl_kirimpesan_engine.DEFAULT_HADIR,
+                                lampiran_bytes=_lamp_bytes,
+                                lampiran_nama=_lamp_nama,
                             )
                             _kd_hasil.append({
                                 "Paket": _kp["nama_paket"][:50],
-                                "Penerima": _res.get("penerima", "-"),
-                                "Status": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
+                                "Penerima (PPK)": _res.get("penerima", "-"),
+                                "PDF": "✅" if _gen["sukses"] else f"❌ {_gen['pesan']}",
+                                "Kirim": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
                             })
 
                         _kd_progress.empty()
-                        _kd_ok = sum(1 for h in _kd_hasil if h["Status"] == "✅")
+                        _kd_ok = sum(1 for h in _kd_hasil if h["Kirim"] == "✅")
                         if _kd_ok == len(_kd_hasil):
                             st.success(f"✅ Semua {_kd_ok} undangan berhasil dikirim!")
                         else:
                             st.warning(f"⚠️ {_kd_ok} berhasil, {len(_kd_hasil)-_kd_ok} gagal.")
-                        st.dataframe(_kd_hasil, use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            _kd_hasil,
+                            use_container_width=True,
+                            column_config={
+                                "Paket":          st.column_config.TextColumn("Paket", width="large"),
+                                "Penerima (PPK)": st.column_config.TextColumn("Penerima (PPK)"),
+                                "PDF":            st.column_config.TextColumn("PDF", width="small"),
+                                "Kirim":          st.column_config.TextColumn("Kirim", width="small"),
+                            },
+                            hide_index=True,
+                        )
 
                 with _kdc2:
                     if st.button("❌ Batal", key="kd_batal", use_container_width=True):
                         st.session_state["kd_konfirmasi"] = False
                         st.rerun()
+
+        with _kd_col_detail:
+            st.markdown("### Preview")
+            if _kd_selected:
+                st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
+                for _p in _kd_selected:
+                    _tgl_a = _p["_tgl_acara"]
+                    st.markdown(
+                        f"- **{_p['nama_paket'][:55]}**  \n"
+                        f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
+                        f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
+                    )
+            else:
+                st.info("Pilih paket di sebelah kiri.")
 
     # ── Tab 3: Buat Jadwal PL ─────────────────────────────────────────────────
     with _pl_tab3:
