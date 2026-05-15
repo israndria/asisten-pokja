@@ -10,6 +10,10 @@ POKJA_ROOT = os.path.dirname(BASE_DIR)  # D:\Dokumen\@ POKJA 2026
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 BROWSER_SESSION_DIR = os.path.join(BASE_DIR, ".browser_session")
 
+# === PL Output Dirs ===
+OUTPUT_DIR_PL_JKK = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026", "@ Pengadaan Langsung JKK")
+OUTPUT_DIR_PL_PK  = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026", "@ Pengadaan Langsung PK")
+
 # === Apendo ===
 APENDO_EXE  = r"D:\Dokumen\3 @ POKJA 2025\@ POKJA 2025\2. Pokja 009\Apendo v5.1.5u20220905(x64)\release\Apendo.exe"
 PYTHON_SYS  = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "Programs", "Python", "Python312", "python.exe")

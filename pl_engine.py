@@ -282,6 +282,7 @@ def download_dokumen_paket_pl(
     ENDPOINTS = [
         (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",    "KAK & Personil"),
         (f"{BASE_URL}/dokumennontender/{kode_paket}/docsskk", "Rancangan Kontrak"),
+        (f"{BASE_URL}/nontender/{kode_paket}/edit",           "Nota Dinas PPK"),
     ]
 
     for url_ep, label_ep in ENDPOINTS:
