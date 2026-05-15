@@ -302,7 +302,8 @@ def generate_undangan_pdf_pl(
         "«HARI_TGL_RAPAT»":     hari_tgl_rapat,
         "«PUKUL»":              pukul_rapat,
         "«ACARA»":              f"Reviu Dokumen Persiapan Pengadaan {nama_paket}",
-        "«NAMA_POKJA»":         "PP",
+        "«NAMA_POKJA»":                        "PP",
+        "Kelompok Kerja Pemilihan PP":         "Pejabat Pengadaan",
     }
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
