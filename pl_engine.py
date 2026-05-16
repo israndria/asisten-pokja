@@ -280,13 +280,63 @@ def download_dokumen_paket_pl(
             log(f"  ❌ {label}: {e}")
 
     ENDPOINTS = [
-        (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",    "KAK & Personil"),
-        (f"{BASE_URL}/dokumennontender/{kode_paket}/docsskk", "Rancangan Kontrak"),
-        (f"{BASE_URL}/nontender/{kode_paket}/edit",           "Nota Dinas PPK"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",      "KAK & Personil"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/docsskk",   "Rancangan Kontrak"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/docuraian", "Uraian Singkat Pekerjaan"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/lainnya",   "Informasi Lainnya"),
+        (f"{BASE_URL}/nontender/{kode_paket}/edit",             "Nota Dinas PPK"),
     ]
 
     for url_ep, label_ep in ENDPOINTS:
         _download_links_dari_endpoint(url_ep, label_ep)
 
     log(f"🏁 Download selesai: {len(hasil['ok'])} file OK, {len(hasil['error'])} error")
+
+    # ── Catat basename PDF uraian singkat ke Supabase
+    try:
+        for fpath in hasil["ok"]:
+            bn = os.path.basename(fpath).lower()
+            if "uraian" in bn and bn.endswith(".pdf"):
+                _sb().table("draft_paket_pl").update(
+                    {"nama_file_uraian": os.path.basename(fpath)}
+                ).eq("kode_paket", kode_paket).execute()
+                log(f"  📝 nama_file_uraian: {os.path.basename(fpath)}")
+                break
+    except Exception as e:
+        log(f"  ⚠ gagal simpan nama_file_uraian: {e}")
+
+    # ── Gabung semua PDF jadi 1 draft (tiru flow tender)
+    try:
+        from inbox_engine import _gabung_pdf_draft
+        nama_paket_row = _sb().table("draft_paket_pl").select("nama_paket").eq(
+            "kode_paket", kode_paket
+        ).maybe_single().execute()
+        nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
+        nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
+        draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
+        # urut: KAK + RAB + Personil + Rincian + Rancangan + Uraian + Lainnya + NotaDinas
+        ordered = sorted(hasil["ok"], key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
+        merged = _gabung_pdf_draft(draft_path, ordered, progress_cb)
+        hasil["draft_pdf"] = merged
+        log(f"📎 Draft PDF gabungan: {os.path.basename(merged)}")
+    except Exception as e:
+        import traceback as _tb
+        log(f"❌ Gagal gabung PDF: {e}")
+        log(f"   {_tb.format_exc()[-300:]}")
+        hasil["error"].append(f"Gabung PDF: {e}")
+
     return hasil
+
+
+def _pl_pdf_sort_key(fname: str) -> tuple:
+    """Urutan gabung draft PL: KAK → RAB/Personil → Rancangan → Uraian → Lainnya → Nota."""
+    f = fname.lower()
+    if "kak" in f: return (0, f)
+    if "rab" in f: return (1, f)
+    if "personil" in f or "personel" in f: return (2, f)
+    if "rincian" in f or "prn" in f: return (3, f)
+    if "rancangan" in f or "sskk" in f or "ssuk" in f or "spk" in f or "spmk" in f: return (4, f)
+    if "uraian" in f: return (5, f)
+    if "rekomendasi" in f or "lainnya" in f: return (6, f)
+    if "permohonan" in f or "nota" in f: return (7, f)
+    return (9, f)

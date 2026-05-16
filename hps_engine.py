@@ -155,3 +155,160 @@ def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
     except Exception as e:
         return {"count": 0, "warning": [], "total_nilai": 0.0,
                 "total_nilai_bulat": 0.0, "error": str(e)}
+
+
+# ============================================================
+# PL Mode — HPS Non-Tender
+# Endpoint: /dokumennontender/{id_nontender}/hps
+# Tabel Supabase: hps_items_pl (PK: kode_paket, urutan)
+# ============================================================
+
+def _fetch_data_var_pl(id_nontender: str) -> list:
+    """Ambil var JS `data` dari halaman HPS non-tender via requests + cookie PP."""
+    import requests
+    import json as _json
+    import spse_browser
+
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return []
+
+    url = f"{SPSE_BASE_URL}dokumennontender/{id_nontender}/hps"
+    r = requests.get(
+        url,
+        headers={
+            "Cookie": cookie_str,
+            "User-Agent": "Mozilla/5.0",
+            "Referer": SPSE_BASE_URL + "admin/pegawai",
+        },
+        timeout=15,
+    )
+    if r.status_code != 200:
+        return []
+
+    # Parse var data = [...]; dari script tag
+    m = re.search(r"var\s+data\s*=\s*(\[.*?\]);\s*(?:var|</script)", r.text, re.DOTALL)
+    if not m:
+        m = re.search(r"data\s*=\s*(\[\{.+?\}\])", r.text, re.DOTALL)
+    if not m:
+        return []
+
+    try:
+        return _json.loads(m.group(1))
+    except _json.JSONDecodeError:
+        return []
+
+
+def scrape_hps_pl(id_nontender: str) -> dict:
+    """Scrape HPS PL via id_nontender. Struktur sama dengan tender."""
+    raw = _fetch_data_var_pl(id_nontender)
+    if not raw:
+        return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+
+    items = []
+    for i, d in enumerate(raw):
+        jenis_bj   = (d.get("item") or "").strip()
+        satuan     = (d.get("unit") or "").strip()
+        vol        = float(d.get("vol") or 0)
+        harga      = float(d.get("harga") or 0)
+        pajak_pct  = float(d.get("pajak") or 0)
+        total_spse = float(d.get("total_harga") or 0)
+        kbki       = (d.get("kbki") or "").strip()
+
+        is_divisi = (satuan == "" and harga == 0)
+
+        if not is_divisi and vol > 0 and harga > 0:
+            total_hitung = float(
+                (Decimal(str(vol)) * Decimal(str(harga)) * (1 + Decimal(str(pajak_pct)) / 100))
+                .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            )
+            selisih    = round(abs(total_spse - total_hitung), 2)
+            selisih_ok = selisih <= 1.0
+        else:
+            total_hitung = 0.0
+            selisih      = 0.0
+            selisih_ok   = True
+
+        items.append({
+            "urutan":       i + 1,
+            "jenis_bj":     jenis_bj,
+            "satuan":       satuan,
+            "vol":          vol,
+            "harga":        harga,
+            "pajak_pct":    pajak_pct,
+            "total_spse":   total_spse,
+            "total_hitung": total_hitung,
+            "kbki":         kbki,
+            "is_divisi":    is_divisi,
+            "selisih":      selisih,
+            "selisih_ok":   selisih_ok,
+        })
+
+    total_nilai = round(sum(float(d.get("total_harga") or 0) for d in raw), 2)
+    from math import ceil
+    total_nilai_bulat = float(ceil(total_nilai))
+
+    return {
+        "items":             items,
+        "total_nilai":       total_nilai,
+        "total_nilai_bulat": total_nilai_bulat,
+    }
+
+
+def upsert_hps_pl(kode_paket: str, hasil: dict) -> dict:
+    """Upsert ke hps_items_pl. PK: (kode_paket, urutan)."""
+    sb = _sb()
+    records = []
+    for it in hasil["items"]:
+        records.append({
+            "kode_paket":        kode_paket,
+            "urutan":            it["urutan"],
+            "jenis_bj":          it["jenis_bj"],
+            "satuan":            it["satuan"] or None,
+            "vol":               it["vol"] or None,
+            "harga":             it["harga"] or None,
+            "pajak_pct":         it["pajak_pct"] or None,
+            "total_spse":        it["total_spse"] or None,
+            "total_hitung":      it["total_hitung"] or None,
+            "kbki":              it["kbki"] or None,
+            "is_divisi":         it["is_divisi"],
+            "selisih":           it["selisih"],
+            "selisih_ok":        it["selisih_ok"],
+            "total_nilai":       hasil["total_nilai"],
+            "total_nilai_bulat": hasil["total_nilai_bulat"],
+        })
+
+    if records:
+        sb.table("hps_items_pl").upsert(records).execute()
+
+    return {
+        "count":   len(records),
+        "warning": [it for it in hasil["items"] if not it["selisih_ok"]],
+    }
+
+
+def scrape_dan_upsert_hps_pl(kode_paket: str) -> dict:
+    """Scrape HPS PL → upsert. kode_paket dari draft_paket_pl; cari id_nontender otomatis."""
+    try:
+        row = _sb().table("draft_paket_pl").select("id_nontender").eq("kode_paket", kode_paket).maybe_single().execute()
+        id_nt = (row.data or {}).get("id_nontender") if row else None
+        if not id_nt:
+            return {"count": 0, "warning": [], "total_nilai": 0.0,
+                    "total_nilai_bulat": 0.0, "error": "id_nontender tidak ditemukan"}
+
+        hasil = scrape_hps_pl(id_nt)
+        if not hasil["items"]:
+            return {"count": 0, "warning": [], "total_nilai": 0.0,
+                    "total_nilai_bulat": 0.0, "error": "Tidak ada item HPS"}
+
+        r = upsert_hps_pl(kode_paket, hasil)
+        return {
+            "count":             r["count"],
+            "warning":           r["warning"],
+            "total_nilai":       hasil["total_nilai"],
+            "total_nilai_bulat": hasil["total_nilai_bulat"],
+            "error":             None,
+        }
+    except Exception as e:
+        return {"count": 0, "warning": [], "total_nilai": 0.0,
+                "total_nilai_bulat": 0.0, "error": str(e)}

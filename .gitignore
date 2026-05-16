@@ -3,3 +3,11 @@ downloads/
 __pycache__/
 *.pyc
 .env
+.paket_cache.json
+_eproc_dev_cookies.txt
+_sbu_last.json
+spse_session.json
+_test_*.pdf
+test_*.pdf
+scratch/_pl_*.html
+scratch/cdp_check.png

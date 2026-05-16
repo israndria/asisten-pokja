@@ -55,10 +55,31 @@ def _extract_jangka_waktu(teks: str) -> str:
     return ""
 
 
-def _extract_sbu(teks: str) -> str:
-    """Kode SBU dari klausul Klasifikasi (RK003, AR001, BG001, dll)."""
+def _extract_sbu(teks: str) -> tuple[str, str]:
+    """Kode SBU + nama lengkap dari master_sbu Supabase.
+
+    Returns: (sbu_baru_lengkap, sbu_lama_lengkap)
+    Contoh:
+      sbu_baru = "Subklasifikasi RK003 (KBLI 2020) Jasa Rekayasa Pekerjaan Teknik Sipil Transportasi."
+      sbu_lama = "Subklasifikasi Jasa Nasehat dan Konsultansi Rekayasa Teknik (KBLI 2017) RE101"
+    """
     m = re.search(r"\b(RK\d{3}|AR\d{3}|SI\d{3}|BG\d{3}|SP\d{3}|EL\d{3}|MK\d{3})\b", teks)
-    return m.group(1) if m else ""
+    if not m:
+        return ("", "")
+
+    kode = m.group(1)
+
+    # Lookup master_sbu
+    try:
+        from config import sb as _sb
+        r = _sb().table("master_sbu").select("sbu_baru,sbu_lama").like("sbu_baru", f"%{kode}%").execute()
+        if r.data:
+            row = r.data[0]
+            return (row.get("sbu_baru") or kode, row.get("sbu_lama") or "")
+    except Exception:
+        pass
+
+    return (kode, "")
 
 
 def _extract_jabatan_k3(teks: str) -> str:
@@ -98,18 +119,8 @@ def _extract_jabatan_teknis(teks: str) -> str:
 
 
 def _extract_lokasi(teks: str) -> str:
-    m = re.search(
-        r"Lokasi Kegiatan\s*:\s*(.+?)(?=\n\d+\.|$)",
-        teks, re.DOTALL | re.IGNORECASE,
-    )
-    if m:
-        raw = m.group(1).strip()
-        # Bersihkan newline tengah
-        raw = re.sub(r"\s+", " ", raw)
-        # Potong di kalimat pertama saja (sebelum titik)
-        raw = raw.split(".")[0].strip() + "."
-        return raw[:200]
-    return ""
+    """Default 'Kabupaten Tapin'. Tidak parse dari KAK karena selalu sama."""
+    return "Kabupaten Tapin"
 
 
 def parse_kak(pdf_path: str) -> dict:
@@ -121,10 +132,12 @@ def parse_kak(pdf_path: str) -> dict:
     if not teks:
         return {}
 
+    sbu_baru, sbu_lama = _extract_sbu(teks)
     return {
         "nama_ppk":     _extract_nama_ppk(teks),
         "jangka_waktu": _extract_jangka_waktu(teks),
-        "sbu_baru":     _extract_sbu(teks),
+        "sbu_baru":     sbu_baru,
+        "sbu_lama":     sbu_lama,
         "jabatan_k3":   _extract_jabatan_k3(teks),
         "lokasi":       _extract_lokasi(teks),
     }

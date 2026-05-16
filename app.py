@@ -659,6 +659,30 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _kak_u:
                             pl_engine.simpan_paket_pl({"kode_paket": _pl_kode_dl, **_kak_u})
                             st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
+                    # Scrape HPS PL otomatis
+                    try:
+                        import hps_engine as _hps_pl
+                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kode_dl)
+                        if _hps_r.get("error"):
+                            st.warning(f"⚠ HPS: {_hps_r['error']}")
+                        else:
+                            st.success(f"💰 HPS: {_hps_r['count']} item, total Rp {_hps_r['total_nilai']:,.0f}")
+                    except Exception as _he:
+                        st.warning(f"⚠ HPS error: {_he}")
+
+            # Tombol scrape HPS mandiri (kalau download sebelumnya tidak include)
+            if _pl_folder_ada and _pl_row_sel:
+                _pl_kode_hps = _pl_row_sel.get("kode_paket", "")
+                if _pl_kode_hps and st.button("💰 Scrape HPS PL", use_container_width=True, key="pl_btn_hps_saja"):
+                    import hps_engine as _hps_pl
+                    with st.spinner("Scrape HPS dari SPSE..."):
+                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kode_hps)
+                    if _hps_r.get("error"):
+                        st.error(f"Gagal: {_hps_r['error']}")
+                    else:
+                        st.success(f"✅ {_hps_r['count']} item, total Rp {_hps_r['total_nilai']:,.0f}, pembulatan Rp {_hps_r['total_nilai_bulat']:,.0f}")
+                        if _hps_r.get("warning"):
+                            st.warning(f"⚠ {len(_hps_r['warning'])} item selisih")
 
             if _pl_buat_btn and _pl_nama_folder:
                 with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
@@ -697,6 +721,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                         if _pl_kak_update:
                                             pl_engine.simpan_paket_pl({"kode_paket": _pl_kp, **_pl_kak_update})
                                             st.info(f"📋 KAK ter-parse: {', '.join(_pl_kak_update.keys())}")
+                                    # Scrape HPS PL
+                                    try:
+                                        import hps_engine as _hps_pl
+                                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kp)
+                                        if not _hps_r.get("error"):
+                                            st.success(f"💰 HPS: {_hps_r['count']} item, Rp {_hps_r['total_nilai']:,.0f}")
+                                    except Exception:
+                                        pass
                             st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
                             st.rerun()
                         else:
@@ -828,6 +860,16 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     _bkak_u = {k: v for k, v in _bkak_d.items() if v}
                                     if _bkak_u:
                                         pl_engine.simpan_paket_pl({"kode_paket": _bkp, **_bkak_u})
+                                # Scrape HPS PL
+                                try:
+                                    import hps_engine as _hps_pl
+                                    _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_bkp)
+                                    if _hps_r.get("error"):
+                                        _bulk_status.write(f"  ⚠ HPS: {_hps_r['error']}")
+                                    else:
+                                        _bulk_status.write(f"  💰 HPS: {_hps_r['count']} item, total Rp {_hps_r['total_nilai']:,.0f}")
+                                except Exception as _he:
+                                    _bulk_status.write(f"  ⚠ HPS error: {_he}")
                             _bulk_ok.append(f"✅ {_bnm_folder}")
                         else:
                             _bulk_err.append(f"❌ {_bnm_folder}: {_bres.stderr[:100]}")
@@ -1041,100 +1083,253 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             else:
                 st.info("Pilih paket di sebelah kiri.")
 
-    # ── Tab 3: Buat Jadwal PL ─────────────────────────────────────────────────
+            st.divider()
+            st.markdown("### Upload BA Reviu DPP")
+            st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
+
+            import upload_ba_reviu_pl as _ubrpl
+            _pl_rows_ba = pl_engine.load_draft_pl()
+            if not _pl_rows_ba:
+                st.info("⚠️ Belum ada paket PL.")
+            else:
+                _ba_pl_selected = []
+                for _pp in _pl_rows_ba:
+                    _ba_key = f"plba_chk_{_pp['kode_paket']}"
+                    _ba_fkey = f"plba_file_{_pp['kode_paket']}"
+                    _bcol_chk, _bcol_file = st.columns([3, 2])
+                    with _bcol_chk:
+                        _ba_chk = st.checkbox(
+                            f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:45]}",
+                            value=st.session_state.get(_ba_key, False),
+                            key=_ba_key,
+                        )
+                    with _bcol_file:
+                        _ba_up = st.file_uploader(
+                            "BA Reviu",
+                            type=["pdf"],
+                            key=_ba_fkey,
+                            label_visibility="collapsed",
+                        )
+                        if _ba_up:
+                            st.caption(f"📋 {_ba_up.name}")
+                    if _ba_chk:
+                        _ba_pl_selected.append({**_pp, "_ba_file": _ba_up})
+
+                _ba_pl_tgl = st.date_input(
+                    "Tanggal BA Reviu",
+                    value=datetime.now().date(),
+                    key="plba_tgl",
+                    format="DD/MM/YYYY",
+                )
+                st.caption(f"{_HARI_NAMA[_ba_pl_tgl.weekday()]}, {_ba_pl_tgl.day} {_BULAN_NAMA[_ba_pl_tgl.month-1]} {_ba_pl_tgl.year}")
+
+                _ba_pl_valid = [_p for _p in _ba_pl_selected if _p.get("_ba_file")]
+                if st.button(
+                    f"📤 Upload BA Reviu ({len(_ba_pl_valid)} file)",
+                    key="plba_upload",
+                    type="primary",
+                    disabled=len(_ba_pl_valid) == 0,
+                    use_container_width=True,
+                ):
+                    _ba_pl_progress = st.progress(0, text="Memulai upload...")
+                    _ba_pl_hasil = []
+                    for _i, _p in enumerate(_ba_pl_valid):
+                        _ba_pl_progress.progress(
+                            (_i + 1) / len(_ba_pl_valid),
+                            text=f"Upload {_p['kode_paket']} ({_i+1}/{len(_ba_pl_valid)})...",
+                        )
+                        _res = _ubrpl.upload_ba_reviu_pl(
+                            kode_paket=_p["kode_paket"],
+                            file_bytes=_p["_ba_file"].getvalue(),
+                            file_name=_p["_ba_file"].name,
+                            tgl_ba=_ba_pl_tgl.strftime("%d-%m-%Y"),
+                        )
+                        _ba_pl_hasil.append({
+                            "kode":   _p["kode_paket"],
+                            "nama":   _p["nama_paket"][:50],
+                            "sukses": _res["ok"],
+                            "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
+                        })
+                    _ba_pl_progress.empty()
+                    _ba_pl_ok = sum(1 for h in _ba_pl_hasil if h["sukses"])
+                    _ba_pl_fail = len(_ba_pl_hasil) - _ba_pl_ok
+                    if _ba_pl_fail == 0:
+                        st.success(f"✅ {_ba_pl_ok} BA Reviu berhasil diupload!")
+                    else:
+                        st.warning(f"⚠️ {_ba_pl_ok} berhasil, {_ba_pl_fail} gagal.")
+                    st.dataframe(_ba_pl_hasil, use_container_width=True, hide_index=True)
+
+    # ── Tab 3: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
     with _pl_tab3:
         st.markdown("### Buat Jadwal Pengadaan Langsung")
-        st.caption("Atur tanggal tahapan PLJKK: Undangan → Penyampaian Penawaran → Pembukaan Penawaran → Evaluasi → Negosiasi → Penetapan.")
+        st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
+
+        import jadwal_engine_pl as _jepl
+        _libur_map_pl = _LIBUR_MAP
 
         _pljd_rows = pl_engine.load_draft_pl()
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
-            _pljd_col_list, _pljd_col_detail = st.columns([1, 1])
+            _pljd_col_list, _pljd_col_detail = st.columns([3, 2])
 
             with _pljd_col_list:
-                st.markdown("#### Pilih Paket")
-                _pljd_selected = None
-                for _rr in _pljd_rows:
-                    if st.button(
-                        f"📦 {_rr['nama_paket'][:55]}",
-                        key=f"pljd_sel_{_rr['kode_paket']}",
-                        use_container_width=True,
-                    ):
-                        st.session_state["pljd_kode_sel"] = _rr["kode_paket"]
+                st.markdown("### 1. Pilih Paket")
+                _pljd_a, _pljd_b = st.columns(2)
+                with _pljd_a:
+                    if st.button("✅ Semua", key="pljd_sel_all", use_container_width=True):
+                        for _rr in _pljd_rows:
+                            st.session_state[f"pljd_chk_{_rr['kode_paket']}"] = True
                         st.rerun()
-                    if st.session_state.get("pljd_kode_sel") == _rr["kode_paket"]:
-                        st.caption(f"✅ Terpilih: {_rr['kode_paket']}")
-                        _pljd_selected = _rr
+                with _pljd_b:
+                    if st.button("⬜ Kosong", key="pljd_sel_none", use_container_width=True):
+                        for _rr in _pljd_rows:
+                            st.session_state[f"pljd_chk_{_rr['kode_paket']}"] = False
+                        st.rerun()
+
+                _pljd_selected = []
+                for _rr in _pljd_rows:
+                    _key = f"pljd_chk_{_rr['kode_paket']}"
+                    _chk = st.checkbox(
+                        f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                        value=st.session_state.get(_key, False),
+                        key=_key,
+                    )
+                    if _chk:
+                        _pljd_selected.append(_rr)
+
+                st.caption(f"**{len(_pljd_selected)}** dari **{len(_pljd_rows)}** paket dipilih")
 
             with _pljd_col_detail:
-                if not _pljd_selected:
-                    st.info("Pilih paket di sebelah kiri.")
+                st.markdown("### 2. Tanggal Mulai (T1)")
+                _pljd_beda = st.checkbox("Jadwal berbeda per paket", value=False, key="pljd_beda")
+
+                if not _pljd_beda:
+                    _c1, _c2 = st.columns(2)
+                    with _c1:
+                        _pljd_tgl_global = st.date_input(
+                            "Tanggal",
+                            value=datetime.now().date(),
+                            format="DD/MM/YYYY",
+                            key="pljd_tgl_global",
+                        )
+                        st.markdown(f"**{_HARI_NAMA[_pljd_tgl_global.weekday()]}, {_pljd_tgl_global.day} {_BULAN_NAMA[_pljd_tgl_global.month-1]} {_pljd_tgl_global.year}**")
+                    with _c2:
+                        _pljd_jam_global = st.time_input(
+                            "Jam",
+                            value=datetime.strptime("08:00", "%H:%M").time(),
+                            key="pljd_jam_global",
+                        )
+                    if _pljd_tgl_global in _libur_map_pl:
+                        st.warning(f"⚠️ **{_libur_map_pl[_pljd_tgl_global]}**")
                 else:
-                    st.markdown(f"#### {_pljd_selected['nama_paket'][:60]}")
-                    _pljd_tgl_undangan = st.date_input(
-                        "1. Tanggal Undangan",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_undangan",
-                    )
-                    st.caption(f"{_HARI_NAMA[_pljd_tgl_undangan.weekday()]}, {_pljd_tgl_undangan.day} {_BULAN_NAMA[_pljd_tgl_undangan.month-1]} {_pljd_tgl_undangan.year}")
+                    if not _pljd_selected:
+                        st.info("Pilih paket dulu.")
+                    else:
+                        for _p in _pljd_selected:
+                            _ktgl = f"pljd_tgl_{_p['kode_paket']}"
+                            _kjam = f"pljd_jam_{_p['kode_paket']}"
+                            _cna, _cdt, _cjm = st.columns([3, 2, 1])
+                            with _cna:
+                                st.markdown(f"**{_p['nama_paket'][:35]}**")
+                            with _cdt:
+                                st.date_input(
+                                    "Tgl",
+                                    value=st.session_state.get(_ktgl, datetime.now().date()),
+                                    format="DD/MM/YYYY",
+                                    key=_ktgl,
+                                    label_visibility="collapsed",
+                                )
+                            with _cjm:
+                                st.time_input(
+                                    "Jam",
+                                    value=st.session_state.get(_kjam, datetime.strptime("08:00", "%H:%M").time()),
+                                    key=_kjam,
+                                    label_visibility="collapsed",
+                                )
 
-                    _pljd_tgl_batas_penawaran = st.date_input(
-                        "2. Batas Penyampaian Penawaran",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_batas",
-                    )
-                    st.caption(f"{_HARI_NAMA[_pljd_tgl_batas_penawaran.weekday()]}, {_pljd_tgl_batas_penawaran.day} {_BULAN_NAMA[_pljd_tgl_batas_penawaran.month-1]} {_pljd_tgl_batas_penawaran.year}")
+                st.divider()
+                st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
-                    _pljd_tgl_buka_penawaran = st.date_input(
-                        "3. Pembukaan Penawaran",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_buka",
-                    )
-                    st.caption(f"{_HARI_NAMA[_pljd_tgl_buka_penawaran.weekday()]}, {_pljd_tgl_buka_penawaran.day} {_BULAN_NAMA[_pljd_tgl_buka_penawaran.month-1]} {_pljd_tgl_buka_penawaran.year}")
+                _pljd_submit = st.button(
+                    f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=len(_pljd_selected) == 0,
+                    key="pljd_submit_btn",
+                )
 
-                    _pljd_tgl_evaluasi = st.date_input(
-                        "4. Evaluasi Penawaran",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_evaluasi",
-                    )
-                    _pljd_tgl_negosiasi = st.date_input(
-                        "5. Negosiasi",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_negosiasi",
-                    )
-                    _pljd_tgl_penetapan = st.date_input(
-                        "6. Penetapan Penyedia",
-                        value=datetime.now().date(),
-                        format="DD/MM/YYYY",
-                        key="pljd_tgl_penetapan",
-                    )
-
-                    if st.button("💾 Simpan Jadwal", key="pljd_simpan", type="primary", use_container_width=True):
-                        _pljd_data = {
-                            "kode_paket": _pljd_selected["kode_paket"],
-                            "tgl_undangan": str(_pljd_tgl_undangan),
-                            "tgl_batas_penawaran": str(_pljd_tgl_batas_penawaran),
-                            "tgl_buka_penawaran": str(_pljd_tgl_buka_penawaran),
-                            "tgl_evaluasi": str(_pljd_tgl_evaluasi),
-                            "tgl_negosiasi": str(_pljd_tgl_negosiasi),
-                            "tgl_penetapan": str(_pljd_tgl_penetapan),
-                        }
-                        _pljd_res = pl_engine.simpan_paket_pl(_pljd_data)
-                        if _pljd_res["ok"]:
-                            st.success("✅ Jadwal tersimpan ke Supabase.")
+                if _pljd_submit:
+                    _hasil = []
+                    _prog = st.progress(0, text="Mulai...")
+                    for _i, _p in enumerate(_pljd_selected):
+                        _prog.progress((_i + 1) / len(_pljd_selected),
+                                       text=f"{_p['kode_paket']} ({_i+1}/{len(_pljd_selected)})...")
+                        if _pljd_beda:
+                            _tgl = st.session_state.get(f"pljd_tgl_{_p['kode_paket']}", datetime.now().date())
+                            _jam = st.session_state.get(f"pljd_jam_{_p['kode_paket']}", datetime.strptime("08:00", "%H:%M").time())
                         else:
-                            st.error(f"❌ Gagal: {_pljd_res['error']}")
+                            _tgl = _pljd_tgl_global
+                            _jam = _pljd_jam_global
+                        _t1 = datetime.combine(_tgl, _jam)
 
-    # ── Tab 4: Setup Paket PL ─────────────────────────────────────────────────
+                        _id_nt = _p.get("id_nontender")
+                        if not _id_nt:
+                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "id_nontender kosong"})
+                            continue
+                        try:
+                            _r = _jepl.submit_full_pl(_id_nt, _t1)
+                            _sub = _r["submit_result"]
+                            _hasil.append({
+                                "paket":  _p['nama_paket'][:40],
+                                "ok":     _sub["ok"],
+                                "pesan":  f"HTTP {_sub['status']}",
+                                "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
+                            })
+                            # Simpan T1 + T5 selesai ke Supabase
+                            try:
+                                _jad = _r["jadwal_list"]
+                                pl_engine.simpan_paket_pl({
+                                    "kode_paket":            _p["kode_paket"],
+                                    "tgl_batas_penawaran":   _jad[0]["selesai"].strftime("%Y-%m-%d"),
+                                    "tgl_buka_penawaran":    _jad[1]["mulai"].strftime("%Y-%m-%d"),
+                                    "tgl_evaluasi":          _jad[2]["mulai"].strftime("%Y-%m-%d"),
+                                    "tgl_negosiasi":         _jad[3]["mulai"].strftime("%Y-%m-%d"),
+                                    "tgl_penetapan":         _jad[4]["mulai"].strftime("%Y-%m-%d"),
+                                })
+                            except Exception:
+                                pass
+                        except Exception as _e:
+                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": str(_e)[:100]})
+
+                    _prog.empty()
+                    _sukses = sum(1 for h in _hasil if h["ok"])
+                    _gagal = len(_hasil) - _sukses
+                    if _gagal == 0:
+                        st.success(f"✅ Semua {_sukses} paket berhasil dijadwalkan!")
+                    else:
+                        st.warning(f"⚠️ {_sukses} sukses, {_gagal} gagal")
+                    for h in _hasil:
+                        _ic = "✅" if h["ok"] else "❌"
+                        st.markdown(f"{_ic} **{h['paket']}** — {h['pesan']}" + (f" — mulai {h.get('mulai','')}" if h["ok"] else ""))
+
+                with st.expander("ℹ️ Libur Nasional Tersisa"):
+                    _hari_ini = datetime.now().date()
+                    _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
+                    for d in _sisa[:15]:
+                        st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_libur_map_pl[d]}")
+
+    # ── Tab 4: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     with _pl_tab4:
         st.markdown("### Setup Paket Pengadaan Langsung")
-        st.caption("Upload Dokumen Pemilihan (Dokpil) ke SPSE untuk paket PL.")
+        st.caption(
+            "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
+            "Checklist Dokumen Penawaran + Upload Dokumen Pemilihan (Dokpil PDF) ke SPSE. "
+            "KAK / Rancangan Kontrak / Uraian Singkat / Informasi Lainnya tugas PPK (bukan PP)."
+        )
+
+        import dokpil_engine_pl as _depl
+        import upload_dokpil_pl as _udpl
 
         _plsp_rows = pl_engine.load_draft_pl()
         if not _plsp_rows:
@@ -1143,7 +1338,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _plsp_col_list, _plsp_col_kanan = st.columns([2, 3])
 
             with _plsp_col_list:
-                st.markdown("### 1. Pilih Paket")
+                st.markdown("### 1. Pilih Paket + Upload Dokpil")
                 _plsp_sel_all, _plsp_sel_none = st.columns(2)
                 with _plsp_sel_all:
                     if st.button("✅ Semua", key="plsp_sel_all", use_container_width=True):
@@ -1158,78 +1353,203 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                 _plsp_selected = []
                 for _rr in _plsp_rows:
-                    _plsp_chk_key    = f"plsp_chk_{_rr['kode_paket']}"
-                    _plsp_dokpil_key = f"plsp_dokpil_{_rr['kode_paket']}"
-                    _col_chk, _col_dokpil = st.columns([3, 2])
+                    _plsp_chk_key = f"plsp_chk_{_rr['kode_paket']}"
+                    _plsp_file_key = f"plsp_dokpil_{_rr['kode_paket']}"
+                    _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
                         _chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}",
-                            value=st.session_state.get(_plsp_chk_key, True),
+                            f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                            value=st.session_state.get(_plsp_chk_key, False),
                             key=_plsp_chk_key,
                         )
-                    with _col_dokpil:
-                        _up = st.file_uploader(
-                            "DOKPIL",
+                    with _col_file:
+                        _dokpil_up = st.file_uploader(
+                            "Dokpil PDF",
                             type=["pdf"],
-                            key=_plsp_dokpil_key,
+                            key=_plsp_file_key,
                             label_visibility="collapsed",
                         )
-                        if _up:
-                            st.caption(f"📄 {_up.name}")
+                        if _dokpil_up:
+                            st.caption(f"📄 {_dokpil_up.name}")
                     if _chk:
-                        _plsp_selected.append({**_rr, "_dokpil": _up})
+                        _plsp_selected.append({**_rr, "_dokpil_file": _dokpil_up})
 
                 st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
 
             with _plsp_col_kanan:
-                st.markdown("### 2. Upload Dokumen Pemilihan")
-                st.caption("Upload file PDF Dokpil ke SPSE untuk masing-masing paket.")
-
-                _plsp_dengan_file = [p for p in _plsp_selected if p.get("_dokpil")]
-                _plsp_tanpa_file  = [p for p in _plsp_selected if not p.get("_dokpil")]
+                st.markdown("### 2. Konfigurasi Setup Paket")
 
                 if not _plsp_selected:
-                    st.info("Pilih paket dan upload DOKPIL di sebelah kiri terlebih dahulu.")
+                    st.info("Pilih paket di sebelah kiri.")
                 else:
-                    if _plsp_dengan_file:
-                        st.caption(f"✅ **{len(_plsp_dengan_file)} paket** siap diupload:")
-                        for _p in _plsp_dengan_file:
-                            _ku = _p.get("kode_unik") or "DPP"
-                            _nomor_auto = f"000.3.3/PP/Dokpil-{_ku}/{datetime.now().year}"
-                            st.markdown(
-                                f"- **{_p['nama_paket'][:60]}**  \n"
-                                f"  📄 `{_p['_dokpil'].name}`  \n"
-                                f"  📋 `{_nomor_auto}`"
-                            )
-                    if _plsp_tanpa_file:
-                        st.caption(f"⚠️ **{len(_plsp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
-                        for _p in _plsp_tanpa_file:
-                            st.markdown(f"- {_p['nama_paket'][:60]}")
+                    # ── LDK config: centang admin + teknis
+                    _ldk_centang_admin = st.checkbox(
+                        "Centang semua syarat administrasi", value=True, key="plsp_centang_admin",
+                    )
+                    _ldk_centang_teknis = st.checkbox(
+                        "Centang semua syarat teknis (kualifikasi JKK a-f)", value=True, key="plsp_centang_teknis",
+                    )
 
-                    _plsp_tanpa_ku = [p for p in _plsp_dengan_file if not p.get("kode_unik")]
-                    if _plsp_tanpa_ku:
-                        st.warning(f"⚠️ **{len(_plsp_tanpa_ku)} paket** belum punya Kode Unik — klik tombol 'Kode Unik PL' di Excel BAPLJKK dulu.")
+                    st.caption(
+                        "ℹ️ JKK PL ckm_id default: admin 251/70/72/73/74 + teknis 77/268/78/79/80/81. "
+                        "Tidak ada syarat 'Kinerja Penyedia' (khusus tender konstruksi)."
+                    )
 
-                    _plsp_tgl_col, _plsp_btn_col = st.columns([2, 3])
-                    with _plsp_tgl_col:
-                        _plsp_tgl = st.date_input(
-                            "Tanggal Dokumen",
-                            value=datetime.now().date(),
-                            key="plsp_tgl_dokpil",
-                            format="DD/MM/YYYY",
-                            label_visibility="collapsed",
+                    st.divider()
+
+                    # ── Masa Berlaku Penawaran
+                    _ldk_masa_berlaku = st.number_input(
+                        "Masa Berlaku Penawaran (hari)",
+                        min_value=1, max_value=180, value=30,
+                        key="plsp_masa_berlaku",
+                    )
+
+                    st.divider()
+
+                    # ── Checklist Dokumen Penawaran
+                    st.markdown("**Checklist Dokumen Penawaran**")
+                    _cd_a, _cd_b, _cd_c = st.columns(3)
+                    with _cd_a:
+                        _cd_centang_admin = st.checkbox(
+                            "Admin (Masa Berlaku, Surat Penawaran)",
+                            value=True, key="plsp_cd_admin",
                         )
-                        st.caption(f"{_HARI_NAMA[_plsp_tgl.weekday()]}, {_plsp_tgl.day} {_BULAN_NAMA[_plsp_tgl.month-1]} {_plsp_tgl.year}")
-                    with _plsp_btn_col:
-                        _plsp_n = len(_plsp_dengan_file)
-                        if st.button(
-                            f"📤 Upload Dokpil PL ({_plsp_n} file)",
-                            key="plsp_upload_btn",
-                            type="primary",
-                            disabled=_plsp_n == 0,
-                            use_container_width=True,
-                        ):
-                            st.info("⚠️ Endpoint upload DOKPIL nontender belum dipetakan. Fitur ini akan diaktifkan setelah endpoint ditemukan via browser inspection.")
+                    with _cd_b:
+                        _cd_centang_syarat = st.checkbox(
+                            "Teknis (Metodologi, Pengalaman, Kualif TA)",
+                            value=True, key="plsp_cd_syarat",
+                        )
+                    with _cd_c:
+                        _cd_centang_harga = st.checkbox(
+                            "Harga (DKH, AHS, Remunerasi)",
+                            value=True, key="plsp_cd_harga",
+                        )
+
+                    st.divider()
+
+                    # ── Generate Nomor Dokpil
+                    st.markdown("**Tanggal Dokumen Pemilihan**")
+                    _plsp_tgl_dokpil = st.date_input(
+                        "Tanggal Dokpil",
+                        value=datetime.now().date(),
+                        key="plsp_tgl_dokpil",
+                        format="DD/MM/YYYY",
+                    )
+
+                    st.divider()
+
+                    # ── Submit
+                    if st.button(
+                        f"🚀 Push Setup ke SPSE ({len(_plsp_selected)} paket)",
+                        key="plsp_submit_btn",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        _hasil_sp = []
+                        _prog_sp = st.progress(0, text="Mulai...")
+                        for _i, _p in enumerate(_plsp_selected):
+                            _kp = _p["kode_paket"]
+                            _id_nt = _p.get("id_nontender")
+                            _nm = _p["nama_paket"][:40]
+                            _prog_sp.progress((_i + 1) / len(_plsp_selected),
+                                              text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
+
+                            # 1. Submit LDK (kode_paket, bukan id_nontender)
+                            try:
+                                _sbu_full = _p.get("sbu_baru") or ""
+                                _sbu_lama = _p.get("sbu_lama") or ""
+                                _r_ldk = _depl.submit_ldk_pl(
+                                    _kp,
+                                    sbu_baru=_sbu_full,
+                                    sbu_lama=_sbu_lama,
+                                    centang_admin_all=_ldk_centang_admin,
+                                    centang_teknis_all=_ldk_centang_teknis,
+                                )
+                                _hasil_sp.append({
+                                    "paket": _nm, "step": "LDK",
+                                    "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}",
+                                })
+                            except Exception as _e:
+                                _hasil_sp.append({"paket": _nm, "step": "LDK", "ok": False, "pesan": str(_e)[:80]})
+
+                            # 2. Masa berlaku penawaran
+                            try:
+                                _r_mb = _depl.submit_masa_berlaku_pl(_kp, int(_ldk_masa_berlaku))
+                                _hasil_sp.append({
+                                    "paket": _nm, "step": "Masa Berlaku",
+                                    "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari)",
+                                })
+                            except Exception as _e:
+                                _hasil_sp.append({"paket": _nm, "step": "Masa Berlaku", "ok": False, "pesan": str(_e)[:80]})
+
+                            # 3. Checklist Dokumen Penawaran
+                            try:
+                                _r_cd = _depl.submit_checklist_pl(
+                                    _kp,
+                                    centang_admin_all=_cd_centang_admin,
+                                    centang_syarat_all=_cd_centang_syarat,
+                                    centang_harga_all=_cd_centang_harga,
+                                )
+                                _hasil_sp.append({
+                                    "paket": _nm, "step": "Checklist Dok Penawaran",
+                                    "ok": _r_cd["ok"], "pesan": f"HTTP {_r_cd['status']}",
+                                })
+                            except Exception as _e:
+                                _hasil_sp.append({"paket": _nm, "step": "Checklist Dok Penawaran", "ok": False, "pesan": str(_e)[:80]})
+
+                            # 4. Upload Dokpil PDF (jika ada file)
+                            _dokpil_file = _p.get("_dokpil_file")
+                            if _dokpil_file and _id_nt:
+                                try:
+                                    # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
+                                    _kode_unik = _p.get("kode_unik") or ""
+                                    _skpd_singkat = _p.get("singkatan_dinas") or _p.get("skpd_singkat") or "DPUPR"
+                                    _nomor_dokpil = _udpl.generate_nomor_dokpil(
+                                        nama_paket=_p["nama_paket"],
+                                        kode_unik=_kode_unik,
+                                        skpd_singkat=_skpd_singkat,
+                                        tahun=_plsp_tgl_dokpil.year,
+                                    )
+                                    _r_up = _udpl.upload_dokpil_pl(
+                                        id_nontender=_id_nt,
+                                        file_bytes=_dokpil_file.getvalue(),
+                                        file_name=_dokpil_file.name,
+                                        nomor_dokpil=_nomor_dokpil,
+                                        tgl_dokpil=_plsp_tgl_dokpil.strftime("%d-%m-%Y"),
+                                    )
+                                    _hasil_sp.append({
+                                        "paket": _nm, "step": "Upload Dokpil",
+                                        "ok": _r_up["ok"],
+                                        "pesan": f"HTTP {_r_up.get('status','?')} | {_nomor_dokpil}",
+                                    })
+                                except Exception as _e:
+                                    _hasil_sp.append({
+                                        "paket": _nm, "step": "Upload Dokpil",
+                                        "ok": False, "pesan": str(_e)[:80],
+                                    })
+                            elif _dokpil_file and not _id_nt:
+                                _hasil_sp.append({
+                                    "paket": _nm, "step": "Upload Dokpil",
+                                    "ok": False, "pesan": "id_nontender kosong, tidak bisa upload",
+                                })
+
+                        _prog_sp.empty()
+                        _sukses_sp = sum(1 for h in _hasil_sp if h["ok"])
+                        _gagal_sp = len(_hasil_sp) - _sukses_sp
+                        if _gagal_sp == 0:
+                            st.success(f"✅ Semua {_sukses_sp} operasi sukses!")
+                        else:
+                            st.warning(f"⚠️ {_sukses_sp} sukses, {_gagal_sp} gagal")
+
+                        # Tampilkan log per paket
+                        import pandas as _pd
+                        _df_sp = _pd.DataFrame(_hasil_sp)
+                        if not _df_sp.empty:
+                            _df_sp["status"] = _df_sp["ok"].map({True: "✅", False: "❌"})
+                            st.dataframe(
+                                _df_sp[["status", "paket", "step", "pesan"]],
+                                use_container_width=True, hide_index=True,
+                            )
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
