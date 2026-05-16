@@ -707,31 +707,82 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
 
-            # Sinkron status folder: folder fisik ada tapi Supabase belum tercatat
-            if st.button("🔄 Sinkron Status Folder", use_container_width=True, key="pl_btn_sinkron"):
-                _sinkron_count = 0
-                for _sr in _pl_rows:
-                    if _sr.get("folder_dibuat"):
-                        continue
-                    _snm  = _sr.get("nama_paket", "")
-                    _skp  = _sr.get("kode_paket", "")
-                    _sj   = _sr.get("jenis_pl", "JKK")
-                    _spfx = {"JKK": "PLJKK", "PK": "PLPK"}.get(_sj, f"PL{_sj}")
-                    _sno  = _pl_no_dari_nama(_snm, 0)
-                    _sfolder = re.sub(r'[/<>:"\|?*]', "-", f"{_sno}. {_spfx} - {_snm}").strip()
-                    _sbase   = _PL_DIR_JKK if _sj == "JKK" else _PL_DIR_PK
-                    _starget = _pl_os.path.join(_sbase, _sfolder)
-                    if _pl_os.path.exists(_starget):
-                        pl_engine.tandai_folder_dibuat(_skp)
-                        _sinkron_count += 1
-                st.success(f"✅ {_sinkron_count} paket disinkron") if _sinkron_count else st.info("Tidak ada yang perlu disinkron")
-                st.rerun()
-
             _pl_rows_belum = [
                 r for r in _pl_rows
                 if r.get("nama_paket") and not r.get("folder_dibuat")
             ]
+
+            # Plan: pre-compute nama folder per paket
+            _pl_bulk_plan = []
+            for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
+                _bnm0  = _br0.get("nama_paket", "")
+                _bj0   = _br0.get("jenis_pl", "JKK")
+                _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
+                _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
+                _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
+                _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
+                _pl_bulk_plan.append({
+                    "kode_paket": _br0.get("kode_paket", ""),
+                    "nama_folder": _bnm_folder0,
+                    "out_base": _bout_base0,
+                    "jenis_pl": _bj0,
+                })
+
             st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
+            if _pl_bulk_plan:
+                with st.expander(f"📋 Preview {len(_pl_bulk_plan)} folder yang akan dibuat"):
+                    for _bp0 in _pl_bulk_plan:
+                        st.caption(_bp0["nama_folder"])
+
+            # ── Reset Status Folder (kosongkan folder_dibuat di Supabase) ──
+            with st.expander("↩️ Reset Status Folder"):
+                st.caption("Kosongkan `folder_dibuat` agar paket muncul kembali di Bulk Create (folder fisik tidak dihapus).")
+                _opsi_reset_pl = {
+                    f"{r.get('nama_paket','')[:60]} — {r.get('jenis_pl','')}": r.get("kode_paket")
+                    for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")
+                }
+                if _opsi_reset_pl:
+                    from config import sb as _sb_reset
+
+                    # Reset Semua
+                    _rs_col1, _rs_col2 = st.columns([1, 1])
+                    if _rs_col1.button(
+                        f"↩️ Reset Semua ({len(_opsi_reset_pl)} paket)",
+                        type="secondary",
+                        use_container_width=True,
+                        key="pl_btn_reset_all",
+                    ):
+                        _reset_all_ok = 0
+                        for _kr_all in _opsi_reset_pl.values():
+                            try:
+                                _sb_reset().table("draft_paket_pl").update(
+                                    {"folder_dibuat": None}
+                                ).eq("kode_paket", _kr_all).execute()
+                                _reset_all_ok += 1
+                            except Exception as _er_all:
+                                st.error(f"{_kr_all}: {_er_all}")
+                        if _reset_all_ok:
+                            st.success(f"✅ {_reset_all_ok} paket berhasil direset.")
+                        st.rerun()
+
+                    _pilih_reset_pl = st.multiselect("Pilih paket:", list(_opsi_reset_pl.keys()), key="pl_ms_reset_folder")
+                    if _pilih_reset_pl:
+                        if st.button("↩️ Reset Pilihan", type="secondary", key="pl_btn_reset_folder"):
+                            _reset_ok_pl = 0
+                            for _kr in [_opsi_reset_pl[k] for k in _pilih_reset_pl]:
+                                try:
+                                    _sb_reset().table("draft_paket_pl").update(
+                                        {"folder_dibuat": None}
+                                    ).eq("kode_paket", _kr).execute()
+                                    _reset_ok_pl += 1
+                                except Exception as _er_pl:
+                                    st.error(f"{_kr}: {_er_pl}")
+                            if _reset_ok_pl:
+                                st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
+                            st.rerun()
+                else:
+                    st.info("Tidak ada paket dengan status folder yang bisa direset.")
+
             if st.button(
                 f"📁 Buat Semua Folder ({len(_pl_rows_belum)} paket)",
                 disabled=len(_pl_rows_belum) == 0,
