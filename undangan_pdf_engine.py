@@ -19,15 +19,7 @@ _BULAN = ["Januari","Februari","Maret","April","Mei","Juni",
 _HARI  = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]
 
 _TEMPLATE_REL    = r"Paket Experiment\4. Undangan Full PK - Template.docx"
-_TEMPLATE_REL_PL = (
-    r"Paket Experiment - Pengadaan Langsung - Konsultan Konstuksi"
-    r"\Development\4. Undangan Full PLJK - Template.docx"
-)
-_TEMPAT_UKPBJ = (
-    "Ruang Aula Rapat Lantai 2 Kantor UKPBJ Kabupaten Tapin, "
-    "Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, Kecamatan Tapin Utara, "
-    "Rantau, Kabupaten Tapin. Kode Pos : 71111"
-)
+_TEMPLATE_REL_PL = r"Paket Experiment - Pengadaan Langsung - Konsultan Konstuksi\Development\4. Undangan Full PLJK - Template.docx"
 
 
 def _fmt_tanggal(d: date) -> str:
@@ -93,16 +85,6 @@ def _export_pdf_via_word(docx_path: str, pdf_path: str) -> None:
             ReadOnly=False,
             AddToRecentFiles=False,
         )
-        # Matikan gridlines agar tidak ikut ter-print ke PDF
-        try:
-            word.ActiveWindow.DisplayGridLines = False
-        except Exception:
-            pass
-        try:
-            doc.ShowGrammaticalErrors = False
-            doc.ShowSpellingErrors = False
-        except Exception:
-            pass
         doc.ExportAsFixedFormat(
             OutputFileName=pdf_path,
             ExportFormat=17,  # wdExportFormatPDF
@@ -300,171 +282,40 @@ def generate_undangan_pdf_pl(
         return {"sukses": False, "pdf_path": "", "pdf_bytes": b"",
                 "pesan": f"Template tidak ditemukan: {template_path}"}
 
-    import re as _re2
-
     nama_satker  = _title_case_dinas(data.get("satker", ""))
     nama_paket   = data.get("nama_paket", "")
+    nama_ppk     = data.get("nama_ppk", "")
+    nomor_sd     = data.get("nomor_surat_dinas", "")
+    nomor_pp_val = data.get("id_nontender", kode_paket)
     kode_unik    = data.get("kode_unik") or "DPP"
-    jenis        = data.get("jenis_pl", "JKK")
-
-    # Nomor + Perihal surat Permohonan PPK — extract dari PDF di folder paket PL
-    nomor_pp = ""
-    perihal_pp = ""
-    import glob as _glob
-    _base_pl = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026",
-                            f"@ Pengadaan Langsung {jenis}")
-    _pdf_list = []
-    for _pat in ["Permohonan PPK*.pdf", "*ermohonan*.pdf"]:
-        _pdf_list = _glob.glob(os.path.join(_base_pl, "**", _pat), recursive=True)
-        if _pdf_list:
-            break
-    if _pdf_list:
-        try:
-            import pdfplumber
-            with pdfplumber.open(_pdf_list[0]) as _pdf:
-                _txt = _pdf.pages[0].extract_text() or ""
-            _mn = _re2.search(r"(?i)nomor\s*:\s*([^\n]+)", _txt)
-            if _mn:
-                nomor_pp = _mn.group(1).strip()
-            _mp = _re2.search(r"(?i)perihal\s*:\s*(.+?)(?=\n(?:Lampiran|Kepada|Nomor|\s*$))", _txt, _re2.DOTALL)
-            if _mp:
-                perihal_pp = " ".join(_mp.group(1).split())
-        except Exception:
-            pass
-
-    # Berdasarkan no. 2: "Surat Nomor: {nomor} tentang {perihal}"
-    if nomor_pp and perihal_pp:
-        berdasarkan_pp = f"Surat Nomor: {nomor_pp} tentang {perihal_pp}."
-    elif perihal_pp:
-        berdasarkan_pp = f"Surat tentang {perihal_pp}."
-    else:
-        berdasarkan_pp = "Surat Permohonan Pengadaan dari PPK."
-
-    # Singkatan SKPD: huruf kapital tiap kata, skip stop words
-    _SKIP = {"Dan", "Di", "Ke", "Dari", "Yang", "Untuk", "Dengan", "Atau",
-             "Pada", "Dalam", "Oleh", "Atas", "Bagi", "Tentang", "Kabupaten",
-             "Kota", "Provinsi", "No", "Nomor"}
-    _singkatan = "".join(
-        w[0] for w in nama_satker.split()
-        if w and w[0].isupper() and w not in _SKIP
-    )
-
-    # Nomor paket dari digit akhir kode_unik, zero-pad 2 digit
-    _no_m = _re2.search(r"\d+$", kode_unik)
-    _no_paket_str = _no_m.group().zfill(2) if _no_m else "01"
 
     if not nomor_surat:
-        nomor_surat = (
-            f"000.3.3/PP-{_no_paket_str}/{_singkatan}"
-            f"/Reviu-{kode_unik}/{tanggal_kirim.year}"
-        )
-
-    NAMA_PP = "Muhammad Isra Andria, S.T."
-    NIP_PP  = "NIP. 19941211 202012 1 006"
+        nomor_surat = f"000.3.3/PP/Reviu-{kode_unik}/{tanggal_kirim.year}"
 
     replacements = {
-        "\xabTANGGAL_KIRIM\xbb":  _fmt_tanggal(tanggal_kirim),
-        "\xabNOMOR_SURAT\xbb":    nomor_surat,
-        "\xabPENERIMA_1\xbb":     f"PPK & Tim Teknis {nama_satker} Kabupaten Tapin",
-        "\xabBERDASARKAN_PP\xbb": berdasarkan_pp,
-        "\xabHARI_TGL_RAPAT\xbb": hari_tgl_rapat,
-        "\xabPUKUL\xbb":          pukul_rapat,
-        "\xabACARA\xbb":          f"Reviu Dokumen Persiapan Pengadaan {nama_paket}",
-        "\xabTEMPAT_RAPAT\xbb":   tempat_rapat,
-        "\xabINSTANSI_PP\xbb":    f"Pejabat Pengadaan {nama_satker}",
-        "\xabTTD_PP\xbb":         "TTD_PP",  # marker untuk inject gambar
-        "\xabNAMA_NIP_PP\xbb":    f"{NAMA_PP}\n{NIP_PP}",
+        "«TANGGAL_KIRIM»":     _fmt_tanggal(tanggal_kirim),
+        "«NOMOR_SURAT»":        nomor_surat,
+        "«PENERIMA_1»":         f"PPK {nama_satker} Kabupaten Tapin",
+        "«PENERIMA_2»":         nama_ppk,
+        "«PENERIMA_3»":         f"Terkait Paket {nama_paket}",
+        "«NOMOR_SURAT_DINAS»":  nomor_sd,
+        "«NOMOR_PP»":           nomor_pp_val,
+        "«HARI_TGL_RAPAT»":     hari_tgl_rapat,
+        "«PUKUL»":              pukul_rapat,
+        "«ACARA»":              f"Reviu Dokumen Persiapan Pengadaan {nama_paket}",
+        "«NAMA_POKJA»":                        "PP",
+        "Kelompok Kerja Pemilihan PP":         "Pejabat Pengadaan",
     }
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(output_dir, exist_ok=True)
     tmp_docx = os.path.join(output_dir, f"_tmp_undangan_pl_{os.getpid()}.docx")
-
-    # Cari file TTD gambar di folder Development template
-    _template_dir = os.path.dirname(template_path)
-    _ttd_path = os.path.join(_template_dir, "ttd_pp.png")
-    # Fallback: cari di semua subfolder paket PL
-    if not os.path.isfile(_ttd_path):
-        import glob as _glob2
-        from config import POKJA_ROOT as _PR
-        _cands = _glob2.glob(os.path.join(_PR, "@ Pejabat Pengadaan 2026", "**", "ttd_pp.png"), recursive=True)
-        if _cands:
-            _ttd_path = _cands[0]
-
     try:
         shutil.copy2(template_path, tmp_docx)
         doc = docx.Document(tmp_docx)
         for ph, val in replacements.items():
             _replace_all(doc, ph, str(val))
-
         doc.save(tmp_docx)
-
-        # Patch zip: fix Content_Types + inject TTD gambar (satu pass)
-        import zipfile as _zf, re as _re3
-        from PIL import Image as _PIL_Image
-
-        with _zf.ZipFile(tmp_docx, "r") as _zin:
-            _files = {n: _zin.read(n) for n in _zin.namelist()}
-
-        # Fix Content_Types — python-docx drop entry png dari header
-        _ct = _files["[Content_Types].xml"].decode()
-        if 'Extension="png"' not in _ct:
-            _files["[Content_Types].xml"] = _ct.replace(
-                "</Types>", '<Default Extension="png" ContentType="image/png"/></Types>'
-            ).encode()
-
-        # Inject TTD gambar
-        if os.path.isfile(_ttd_path):
-            with _PIL_Image.open(_ttd_path) as _im:
-                _px_w, _px_h = _im.size
-            _emu_target_w = int(3 / 2.54 * 914400)
-            _emu_target_h = int(_emu_target_w * _px_h / _px_w)
-
-            with open(_ttd_path, "rb") as _fimg:
-                _png_bytes = _fimg.read()
-
-            _rels_xml = _files["word/_rels/document.xml.rels"].decode()
-            _existing_ids = list(map(int, _re3.findall(r'Id="rId(\d+)"', _rels_xml)))
-            _new_rid_num = max(_existing_ids, default=10) + 1
-            _new_rid = f"rId{_new_rid_num}"
-
-            _files["word/media/ttd_pp.png"] = _png_bytes
-            _files["word/_rels/document.xml.rels"] = _rels_xml.replace(
-                "</Relationships>",
-                f'<Relationship Id="{_new_rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/ttd_pp.png"/></Relationships>',
-            ).encode()
-
-            _doc_xml = _files["word/document.xml"].decode()
-            _drawing = (
-                f'<w:drawing>'
-                f'<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
-                f'<wp:extent cx="{_emu_target_w}" cy="{_emu_target_h}"/>'
-                f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
-                f'<wp:docPr id="{_new_rid_num}" name="ttd_pp"/>'
-                f'<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
-                f'<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
-                f'<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-                f'<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-                f'<pic:nvPicPr><pic:cNvPr id="0" name="ttd_pp"/><pic:cNvPicPr/></pic:nvPicPr>'
-                f'<pic:blipFill><a:blip r:embed="{_new_rid}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
-                f'<a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
-                f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{_emu_target_w}" cy="{_emu_target_h}"/></a:xfrm>'
-                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
-                f'</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>'
-            )
-            _ttd_pos = _doc_xml.find(">TTD_PP</w:t>")
-            if _ttd_pos >= 0:
-                _run_matches = list(_re3.finditer(r'<w:r[ >]', _doc_xml[:_ttd_pos]))
-                if _run_matches:
-                    _rs = _run_matches[-1].start()
-                    _re_end = _doc_xml.find("</w:r>", _ttd_pos) + len("</w:r>")
-                    _doc_xml = _doc_xml[:_rs] + f'<w:r>{_drawing}</w:r>' + _doc_xml[_re_end:]
-            _files["word/document.xml"] = _doc_xml.encode()
-
-        with _zf.ZipFile(tmp_docx, "w", _zf.ZIP_DEFLATED) as _zout:
-            for _n, _data in _files.items():
-                _zout.writestr(_n, _data)
-
         _export_pdf_via_word(os.path.abspath(tmp_docx), os.path.abspath(output_path))
     except Exception as e:
         return {"sukses": False, "pdf_path": output_path, "pdf_bytes": b"",
