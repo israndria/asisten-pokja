@@ -704,6 +704,73 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     except Exception as _pe:
                         st.error(f"Error: {_pe}")
 
+            # ── Bulk: Buat Semua Folder ──────────────────────────────
+            st.divider()
+            _pl_rows_belum = [
+                r for r in _pl_rows
+                if r.get("nama_paket") and not r.get("folder_dibuat")
+            ]
+            st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
+            if st.button(
+                f"📁 Buat Semua Folder ({len(_pl_rows_belum)} paket)",
+                disabled=len(_pl_rows_belum) == 0,
+                use_container_width=True,
+                key="pl_btn_buat_semua",
+            ):
+                _bulk_status = st.status(
+                    f"⏳ Memproses {len(_pl_rows_belum)} paket...", expanded=True
+                )
+                _bulk_ok, _bulk_err = [], []
+                for _bi, _br in enumerate(_pl_rows_belum, 1):
+                    _bnm  = _br.get("nama_paket", "")
+                    _bkp  = _br.get("kode_paket", "")
+                    _bj   = _br.get("jenis_pl", "JKK")
+                    _bpfx = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj, f"PL{_bj}")
+                    _bno  = _pl_no_dari_nama(_bnm, _bi)
+                    _bnm_folder = re.sub(r'[/<>:"\|?*]', "-", f"{_bno}. {_bpfx} - {_bnm}").strip()
+                    _bout_base  = _PL_DIR_JKK if _bj == "JKK" else _PL_DIR_PK
+                    _btarget    = _pl_os.path.join(_bout_base, _bnm_folder)
+                    _bulk_status.update(label=f"📁 [{_bi}/{len(_pl_rows_belum)}] {_bnm_folder[:50]}...")
+                    try:
+                        if _pl_os.path.exists(_btarget):
+                            pl_engine.tandai_folder_dibuat(_bkp)
+                            _bulk_ok.append(f"✅ {_bnm_folder} (sudah ada)")
+                            continue
+                        _bres = _pl_sp.run(
+                            [_PL_PY, _PL_SCRIPT, "--mode", "pl",
+                             "--output-dir", _bout_base, _bnm_folder],
+                            capture_output=True, text=True, timeout=60,
+                            creationflags=_PL_NO_WIN,
+                        )
+                        if _bres.returncode == 0:
+                            pl_engine.tandai_folder_dibuat(_bkp)
+                            # Download dokumen
+                            if _pl_dl_dokumen and _bkp:
+                                _bdl_msgs = []
+                                def _bdl_cb(msg): _bdl_msgs.append(msg)
+                                _bdl_r = pl_engine.download_dokumen_paket_pl(_bkp, _btarget, _bdl_cb)
+                                # Parse KAK
+                                _bkak_p = parse_kak_pl.cari_kak_di_folder(_btarget)
+                                if _bkak_p:
+                                    _bkak_d = parse_kak_pl.parse_kak(_bkak_p)
+                                    _bkak_u = {k: v for k, v in _bkak_d.items() if v}
+                                    if _bkak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _bkp, **_bkak_u})
+                            _bulk_ok.append(f"✅ {_bnm_folder}")
+                        else:
+                            _bulk_err.append(f"❌ {_bnm_folder}: {_bres.stderr[:100]}")
+                    except Exception as _be:
+                        _bulk_err.append(f"❌ {_bnm_folder}: {_be}")
+                _bulk_status.update(
+                    label=f"✅ {len(_bulk_ok)} berhasil, ❌ {len(_bulk_err)} gagal",
+                    state="complete", expanded=True,
+                )
+                for _m in _bulk_ok:
+                    _bulk_status.write(_m)
+                for _m in _bulk_err:
+                    _bulk_status.write(_m)
+                st.rerun()
+
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     with _pl_tab2:
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
