@@ -706,6 +706,27 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
+
+            # Sinkron status folder: folder fisik ada tapi Supabase belum tercatat
+            if st.button("🔄 Sinkron Status Folder", use_container_width=True, key="pl_btn_sinkron"):
+                _sinkron_count = 0
+                for _sr in _pl_rows:
+                    if _sr.get("folder_dibuat"):
+                        continue
+                    _snm  = _sr.get("nama_paket", "")
+                    _skp  = _sr.get("kode_paket", "")
+                    _sj   = _sr.get("jenis_pl", "JKK")
+                    _spfx = {"JKK": "PLJKK", "PK": "PLPK"}.get(_sj, f"PL{_sj}")
+                    _sno  = _pl_no_dari_nama(_snm, 0)
+                    _sfolder = re.sub(r'[/<>:"\|?*]', "-", f"{_sno}. {_spfx} - {_snm}").strip()
+                    _sbase   = _PL_DIR_JKK if _sj == "JKK" else _PL_DIR_PK
+                    _starget = _pl_os.path.join(_sbase, _sfolder)
+                    if _pl_os.path.exists(_starget):
+                        pl_engine.tandai_folder_dibuat(_skp)
+                        _sinkron_count += 1
+                st.success(f"✅ {_sinkron_count} paket disinkron") if _sinkron_count else st.info("Tidak ada yang perlu disinkron")
+                st.rerun()
+
             _pl_rows_belum = [
                 r for r in _pl_rows
                 if r.get("nama_paket") and not r.get("folder_dibuat")
