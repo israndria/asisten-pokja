@@ -375,7 +375,7 @@ def generate_undangan_pdf_pl(
         "\xabACARA\xbb":          f"Reviu Dokumen Persiapan Pengadaan {nama_paket}",
         "\xabTEMPAT_RAPAT\xbb":   tempat_rapat,
         "\xabTTD_PP\xbb":         "TTD_PP",  # marker inject gambar
-        "\xabNAMA_NIP_PP\xbb":    f"{NAMA_PP}\n{NIP_PP}",
+        "\xabNAMA_NIP_PP\xbb":    f"{NAMA_PP}||NIP||{NIP_PP}",
         "UKPBJ Kabupaten Tapin":  f"Pejabat Pengadaan {nama_satker}",
         "Kelompok Kerja Pemilihan PP": f"Pejabat Pengadaan {nama_satker}",
     }
@@ -437,6 +437,26 @@ def generate_undangan_pdf_pl(
                         .replace("<", "&lt;")
                         .replace(">", "&gt;"))
             _doc_xml = _doc_xml.replace(ph, _escaped)
+        _RPR = (
+            '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+            '<w:color w:val="000000" w:themeColor="text1"/>'
+            '<w:sz w:val="28"/><w:szCs w:val="28"/>'
+            '<w:lang w:eastAsia="id-ID"/></w:rPr>'
+        )
+        # Fix nama+NIP: ||NIP|| → line break Word dengan rPr Arial 14pt
+        _doc_xml = _doc_xml.replace(
+            "||NIP||",
+            f'</w:t></w:r><w:r>{_RPR}<w:br/></w:r><w:r>{_RPR}<w:t xml:space="preserve">'
+        )
+        # Fix TEMPAT_RAPAT: run tanpa rPr (ListParagraph style) → inject rPr Arial 14pt
+        # Cari run <w:r><w:t>...hasil replace tempat...</w:t></w:r> dan tambah rPr
+        _tempat_val = replacements.get("\xabTEMPAT_RAPAT\xbb", "")
+        if _tempat_val:
+            _tempat_escaped = (_tempat_val.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+            _doc_xml = _doc_xml.replace(
+                f'<w:r><w:t>{_tempat_escaped}</w:t></w:r>',
+                f'<w:r>{_RPR}<w:t xml:space="preserve">{_tempat_escaped}</w:t></w:r>',
+            )
         _files["word/document.xml"] = _doc_xml.encode()
 
         # Fix Content_Types — python-docx drop entry png dari header
@@ -450,7 +470,7 @@ def generate_undangan_pdf_pl(
         if os.path.isfile(_ttd_path):
             with _PIL_Image.open(_ttd_path) as _im:
                 _px_w, _px_h = _im.size
-            _emu_target_w = int(3 / 2.54 * 914400)
+            _emu_target_w = int(2 / 2.54 * 914400)
             _emu_target_h = int(_emu_target_w * _px_h / _px_w)
 
             with open(_ttd_path, "rb") as _fimg:
