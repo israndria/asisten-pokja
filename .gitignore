@@ -10,4 +10,5 @@ spse_session.json
 _test_*.pdf
 test_*.pdf
 scratch/_pl_*.html
+scratch/_prod_*.html
 scratch/cdp_check.png

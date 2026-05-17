@@ -140,9 +140,27 @@ def _check_upload_status(file_id: str, cookie: str, max_retries: int = 8) -> boo
 # Step 5: Submit form Dokpil
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _scrap_upload_form(id_nontender: str, cookie: str) -> dict:
-    """GET /dokumennontender/{id_nontender}/uploaddoknontender → CSRF + ref + kode_paket di action."""
-    url = f"{BASE}/dokumennontender/{id_nontender}/uploaddoknontender"
+def _resolve_id_dokpil(kode_paket: str, cookie: str) -> str:
+    """
+    Scrape /nontender/{kode_paket}/edit cari href '/dokumennontender/{id_dokpil}/uploaddoknontender'.
+
+    PROD pakai id_dokpil terpisah (≠ id_nontender ≠ kode_paket). Contoh paket 10860847000:
+    kode_paket=10860847000, id_nontender=11724277000, id_dokpil=10771412000.
+    """
+    url = f"{BASE}/nontender/{kode_paket}/edit"
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0", "Cookie": cookie,
+                                    "Referer": f"{BASE}/admin/pegawai"}, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"GET /nontender/{kode_paket}/edit fail: HTTP {r.status_code}")
+    m = re.search(r"/dokumennontender/(\d+)/uploaddoknontender", r.text)
+    if not m:
+        raise RuntimeError("Link uploaddoknontender tidak ditemukan di /edit.")
+    return m.group(1)
+
+
+def _scrap_upload_form(id_dokpil: str, cookie: str) -> dict:
+    """GET /dokumennontender/{id_dokpil}/uploaddoknontender → CSRF + ref + kode_paket di action."""
+    url = f"{BASE}/dokumennontender/{id_dokpil}/uploaddoknontender"
     r = requests.get(url, headers={**HDRS, "Cookie": cookie, "Referer": f"{BASE}/admin/pegawai"}, timeout=15)
     if r.status_code != 200:
         raise RuntimeError(f"GET uploaddoknontender fail: HTTP {r.status_code}")
@@ -154,7 +172,7 @@ def _scrap_upload_form(id_nontender: str, cookie: str) -> dict:
     action = form.get("action") or ""
     # Action: /tapinkab/dokumennontender/{KODE_PAKET}/doknontendersubmit
     m = re.search(r"/dokumennontender/(\d+)/doknontendersubmit", action)
-    kode_paket = m.group(1) if m else id_nontender
+    kode_paket = m.group(1) if m else id_dokpil
 
     csrf = ""
     ref = ""
@@ -216,7 +234,7 @@ def _submit_dokpil_form(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def upload_dokpil_pl(
-    id_nontender: str,
+    kode_paket: str,
     file_bytes: bytes,
     file_name: str,
     nomor_dokpil: str,
@@ -226,7 +244,7 @@ def upload_dokpil_pl(
     Upload PDF Dokumen Pemilihan ke paket PL.
 
     Args:
-        id_nontender : ID internal paket (kolom 0 dt/paketpp). Dipakai untuk GET form upload.
+        kode_paket   : kode paket (kolom 5 dt/paketpp). Engine resolve id_dokpil dari /nontender/{kode}/edit.
         file_bytes   : isi PDF
         file_name    : nama file
         nomor_dokpil : nomor dokpil (generate_nomor_dokpil)
@@ -239,13 +257,20 @@ def upload_dokpil_pl(
     if not cookie:
         return {"ok": False, "error": "Cookie SPSE kosong."}
 
-    # Step 0: scrap form (dapatkan kode_paket dari action, CSRF, ref)
+    # Step 0a: resolve id_dokpil dari /nontender/{kode}/edit
     try:
-        ctx = _scrap_upload_form(id_nontender, cookie)
+        id_dokpil = _resolve_id_dokpil(kode_paket, cookie)
+    except Exception as e:
+        return {"ok": False, "error": f"Resolve id_dokpil fail: {e}"}
+
+    # Step 0b: scrap form upload (CSRF + ref + kode_paket dari action)
+    try:
+        ctx = _scrap_upload_form(id_dokpil, cookie)
     except Exception as e:
         return {"ok": False, "error": f"Scrap form fail: {e}"}
 
-    kode_paket = ctx["kode_paket"]
+    # kode_paket override dari action (untuk safety)
+    kode_paket = ctx["kode_paket"] or kode_paket
 
     # Step 1: getSignedUrl
     try:

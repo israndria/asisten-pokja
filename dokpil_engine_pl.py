@@ -31,7 +31,14 @@ HDRS = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scrap_ldk_context(kode_paket: str) -> dict:
-    """GET /dokumennontender/{kode}/ldk — scrap authenticityToken + ckm_id."""
+    """
+    GET /dokumennontender/{kode}/ldk — scrap CSRF + (chk_id, ckm_id) per syarat.
+
+    Penting: server SPSE butuh `chk_id` VALUE ASLI dari hidden input (BUKAN kosong).
+    Kalau chk_id="" → server treat sebagai row baru dan ABAIKAN centang (sehingga
+    syarat bawaan tidak tercentang). Plus butuh hidden ijin[N].chk_id juga.
+    """
+    import re as _re
     cookie = spse_browser.get_spse_cookies()
     if not cookie:
         raise RuntimeError("Cookie SPSE kosong.")
@@ -53,23 +60,47 @@ def scrap_ldk_context(kode_paket: str) -> dict:
     csrf_inp = form.find("input", {"name": "authenticityToken"})
     csrf = csrf_inp["value"] if csrf_inp else None
 
-    admin_ids = []
-    teknis_ids = []
-    for inp in form.find_all("input", type="hidden"):
+    # Parse hidden chk_id + ckm_id per index berdasar nama field
+    # Pattern: syaratAdmin[N].chk_id | syaratAdmin[N].ckm_id | ijin[N].chk_id
+    admin_items  = {}  # idx -> {"chk_id": "...", "ckm_id": "..."}
+    teknis_items = {}
+    ijin_items   = {}  # idx -> chk_id (untuk override ijin existing)
+
+    for inp in form.find_all("input"):
         n = inp.get("name", "")
         v = inp.get("value", "")
-        if n.startswith("checklist_kualifikasi_administrasi_ckm_id"):
-            admin_ids.append(v)
-        elif n.startswith("checklist_kualifikasi_teknis_ckm_id"):
-            teknis_ids.append(v)
+        m = _re.match(r"^(syaratAdmin|syaratTeknis|ijin)\[(\d+)\]\.(chk_id|ckm_id)$", n)
+        if not m:
+            continue
+        prefix, idx, field = m.group(1), int(m.group(2)), m.group(3)
+        bucket = {"syaratAdmin": admin_items,
+                  "syaratTeknis": teknis_items,
+                  "ijin": ijin_items}[prefix]
+        if prefix == "ijin":
+            if field == "chk_id":
+                ijin_items[idx] = v
+        else:
+            bucket.setdefault(idx, {})[field] = v
+
+    # Convert ke list ordered by idx
+    def _ordered(items: dict) -> list:
+        return [items[k] for k in sorted(items.keys())]
+
+    admin_list  = _ordered(admin_items)   # [{chk_id, ckm_id}, ...]
+    teknis_list = _ordered(teknis_items)
+    ijin_chk_ids = _ordered(ijin_items)    # [chk_id, ...]
 
     return {
-        "csrf":       csrf,
-        "cookie":     cookie,
-        "admin_ids":  admin_ids,
-        "teknis_ids": teknis_ids,
-        "url_submit": f"{BASE}/dokumennontender/{kode_paket}/ldksubmitbaru",
-        "url_form":   url,
+        "csrf":         csrf,
+        "cookie":       cookie,
+        "admin_list":   admin_list,       # list of dict {chk_id, ckm_id}
+        "teknis_list":  teknis_list,
+        "ijin_chk_ids": ijin_chk_ids,     # list of chk_id existing (untuk override)
+        # Backward compat (jangan dipakai utk submit yg butuh chk_id):
+        "admin_ids":    [d.get("ckm_id", "") for d in admin_list],
+        "teknis_ids":   [d.get("ckm_id", "") for d in teknis_list],
+        "url_submit":   f"{BASE}/dokumennontender/{kode_paket}/ldksubmitbaru",
+        "url_form":     url,
     }
 
 
@@ -164,43 +195,74 @@ def submit_ldk_pl(
     sbu_baru: str = "",
     sbu_lama: str = "",
     centang_admin_all: bool = True,
-    centang_teknis_all: bool = True,
+    teknis_centang_indices: list[int] | None = None,
     izin_extra: list[dict] | None = None,
+    kinerja_text: str = "",
 ) -> dict:
     """
     Submit form LDK PL (JKK).
 
-    JKK PL ckm_id (verified 2026-05-16 latihan):
-      - Admin a-e: 251, 70, 72, 73, 74
-      - Teknis a-f: 77, 268, 78, 79, 80, 81
-    TIDAK ada syarat kinerja penyedia di JKK PL (khusus tender PK/Konstruksi).
+    JKK PL ckm_id BAWAAN (verified 2026-05-17 PROD):
+      - Admin idx 0-4: 251, 70, 72, 73, 74 (Pakta, KSWP, Tempat Usaha, Hukum, Pernyataan)
+      - Teknis idx 0-5: 77, 268, 78, 79, 80, 81 (Pengalaman, <3thn, SDM-Manaj, SDM-Ahli, SDM-Teknis, Peralatan)
+
+    DEFAULT BARU (per user 2026-05-17 E2E test):
+      - centang_admin_all=True → semua admin tercentang (NPWP/Akta/Pakta auto by sistem)
+      - teknis_centang_indices=[0, 1] → HANYA centang Pengalaman + Dispensasi <3thn
+        SDM Manajerial/Ahli/Teknis/Peralatan (78/79/80/81) JANGAN dicentang.
+      - kinerja_text → tambah custom row "Penilaian Kinerja Penyedia" ckm_id=996
+
+    PENTING: Server butuh `chk_id` VALUE ASLI dari hidden input.
+    Kalau dikirim chk_id="" → server abaikan centang (row dianggap baru/orphan).
     """
     ctx = scrap_ldk_context(kode_paket)
     payload = {"authenticityToken": ctx["csrf"]}
 
-    # Izin Usaha — 2 baris default JKK
+    # ── IJIN USAHA ────────────────────────────────────────────────
+    # Override 2 ijin existing (chk_id asli) + tambah jika user kasih izin_extra
     izin_list = build_izin_usaha_jkk(sbu_baru, sbu_lama)
     if izin_extra:
         izin_list.extend(izin_extra)
 
+    ijin_existing_ids = ctx.get("ijin_chk_ids", [])
     for i, ij in enumerate(izin_list):
-        payload[f"ijin[{i}].chk_id"] = ""
+        # Pakai chk_id existing jika ada, else kosong (row baru)
+        payload[f"ijin[{i}].chk_id"] = ijin_existing_ids[i] if i < len(ijin_existing_ids) else ""
         payload[f"ijin[{i}].chk_nama"] = ij["jenis_izin"]
         payload[f"ijin[{i}].chk_klasifikasi"] = ij["klasifikasi"]
 
-    # Syarat Administrasi (default centang semua)
-    if centang_admin_all:
-        for i, cid in enumerate(ctx["admin_ids"]):
-            payload[f"syaratAdmin[{i}].chk_id"] = ""
-            payload[f"syaratAdmin[{i}].ckm_id"] = cid
-            payload[f"checklist_kualifikasi_administrasi_ckm_id[{i}]"] = cid
+    # ── SYARAT ADMINISTRASI ───────────────────────────────────────
+    # Kirim SEMUA hidden chk_id (wajib agar form lengkap)
+    # Centang ckm_id HANYA jika centang_admin_all=True
+    for i, item in enumerate(ctx["admin_list"]):
+        chk_id = item.get("chk_id", "")
+        ckm_id = item.get("ckm_id", "")
+        payload[f"syaratAdmin[{i}].chk_id"] = chk_id
+        if centang_admin_all:
+            payload[f"syaratAdmin[{i}].ckm_id"] = ckm_id
+            payload[f"checklist_kualifikasi_administrasi_ckm_id[{i}]"] = ckm_id
 
-    # Syarat Teknis (default centang semua a-f kualifikasi teknis JKK)
-    if centang_teknis_all:
-        for i, cid in enumerate(ctx["teknis_ids"]):
-            payload[f"syaratTeknis[{i}].chk_id"] = ""
-            payload[f"syaratTeknis[{i}].ckm_id"] = cid
-            payload[f"checklist_kualifikasi_teknis_ckm_id[{i}]"] = cid
+    # ── SYARAT TEKNIS ─────────────────────────────────────────────
+    # Default centang HANYA idx 0 (77 Pengalaman) + idx 1 (268 Dispensasi <3thn).
+    # idx 2-5 (SDM Manajerial/Ahli/Teknis/Peralatan) JANGAN dicentang per user.
+    if teknis_centang_indices is None:
+        teknis_centang_indices = [0, 1]
+
+    for i, item in enumerate(ctx["teknis_list"]):
+        chk_id = item.get("chk_id", "")
+        ckm_id = item.get("ckm_id", "")
+        payload[f"syaratTeknis[{i}].chk_id"] = chk_id
+        if i in teknis_centang_indices:
+            payload[f"syaratTeknis[{i}].ckm_id"] = ckm_id
+            payload[f"checklist_kualifikasi_teknis_ckm_id[{i}]"] = ckm_id
+
+    # ── KINERJA PENYEDIA (custom row baru) ────────────────────────
+    if kinerja_text:
+        n = len(ctx["teknis_list"])  # index lanjut setelah bawaan
+        payload[f"syaratTeknis[{n}].chk_id"] = ""
+        payload[f"syaratTeknis[{n}].ckm_id"] = "996"
+        payload[f"checklist_kualifikasi_teknis_ckm_id[{n}]"] = "996"
+        payload[f"syaratTeknis[{n}].chk_nama"] = kinerja_text
 
     r = requests.post(
         ctx["url_submit"],
