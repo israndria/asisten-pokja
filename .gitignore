@@ -12,3 +12,4 @@ test_*.pdf
 scratch/_pl_*.html
 scratch/_prod_*.html
 scratch/cdp_check.png
+scratch/_backup_*.csv
