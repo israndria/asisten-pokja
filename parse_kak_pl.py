@@ -210,6 +210,117 @@ def parse_draft_pl(pdf_path: str) -> dict:
     return out
 
 
+def parse_sub_kegiatan_dari_draft_pl(pdf_path: str) -> str:
+    """Extract Sub Kegiatan (prefer) atau Kegiatan (fallback) dari Draft_PL PDF.
+
+    Stop terminator: 'NAMA PAKET' / 'TAHUN ANGGARAN' / baris kosong ganda.
+    Gabung multi-line, strip, return.
+    """
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return ""
+
+    m = re.search(
+        r"NAMA\s+SUB\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+PAKET|TAHUN\s+ANGGARAN|\n\s*\n)",
+        teks, re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        raw = m.group(1).strip()
+        return re.sub(r"\s+", " ", raw).strip()
+
+    m2 = re.search(
+        r"NAMA\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+SUB|NAMA\s+PAKET|TAHUN|\n)",
+        teks, re.IGNORECASE,
+    )
+    if m2:
+        return re.sub(r"\s+", " ", m2.group(1).strip()).strip()
+
+    return ""
+
+
+def cari_daftar_personil_di_folder(folder: str) -> str | None:
+    """Cari PDF 'Daftar Personil*.pdf' di folder paket (case-insensitive)."""
+    if not os.path.isdir(folder):
+        return None
+    for f in os.listdir(folder):
+        fl = f.lower()
+        if fl.endswith(".pdf") and ("daftar personil" in fl or "personil" in fl):
+            if fl.startswith("draft_pl"):
+                continue
+            return os.path.join(folder, f)
+    return None
+
+
+def parse_personil_daftar(pdf_path: str) -> list[dict]:
+    """Parse Daftar Personil PDF ke list of {jabatan, pengalaman} (max 6).
+
+    Pola tiap baris: '<no> <jabatan...> <N Tahun>'.
+    """
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return []
+
+    personil = []
+    for line in teks.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
+        if m:
+            personil.append({"jabatan": m.group(2).strip(), "pengalaman": m.group(3).strip()})
+            if len(personil) >= 6:
+                break
+    return personil
+
+
+def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
+    """Fallback: parse personil dari Draft_PL PDF section 'Personil Inti'."""
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return []
+
+    idx = teks.lower().find("personil inti")
+    if idx < 0:
+        return []
+
+    sub = teks[idx:idx + 3000]
+    personil = []
+    for line in sub.split("\n"):
+        line = line.strip()
+        m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
+        if m:
+            personil.append({"jabatan": m.group(2).strip(), "pengalaman": m.group(3).strip()})
+            if len(personil) >= 6:
+                break
+    return personil
+
+
+def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fallback_jabatan_k3: str = "") -> list[dict]:
+    """3-layer extraction:
+    Layer 1: Daftar Personil PDF
+    Layer 2: Draft_PL PDF (section Personil Inti)
+    Layer 3: fallback Supabase (jabatan_teknis + jabatan_k3 — slot 1+2)
+    """
+    daftar_pdf = cari_daftar_personil_di_folder(folder)
+    if daftar_pdf:
+        result = parse_personil_daftar(daftar_pdf)
+        if result:
+            return result
+
+    draft_pdf = cari_draft_pl_di_folder(folder)
+    if draft_pdf:
+        result = parse_personil_dari_draft_pl(draft_pdf)
+        if result:
+            return result
+
+    result = []
+    if fallback_jabatan_teknis:
+        result.append({"jabatan": fallback_jabatan_teknis, "pengalaman": "1 Tahun"})
+    if fallback_jabatan_k3:
+        result.append({"jabatan": fallback_jabatan_k3, "pengalaman": "1 Tahun"})
+    return result
+
+
 def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None:
     """Cari folder paket PL di OUTPUT_DIR_PL_{JKK|PK}.
 
@@ -248,7 +359,7 @@ def serap_penyedia_pl(progress_cb=None) -> dict:
             progress_cb(p, m)
 
     log(0.05, "Fetch daftar paket PL dari Supabase...")
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl").execute().data or []
+    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3").execute().data or []
     log(0.10, f"Total {len(rows)} paket")
 
     updated = 0
@@ -274,15 +385,33 @@ def serap_penyedia_pl(progress_cb=None) -> dict:
                 continue
 
             data = parse_draft_pl(pdf)
+
+            # Sub Kegiatan dari Draft_PL
+            sub_keg = parse_sub_kegiatan_dari_draft_pl(pdf)
+            if sub_keg:
+                data["sub_kegiatan"] = sub_keg
+
+            # Personil 3-layer
+            personil = ekstrak_personil_3layer(
+                folder,
+                fallback_jabatan_teknis=p.get("jabatan_teknis") or "",
+                fallback_jabatan_k3=p.get("jabatan_k3") or "",
+            )
+            if personil:
+                data["personil_json"] = personil  # supabase-py auto-encode list ke JSONB
+
             update = {k: v for k, v in data.items() if v}
             if not update:
                 no_data += 1
-                log(prog, f"  - {kode}: PDF ada tapi tidak ada Nama/NPWP Perusahaan")
+                log(prog, f"  - {kode}: PDF ada tapi tidak ada data yang bisa diekstrak")
                 continue
 
             _sb().table("draft_paket_pl").update(update).eq("kode_paket", kode).execute()
             updated += 1
-            log(prog, f"  OK {kode}: {update.get('nama_penyedia', '')[:30]} / {update.get('npwp_penyedia', '')}")
+            pn = update.get("nama_penyedia", "")[:25]
+            sk = update.get("sub_kegiatan", "")[:30]
+            np = len(personil)
+            log(prog, f"  OK {kode}: penyedia={pn} sub_keg={bool(sk)} personil={np}")
         except Exception as e:
             errors.append(f"{kode}: {e}")
 
