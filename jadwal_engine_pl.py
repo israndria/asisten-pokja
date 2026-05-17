@@ -12,7 +12,8 @@ Endpoints (production):
 4. Klarifikasi Teknis dan Negosiasi
 5. Penandatanganan Kontrak
 
-Catatan: id endpoint = id_nontender (kolom 0 dt/paketpp), bukan kode_paket.
+Catatan: id endpoint = kode_paket (kolom 5 dt/paketpp), BUKAN id_nontender (kolom 0).
+Verified: /jadwalnontender/{kode_paket}/list → 200, /jadwalnontender/{id_nontender}/list → 500.
 """
 import requests
 from datetime import datetime, timedelta
@@ -92,13 +93,13 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
 # Scrape form fields PL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scrap_hidden_fields_pl(id_nontender: str) -> dict:
-    """GET /jadwalnontender/{id}/list — scrap hidden fields + CSRF."""
+def scrap_hidden_fields_pl(kode_paket: str) -> dict:
+    """GET /jadwalnontender/{kode_paket}/list — scrap hidden fields + CSRF."""
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
         raise RuntimeError("Cookie SPSE kosong — login PP di Chrome dulu.")
 
-    url = f"{BASE}/jadwalnontender/{id_nontender}/list"
+    url = f"{BASE}/jadwalnontender/{kode_paket}/list"
     r = requests.get(url, headers={**HDRS, "Cookie": cookie_str}, timeout=20)
     if r.status_code != 200:
         raise RuntimeError(f"GET jadwalnontender gagal: HTTP {r.status_code}")
@@ -120,7 +121,7 @@ def scrap_hidden_fields_pl(id_nontender: str) -> dict:
 
     # Field id (paket_id)
     id_inp = form_jadwal.find("input", {"name": "id"})
-    paket_id_val = id_inp["value"] if id_inp else id_nontender
+    paket_id_val = id_inp["value"] if id_inp else kode_paket
 
     # Rows (hidden: akt_id, dtj_id, thp_id + text: tglawal, tglakhir)
     rows = []
@@ -186,19 +187,19 @@ def build_payload_pl(scraped: dict, jadwal_list: list[dict]) -> dict:
     return payload
 
 
-def submit_jadwal_pl(id_nontender: str, payload: dict, cookie_str: str = None) -> dict:
+def submit_jadwal_pl(kode_paket: str, payload: dict, cookie_str: str = None) -> dict:
     if not cookie_str:
         cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
         raise RuntimeError("Cookie SPSE kosong.")
 
-    url = f"{BASE}/simpanjadwalnontender?id={id_nontender}"
+    url = f"{BASE}/simpanjadwalnontender?id={kode_paket}"
     headers = {
         **HDRS,
         "Cookie": cookie_str,
         "Content-Type": "application/x-www-form-urlencoded",
         "Origin": BASE.split("/tapinkab")[0] if "/tapinkab" in BASE else "https://spse.inaproc.id",
-        "Referer": f"{BASE}/jadwalnontender/{id_nontender}/list",
+        "Referer": f"{BASE}/jadwalnontender/{kode_paket}/list",
     }
 
     r = requests.post(url, data=payload, headers=headers, allow_redirects=False, timeout=30)
@@ -210,17 +211,17 @@ def submit_jadwal_pl(id_nontender: str, payload: dict, cookie_str: str = None) -
     }
 
 
-def auto_fill_jadwal_pl(id_nontender: str, tgl_mulai: datetime) -> dict:
+def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime) -> dict:
     """Full flow: scrap → hitung → build payload."""
-    scraped = scrap_hidden_fields_pl(id_nontender)
+    scraped = scrap_hidden_fields_pl(kode_paket)
     jadwal_list = hitung_jadwal_pl(tgl_mulai)
     payload = build_payload_pl(scraped, jadwal_list)
     return {"scraped": scraped, "jadwal_list": jadwal_list, "payload": payload}
 
 
-def submit_full_pl(id_nontender: str, tgl_mulai: datetime) -> dict:
-    result = auto_fill_jadwal_pl(id_nontender, tgl_mulai)
+def submit_full_pl(kode_paket: str, tgl_mulai: datetime) -> dict:
+    result = auto_fill_jadwal_pl(kode_paket, tgl_mulai)
     cookie = result["scraped"].get("cookie")
-    sub = submit_jadwal_pl(id_nontender, result["payload"], cookie_str=cookie)
+    sub = submit_jadwal_pl(kode_paket, result["payload"], cookie_str=cookie)
     result["submit_result"] = sub
     return result

@@ -1363,12 +1363,12 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             _jam = _pljd_jam_global
                         _t1 = datetime.combine(_tgl, _jam)
 
-                        _id_nt = _p.get("id_nontender")
-                        if not _id_nt:
-                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "id_nontender kosong"})
+                        _kp = _p.get("kode_paket")
+                        if not _kp:
+                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _r = _jepl.submit_full_pl(_id_nt, _t1)
+                            _r = _jepl.submit_full_pl(_kp, _t1)
                             _sub = _r["submit_result"]
                             _hasil.append({
                                 "paket":  _p['nama_paket'][:40],
