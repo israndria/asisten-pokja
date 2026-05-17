@@ -1,9 +1,9 @@
 kode_baru,klasifikasi,kode_lama,nama_baru_singkat,nama_lama_singkat,kbli_2020,kbli_2017
-AL001,Arsitektur,PR104,Jasa Pengembangan Pemanfaatan Ruang,Jasa Pengemba ngan Pemanfaat an Ruang,71101,71101
+AL001,Arsitektur,PR104,Jasa Pengembangan Pemanfaatan Ruang,Jasa Pengembangan Pemanfaatan Ruang,71101,71101
 AL001,Arsitektur,PR201,Jasa Pengembangan Pemanfaatan Ruang,Jasa Pengawas dan Pengendali Penataan Ruang,71101,71101
 AL002,Arsitektur,PR102,Jasa Pengembangan Wilayah,Jasa Perencanaan Wilayah,71101,71101
-AL003,Arsitektur,PR101,Jasa Pengembangan Perkotaan,Jasa Perencanaan dan Perancanga n Perkotaan,71101,71101
-AL004,Arsitektur,PR103,Jasa Pengembangan Lingkungan Bangunan dan Lanskap,Jasa Perencana an dan Perancang an Lingkunga n Bangunan dan Lansekap,71101,71101
+AL003,Arsitektur,PR101,Jasa Pengembangan Perkotaan,Jasa Perencanaan dan Perancangan Perkotaan,71101,71101
+AL004,Arsitektur,PR103,Jasa Pengembangan Lingkungan Bangunan dan Lanskap,Jasa Perencanaan dan Perancangan Lingkungan Bangunan dan Lansekap,71101,71101
 AR001,Arsitektur,AR101,Jasa Arsitektural Bangunan Gedung Hunian dan Non Hunian,Jasa Nasihat dan Pra Desain Arsitektural,71101,71102
 AR001,Arsitektur,AR102,Jasa Arsitektural Bangunan Gedung Hunian dan Non Hunian,Jasa Desain Arsitektural,71101,71101
 AR001,Arsitektur,AR103,Jasa Arsitektural Bangunan Gedung Hunian dan Non Hunian,Jasa Penilai Perawatan dan Kelayakan Bangunan Gedung,71101,71101
@@ -27,13 +27,13 @@ IT002,Konsultansi Ilmiah dan Teknis,SP302,Jasa Konsultansi Ilmiah dan Teknis Baw
 IT003,Konsultansi Ilmiah dan Teknis,SP303,Jasa Konsultansi Ilmiah dan Teknis Permukaan Tanah dan Pembuatan Peta,Jasa Survey Permukaan Tanah,71102,71102
 IT003,Konsultansi Ilmiah dan Teknis,SP304,Jasa Konsultansi Ilmiah dan Teknis Permukaan Tanah dan Pembuatan Peta,Jasa Pembuatan Peta,71102,71102
 IT005,Konsultansi Ilmiah dan Teknis,KL408,Jasa Konsultansi Ilmiah dan Teknis Konstruksi Sistem Kendali Lalu Lintas,Jasa Manajemen Proyek Terkait Konstruksi Pekerjaan Sistem Kendali Lalu Lintas,71102,71102
-KK001,Konsultansi Konstruksi,SP007,Pondasi Konstruksi,"Pekerjaan Pondasi, Termasuk Pemancangann ya",43901,43901
+KK001,Konsultansi Konstruksi,SP007,Pondasi Konstruksi,"Pekerjaan Pondasi, Termasuk Pemancangannya",43901,43901
 KK007,Konsultansi Konstruksi,MK004,Pekerjaan,Jasa Pelaksana Konstruksi Insulasi dalam Bangunan,43302,43299
 KK008,Konsultansi Konstruksi,SP014,Perkerasan Aspal,Pekerjaan Pengaspalan dengan Rangkaian Peralatan Khusus,43909,42111
-KK011,Konsultansi Konstruksi,SP009,Pemasangan Rangka dan Atap/Roofcov ering,Pekerjaan Atap dan Kedap Air (waterproffing),43903,43903
+KK011,Konsultansi Konstruksi,SP009,Pemasangan Rangka dan Atap/Roofcovering,Pekerjaan Atap dan Kedap Air (waterproffing),43903,43903
 KK012,Konsultansi Konstruksi,SP010,Pekerjaan Struktur Beton,Pekerjaan Beton,43909,43909
 KK015,Konsultansi Konstruksi,MK004,"Pekerjaan Konstruksi Tahan Api (Tanur, Anneling, Flare, atau Incenerator)",Jasa Pelaksana Konstruksi Insulasi dalam Bangunan,43909,43299
-KK016,Konsultansi Konstruksi,SP011,Pemasangan Kerangka Baja,"Pekerjaan Baja dan Pemasanganny a, Termasuk Pengelasan",43904,43904
+KK016,Konsultansi Konstruksi,SP011,Pemasangan Kerangka Baja,"Pekerjaan Baja dan Pemasangannya, Termasuk Pengelasan",43904,43904
 RK001,Rekayasa,KL403,Jasa Rekayasa Konstruksi Bangunan Gedung Hunian dan Nonhunian,Jasa Manajemen Proyek Terkait Konstruksi Bangunan,71102,71101
 RK001,Rekayasa,RE101,Jasa Rekayasa Konstruksi Bangunan Gedung Hunian dan Nonhunian,Jasa Nasehat dan Konsultansi Rekayasa Teknik,71102,71102
 RK001,Rekayasa,RE102,Jasa Rekayasa Konstruksi Bangunan Gedung Hunian dan Nonhunian,Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan,71102,71101
@@ -92,8 +92,8 @@ BS005,Sipil,SI008,Konstruksi Bangunan Sipil Pengolahan,Jasa Pelaksana Konstruksi
 BS006,Sipil,SI002,"Konstruksi Bangunan Sipil Prasarana dan Sarana Sistem Pengolahan Limbah Padat, Cair, dan Gas",Jasa Pelaksana Konstruksi Instalasi Pengolahan Air Minum dan Air Limbah Serta Bangunan Pengolahan Sampah,42203,42212
 BS006,Sipil,SI006,"Konstruksi Bangunan Sipil Prasarana dan Sarana Sistem Pengolahan Limbah Padat, Cair, dan Gas",Jasa Pelaksana Konstruksi Perpipaan Air Limbah Jarak Jauh,42203,42212
 BS006,Sipil,SI009,"Konstruksi Bangunan Sipil Prasarana dan Sarana Sistem Pengolahan Limbah Padat, Cair, dan Gas",Jasa Pelaksana Konstruksi Perpipaan Air Limbah Lokal,42203,42212
-BS009,Sipil,EL005,Konstruksi Sentral Telekomunik asi,Jasa Pelaksana Konstruksi Jaringan Transmisi Telekomunika si dan/atau,42206,42214
-BS009,Sipil,EL008,Konstruksi Sentral Telekomunik asi,Jasa Pelaksana Konstruksi Instalasi Jaringan Distribusi Telekomunikasi,42206,42214
+BS009,Sipil,EL005,Konstruksi Sentral Telekomunikasi,Jasa Pelaksana Konstruksi Jaringan Transmisi Telekomunikasi dan/atau,42206,42214
+BS009,Sipil,EL008,Konstruksi Sentral Telekomunikasi,Jasa Pelaksana Konstruksi Instalasi Jaringan Distribusi Telekomunikasi,42206,42214
 BS010,Sipil,SI001,Konstruksi Bangunan Prasarana Sumber Daya Air,"Jasa Pelaksana Konstruksi Saluran Air, Pelabuhan, Dam, dan Prasarana Sumber Daya Air Lainnya",42911,42211
 BS011,Sipil,SI001,Konstruksi Bangunan Pelabuhan Bukan Perikanan,"Jasa Pelaksana Konstruksi Saluran Air, Pelabuhan, Dam, dan Prasarana Sumber Daya Air Lainnya",42912,42211
 BS012,Sipil,SI001,Konstruksi Bangunan Pelabuhan Perikanan,"Jasa Pelaksana Konstruksi Saluran Air, Pelabuhan, Dam, dan Prasarana Sumber Daya Air Lainnya",42913,42211
@@ -121,8 +121,8 @@ IN007,Spesialis,MK002,Instalasi saluran air (plumbing),Jasa Pelaksana konstruksi
 IN007,Spesialis,MK003,Instalasi saluran air (plumbing),Jasa Pelaksana Konstruksi Pemasangan Pipa Air (Plumbing) Dalam Gedung dan Salurannya,43221,43223
 IN008,Spesialis,MK001,Instalasi Pendingin Dan Ventilasi Udara,"Jasa Pelaksana Konstruksi Pemasangan Pendingin Udara (Air Conditioner), Pemanas Dan Ventilasi",43224,43222
 IN011,Spesialis,EL011,Api,Jasa Pelaksana Konstruksi Instalasi Elektrikal Lainnya,43216,42213
-IN012,Spesialis,EL011,Instalasi Sinyal dan Telekomuni kasi Kereta,Jasa Pelaksana Konstruksi Instalasi Elektrikal Lainnya,43215,42213
-PA001,Spesialis,PL001,Penyewaan Peralatan Konstruksi,Jasa Penyewaan Alat Konstruksi dan Pembongkara n Bangunan atau Pekerjaan Sipil Lainnya dengan Operator,43905,43905
+IN012,Spesialis,EL011,Instalasi Sinyal dan Telekomunikasi Kereta,Jasa Pelaksana Konstruksi Instalasi Elektrikal Lainnya,43215,42213
+PA001,Spesialis,PL001,Penyewaan Peralatan Konstruksi,Jasa Penyewaan Alat Konstruksi dan Pembongkaran Bangunan atau Pekerjaan Sipil Lainnya dengan Operator,43905,43905
 PB001,Spesialis,KT011,Pengerjaan Pemasangan Kaca dan Aluminium,Pemasangan curtain wall,43301,43302
 PB002,Spesialis,KT001,Pengerjaan Pemasangan Kaca Dan Alumunium,Pekerjaan Kaca dan Pemasangan Kaca Jendela,43301,43301
 PB003,Spesialis,KT002,"Pengerjaan Lantai, Dinding, Peralatan Saniter Dan",Pekerjaan Plesteran,43302,43302
@@ -136,13 +136,13 @@ PB005,Spesialis,KT008,Pemasangan Ornamen dan Pekerjaan Seni,Pekerjaan Pemasangan
 PB005,Spesialis,SP012,Pemasangan Ornamen dan Pekerjaan Seni,Pekerjaan Pemasangan Batu,43304,43909
 PB007,Spesialis,KT003,Pengecatan,Pekerjaan Pengecatan,43303,43303
 PB009,Spesialis,SP016,Pembersihan dan Perapihan Bangunan Gedung,Pekerjaan Perawatan Bangunan Gedung,43309,43309
-PB010,Spesialis,SP015,"Pekerjaan Lanskap, Pertamanan, dan Penanaman Vegetasi",Pekerjaan Lansekap/Pert am anan,43305,43305
+PB010,Spesialis,SP015,"Pekerjaan Lanskap, Pertamanan, dan Penanaman Vegetasi",Pekerjaan Lansekap/Pertamanan,43305,43305
 PL001,Spesialis,SP002,43905,Pekerjaan Pembongkaran,43110,43110
 PL003,Spesialis,SP003,42120,Pekerjaan Penyiapan dan Pematangan Tanah/Lokasi,43120,43120
 PL003,Spesialis,SP005,42120,Jasa Pelaksanaan Pekerjaan Khusus,43120,42115
 PL003,Spesialis,SP013,42120,Jasa Pelaksanaan Pekerjaan Penyelidikan Tanah dan Struktur,43120,43120
 PL004,Spesialis,SP004,42220,"Pekerjaan Tanah, Galian, dan Timbunan",43120,43120
-PL005,Spesialis,SP008,Pembuatan/ Pengeb oran Sumur Air Tanah,Pekerjaan Pengeboran Sumur Air Tanah Dalam,42207,42218
+PL005,Spesialis,SP008,Pembuatan/ Pengeboran Sumur Air Tanah,Pekerjaan Pengeboran Sumur Air Tanah Dalam,42207,42218
 PL007,Spesialis,SP001,Survei Penyelidikan Lapangan,Pekerjaan Penyelidikan Lapangan,43120,71102
 PL008,Spesialis,SP006,Pemasangan Perancah (Steiger),Pekerjaan Perancah,43902,43902
 ST001,Terintegrasi,TI501,"Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass",Jasa Terintegrasi Untuk Infrastruktur Transportasi,42102,42111
