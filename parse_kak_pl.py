@@ -251,8 +251,45 @@ def cari_daftar_personil_di_folder(folder: str) -> str | None:
     return None
 
 
+def _extract_sertifikat_dari_jabatan(jabatan_str: str) -> str:
+    """Tebak sertifikat dari teks jabatan (regex keyword matching).
+
+    Pola:
+    - "SKA/SKK [Bidang] [Level]" -> "SKK [Bidang] - Ahli [Level]"
+    - "K3 Konstruksi" + "Petugas/Ahli" -> "SKK Petugas K3 Konstruksi" / "SKA Ahli K3 Konstruksi"
+    - "Sertifikasi ..." -> "Sertifikat ..."
+    - Fallback: "" kosong (tidak memaksa tebakan)
+    """
+    if not jabatan_str:
+        return ""
+    s = jabatan_str
+
+    # Pattern 1: SKK/SKA eksplisit + bidang + level (Muda/Madya/Utama)
+    m = re.search(
+        r"SK[AK]/?SK[AK]?\s+([\w/\s]+?)\s+(?:Ahli\s+)?(Muda|Madya|Utama)",
+        s, re.IGNORECASE,
+    )
+    if m:
+        bidang = re.sub(r"\s+", " ", m.group(1)).strip().rstrip("/")
+        level = m.group(2).strip().title()
+        return f"SKK {bidang} - Ahli {level}"
+
+    # Pattern 2: K3 Konstruksi
+    if re.search(r"K3\s+Konstruksi", s, re.IGNORECASE):
+        if re.search(r"\bAhli\b", s, re.IGNORECASE):
+            return "SKA Ahli K3 Konstruksi"
+        return "SKK Petugas K3 Konstruksi"
+
+    # Pattern 3: Sertifikasi eksplisit
+    m2 = re.search(r"Sertifikasi\s+([^,\)]+?)(?:\)|,|$)", s, re.IGNORECASE)
+    if m2:
+        return f"Sertifikat {m2.group(1).strip()}"
+
+    return ""
+
+
 def parse_personil_daftar(pdf_path: str) -> list[dict]:
-    """Parse Daftar Personil PDF ke list of {jabatan, pengalaman} (max 6).
+    """Parse Daftar Personil PDF ke list of {jabatan, pengalaman, sertifikat} (max 6).
 
     Pola tiap baris: '<no> <jabatan...> <N Tahun>'.
     """
@@ -267,7 +304,14 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
             continue
         m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
         if m:
-            personil.append({"jabatan": m.group(2).strip(), "pengalaman": m.group(3).strip()})
+            jabatan = m.group(2).strip()
+            idx_p = len(personil)
+            sertifikat = _extract_sertifikat_dari_jabatan(jabatan) if idx_p < 2 else "(Tidak Dipersyaratkan)"
+            personil.append({
+                "jabatan": jabatan,
+                "pengalaman": m.group(3).strip(),
+                "sertifikat": sertifikat,
+            })
             if len(personil) >= 6:
                 break
     return personil
@@ -289,7 +333,14 @@ def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
         line = line.strip()
         m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
         if m:
-            personil.append({"jabatan": m.group(2).strip(), "pengalaman": m.group(3).strip()})
+            jabatan = m.group(2).strip()
+            idx_p = len(personil)
+            sertifikat = _extract_sertifikat_dari_jabatan(jabatan) if idx_p < 2 else "(Tidak Dipersyaratkan)"
+            personil.append({
+                "jabatan": jabatan,
+                "pengalaman": m.group(3).strip(),
+                "sertifikat": sertifikat,
+            })
             if len(personil) >= 6:
                 break
     return personil
@@ -300,6 +351,7 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
     Layer 1: Daftar Personil PDF
     Layer 2: Draft_PL PDF (section Personil Inti)
     Layer 3: fallback Supabase (jabatan_teknis + jabatan_k3 — slot 1+2)
+    Tiap item: {jabatan, pengalaman, sertifikat}
     """
     daftar_pdf = cari_daftar_personil_di_folder(folder)
     if daftar_pdf:
@@ -315,9 +367,17 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
 
     result = []
     if fallback_jabatan_teknis:
-        result.append({"jabatan": fallback_jabatan_teknis, "pengalaman": "1 Tahun"})
+        result.append({
+            "jabatan": fallback_jabatan_teknis,
+            "pengalaman": "1 Tahun",
+            "sertifikat": _extract_sertifikat_dari_jabatan(fallback_jabatan_teknis),
+        })
     if fallback_jabatan_k3:
-        result.append({"jabatan": fallback_jabatan_k3, "pengalaman": "1 Tahun"})
+        result.append({
+            "jabatan": fallback_jabatan_k3,
+            "pengalaman": "1 Tahun",
+            "sertifikat": _extract_sertifikat_dari_jabatan(fallback_jabatan_k3),
+        })
     return result
 
 

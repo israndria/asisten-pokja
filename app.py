@@ -1421,6 +1421,19 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         import dokpil_engine_pl as _depl
         import upload_dokpil_pl as _udpl
 
+        @st.cache_data(ttl=3600)
+        def _lookup_singkatan_dinas(satker: str) -> str:
+            if not satker:
+                return "DPUPR"
+            try:
+                from config import sb as _sb_f
+                r = _sb_f().table("master_dinas").select("singkatan").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
+                if r.data:
+                    return r.data[0].get("singkatan") or "DPUPR"
+            except Exception:
+                pass
+            return "DPUPR"
+
         _plsp_rows = pl_engine.load_draft_pl()
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
@@ -1442,7 +1455,6 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         st.rerun()
 
                 import sbu_picker as _sp
-                _plsp_klas_list = ["(auto-detect dari draft)"] + _sp.list_klasifikasi()
 
                 _plsp_selected = []
                 for _rr in _plsp_rows:
@@ -1465,139 +1477,24 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             label_visibility="collapsed",
                         )
                         if _dokpil_up:
-                            st.caption(f"📄 {_dokpil_up.name}")
-
-                    # ── SBU picker per paket (auto-detect dari draft + override manual)
-                    _detected = _sp.detect_from_draft(
-                        _rr.get("sbu_baru") or "", _rr.get("sbu_lama") or ""
-                    )
-                    _kode_baru_detected = _detected.get("kode_baru", "")
-                    _kode_lama_detected = _detected.get("kode_lama", "")
-
-                    # Cari klasifikasi default berdasar detected kode_baru
-                    _klas_default_idx = 0
-                    if _kode_baru_detected:
-                        _baru_info = _sp.get_sbu_baru_by_kode(_kode_baru_detected)
-                        _klas_detected = (_baru_info or {}).get("klasifikasi", "")
-                        if _klas_detected in _plsp_klas_list:
-                            _klas_default_idx = _plsp_klas_list.index(_klas_detected)
-
-                    _klas_key = f"plsp_sbu_klas_{_kp_key}"
-                    _kb_key   = f"plsp_sbu_baru_{_kp_key}"
-                    _kl_key   = f"plsp_sbu_lama_{_kp_key}"
-
-                    if _chk:
-                        with st.expander(f"🔧 SBU {_kp_key}", expanded=False):
-                            _picked_klas = st.selectbox(
-                                "Klasifikasi",
-                                _plsp_klas_list,
-                                index=_klas_default_idx,
-                                key=_klas_key,
+                            _ku_prev = _rr.get("kode_unik") or "?"
+                            _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
+                            _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                            _no_prev = _udpl.generate_nomor_dokpil(
+                                nama_paket=_rr["nama_paket"],
+                                kode_unik=_ku_prev,
+                                skpd_singkat=_sk_prev,
+                                tahun=_tgl_prev.year,
                             )
-
-                            # SBU Baru dropdown (filter by klasifikasi)
-                            if _picked_klas and _picked_klas != "(auto-detect dari draft)":
-                                _baru_options = _sp.list_sbu_baru_by_klasifikasi(_picked_klas)
-                            else:
-                                # Auto-detect: tampilkan semua dgn kode detected di atas
-                                _baru_options = []
-                                if _kode_baru_detected:
-                                    _baru_options.append(_sp.get_sbu_baru_by_kode(_kode_baru_detected))
-
-                            _baru_labels = [
-                                f"{b['kode']} — {(b.get('nama_singkat') or b.get('nama_full',''))[:70]}"
-                                for b in _baru_options if b
-                            ]
-                            _baru_default_idx = 0
-                            for i, b in enumerate(_baru_options):
-                                if b and b.get("kode") == _kode_baru_detected:
-                                    _baru_default_idx = i
-                                    break
-
-                            _picked_baru_label = st.selectbox(
-                                "SBU Baru (KBLI 2020)",
-                                _baru_labels or ["(tidak ada — pilih klasifikasi)"],
-                                index=_baru_default_idx if _baru_labels else 0,
-                                key=_kb_key,
-                            )
-                            _picked_baru_kode = (
-                                _picked_baru_label.split(" — ", 1)[0]
-                                if _baru_labels and " — " in _picked_baru_label else ""
-                            )
-
-                            # SBU Lama dropdown (filter padanan kode_baru)
-                            _lama_options = _sp.list_sbu_lama_padanan(_picked_baru_kode) if _picked_baru_kode else []
-                            _lama_labels = ["(tidak ada padanan)"] + [
-                                f"{l['kode']} — {(l.get('nama_singkat') or l.get('nama_full',''))[:70]}"
-                                for l in _lama_options
-                            ]
-                            _lama_default_idx = 0
-                            for i, l in enumerate(_lama_options):
-                                if l.get("kode") == _kode_lama_detected:
-                                    _lama_default_idx = i + 1  # +1 untuk offset "(tidak ada padanan)"
-                                    break
-
-                            _picked_lama_label = st.selectbox(
-                                "SBU Lama (KBLI 2017) — padanan",
-                                _lama_labels,
-                                index=_lama_default_idx,
-                                key=_kl_key,
-                            )
-                            _picked_lama_kode = (
-                                _picked_lama_label.split(" — ", 1)[0]
-                                if " — " in _picked_lama_label else ""
-                            )
-
-                            # Hasil final SBU (override draft jika user pilih)
-                            _sbu_baru_full = ""
-                            _sbu_lama_full = ""
-                            if _picked_baru_kode:
-                                _baru_obj = _sp.get_sbu_baru_by_kode(_picked_baru_kode)
-                                _sbu_baru_full = (_baru_obj or {}).get("nama_full", "")
-                            if _picked_lama_kode:
-                                _lama_obj = _sp.get_sbu_lama_by_kode(_picked_lama_kode)
-                                _sbu_lama_full = (_lama_obj or {}).get("nama_full", "")
-
-                            # Fallback ke draft jika dropdown kosong
-                            if not _sbu_baru_full:
-                                _sbu_baru_full = _rr.get("sbu_baru") or ""
-                            if not _sbu_lama_full:
-                                _sbu_lama_full = _rr.get("sbu_lama") or ""
-
-                            st.caption(f"🔹 Baru: `{_sbu_baru_full[:80]}`")
-                            st.caption(f"🔸 Lama: `{_sbu_lama_full[:80]}`")
-                    else:
-                        _sbu_baru_full = _rr.get("sbu_baru") or ""
-                        _sbu_lama_full = _rr.get("sbu_lama") or ""
+                            st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`")
 
                     if _chk:
                         _plsp_selected.append({
                             **_rr,
                             "_dokpil_file": _dokpil_up,
-                            "sbu_baru_picked": _sbu_baru_full,
-                            "sbu_lama_picked": _sbu_lama_full,
                         })
 
                 st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
-
-                if _plsp_selected:
-                    if st.button(
-                        f"💾 Simpan SBU pilihan ke draft_paket_pl ({len(_plsp_selected)})",
-                        key="plsp_save_sbu_btn", use_container_width=True,
-                    ):
-                        from config import sb as _sb_factory
-                        _client = _sb_factory()
-                        _ok_count = 0
-                        for _p in _plsp_selected:
-                            try:
-                                _client.table("draft_paket_pl").update({
-                                    "sbu_baru": _p.get("sbu_baru_picked") or "",
-                                    "sbu_lama": _p.get("sbu_lama_picked") or "",
-                                }).eq("kode_paket", _p["kode_paket"]).execute()
-                                _ok_count += 1
-                            except Exception as _e:
-                                st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
-                        st.success(f"✅ {_ok_count}/{len(_plsp_selected)} paket disimpan ke Supabase")
 
             with _plsp_col_kanan:
                 st.markdown("### 2. Konfigurasi Setup Paket")
@@ -1605,6 +1502,124 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 if not _plsp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
+                    # ── SBU Global (satu pilihan apply ke semua paket terpilih) ─────
+                    st.markdown("**SBU Global** *(satu pilihan apply ke semua paket terpilih)*")
+                    _plsp_klas_list = ["(auto-detect dari paket pertama)"] + _sp.list_klasifikasi()
+
+                    # Auto-detect dari paket pertama terpilih
+                    _first_p = _plsp_selected[0]
+                    _detected_g = _sp.detect_from_draft(
+                        _first_p.get("sbu_baru") or "", _first_p.get("sbu_lama") or ""
+                    )
+                    _g_kode_baru = _detected_g.get("kode_baru", "")
+                    _g_kode_lama = _detected_g.get("kode_lama", "")
+
+                    _g_klas_default = 0
+                    if _g_kode_baru:
+                        _baru_info_g = _sp.get_sbu_baru_by_kode(_g_kode_baru)
+                        _klas_det_g = (_baru_info_g or {}).get("klasifikasi", "")
+                        if _klas_det_g in _plsp_klas_list:
+                            _g_klas_default = _plsp_klas_list.index(_klas_det_g)
+
+                    if _g_kode_baru:
+                        st.caption(f"Auto-detect dari **{_first_p['nama_paket'][:40]}**: `{_g_kode_baru}` / `{_g_kode_lama}`")
+
+                    _g_picked_klas = st.selectbox(
+                        "Klasifikasi",
+                        _plsp_klas_list,
+                        index=_g_klas_default,
+                        key="plsp_global_klas",
+                    )
+
+                    # SBU Baru dropdown
+                    if _g_picked_klas and _g_picked_klas != "(auto-detect dari paket pertama)":
+                        _g_baru_options = _sp.list_sbu_baru_by_klasifikasi(_g_picked_klas)
+                    else:
+                        _g_baru_options = []
+                        if _g_kode_baru:
+                            _g_baru_options = [_sp.get_sbu_baru_by_kode(_g_kode_baru)]
+                    _g_baru_labels = [
+                        f"{b['kode']} — {(b.get('nama_singkat') or b.get('nama_full',''))[:70]}"
+                        for b in _g_baru_options if b
+                    ]
+                    _g_baru_default = 0
+                    for _gi, _gb in enumerate(_g_baru_options):
+                        if _gb and _gb.get("kode") == _g_kode_baru:
+                            _g_baru_default = _gi
+                            break
+                    _g_picked_baru_label = st.selectbox(
+                        "SBU Baru (KBLI 2020)",
+                        _g_baru_labels or ["(pilih klasifikasi dulu)"],
+                        index=_g_baru_default if _g_baru_labels else 0,
+                        key="plsp_global_sbu_baru",
+                    )
+                    _g_picked_baru_kode = (
+                        _g_picked_baru_label.split(" — ", 1)[0]
+                        if _g_baru_labels and " — " in _g_picked_baru_label else ""
+                    )
+
+                    # SBU Lama dropdown (padanan)
+                    _g_lama_options = _sp.list_sbu_lama_padanan(_g_picked_baru_kode) if _g_picked_baru_kode else []
+                    _g_lama_labels = ["(tidak ada padanan)"] + [
+                        f"{l['kode']} — {(l.get('nama_singkat') or l.get('nama_full',''))[:70]}"
+                        for l in _g_lama_options
+                    ]
+                    _g_lama_default = 0
+                    for _gli, _gl in enumerate(_g_lama_options):
+                        if _gl.get("kode") == _g_kode_lama:
+                            _g_lama_default = _gli + 1
+                            break
+                    _g_picked_lama_label = st.selectbox(
+                        "SBU Lama (KBLI 2017) — padanan",
+                        _g_lama_labels,
+                        index=_g_lama_default,
+                        key="plsp_global_sbu_lama",
+                    )
+                    _g_picked_lama_kode = (
+                        _g_picked_lama_label.split(" — ", 1)[0]
+                        if " — " in _g_picked_lama_label else ""
+                    )
+
+                    # Resolve nama_full SBU global
+                    _sbu_baru_global = ""
+                    _sbu_lama_global = ""
+                    if _g_picked_baru_kode:
+                        _baru_obj_g = _sp.get_sbu_baru_by_kode(_g_picked_baru_kode)
+                        _sbu_baru_global = (_baru_obj_g or {}).get("nama_full", "")
+                    if _g_picked_lama_kode:
+                        _lama_obj_g = _sp.get_sbu_lama_by_kode(_g_picked_lama_kode)
+                        _sbu_lama_global = (_lama_obj_g or {}).get("nama_full", "")
+                    # Fallback ke paket pertama jika dropdown kosong
+                    if not _sbu_baru_global:
+                        _sbu_baru_global = _first_p.get("sbu_baru") or ""
+                    if not _sbu_lama_global:
+                        _sbu_lama_global = _first_p.get("sbu_lama") or ""
+
+                    if _sbu_baru_global:
+                        st.caption(f"🔹 Baru: `{_sbu_baru_global[:80]}`")
+                    if _sbu_lama_global:
+                        st.caption(f"🔸 Lama: `{_sbu_lama_global[:80]}`")
+
+                    if st.button(
+                        f"💾 Simpan SBU Global ke {len(_plsp_selected)} paket",
+                        key="plsp_save_sbu_btn", use_container_width=True,
+                    ):
+                        from config import sb as _sb_factory
+                        _client_sbu = _sb_factory()
+                        _ok_sbu = 0
+                        for _p in _plsp_selected:
+                            try:
+                                _client_sbu.table("draft_paket_pl").update({
+                                    "sbu_baru": _sbu_baru_global,
+                                    "sbu_lama": _sbu_lama_global,
+                                }).eq("kode_paket", _p["kode_paket"]).execute()
+                                _ok_sbu += 1
+                            except Exception as _e:
+                                st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                        st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
+
+                    st.divider()
+
                     # ── LDK config: centang admin + teknis
                     _ldk_centang_admin = st.checkbox(
                         "Centang semua syarat administrasi (Pakta/KSWP/Tempat/Hukum/Pernyataan)",
@@ -1688,6 +1703,11 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         key="plsp_tgl_dokpil",
                         format="DD/MM/YYYY",
                     )
+                    st.caption(
+                        f"{_HARI_NAMA[_plsp_tgl_dokpil.weekday()]}, "
+                        f"{_plsp_tgl_dokpil.day} {_BULAN_NAMA[_plsp_tgl_dokpil.month-1]} "
+                        f"{_plsp_tgl_dokpil.year}"
+                    )
 
                     st.divider()
 
@@ -1700,6 +1720,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     ):
                         _hasil_sp = []
                         _prog_sp = st.progress(0, text="Mulai...")
+                        from config import sb as _sb_factory_sp
+                        _client_sp = _sb_factory_sp()
                         for _i, _p in enumerate(_plsp_selected):
                             _kp = _p["kode_paket"]
                             _id_nt = _p.get("id_nontender")
@@ -1707,15 +1729,22 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             _prog_sp.progress((_i + 1) / len(_plsp_selected),
                                               text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
 
+                            # 0. Simpan tgl_dokpil + SBU global ke Supabase
+                            try:
+                                _client_sp.table("draft_paket_pl").update({
+                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
+                                    "sbu_baru": _sbu_baru_global,
+                                    "sbu_lama": _sbu_lama_global,
+                                }).eq("kode_paket", _kp).execute()
+                            except Exception as _e_save:
+                                _hasil_sp.append({"paket": _nm, "step": "Simpan Supabase", "ok": False, "pesan": str(_e_save)[:80]})
+
                             # 1. Submit LDK (kode_paket, bukan id_nontender)
                             try:
-                                # Pakai picked dari dropdown jika ada, fallback ke draft
-                                _sbu_full = _p.get("sbu_baru_picked") or _p.get("sbu_baru") or ""
-                                _sbu_lama = _p.get("sbu_lama_picked") or _p.get("sbu_lama") or ""
                                 _r_ldk = _depl.submit_ldk_pl(
                                     _kp,
-                                    sbu_baru=_sbu_full,
-                                    sbu_lama=_sbu_lama,
+                                    sbu_baru=_sbu_baru_global,
+                                    sbu_lama=_sbu_lama_global,
                                     centang_admin_all=_ldk_centang_admin,
                                     teknis_centang_indices=_ldk_teknis_indices,
                                     kinerja_text=_ldk_kinerja_text,
@@ -1758,7 +1787,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 try:
                                     # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
                                     _kode_unik = _p.get("kode_unik") or ""
-                                    _skpd_singkat = _p.get("singkatan_dinas") or _p.get("skpd_singkat") or "DPUPR"
+                                    _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
                                     _nomor_dokpil = _udpl.generate_nomor_dokpil(
                                         nama_paket=_p["nama_paket"],
                                         kode_unik=_kode_unik,
@@ -1777,6 +1806,13 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                         "ok": _r_up["ok"],
                                         "pesan": f"HTTP {_r_up.get('status','?')} | {_nomor_dokpil}",
                                     })
+                                    if _r_up["ok"]:
+                                        try:
+                                            _client_sp.table("draft_paket_pl").update({
+                                                "nomor_dokpil": _nomor_dokpil,
+                                            }).eq("kode_paket", _kp).execute()
+                                        except Exception:
+                                            pass
                                 except Exception as _e:
                                     _hasil_sp.append({
                                         "paket": _nm, "step": "Upload Dokpil",

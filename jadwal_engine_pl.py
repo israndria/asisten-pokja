@@ -34,48 +34,57 @@ HDRS = {
 # Hitung jadwal 5 tahap PL
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _tambah_hari_kerja(dt: datetime, n: int) -> datetime:
+    """Geser dt maju n hari kerja (skip Sabtu/Minggu + hari libur)."""
+    result = dt
+    added = 0
+    while added < n:
+        result += timedelta(days=1)
+        if is_hari_kerja(result):
+            added += 1
+    return result
+
+
 def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung 5 tahap PL dari tanggal mulai (T1).
 
-    Logika sederhana (PL = cepat):
-    - T1 Upload Penawaran: durasi 2 hari kerja
-    - T2 Pembukaan: hari sama T1 selesai, +1 jam
-    - T3 Evaluasi: 1 hari kerja
-    - T4 Klarifikasi+Nego: 1 hari kerja
-    - T5 Penandatanganan: 1 hari kerja, mulai pagi
+    Pola yang dikonfirmasi user (2026-05-17):
+    - T1: mulai D jam X → selesai D+2 hari kerja jam X (jam sama)
+    - T2: T1.selesai → T1.selesai + 65 menit (hari sama, no geser)
+    - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 2 hari kerja replace(hour=16)
+    - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
+    - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +7 hari kerja replace(hour=16)
     """
     # T1 Upload Penawaran
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
-    t1_selesai_kand = t1_mulai + timedelta(days=2)
-    t1_selesai = geser_ke_hari_kerja(t1_selesai_kand)
-    t1_selesai = t1_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
+    t1_selesai = _tambah_hari_kerja(t1_mulai, 2).replace(
+        hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
+    )
 
-    # T2 Pembukaan Penawaran
+    # T2 Pembukaan Penawaran (hari sama T1.selesai, +65 menit)
     t2_mulai = t1_selesai + timedelta(minutes=1)
-    t2_selesai = t2_mulai + timedelta(hours=1)
+    t2_selesai = t1_selesai + timedelta(minutes=65)
 
-    # T3 Evaluasi Penawaran (mulai hari berikutnya pagi)
-    t3_kand = geser_ke_hari_kerja(t2_selesai + timedelta(days=1), jam_mulai=9)
-    t3_mulai = t3_kand.replace(hour=9, minute=0, second=0, microsecond=0)
-    t3_selesai = t3_mulai.replace(hour=16, minute=0, second=0, microsecond=0)
+    # T3 Evaluasi Penawaran
+    t3_mulai = t2_selesai + timedelta(minutes=1)
+    t3_selesai = _tambah_hari_kerja(t3_mulai, 2).replace(hour=16, minute=0, second=0, microsecond=0)
 
-    # T4 Klarifikasi+Nego
-    t4_mulai = geser_ke_hari_kerja(t3_selesai + timedelta(days=1), jam_mulai=9)
-    t4_mulai = t4_mulai.replace(hour=9, minute=0, second=0, microsecond=0)
-    t4_selesai = t4_mulai.replace(hour=16, minute=0, second=0, microsecond=0)
+    # T4 Klarifikasi + Negosiasi (hari sama T3.selesai)
+    t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
+    t4_selesai = t3_selesai.replace(hour=15, minute=45, second=0, microsecond=0)
 
     # T5 Penandatanganan Kontrak
-    t5_mulai = geser_ke_hari_kerja(t4_selesai + timedelta(days=1), jam_mulai=9)
-    t5_mulai = t5_mulai.replace(hour=9, minute=0, second=0, microsecond=0)
-    t5_selesai = t5_mulai.replace(hour=16, minute=0, second=0, microsecond=0)
+    t5_mulai_kand = t4_selesai + timedelta(days=1)
+    t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=8, minute=0, second=0, microsecond=0)
+    t5_selesai = _tambah_hari_kerja(t5_mulai, 7).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [
-        {"nama": "Upload Dokumen Penawaran",      "mulai": t1_mulai, "selesai": t1_selesai},
-        {"nama": "Pembukaan Dokumen Penawaran",   "mulai": t2_mulai, "selesai": t2_selesai},
-        {"nama": "Evaluasi Penawaran",            "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
         {"nama": "Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
-        {"nama": "Penandatanganan Kontrak",       "mulai": t5_mulai, "selesai": t5_selesai},
+        {"nama": "Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
     ]
 
 
