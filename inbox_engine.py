@@ -17,6 +17,7 @@ from config import sb as _sb
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 SUBJEK_DELEGASI = "(LPSE) Pengumuman Delegasi Pokja"
+SUBJEK_DELEGASI_PL = "(LPSE) Pengumuman Delegasi PP"
 
 
 def _headers(referer: str = "") -> dict:
@@ -174,6 +175,118 @@ def parse_detail_pesan(id_pesan: str) -> dict:
         "link_pdf": link_pdf,
         "_kode_tender_for_anggota": kode_tender,
     }
+
+
+def filter_delegasi_pl(list_inbox: list[dict]) -> list[dict]:
+    """Filter pesan Pengumuman Delegasi PP (non-tender PL) tahun berjalan."""
+    def _strip(s):
+        return re.sub(r"<[^>]+>", "", s)
+    tahun = str(datetime.now().year)
+    return [
+        p for p in list_inbox
+        if SUBJEK_DELEGASI_PL in _strip(p["subjek"])
+        and (tahun in p.get("tanggal", "") or tahun in p.get("kode_paket_raw", ""))
+    ]
+
+
+def parse_detail_pesan_pl(id_pesan: str) -> dict:
+    """Ambil detail pesan inbox PL non-tender (label berbeda dari tender).
+
+    Label HTML: 'Kode Non Tender', 'Nama Non Tender' (vs 'Kode Tender'/'Nama Tender').
+    """
+    url = f"{BASE_URL}/non-rekanan/inbox/{id_pesan}"
+    r = _get(url, referer=f"{BASE_URL}/admin/pegawai/inbox")
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    tabel = soup.find("table", class_="list-content")
+    if not tabel:
+        for t in soup.find_all("table"):
+            if "Kode Non Tender" in t.get_text():
+                tabel = t
+                break
+    if not tabel:
+        return {"kode_paket": "", "mak": "", "kode_rup": "", "nilai_pagu": "", "nilai_hps": ""}
+
+    pdf_tag = soup.find("a", href=lambda h: h and "/dl/" in h)
+    link_pdf = ""
+    if pdf_tag:
+        href = pdf_tag.get("href", "")
+        href = re.sub(r"^/(spse4|eproc4)/", "/tapinkab/", href)
+        link_pdf = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+
+    kode_paket = _extract_td_value(tabel, "Kode Non Tender")
+    mak_raw = _extract_td_value(tabel, "MAK")
+    # Trailing dot pada MAK kadang ikut (e.g., "1.03.10.2.01.0029.5.1.02.02.008.00009.")
+    mak = mak_raw.rstrip(".") if mak_raw else ""
+
+    return {
+        "kode_paket": kode_paket,
+        "nama_paket": _extract_td_value(tabel, "Nama Non Tender"),
+        "mak": mak,
+        "kode_rup": _extract_td_value(tabel, "Kode RUP"),
+        "nilai_pagu": _extract_td_value(tabel, "Nilai Pagu"),
+        "nilai_hps": _extract_td_value(tabel, "Nilai HPS"),
+        "link_pdf": link_pdf,
+    }
+
+
+def serap_inbox_pl(progress_cb=None) -> dict:
+    """Serap pesan Delegasi PP (inbox non-tender PL), upsert mak+kode_rup+nilai ke draft_paket_pl.
+
+    Field yang di-update: mak, kode_rup, nilai_pagu, nilai_hps.
+    Match key: kode_paket.
+    """
+    def log(p, m):
+        if progress_cb:
+            progress_cb(p, m)
+
+    log(0.05, "Mengambil list inbox...")
+    semua = ambil_list_inbox()
+    log(0.15, f"Total {len(semua)} pesan, filter delegasi PP...")
+    pesan_pl = filter_delegasi_pl(semua)
+    if not pesan_pl:
+        log(1.0, "Tidak ada pesan Delegasi PP ditemukan di inbox.")
+        return {"ok": True, "scraped": 0, "matched": 0, "errors": []}
+
+    log(0.25, f"Ditemukan {len(pesan_pl)} pesan Delegasi PP")
+
+    # Snapshot daftar paket PL existing untuk match
+    existing = _sb().table("draft_paket_pl").select("kode_paket").execute().data or []
+    existing_kode = {r["kode_paket"] for r in existing}
+
+    scraped = 0
+    matched = 0
+    errors = []
+    total = len(pesan_pl)
+    for i, p in enumerate(pesan_pl):
+        prog = 0.25 + 0.7 * ((i + 1) / total)
+        try:
+            detail = parse_detail_pesan_pl(p["id_pesan"])
+            kode_paket = detail.get("kode_paket", "")
+            if not kode_paket:
+                errors.append(f"Pesan {p['id_pesan']}: kode_paket kosong")
+                continue
+            scraped += 1
+            if kode_paket not in existing_kode:
+                log(prog, f"  ⚠ {kode_paket} tidak ada di draft_paket_pl — skip")
+                continue
+            update_data = {
+                "mak": detail.get("mak") or None,
+                "kode_rup": detail.get("kode_rup") or None,
+                "nilai_pagu": detail.get("nilai_pagu") or None,
+                "nilai_hps": detail.get("nilai_hps") or None,
+            }
+            # Hapus key dengan None biar tidak overwrite existing nilai
+            update_data = {k: v for k, v in update_data.items() if v}
+            _sb().table("draft_paket_pl").update(update_data).eq("kode_paket", kode_paket).execute()
+            matched += 1
+            log(prog, f"  OK {kode_paket} ({detail.get('nama_paket', '')[:30]}) - MAK {detail.get('mak', '')[:30]}")
+        except Exception as e:
+            errors.append(f"Pesan {p['id_pesan']}: {e}")
+
+    log(1.0, f"Selesai: {scraped} pesan diparse, {matched} paket di-update, {len(errors)} error")
+    return {"ok": True, "scraped": scraped, "matched": matched, "errors": errors}
 
 
 # ── Scrape anggota pokja dari halaman /lelang/{kode_tender}/edit ───────────────

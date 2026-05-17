@@ -164,6 +164,132 @@ def cari_kak_di_folder(folder: str) -> str | None:
     return None
 
 
+# ============================================================
+# Parse Draft_PL PDF — extract nama_penyedia + NPWP penyedia
+# ============================================================
+
+def cari_draft_pl_di_folder(folder: str) -> str | None:
+    """Cari PDF Draft_PL_*.pdf di folder paket."""
+    if not os.path.isdir(folder):
+        return None
+    for f in os.listdir(folder):
+        fl = f.lower()
+        if fl.endswith(".pdf") and fl.startswith("draft_pl"):
+            return os.path.join(folder, f)
+    return None
+
+
+def parse_draft_pl(pdf_path: str) -> dict:
+    """Parse Draft_PL PDF — ekstrak nama_penyedia + npwp_penyedia dari halaman SURAT REKOMENDASI.
+
+    Format yang dicari:
+        Nama Perusahaan : CV. MEDIA TALENTA MUDA
+        NPWP Perusahaan : 31854730733000
+    """
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return {}
+
+    out = {"nama_penyedia": "", "npwp_penyedia": ""}
+
+    m_nama = re.search(
+        r"Nama\s+Perusahaan\s*:\s*(.+?)(?:\n|$)",
+        teks, re.IGNORECASE,
+    )
+    if m_nama:
+        out["nama_penyedia"] = m_nama.group(1).strip()
+
+    m_npwp = re.search(
+        r"NPWP\s+Perusahaan\s*:\s*([0-9.\-\s]+)",
+        teks, re.IGNORECASE,
+    )
+    if m_npwp:
+        npwp = re.sub(r"[.\-\s]", "", m_npwp.group(1)).strip()
+        out["npwp_penyedia"] = npwp
+
+    return out
+
+
+def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None:
+    """Cari folder paket PL di OUTPUT_DIR_PL_{JKK|PK}.
+
+    Pola: '{nomor}. PL{jenis} - {nama_clean}'.
+    Fallback: scan folder yg endswith nama_clean.
+    """
+    from config import OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK, sanitasi_nama_folder
+
+    jenis = (jenis_pl or "JKK").upper()
+    root = OUTPUT_DIR_PL_JKK if jenis == "JKK" else OUTPUT_DIR_PL_PK
+    if not os.path.isdir(root):
+        return None
+
+    nama_clean = sanitasi_nama_folder(nama_paket or "")
+    nomor = nomor_urut or ""
+    folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
+    candidate = os.path.join(root, folder_name)
+    if os.path.isdir(candidate):
+        return candidate
+    # Fallback: cari folder yg endswith nama_clean
+    for f in os.listdir(root):
+        full = os.path.join(root, f)
+        if os.path.isdir(full) and (f.endswith(nama_clean) or nama_clean in f):
+            return full
+    return None
+
+
+def serap_penyedia_pl(progress_cb=None) -> dict:
+    """Bulk: loop semua paket PL di Supabase, cari Draft_PL.pdf di folder,
+    parse nama_penyedia + npwp_penyedia, upsert ke draft_paket_pl.
+    """
+    from config import sb as _sb
+
+    def log(p, m):
+        if progress_cb:
+            progress_cb(p, m)
+
+    log(0.05, "Fetch daftar paket PL dari Supabase...")
+    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl").execute().data or []
+    log(0.10, f"Total {len(rows)} paket")
+
+    updated = 0
+    not_found = 0
+    no_data = 0
+    errors = []
+    total = max(len(rows), 1)
+    for i, p in enumerate(rows):
+        prog = 0.10 + 0.85 * ((i + 1) / total)
+        kode = p["kode_paket"]
+        nama = p["nama_paket"] or ""
+        try:
+            folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK")
+            if not folder:
+                not_found += 1
+                log(prog, f"  - {kode}: folder paket tidak ditemukan")
+                continue
+
+            pdf = cari_draft_pl_di_folder(folder)
+            if not pdf:
+                not_found += 1
+                log(prog, f"  - {kode}: Draft_PL PDF tidak ditemukan di {os.path.basename(folder)}")
+                continue
+
+            data = parse_draft_pl(pdf)
+            update = {k: v for k, v in data.items() if v}
+            if not update:
+                no_data += 1
+                log(prog, f"  - {kode}: PDF ada tapi tidak ada Nama/NPWP Perusahaan")
+                continue
+
+            _sb().table("draft_paket_pl").update(update).eq("kode_paket", kode).execute()
+            updated += 1
+            log(prog, f"  OK {kode}: {update.get('nama_penyedia', '')[:30]} / {update.get('npwp_penyedia', '')}")
+        except Exception as e:
+            errors.append(f"{kode}: {e}")
+
+    log(1.0, f"Selesai: updated={updated} not_found={not_found} no_data={no_data} errors={len(errors)}")
+    return {"ok": True, "updated": updated, "not_found": not_found, "no_data": no_data, "errors": errors}
+
+
 # ── CLI self-test ─────────────────────────────────────────────
 if __name__ == "__main__":
     import sys

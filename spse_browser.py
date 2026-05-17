@@ -441,38 +441,46 @@ def submit_via_fetch(endpoint_url: str, payload: dict, method: str = "POST") -> 
 
 _cookie_cache: str = ""
 _cookie_cache_ts: float = 0.0
-_COOKIE_CACHE_TTL = 30.0  # cookie valid 30 detik
+_COOKIE_CACHE_TTL = 300.0  # cookie valid 5 menit (cukup utk bulk paralel)
+_cookie_lock = threading.Lock()
 
 
 def get_spse_cookies() -> str:
     """
     Ambil cookies SPSE via Playwright context yang sudah ada.
-    Di-cache 30 detik agar tidak connect ulang tiap kali dipanggil.
+    Di-cache 5 menit + thread-safe lock agar concurrent caller (bulk paralel)
+    tidak race init Playwright.
     """
     import time as _time
     global _cookie_cache, _cookie_cache_ts
 
+    # Fast-path: cache hit tanpa lock
     now = _time.time()
     if _cookie_cache and (now - _cookie_cache_ts) < _COOKIE_CACHE_TTL:
         return _cookie_cache
 
-    # Pastikan context tersedia — connect tanpa navigasi kalau belum
-    if _context is None:
-        try:
-            buka_browser(navigate=False)
-        except Exception:
+    # Slow-path: pegang lock, double-check (worker lain mungkin sudah refresh)
+    with _cookie_lock:
+        now = _time.time()
+        if _cookie_cache and (now - _cookie_cache_ts) < _COOKIE_CACHE_TTL:
+            return _cookie_cache
+
+        if _context is None:
+            try:
+                buka_browser(navigate=False)
+            except Exception:
+                return ""
+
+        if _context is None:
             return ""
 
-    if _context is None:
-        return ""
-
-    try:
-        cookies = _run(_context.cookies(), timeout=10)
-        spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
-        result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
-        if result:
-            _cookie_cache = result
-            _cookie_cache_ts = now
-        return result
-    except Exception:
-        return _cookie_cache  # kembalikan cache lama jika gagal
+        try:
+            cookies = _run(_context.cookies(), timeout=10)
+            spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
+            result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+            if result:
+                _cookie_cache = result
+                _cookie_cache_ts = now
+            return result
+        except Exception:
+            return _cookie_cache  # kembalikan cache lama jika gagal

@@ -191,13 +191,20 @@ def download_dokumen_paket_pl(
     kode_paket: str,
     folder_tujuan: str,
     progress_cb=None,
+    cookie_str: str = "",
+    skip_merge: bool = False,
 ) -> dict:
     """
     Download dokumen dari endpoint non-tender PP ke folder_tujuan:
       - /dokumennontender/{kode}/spek  → KAK, Daftar Personil, RAB
       - /dokumennontender/{kode}/docsskk → Rancangan SPK/SPMK/SSUK/SSKK
 
-    Pakai cookie PP via spse_browser.get_spse_cookies().
+    Pakai cookie PP via spse_browser.get_spse_cookies() — bisa juga di-pass
+    eksplisit lewat parameter cookie_str (untuk paralel: hindari race init Playwright).
+
+    skip_merge=True: lewati gabung PDF (Excel COM tidak thread-safe untuk paralel).
+                     Merge dilakukan sequential setelah pool selesai via gabung_draft_pl().
+
     Return: {"ok": [...], "error": [...]}
     """
     import requests
@@ -212,7 +219,8 @@ def download_dokumen_paket_pl(
     os.makedirs(folder_tujuan, exist_ok=True)
     hasil = {"ok": [], "error": []}
 
-    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
         hasil["error"].append("Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
         return hasil
@@ -306,26 +314,41 @@ def download_dokumen_paket_pl(
         log(f"  ⚠ gagal simpan nama_file_uraian: {e}")
 
     # ── Gabung semua PDF jadi 1 draft (tiru flow tender)
-    try:
-        from inbox_engine import _gabung_pdf_draft
-        nama_paket_row = _sb().table("draft_paket_pl").select("nama_paket").eq(
-            "kode_paket", kode_paket
-        ).maybe_single().execute()
-        nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
-        nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
-        draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
-        # urut: KAK + RAB + Personil + Rincian + Rancangan + Uraian + Lainnya + NotaDinas
-        ordered = sorted(hasil["ok"], key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
-        merged = _gabung_pdf_draft(draft_path, ordered, progress_cb)
-        hasil["draft_pdf"] = merged
-        log(f"📎 Draft PDF gabungan: {os.path.basename(merged)}")
-    except Exception as e:
-        import traceback as _tb
-        log(f"❌ Gagal gabung PDF: {e}")
-        log(f"   {_tb.format_exc()[-300:]}")
-        hasil["error"].append(f"Gabung PDF: {e}")
+    if not skip_merge:
+        try:
+            merged = gabung_draft_pl(kode_paket, folder_tujuan, hasil["ok"], progress_cb)
+            if merged:
+                hasil["draft_pdf"] = merged
+                log(f"📎 Draft PDF gabungan: {os.path.basename(merged)}")
+        except Exception as e:
+            import traceback as _tb
+            log(f"❌ Gagal gabung PDF: {e}")
+            log(f"   {_tb.format_exc()[-300:]}")
+            hasil["error"].append(f"Gabung PDF: {e}")
 
     return hasil
+
+
+def gabung_draft_pl(kode_paket: str, folder_tujuan: str, files_ok: list, progress_cb=None) -> str:
+    """Standalone gabung PDF — dipanggil sequential setelah bulk parallel download.
+
+    Excel/Word COM tidak thread-safe → harus serial.
+    Return: path Draft_PL_*.pdf atau "" jika gagal.
+    """
+    from inbox_engine import _gabung_pdf_draft
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    nama_paket_row = _sb().table("draft_paket_pl").select("nama_paket").eq(
+        "kode_paket", kode_paket
+    ).maybe_single().execute()
+    nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
+    nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
+    draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
+    ordered = sorted(files_ok, key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
+    return _gabung_pdf_draft(draft_path, ordered, progress_cb)
 
 
 def _pl_pdf_sort_key(fname: str) -> tuple:
