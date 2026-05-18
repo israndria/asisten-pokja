@@ -187,6 +187,53 @@ def ubah_metode_via_playwright(kode_paket: str, kategori_id: int, pilih: int, ba
     return _run(_ubah_metode_async(kode_paket, kategori_id, pilih, base_url), timeout=45)
 
 
+async def _update_ijin_sbu_async(kode_paket: str, ijin_idx: int, klas_baru: str, base_url: str) -> str:
+    """
+    Update isi field ijin[N].chk_klasifikasi di form LDK via Playwright CDP, lalu submit.
+    Dipakai karena server SPSE block update ijin existing via requests POST (nilai di-revert).
+    Return "OK" jika sukses, pesan error jika gagal.
+    """
+    global _context
+    if _context is None:
+        buka_browser(navigate=False)
+    if _context is None:
+        return "CDP tidak tersambung"
+
+    page = await _context.new_page()
+    try:
+        url_ldk = f"{base_url}dokumennontender/{kode_paket}/ldk"
+        await page.goto(url_ldk, wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(1000)
+
+        # Set nilai baru pada field ijin klasifikasi
+        field_selector = f"input[name='ijin[{ijin_idx}].chk_klasifikasi']"
+        await page.eval_on_selector(
+            field_selector,
+            f"(el) => {{ el.value = {repr(klas_baru)}; }}"
+        )
+
+        # Submit form
+        await page.click("button[type='submit'], input[type='submit']")
+        await page.wait_for_timeout(3000)
+
+        if "/ldk" in page.url:
+            return "OK"
+        return f"Gagal redirect, URL: {page.url}"
+    except Exception as e:
+        return f"Error: {e}"
+    finally:
+        await page.close()
+
+
+def update_ijin_sbu_via_playwright(kode_paket: str, ijin_idx: int, klas_baru: str, base_url: str) -> str:
+    """
+    Update teks klasifikasi SBU pada baris ijin[N] di form LDK nontender via Playwright CDP.
+    Server SPSE tidak bisa update ijin existing via requests POST, harus via browser real.
+    Return "OK" jika sukses, pesan error jika gagal.
+    """
+    return _run(_update_ijin_sbu_async(kode_paket, ijin_idx, klas_baru, base_url), timeout=45)
+
+
 def halaman_aktif() -> Page | None:
     global _page
     if _page and not _page.is_closed():

@@ -194,57 +194,68 @@ def submit_ldk_pl(
     kode_paket: str,
     sbu_baru: str = "",
     sbu_lama: str = "",
-    centang_admin_all: bool = True,
+    centang_admin_indices: list[int] | None = None,
     teknis_centang_indices: list[int] | None = None,
     izin_extra: list[dict] | None = None,
     kinerja_text: str = "",
+    base_url: str = "",
 ) -> dict:
     """
-    Submit form LDK PL (JKK).
+    Submit form LDK PL (JKK Konstruksi).
 
-    JKK PL ckm_id BAWAAN (verified 2026-05-17 PROD):
-      - Admin idx 0-4: 251, 70, 72, 73, 74 (Pakta, KSWP, Tempat Usaha, Hukum, Pernyataan)
-      - Teknis idx 0-5: 77, 268, 78, 79, 80, 81 (Pengalaman, <3thn, SDM-Manaj, SDM-Ahli, SDM-Teknis, Peralatan)
+    CKM IDs BAWAAN prod JKK Konstruksi (verified 2026-05-18):
+      - Admin idx 0-5: 413, 414, 415, 416, 422, 423
+        413=KSWP, 414=Kapasitas hukum (Akta), 415=Pakta Integritas, 416=Surat Pernyataan
+        422/423=SKIP (ada di DB tapi tidak dicentang untuk JKK Konstruksi)
+      - Teknis idx 0-4: 433, 434, 435, 436, 996
+        433=Pengalaman ≥1 JKK, 434=Pengalaman sejenis, 435=Pengalaman sejenis 10thn,
+        436=Dispensasi penyedia kecil <3thn, 996=Kinerja Penyedia (custom)
+        ⚠️ idx 2+3 (435/436) chk_id="" (row baru) — server auto assign setelah submit
 
-    DEFAULT BARU (per user 2026-05-17 E2E test):
-      - centang_admin_all=True → semua admin tercentang (NPWP/Akta/Pakta auto by sistem)
-      - teknis_centang_indices=[0, 1] → HANYA centang Pengalaman + Dispensasi <3thn
-        SDM Manajerial/Ahli/Teknis/Peralatan (78/79/80/81) JANGAN dicentang.
-      - kinerja_text → tambah custom row "Penilaian Kinerja Penyedia" ckm_id=996
+    DEFAULT centang:
+      - centang_admin_indices=[0,1,2,3] → centang 413/414/415/416, SKIP 422/423
+      - teknis_centang_indices=[0,1] → HANYA centang 433 (Pengalaman) + 434 (Pengalaman sejenis)
+      - kinerja_text → tambah custom row ckm_id=996
 
-    PENTING: Server butuh `chk_id` VALUE ASLI dari hidden input.
-    Kalau dikirim chk_id="" → server abaikan centang (row dianggap baru/orphan).
+    UPDATE ijin[1] klasifikasi:
+      Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), server SPSE TIDAK bisa
+      update klasifikasi via requests POST biasa. Dipakai CDP Playwright via update_ijin_sbu_via_playwright().
+
+    PENTING: Server butuh chk_id VALUE ASLI dari hidden input.
+    Kalau chk_id="" → server abaikan centang (row dianggap baru/orphan).
     """
+    from config import SPSE_BASE_URL
+    _base = (base_url or SPSE_BASE_URL).rstrip("/") + "/"
+
     ctx = scrap_ldk_context(kode_paket)
     payload = {"authenticityToken": ctx["csrf"]}
 
     # ── IJIN USAHA ────────────────────────────────────────────────
-    # Override 2 ijin existing (chk_id asli) + tambah jika user kasih izin_extra
     izin_list = build_izin_usaha_jkk(sbu_baru, sbu_lama)
     if izin_extra:
         izin_list.extend(izin_extra)
 
     ijin_existing_ids = ctx.get("ijin_chk_ids", [])
     for i, ij in enumerate(izin_list):
-        # Pakai chk_id existing jika ada, else kosong (row baru)
         payload[f"ijin[{i}].chk_id"] = ijin_existing_ids[i] if i < len(ijin_existing_ids) else ""
         payload[f"ijin[{i}].chk_nama"] = ij["jenis_izin"]
         payload[f"ijin[{i}].chk_klasifikasi"] = ij["klasifikasi"]
 
     # ── SYARAT ADMINISTRASI ───────────────────────────────────────
-    # Kirim SEMUA hidden chk_id (wajib agar form lengkap)
-    # Centang ckm_id HANYA jika centang_admin_all=True
+    # Default: centang hanya idx 0-3 (413/414/415/416), SKIP idx 4-5 (422/423).
+    if centang_admin_indices is None:
+        centang_admin_indices = [0, 1, 2, 3]
+
     for i, item in enumerate(ctx["admin_list"]):
         chk_id = item.get("chk_id", "")
         ckm_id = item.get("ckm_id", "")
         payload[f"syaratAdmin[{i}].chk_id"] = chk_id
-        if centang_admin_all:
+        if i in centang_admin_indices:
             payload[f"syaratAdmin[{i}].ckm_id"] = ckm_id
             payload[f"checklist_kualifikasi_administrasi_ckm_id[{i}]"] = ckm_id
 
     # ── SYARAT TEKNIS ─────────────────────────────────────────────
-    # Default centang HANYA idx 0 (77 Pengalaman) + idx 1 (268 Dispensasi <3thn).
-    # idx 2-5 (SDM Manajerial/Ahli/Teknis/Peralatan) JANGAN dicentang per user.
+    # Default centang idx 0 (433) + idx 1 (434).
     if teknis_centang_indices is None:
         teknis_centang_indices = [0, 1]
 
@@ -277,12 +288,32 @@ def submit_ldk_pl(
         timeout=30,
     )
 
-    return {
-        "ok":       r.status_code in (200, 302),
+    ok = r.status_code in (200, 302)
+    result = {
+        "ok":       ok,
         "status":   r.status_code,
         "body":     (r.text or "")[:1500],
         "redirect": r.headers.get("Location", ""),
+        "ijin_update": None,
     }
+
+    # ── UPDATE ijin[1] klasifikasi via CDP Playwright ─────────────────────────
+    # Jika sbu_lama kosong DAN ijin[1] sudah ada di SPSE (chk_id asli ≠ ""),
+    # klasifikasi tidak bisa diubah via requests POST (server revert ke nilai lama).
+    # Wajib pakai browser real (CDP) untuk update teks ke hanya SBU 2020.
+    if ok and not sbu_lama and sbu_baru and len(ijin_existing_ids) >= 2:
+        # Teks target dari build_izin_usaha_jkk (sbu_lama="") — row[1].klasifikasi
+        klas_target = build_izin_usaha_jkk(sbu_baru, "")[1]["klasifikasi"]
+        try:
+            import spse_browser as _sb
+            cdp_result = _sb.update_ijin_sbu_via_playwright(
+                kode_paket, 1, klas_target, _base
+            )
+            result["ijin_update"] = cdp_result
+        except Exception as e:
+            result["ijin_update"] = f"CDP error: {e}"
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

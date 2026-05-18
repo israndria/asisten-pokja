@@ -1615,19 +1615,19 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _g_baru_labels and " — " in _g_picked_baru_label else ""
                     )
 
-                    # SBU Lama dropdown (padanan)
+                    # SBU Lama dropdown (opsional — kosongkan jika tidak dipersyaratkan)
                     _g_lama_options = _sp.list_sbu_lama_padanan(_g_picked_baru_kode) if _g_picked_baru_kode else []
-                    _g_lama_labels = ["(tidak ada padanan)"] + [
+                    _g_lama_labels = ["(tidak dipersyaratkan / hanya SBU 2020)"] + [
                         f"{l['kode']} — {(l.get('nama_singkat') or l.get('nama_full',''))[:70]}"
                         for l in _g_lama_options
                     ]
-                    _g_lama_default = 0
+                    _g_lama_default = 0  # default: tidak dipersyaratkan
                     for _gli, _gl in enumerate(_g_lama_options):
                         if _gl.get("kode") == _g_kode_lama:
                             _g_lama_default = _gli + 1
                             break
                     _g_picked_lama_label = st.selectbox(
-                        "SBU Lama (KBLI 2017) — padanan",
+                        "SBU Lama (KBLI 2017) — opsional, kosongkan jika tidak dipersyaratkan",
                         _g_lama_labels,
                         index=_g_lama_default,
                         key="plsp_global_sbu_lama",
@@ -1646,16 +1646,17 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     if _g_picked_lama_kode:
                         _lama_obj_g = _sp.get_sbu_lama_by_kode(_g_picked_lama_kode)
                         _sbu_lama_global = (_lama_obj_g or {}).get("nama_full", "")
-                    # Fallback ke paket pertama jika dropdown kosong
+                    # Fallback SBU baru ke paket pertama jika dropdown kosong
                     if not _sbu_baru_global:
                         _sbu_baru_global = _first_p.get("sbu_baru") or ""
-                    if not _sbu_lama_global:
-                        _sbu_lama_global = _first_p.get("sbu_lama") or ""
+                    # SBU lama: tidak fallback ke paket (user pilih sadar opsional)
 
                     if _sbu_baru_global:
                         st.caption(f"🔹 Baru: `{_sbu_baru_global[:80]}`")
                     if _sbu_lama_global:
                         st.caption(f"🔸 Lama: `{_sbu_lama_global[:80]}`")
+                    elif _sbu_baru_global:
+                        st.caption("ℹ️ SBU Lama tidak dipersyaratkan — hanya SBU 2020 di LDK")
 
                     if st.button(
                         f"💾 Simpan SBU Global ke {len(_plsp_selected)} paket",
@@ -1678,19 +1679,29 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     st.divider()
 
                     # ── LDK config: centang admin + teknis
-                    _ldk_centang_admin = st.checkbox(
-                        "Centang semua syarat administrasi (Pakta/KSWP/Tempat/Hukum/Pernyataan)",
-                        value=True, key="plsp_centang_admin",
-                    )
+                    st.markdown("**Syarat Administrasi** *(default: centang idx 0-3, skip 422/423)*")
+                    _ADMIN_LABEL = {
+                        0: "413 — KSWP (Wajib Pajak)",
+                        1: "414 — Kapasitas Hukum (Akta Pendirian)",
+                        2: "415 — Pakta Integritas",
+                        3: "416 — Surat Pernyataan Peserta",
+                        4: "422 — (skip default)",
+                        5: "423 — (skip default)",
+                    }
+                    _ldk_centang_admin_indices = []
+                    _cols_adm = st.columns(2)
+                    for _i, _lbl in _ADMIN_LABEL.items():
+                        with _cols_adm[_i % 2]:
+                            _default_adm = _i in (0, 1, 2, 3)
+                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_idx_{_i}"):
+                                _ldk_centang_admin_indices.append(_i)
 
-                    st.markdown("**Syarat Teknis JKK a-f (pilih yang dicentang)**")
+                    st.markdown("**Syarat Teknis JKK Konstruksi** *(default: centang 0+1)*")
                     _TEKNIS_LABEL = {
-                        0: "a. Pengalaman Pekerjaan (ckm_id=77)",
-                        1: "b. Dispensasi <3thn / Agen Pengadaan (ckm_id=268)",
-                        2: "c. SDM Manajerial (ckm_id=78)",
-                        3: "d. SDM Tenaga Ahli (ckm_id=79)",
-                        4: "e. SDM Tenaga Teknis/Terampil (ckm_id=80)",
-                        5: "f. Peralatan (ckm_id=81)",
+                        0: "433 — Pengalaman ≥1 JKK 4thn terakhir",
+                        1: "434 — Pengalaman pekerjaan sejenis",
+                        2: "435 — Pengalaman sejenis 10thn terakhir",
+                        3: "436 — Dispensasi penyedia kecil baru <3thn",
                     }
                     _ldk_teknis_indices = []
                     _cols_tk = st.columns(2)
@@ -1802,13 +1813,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     _kp,
                                     sbu_baru=_sbu_baru_global,
                                     sbu_lama=_sbu_lama_global,
-                                    centang_admin_all=_ldk_centang_admin,
+                                    centang_admin_indices=_ldk_centang_admin_indices,
                                     teknis_centang_indices=_ldk_teknis_indices,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
+                                _ijin_note = f" | ijin CDP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "LDK",
-                                    "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}",
+                                    "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}{_ijin_note}",
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "LDK", "ok": False, "pesan": str(_e)[:80]})
@@ -2872,14 +2884,14 @@ with tab_setup:
                         "SBU KBLI 2020",
                         options=_sbu_opts_2020,
                         key="sbu_2020_1",
-                        label_visibility="collapsed",
+                        label_visibility="visible",
                     )
                 with col_2015:
                     sbu_2015 = st.selectbox(
-                        "SBU KBLI 2015",
+                        "SBU KBLI 2015 (opsional — kosongkan jika hanya SBU 2020)",
                         options=_sbu_opts_2015,
                         key="sbu_2015_1",
-                        label_visibility="collapsed",
+                        label_visibility="visible",
                     )
 
                 # Auto-generate teks klasifikasi dari pilihan dropdown
