@@ -135,6 +135,58 @@ def diskonek():
     _cdp_tabs_cache_ts = 0.0
 
 
+async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
+    """
+    Navigasi ke /metode via Playwright, pilih kategori + radio, accept confirm dialog, klik Simpan.
+    Return: "OK" jika sukses, pesan error jika gagal.
+    """
+    global _context
+    if _context is None:
+        buka_browser(navigate=False)
+    if _context is None:
+        return "CDP tidak tersambung"
+
+    page = await _context.new_page()
+    try:
+        # Auto-accept dialog (confirm/alert) — asyncio.ensure_future agar tidak deadlock
+        page.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+
+        url_metode = f"{base_url}nontender/{kode_paket}/metode"
+        await page.goto(url_metode, wait_until="domcontentloaded", timeout=20000)
+
+        # Pilih kategori dari dropdown + dispatch change event
+        await page.select_option("select[name='kategoriId']", str(kategori_id))
+        await page.dispatch_event("select[name='kategoriId']", "change")
+        await page.wait_for_timeout(1000)  # tunggu JS update radio list
+
+        # Klik radio pilih + dispatch change event
+        radio_selector = f"input[name='pilih'][value='{pilih}']"
+        await page.check(radio_selector)
+        await page.dispatch_event(radio_selector, "change")
+        await page.wait_for_timeout(500)
+
+        # Klik Simpan → trigger confirm() → auto-accept → form submit
+        await page.click("button[name='simpan']")
+        await page.wait_for_timeout(4000)
+
+        # Verifikasi redirect ke /edit (sukses)
+        if "/edit" in page.url:
+            return "OK"
+        return f"Gagal redirect, posisi URL: {page.url}"
+    except Exception as e:
+        return f"Error: {e}"
+    finally:
+        await page.close()
+
+
+def ubah_metode_via_playwright(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
+    """
+    Ubah metode pengadaan via Playwright CDP (handle JS confirm dialog).
+    Return "OK" jika sukses, pesan error jika gagal.
+    """
+    return _run(_ubah_metode_async(kode_paket, kategori_id, pilih, base_url), timeout=45)
+
+
 def halaman_aktif() -> Page | None:
     global _page
     if _page and not _page.is_closed():

@@ -605,10 +605,27 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     _pr_status = _pr.get("status", "draft")
                     _pr_folder = bool(_pr.get("folder_dibuat"))
                     _pr_icon   = "✅" if _pr_folder else "📋"
-                    _pr_label  = f"{_pr_icon} [{_pr_jenis}] {_pr_nama[:50]}"
+                    # Label metode singkat + tanda ⚠️ jika Non Konstruksi
+                    _pr_metode_raw = _pr.get("metode_pengadaan", "") or ""
+                    _pr_metode_low = _pr_metode_raw.lower()
+                    if "non konstruksi" in _pr_metode_low or "non konstruksi" in _pr_metode_low.replace(" ", ""):
+                        _pr_metode_lbl = "⚠️ JKK Non-Konstruksi"
+                    elif "konstruksi" in _pr_metode_low:
+                        _pr_metode_lbl = "JKK Konstruksi"
+                    elif "barang" in _pr_metode_low:
+                        _pr_metode_lbl = "PK"
+                    elif _pr_metode_raw:
+                        _pr_metode_lbl = _pr_metode_raw[:30]
+                    else:
+                        _pr_metode_lbl = _pr_jenis or "-"
+                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama[:45]}"
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        if "non konstruksi" in _pr_metode_low:
+                            st.warning("⚠️ Metode: Non Konstruksi — minta PPK ubah ke Konstruksi di SPSE.")
+                        elif _pr_metode_raw:
+                            st.caption(f"Metode: {_pr_metode_raw}")
                         st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
                         _pr_c1, _pr_c2, _pr_c3 = st.columns(3)
@@ -624,6 +641,46 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _pr_c3.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
+
+        # ── Ubah Metode Pengadaan via CDP ────────────────────────
+        if _pl_rows:
+            _pl_non_kon = [r for r in _pl_rows if "non konstruksi" in (r.get("metode_pengadaan") or "").lower()]
+            _ekspander_label = f"🔧 Ubah Metode Pengadaan" + (f"  ⚠️ {len(_pl_non_kon)} Non-Konstruksi" if _pl_non_kon else "")
+            with st.expander(_ekspander_label):
+                st.info("Pastikan CDP browser sudah terbuka dan login sebagai PP.")
+                _pl_opsi_ubah = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_rows}
+                _pl_default_sel = [r.get("nama_paket", r.get("kode_paket")) for r in _pl_non_kon]
+                _pl_sel_ubah = st.multiselect(
+                    "Pilih paket yang diubah:",
+                    list(_pl_opsi_ubah.keys()),
+                    default=_pl_default_sel,
+                    key="pl_ubah_metode_sel",
+                )
+                _pl_metode_pilihan = st.selectbox(
+                    "Target metode:",
+                    list(pl_engine.METODE_PL_MAP.keys()),
+                    index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                    key="pl_ubah_metode_target",
+                )
+                _pl_kat_id, _pl_pilih_val = pl_engine.METODE_PL_MAP[_pl_metode_pilihan]
+
+                if st.button(
+                    f"🔄 Ubah Metode ({len(_pl_sel_ubah)} paket) via CDP",
+                    disabled=not _pl_sel_ubah,
+                    use_container_width=True,
+                    key="pl_btn_ubah_metode",
+                ):
+                    _pl_base_ubah = pl_engine.BASE_URL + "/"
+                    _pl_ok_ubah = _pl_fail_ubah = 0
+                    for _nm_ubah in _pl_sel_ubah:
+                        _kd_ubah = _pl_opsi_ubah[_nm_ubah]
+                        if pl_engine.ubah_metode_pl_playwright(_kd_ubah, _pl_kat_id, _pl_pilih_val, _pl_base_ubah):
+                            _pl_ok_ubah += 1
+                            st.write(f"✅ {_nm_ubah[:45]}")
+                        else:
+                            _pl_fail_ubah += 1
+                            st.write(f"❌ {_nm_ubah[:45]}")
+                    st.success(f"Selesai: {_pl_ok_ubah} OK, {_pl_fail_ubah} GAGAL. Serap ulang untuk refresh.")
 
         # ══════════════════════════════════════════════════════
         # KOLOM KANAN — Buat Folder + Download Dokumen
