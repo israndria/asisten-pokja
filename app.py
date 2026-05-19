@@ -1556,6 +1556,26 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 tahun=_tgl_prev.year,
                             )
                             st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`")
+                            if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
+                                with st.spinner("Mengupload dokpil..."):
+                                    try:
+                                        _r_up_only = _udpl.upload_dokpil_pl(
+                                            kode_paket=_kp_key,
+                                            file_bytes=_dokpil_up.getvalue(),
+                                            file_name=_dokpil_up.name,
+                                            nomor_dokpil=_no_prev,
+                                            tgl_dokpil=_tgl_prev.strftime("%d-%m-%Y"),
+                                        )
+                                        if _r_up_only["ok"]:
+                                            from config import sb as _sb_up_only
+                                            _sb_up_only().table("draft_paket_pl").update({
+                                                "nomor_dokpil": _no_prev,
+                                            }).eq("kode_paket", _kp_key).execute()
+                                            st.success(f"✅ Upload berhasil — {_no_prev}")
+                                        else:
+                                            st.error(f"❌ HTTP {_r_up_only.get('status','?')} — {_r_up_only.get('text','')[:100]}")
+                                    except Exception as _e_up_only:
+                                        st.error(f"❌ {_e_up_only}")
 
                     if _chk:
                         _plsp_selected.append({
