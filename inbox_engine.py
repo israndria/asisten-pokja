@@ -473,8 +473,9 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                 hasil["jangka_waktu"] = _re_extract(
                     r"Jangka Waktu\s*:\s*([^\n]+)", txt2
                 )
-                hasil["sumber_anggaran"] = _re_extract(
-                    r"Sumber Anggaran\s*:\s*([^\n]+)", txt2
+                hasil["sumber_anggaran"] = (
+                    _re_extract(r"Sumber Anggaran\s*:\s*([^\n]+)", txt2)
+                    or _re_extract(r"Sumber Dana\s*:\s*([^\n]+)", txt2)
                 )
     except Exception as e:
         hasil["_error_pdf"] = str(e)
