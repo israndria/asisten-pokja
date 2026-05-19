@@ -1571,11 +1571,12 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 if not _plsp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
-                    # ── SBU Global (satu pilihan apply ke semua paket terpilih) ─────
-                    st.markdown("**SBU Global** *(satu pilihan apply ke semua paket terpilih)*")
+                    # ── SEKSI 1: SBU Global ───────────────────────────────────
+                    st.markdown("#### 🏗️ Seksi 1 — SBU Global")
+                    st.caption("Satu pilihan SBU apply ke semua paket terpilih.")
+
                     _plsp_klas_list = ["(auto-detect dari paket pertama)"] + _sp.list_klasifikasi()
 
-                    # Auto-detect dari paket pertama terpilih
                     _first_p = _plsp_selected[0]
                     _detected_g = _sp.detect_from_draft(
                         _first_p.get("sbu_baru") or "", _first_p.get("sbu_lama") or ""
@@ -1600,7 +1601,6 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         key="plsp_global_klas",
                     )
 
-                    # SBU Baru dropdown
                     if _g_picked_klas and _g_picked_klas != "(auto-detect dari paket pertama)":
                         _g_baru_options = _sp.list_sbu_baru_by_klasifikasi(_g_picked_klas)
                     else:
@@ -1627,19 +1627,18 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _g_baru_labels and " — " in _g_picked_baru_label else ""
                     )
 
-                    # SBU Lama dropdown (opsional — kosongkan jika tidak dipersyaratkan)
                     _g_lama_options = _sp.list_sbu_lama_padanan(_g_picked_baru_kode) if _g_picked_baru_kode else []
                     _g_lama_labels = ["(tidak dipersyaratkan / hanya SBU 2020)"] + [
                         f"{l['kode']} — {(l.get('nama_singkat') or l.get('nama_full',''))[:70]}"
                         for l in _g_lama_options
                     ]
-                    _g_lama_default = 0  # default: tidak dipersyaratkan
+                    _g_lama_default = 0
                     for _gli, _gl in enumerate(_g_lama_options):
                         if _gl.get("kode") == _g_kode_lama:
                             _g_lama_default = _gli + 1
                             break
                     _g_picked_lama_label = st.selectbox(
-                        "SBU Lama (KBLI 2017) — opsional, kosongkan jika tidak dipersyaratkan",
+                        "SBU Lama (KBLI 2017) — opsional",
                         _g_lama_labels,
                         index=_g_lama_default,
                         key="plsp_global_sbu_lama",
@@ -1649,7 +1648,6 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if " — " in _g_picked_lama_label else ""
                     )
 
-                    # Resolve nama_full SBU global
                     _sbu_baru_global = ""
                     _sbu_lama_global = ""
                     if _g_picked_baru_kode:
@@ -1658,10 +1656,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     if _g_picked_lama_kode:
                         _lama_obj_g = _sp.get_sbu_lama_by_kode(_g_picked_lama_kode)
                         _sbu_lama_global = (_lama_obj_g or {}).get("nama_full", "")
-                    # Fallback SBU baru ke paket pertama jika dropdown kosong
                     if not _sbu_baru_global:
                         _sbu_baru_global = _first_p.get("sbu_baru") or ""
-                    # SBU lama: tidak fallback ke paket (user pilih sadar opsional)
 
                     if _sbu_baru_global:
                         st.caption(f"🔹 Baru: `{_sbu_baru_global[:80]}`")
@@ -1690,7 +1686,38 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                     st.divider()
 
-                    # ── LDK config: centang admin + teknis
+                    # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
+                    st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
+
+                    _plsp_tgl_dokpil = st.date_input(
+                        "Tanggal Dokpil",
+                        value=datetime.now().date(),
+                        key="plsp_tgl_dokpil",
+                        format="DD/MM/YYYY",
+                    )
+                    st.caption(
+                        f"{_HARI_NAMA[_plsp_tgl_dokpil.weekday()]}, "
+                        f"{_plsp_tgl_dokpil.day} {_BULAN_NAMA[_plsp_tgl_dokpil.month-1]} "
+                        f"{_plsp_tgl_dokpil.year}"
+                    )
+
+                    _ldk_masa_berlaku = st.number_input(
+                        "Masa Berlaku Penawaran (hari)",
+                        min_value=1, max_value=180, value=30,
+                        key="plsp_masa_berlaku",
+                    )
+
+                    if st.button("💾 Submit Masa Berlaku", key="plsp_btn_masa_berlaku", use_container_width=True):
+                        for _p in _plsp_selected:
+                            _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
+                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_mb['status']}")
+
+                    st.divider()
+
+                    # ── SEKSI 3: Dokumen Kualifikasi (LDK) ───────────────────
+                    st.markdown("#### 📋 Seksi 3 — Dokumen Kualifikasi (LDK)")
+                    st.caption("ℹ️ Di-submit ke SPSE bagian Persyaratan Kualifikasi (LDK).")
+
                     st.markdown("**Syarat Administrasi** *(default: centang idx 0-3, skip 422/423)*")
                     _ADMIN_LABEL = {
                         0: "413 — KSWP (Wajib Pajak)",
@@ -1723,7 +1750,6 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_idx_{_i}"):
                                 _ldk_teknis_indices.append(_i)
 
-                    # ── Tambah Syarat Kinerja Penyedia (custom row) ───────────
                     import ldk_config as _ldk_cfg_pl
                     _ldk_tambah_kinerja = st.checkbox(
                         "➕ Tambah Syarat Teknis: Penilaian Kinerja Penyedia (ckm_id=996)",
@@ -1743,19 +1769,33 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia = custom row ckm_id=996."
                     )
 
+                    if st.button("📋 Submit Dokumen Kualifikasi (LDK)", key="plsp_btn_ldk", use_container_width=True):
+                        from config import sb as _sb_factory_ldk
+                        _client_ldk = _sb_factory_ldk()
+                        for _p in _plsp_selected:
+                            try:
+                                _client_ldk.table("draft_paket_pl").update({
+                                    "sbu_baru": _sbu_baru_global,
+                                    "sbu_lama": _sbu_lama_global,
+                                }).eq("kode_paket", _p["kode_paket"]).execute()
+                            except Exception:
+                                pass
+                            _r_ldk = _depl.submit_ldk_pl(
+                                _p["kode_paket"],
+                                sbu_baru=_sbu_baru_global,
+                                sbu_lama=_sbu_lama_global,
+                                centang_admin_indices=_ldk_centang_admin_indices,
+                                teknis_centang_indices=_ldk_teknis_indices,
+                                kinerja_text=_ldk_kinerja_text,
+                            )
+                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_ldk['status']}")
+
                     st.divider()
 
-                    # ── Masa Berlaku Penawaran
-                    _ldk_masa_berlaku = st.number_input(
-                        "Masa Berlaku Penawaran (hari)",
-                        min_value=1, max_value=180, value=30,
-                        key="plsp_masa_berlaku",
-                    )
+                    # ── SEKSI 4: Dokumen Penawaran (Checklist) ────────────────
+                    st.markdown("#### 📝 Seksi 4 — Dokumen Penawaran (Checklist)")
+                    st.caption("ℹ️ Centang sesuai dokumen penawaran yang diminta ke peserta. Di-submit ke SPSE bagian Checklist Dokumen Penawaran.")
 
-                    st.divider()
-
-                    # ── Checklist Dokumen Penawaran
-                    st.markdown("**Checklist Dokumen Penawaran**")
                     _cd_a, _cd_b, _cd_c = st.columns(3)
                     with _cd_a:
                         _cd_centang_admin = st.checkbox(
@@ -1773,25 +1813,20 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             value=True, key="plsp_cd_harga",
                         )
 
-                    st.divider()
-
-                    # ── Generate Nomor Dokpil
-                    st.markdown("**Tanggal Dokumen Pemilihan**")
-                    _plsp_tgl_dokpil = st.date_input(
-                        "Tanggal Dokpil",
-                        value=datetime.now().date(),
-                        key="plsp_tgl_dokpil",
-                        format="DD/MM/YYYY",
-                    )
-                    st.caption(
-                        f"{_HARI_NAMA[_plsp_tgl_dokpil.weekday()]}, "
-                        f"{_plsp_tgl_dokpil.day} {_BULAN_NAMA[_plsp_tgl_dokpil.month-1]} "
-                        f"{_plsp_tgl_dokpil.year}"
-                    )
+                    if st.button("📝 Submit Dokumen Penawaran (Checklist)", key="plsp_btn_checklist", use_container_width=True):
+                        for _p in _plsp_selected:
+                            _r_cd = _depl.submit_checklist_pl(
+                                _p["kode_paket"],
+                                centang_admin_all=_cd_centang_admin,
+                                centang_syarat_all=_cd_centang_syarat,
+                                centang_harga_all=_cd_centang_harga,
+                            )
+                            st.write(f"{'✅' if _r_cd['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_cd['status']}")
 
                     st.divider()
+                    st.caption("⬇️ Atau jalankan semua seksi sekaligus:")
 
-                    # ── Submit
+                    # ── Submit All-in-One ─────────────────────────────────────
                     if st.button(
                         f"🚀 Push Setup ke SPSE ({len(_plsp_selected)} paket)",
                         key="plsp_submit_btn",
