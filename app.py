@@ -1171,7 +1171,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 tempat_rapat=_kd_tempat.strip(),
                             )
                             _lamp_bytes = _gen["pdf_bytes"] if _gen["sukses"] else None
-                            _lamp_nama  = f"Undangan_DPP_{_kp['kode_paket']}.pdf"
+                            _ku_lamp = _kp.get("kode_unik") or _kp["kode_paket"]
+                            _lamp_nama  = f"undangan_reviu_{_ku_lamp}.pdf"
+                            if _lamp_bytes:
+                                st.session_state.setdefault("_kd_pdf_cache", {})[_ku_lamp] = (_lamp_nama, _lamp_bytes)
 
                             _waktu_str  = datetime.combine(_kd_tgl_a, _kd_jam_mulai).strftime("%d-%m-%Y %H:%M")
                             _sampai_str = datetime.combine(_kd_tgl_a, _kd_jam_selesai).strftime("%d-%m-%Y %H:%M")
@@ -1210,6 +1213,15 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             },
                             hide_index=True,
                         )
+                        # Tombol download per PDF
+                        for _ku_dl, (_nm_dl, _by_dl) in st.session_state.get("_kd_pdf_cache", {}).items():
+                            st.download_button(
+                                f"⬇️ Download {_nm_dl}",
+                                data=_by_dl,
+                                file_name=_nm_dl,
+                                mime="application/pdf",
+                                key=f"kd_dl_{_ku_dl}",
+                            )
 
                 with _kdc2:
                     if st.button("❌ Batal", key="kd_batal", use_container_width=True):
