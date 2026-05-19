@@ -1708,7 +1708,16 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     )
 
                     if st.button("💾 Submit Masa Berlaku", key="plsp_btn_masa_berlaku", use_container_width=True):
+                        from config import sb as _sb_factory_mb
+                        _client_mb = _sb_factory_mb()
                         for _p in _plsp_selected:
+                            # Simpan tgl_dokpil ke Supabase agar Isi Data PL bisa baca
+                            try:
+                                _client_mb.table("draft_paket_pl").update({
+                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
+                                }).eq("kode_paket", _p["kode_paket"]).execute()
+                            except Exception as _e_mb:
+                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket'][:30]}: {_e_mb}")
                             _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
                             st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_mb['status']}")
 
