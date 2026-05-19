@@ -90,15 +90,16 @@ def _get_signed_url(kode_paket: str, file_name: str, cookie: str) -> dict:
     }
 
 
-def _otorisasi_data_pl(kode_paket: str, cookie: str) -> bool:
-    """POST /otorisasiDataPlSeleksi → grant ACL upload."""
+def _otorisasi_data_pl(kode_paket: str, cookie: str) -> tuple[bool, str]:
+    """POST /otorisasiDataPlSeleksi → grant ACL upload. Return (ok, debug_msg)."""
     r = requests.post(
         f"{BASE}/otorisasiDataPlSeleksi",
         data={"id": kode_paket},
         headers={**HDRS, "Cookie": cookie},
         timeout=15,
     )
-    return r.status_code == 200
+    ok = r.status_code == 200
+    return ok, f"HTTP {r.status_code} body={r.text[:200]}"
 
 
 def _put_to_gcs(signed_url: str, file_bytes: bytes) -> bool:
@@ -278,9 +279,9 @@ def upload_dokpil_pl(
     except Exception as e:
         return {"ok": False, "error": f"getSignedUrl fail: {e}"}
 
-    # Step 2: otorisasi ACL
-    if not _otorisasi_data_pl(kode_paket, cookie):
-        return {"ok": False, "error": "otorisasiDataPlSeleksi fail"}
+    # Step 2: otorisasi ACL (opsional — endpoint mungkin tidak ada di semua LPSE)
+    _otor_ok, _otor_dbg = _otorisasi_data_pl(kode_paket, cookie)
+    # Tidak abort jika 404 — lanjut, GCS mungkin sudah public/pre-signed
 
     # Step 3: PUT ke GCS
     if not _put_to_gcs(signed["signedUrl"], file_bytes):

@@ -1548,14 +1548,24 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _dokpil_up:
                             _ku_prev = _rr.get("kode_unik") or "?"
                             _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
-                            _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
-                            _no_prev = _udpl.generate_nomor_dokpil(
+                            # Tanggal: dari DB (tgl_dokpil) → fallback session → hari ini
+                            _tgl_db = _rr.get("tgl_dokpil")
+                            if _tgl_db:
+                                try:
+                                    from datetime import date as _date
+                                    _tgl_prev = _date.fromisoformat(str(_tgl_db))
+                                except Exception:
+                                    _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                            else:
+                                _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                            # Nomor: dari DB → fallback generate
+                            _no_prev = _rr.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                 nama_paket=_rr["nama_paket"],
                                 kode_unik=_ku_prev,
                                 skpd_singkat=_sk_prev,
                                 tahun=_tgl_prev.year,
                             )
-                            st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`")
+                            st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
                                 with st.spinner("Mengupload dokpil..."):
                                     try:
@@ -1573,9 +1583,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                             }).eq("kode_paket", _kp_key).execute()
                                             st.success(f"✅ Upload berhasil — {_no_prev}")
                                         else:
-                                            st.error(f"❌ HTTP {_r_up_only.get('status','?')} — {_r_up_only.get('text','')[:100]}")
+                                            st.error(f"❌ HTTP {_r_up_only.get('status','?')} — {_r_up_only.get('error') or _r_up_only.get('body','')[:300]}")
+                                            st.json(_r_up_only)
                                     except Exception as _e_up_only:
-                                        st.error(f"❌ {_e_up_only}")
+                                        st.error(f"❌ Exception: {_e_up_only}")
 
                     if _chk:
                         _plsp_selected.append({
@@ -1584,6 +1595,55 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         })
 
                 st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
+
+                # Kumpulkan semua paket yang sudah ada file dokpil
+                _all_with_file = [
+                    {**_rr, "_dokpil_file": st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")}
+                    for _rr in _plsp_rows
+                    if st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")
+                ]
+                if _all_with_file:
+                    st.divider()
+                    if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
+                        from config import sb as _sb_upall
+                        _cl_upall = _sb_upall()
+                        for _rr_up in _all_with_file:
+                            _kp_up = _rr_up["kode_paket"]
+                            _f_up = _rr_up["_dokpil_file"]
+                            _ku_up = _rr_up.get("kode_unik") or "?"
+                            _sk_up = _lookup_singkatan_dinas(_rr_up.get("satker", ""))
+                            # Tanggal dari DB, fallback session
+                            _tgl_db_up = _rr_up.get("tgl_dokpil")
+                            if _tgl_db_up:
+                                try:
+                                    from datetime import date as _date2
+                                    _tgl_up = _date2.fromisoformat(str(_tgl_db_up))
+                                except Exception:
+                                    _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                            else:
+                                _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                            # Nomor dari DB, fallback generate
+                            _no_up = _rr_up.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
+                                nama_paket=_rr_up["nama_paket"],
+                                kode_unik=_ku_up,
+                                skpd_singkat=_sk_up,
+                                tahun=_tgl_up.year,
+                            )
+                            try:
+                                _r_upall = _udpl.upload_dokpil_pl(
+                                    kode_paket=_kp_up,
+                                    file_bytes=_f_up.getvalue(),
+                                    file_name=_f_up.name,
+                                    nomor_dokpil=_no_up,
+                                    tgl_dokpil=_tgl_up.strftime("%d-%m-%Y"),
+                                )
+                                if _r_upall["ok"]:
+                                    _cl_upall.table("draft_paket_pl").update({"nomor_dokpil": _no_up}).eq("kode_paket", _kp_up).execute()
+                                    st.success(f"✅ {_rr_up['nama_paket'][:40]} — {_no_up}")
+                                else:
+                                    st.error(f"❌ {_rr_up['nama_paket'][:40]} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
+                            except Exception as _e_upall:
+                                st.error(f"❌ {_rr_up['nama_paket'][:40]}: {_e_upall}")
 
             with _plsp_col_kanan:
                 st.markdown("### 2. Konfigurasi Setup Paket")
