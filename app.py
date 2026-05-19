@@ -1491,6 +1491,18 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 pass
             return "DPUPR"
 
+        def _lookup_telepon_pp(satker: str) -> str:
+            if not satker:
+                return ""
+            try:
+                from config import sb as _sb_f
+                r = _sb_f().table("master_dinas").select("telepon_pp").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
+                if r.data:
+                    return r.data[0].get("telepon_pp") or ""
+            except Exception:
+                pass
+            return ""
+
         _plsp_rows = pl_engine.load_draft_pl()
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
@@ -1910,6 +1922,129 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 _df_sp[["status", "paket", "step", "pesan"]],
                                 use_container_width=True, hide_index=True,
                             )
+
+    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
+    with _pl_tab4:
+        st.divider()
+        st.markdown("### 🏢 Pilih Penyedia ke SPSE")
+        st.caption(
+            "Cari penyedia by NPWP → klik pilih ke SPSE (prioritas kabupaten Tapin, "
+            "fallback semua kabupaten Kalsel propinsi 22)."
+        )
+
+        _pp_rows = pl_engine.load_draft_pl()
+        if _pp_rows:
+            import pilih_penyedia_pl as _ppp
+
+            _pp_col_list, _pp_col_act = st.columns([2, 3])
+
+            with _pp_col_list:
+                st.markdown("**Pilih paket:**")
+                _pp_sel_all, _pp_sel_none = st.columns(2)
+                with _pp_sel_all:
+                    if st.button("✅ Semua", key="pp_sel_all", use_container_width=True):
+                        for _rr in _pp_rows:
+                            st.session_state[f"pp_chk_{_rr['kode_paket']}"] = True
+                        st.rerun()
+                with _pp_sel_none:
+                    if st.button("⬜ Kosong", key="pp_sel_none", use_container_width=True):
+                        for _rr in _pp_rows:
+                            st.session_state[f"pp_chk_{_rr['kode_paket']}"] = False
+                        st.rerun()
+
+                _pp_selected = []
+                for _rr in _pp_rows:
+                    _kp = _rr["kode_paket"]
+                    _npwp_disp = _rr.get("npwp_penyedia") or "—"
+                    _nama_disp = _rr.get("nama_penyedia") or "—"
+                    _chk = st.checkbox(
+                        f"{_rr['nama_paket'][:45]}",
+                        value=st.session_state.get(f"pp_chk_{_kp}", False),
+                        key=f"pp_chk_{_kp}",
+                        help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
+                    )
+                    if _chk:
+                        _pp_selected.append(_rr)
+
+                st.caption(f"**{len(_pp_selected)}** paket dipilih")
+
+            with _pp_col_act:
+                if not _pp_selected:
+                    st.info("Pilih paket di sebelah kiri.")
+                else:
+                    # Tabel ringkas paket terpilih
+                    import pandas as _pd2
+                    _pp_df = _pd2.DataFrame([{
+                        "Paket": r["nama_paket"][:45],
+                        "Penyedia": r.get("nama_penyedia") or "—",
+                        "NPWP": r.get("npwp_penyedia") or "—",
+                    } for r in _pp_selected])
+                    st.dataframe(_pp_df, use_container_width=True, hide_index=True)
+
+                    _invalid = [r for r in _pp_selected if not r.get("npwp_penyedia")]
+                    if _invalid:
+                        st.warning(
+                            f"⚠️ {len(_invalid)} paket belum ada NPWP penyedia: "
+                            + ", ".join(r["nama_paket"][:30] for r in _invalid)
+                        )
+
+                    _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
+                    if _valid_pp:
+                        if st.button(
+                            f"🏢 Pilih Semua Penyedia ke SPSE ({len(_valid_pp)} paket)",
+                            key="pp_submit_btn",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            import spse_browser as _spse_br
+                            _ck_pp = _spse_br.get_spse_cookies()
+                            _base_pp = pl_engine.BASE_URL
+
+                            _pp_hasil = []
+                            _pp_prog = st.progress(0, text="Mulai pilih penyedia...")
+                            for _i_pp, _pp_r in enumerate(_valid_pp):
+                                _pp_nm = _pp_r["nama_paket"][:40]
+                                _pp_prog.progress(
+                                    (_i_pp + 1) / len(_valid_pp),
+                                    text=f"{_pp_nm} ({_i_pp+1}/{len(_valid_pp)})...",
+                                )
+                                try:
+                                    _res_pp = _ppp.cari_dan_pilih_penyedia(
+                                        kode_paket=_pp_r["kode_paket"],
+                                        npwp=_pp_r.get("npwp_penyedia") or "",
+                                        cookie_str=_ck_pp,
+                                        base_url=_base_pp,
+                                        nama_penyedia=_pp_r.get("nama_penyedia") or "",
+                                    )
+                                    _pp_hasil.append({
+                                        "paket": _pp_nm,
+                                        "ok": _res_pp["ok"],
+                                        "pesan": (
+                                            f"✅ {_res_pp.get('nama','?')} (kab {_res_pp.get('kabupaten_id','')})"
+                                            if _res_pp["ok"]
+                                            else f"❌ {_res_pp.get('pesan','?')}"
+                                        ),
+                                    })
+                                except Exception as _e_pp:
+                                    _pp_hasil.append({
+                                        "paket": _pp_nm,
+                                        "ok": False,
+                                        "pesan": f"❌ Error: {str(_e_pp)[:80]}",
+                                    })
+
+                            _pp_prog.empty()
+                            _pp_ok = sum(1 for h in _pp_hasil if h["ok"])
+                            if _pp_ok == len(_pp_hasil):
+                                st.success(f"✅ {_pp_ok}/{len(_pp_hasil)} paket berhasil dipilih penyedia!")
+                            else:
+                                st.warning(f"⚠️ {_pp_ok}/{len(_pp_hasil)} sukses")
+
+                            _df_pp = _pd2.DataFrame(_pp_hasil)
+                            if not _df_pp.empty:
+                                st.dataframe(
+                                    _df_pp[["paket", "pesan"]],
+                                    use_container_width=True, hide_index=True,
+                                )
 
     st.stop()  # Jangan render tab Tender jika mode PL
 

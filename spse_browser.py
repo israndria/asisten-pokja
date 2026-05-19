@@ -234,6 +234,206 @@ def update_ijin_sbu_via_playwright(kode_paket: str, ijin_idx: int, klas_baru: st
     return _run(_update_ijin_sbu_async(kode_paket, ijin_idx, klas_baru, base_url), timeout=45)
 
 
+def _format_npwp_15(npwp_raw: str) -> str:
+    """
+    Konversi NPWP ke format XX.XXX.XXX.X-XXX.XXX (15 digit SPSE).
+    Handle:
+      - 15 digit → langsung format
+      - 16 digit (NPWP baru) → strip prefix 1 digit terdepan (biasanya '1')
+      - 14 digit → pad trailing '0' jadi 15
+      - Sudah ada titik/strip → kembalikan as-is
+    """
+    if "." in npwp_raw and "-" in npwp_raw:
+        return npwp_raw  # sudah terformat
+    digits = "".join(c for c in npwp_raw if c.isdigit())
+    if len(digits) == 16:
+        digits = digits[1:]   # strip prefix NPWP 16 digit
+    elif len(digits) == 14:
+        digits = digits + "0" # pad trailing 0
+    if len(digits) != 15:
+        return npwp_raw  # fallback
+    return f"{digits[0:2]}.{digits[2:5]}.{digits[5:8]}.{digits[8]}-{digits[9:12]}.{digits[12:15]}"
+
+
+async def _pilih_penyedia_async(kode_paket: str, npwp: str, base_url: str, nama_penyedia: str = "") -> dict:
+    """
+    Buka /pilihpenyedia/{kode} via browser CDP.
+    Strategi 1: goto URL dengan ?search=true&npwp=XX.XXX.XXX.X-XXX.XXX (SPSE auto-trigger search).
+    Strategi 2: search manual by nama (kata signifikan pertama), lalu filter NPWP 16-digit di hasil.
+    """
+    global _context
+    if _context is None:
+        await _connect_cdp_async(navigate=False)
+    if _context is None:
+        return {"ok": False, "pesan": "CDP tidak tersambung"}
+
+    page = await _context.new_page()
+    try:
+        npwp_fmt = _format_npwp_15(npwp)
+        # Digits NPWP 16: strip non-digit dari raw input, pad ke 16
+        npwp_digits = "".join(c for c in npwp if c.isdigit())
+        npwp16 = npwp_digits.zfill(16) if len(npwp_digits) <= 16 else npwp_digits[:16]
+
+        found = False
+        search_mode = ""
+        chk_idx = 0  # index checkbox yang cocok
+
+        # Strategi 1: URL dengan query string NPWP → SPSE langsung trigger search
+        url_npwp = f"{base_url}pilihpenyedia/{kode_paket}?search=true&nama=&npwp={npwp_fmt}"
+        await page.goto(url_npwp, wait_until="domcontentloaded", timeout=25000)
+        await page.wait_for_timeout(2000)
+
+        chk_count = await page.locator("input.chk").count()
+        if chk_count > 0:
+            found = True
+            search_mode = "npwp_url"
+            # Cari checkbox yang NPWP 16-nya cocok
+            for _ci in range(chk_count):
+                _chk = page.locator("input.chk").nth(_ci)
+                _idx = (await _chk.get_attribute("name") or "").split("[")[-1].split("]")[0]
+                _npwp16_field = await page.locator(f"#rekananNpwp16_{_idx}").get_attribute("value") if _idx.isdigit() else ""
+                if npwp16 and _npwp16_field and _npwp16_field.strip() == npwp16:
+                    chk_idx = _ci
+                    break
+
+        # Strategi 2: search by nama jika NPWP tidak ketemu
+        if not found and nama_penyedia:
+            kata = [w for w in nama_penyedia.upper().split()
+                    if w not in ("CV.", "PT.", "CV", "PT", "UD.", "UD", "TB.", "TB",
+                                 "FIRMA", "FA.", "FA", "KOPERASI")]
+            if kata:
+                url_base = f"{base_url}pilihpenyedia/{kode_paket}"
+                await page.goto(url_base, wait_until="domcontentloaded", timeout=25000)
+                await page.wait_for_timeout(1500)
+                await page.locator("input[name='nama']").fill(kata[0])
+                await page.locator("button:has-text('Cari Penyedia')").click()
+                await page.wait_for_timeout(3000)
+
+                chk_count = await page.locator("input.chk").count()
+                if chk_count > 0:
+                    # Filter: cari yang NPWP 16 atau nama cocok
+                    for _ci in range(chk_count):
+                        _chk = page.locator("input.chk").nth(_ci)
+                        _idx = (await _chk.get_attribute("name") or "").split("[")[-1].split("]")[0]
+                        if not _idx.isdigit():
+                            continue
+                        _np16 = (await page.locator(f"#rekananNpwp16_{_idx}").get_attribute("value") or "").strip()
+                        _nm = (await page.locator(f"#rekananNama_{_idx}").get_attribute("value") or "").strip().upper()
+                        if (npwp16 and _np16 == npwp16) or _nm == nama_penyedia.upper():
+                            chk_idx = _ci
+                            found = True
+                            search_mode = "nama_exact"
+                            break
+                    if not found and chk_count == 1:
+                        # Hanya 1 hasil → ambil saja
+                        chk_idx = 0
+                        found = True
+                        search_mode = "nama_single"
+
+        if not found:
+            return {"ok": False, "pesan": f"Penyedia tidak ditemukan (NPWP: {npwp_fmt}, nama: {nama_penyedia})"}
+
+        # Ambil nama penyedia dari hidden field
+        nama_hasil = ""
+        try:
+            chk_el = page.locator("input.chk").nth(chk_idx)
+            _idx = (await chk_el.get_attribute("name") or "").split("[")[-1].split("]")[0]
+            if _idx.isdigit():
+                nama_hasil = (await page.locator(f"#rekananNama_{_idx}").get_attribute("value") or "").strip()
+        except Exception:
+            pass
+        if not nama_hasil:
+            try:
+                row = page.locator("table tbody tr").nth(chk_idx)
+                nama_hasil = (await row.locator("td").nth(1).text_content() or "").strip()
+            except Exception:
+                pass
+
+        # Centang checkbox — click() agar trigger event JS
+        chk_target = page.locator("input.chk").nth(chk_idx)
+        try:
+            if await chk_target.is_checked():
+                await chk_target.click()
+                await page.wait_for_timeout(200)
+            await chk_target.click()
+        except Exception:
+            await chk_target.evaluate("el => el.click()")
+        await page.wait_for_timeout(500)
+
+        # Klik tombol Simpan (class btn-simpan di SPSE)
+        simpan_clicked = False
+        try:
+            simpan_btn = page.locator("button.btn-simpan")
+            if await simpan_btn.count() > 0:
+                await simpan_btn.first.click()
+                simpan_clicked = True
+        except Exception:
+            pass
+
+        if not simpan_clicked:
+            try:
+                simpan_btn = page.locator("button:has-text('Simpan')")
+                if await simpan_btn.count() > 0:
+                    await simpan_btn.first.click()
+                    simpan_clicked = True
+            except Exception:
+                pass
+
+        if not simpan_clicked:
+            await page.locator("form").first.evaluate("f => f.submit()")
+
+        # Tunggu respons SPSE — redirect atau alert muncul
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            await page.wait_for_timeout(3000)
+
+        # Debug: screenshot + state checkbox + URL
+        _dbg_dir = Path(__file__).parent / "_debug_pilih_penyedia"
+        _dbg_dir.mkdir(exist_ok=True)
+        try:
+            await page.screenshot(path=str(_dbg_dir / f"{kode_paket}_after.png"), full_page=True)
+            _chk_state = await page.locator("input.chk").first.is_checked() if await page.locator("input.chk").count() > 0 else "no_chk"
+            (_dbg_dir / f"{kode_paket}_state.txt").write_text(
+                f"url={page.url}\nchk_checked={_chk_state}\nfound_mode={search_mode}\n",
+                encoding="utf-8"
+            )
+        except Exception as _de:
+            pass
+
+        # Cek sukses: URL redirect ATAU alert sukses (SPSE kadang tidak redirect)
+        if "pilihpenyedia" not in page.url:
+            return {"ok": True, "nama": nama_hasil, "mode": search_mode}
+
+        # Cek alert — bisa sukses atau error
+        alert_txt = ""
+        try:
+            alert_loc = page.locator(".alert")
+            if await alert_loc.count() > 0:
+                alert_txt = (await alert_loc.first.text_content() or "").strip()
+        except Exception:
+            pass
+
+        # SPSE alert sukses: "Berhasil simpan draft Penyedia"
+        if "berhasil" in alert_txt.lower():
+            return {"ok": True, "nama": nama_hasil, "mode": search_mode, "pesan": alert_txt}
+
+        return {"ok": False, "pesan": f"Submit gagal. {alert_txt}"}
+
+    except Exception as e:
+        return {"ok": False, "pesan": f"Error: {e}"}
+    finally:
+        await page.close()
+
+
+def pilih_penyedia_via_playwright(kode_paket: str, npwp: str, base_url: str, nama_penyedia: str = "") -> dict:
+    """
+    Pilih penyedia PL ke SPSE via Playwright browser CDP.
+    Lebih reliable dari requests karena data penyedia di-render via JS.
+    """
+    return _run(_pilih_penyedia_async(kode_paket, npwp, base_url, nama_penyedia=nama_penyedia), timeout=180)
+
+
 def halaman_aktif() -> Page | None:
     global _page
     if _page and not _page.is_closed():

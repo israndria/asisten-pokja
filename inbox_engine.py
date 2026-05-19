@@ -271,11 +271,17 @@ def serap_inbox_pl(progress_cb=None) -> dict:
             if kode_paket not in existing_kode:
                 log(prog, f"  ⚠ {kode_paket} tidak ada di draft_paket_pl — skip")
                 continue
+            _hps_raw  = detail.get("nilai_hps") or ""
+            _pagu_raw = detail.get("nilai_pagu") or ""
+            if _hps_raw and not _hps_raw.startswith("Rp."):
+                _hps_raw = "Rp. " + _hps_raw
+            if _pagu_raw and not _pagu_raw.startswith("Rp."):
+                _pagu_raw = "Rp. " + _pagu_raw
             update_data = {
                 "mak": detail.get("mak") or None,
                 "kode_rup": detail.get("kode_rup") or None,
-                "nilai_pagu": detail.get("nilai_pagu") or None,
-                "nilai_hps": detail.get("nilai_hps") or None,
+                "nilai_pagu": _pagu_raw or None,
+                "nilai_hps": _hps_raw or None,
             }
             # Hapus key dengan None biar tidak overwrite existing nilai
             update_data = {k: v for k, v in update_data.items() if v}

@@ -88,7 +88,7 @@ def _parse_hps_dari_edit(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     teks = soup.get_text(" ", strip=True)
     m = re.search(r"Nilai HPS\s*Rp\.\s*([\d.,]+)", teks)
-    return m.group(1) if m else ""
+    return f"Rp. {m.group(1)}" if m else ""
 
 
 def _parse_jenis_kontrak_dari_edit(html: str) -> str:
