@@ -400,10 +400,10 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
         return candidate
-    # Fallback: cari folder yg endswith nama_clean
+    # Fallback: endswith nama_clean (exact suffix, bukan substring)
     for f in os.listdir(root):
         full = os.path.join(root, f)
-        if os.path.isdir(full) and (f.endswith(nama_clean) or nama_clean in f):
+        if os.path.isdir(full) and f.endswith(nama_clean):
             return full
     return None
 
