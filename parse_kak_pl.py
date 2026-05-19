@@ -395,17 +395,30 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None
         return None
 
     nama_clean = sanitasi_nama_folder(nama_paket or "")
+    nama_lower = nama_clean.lower()
     nomor = nomor_urut or ""
     folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
         return candidate
-    # Fallback: endswith nama_clean (exact suffix, bukan substring)
+    best = None
+    best_score = 0
     for f in os.listdir(root):
         full = os.path.join(root, f)
-        if os.path.isdir(full) and f.endswith(nama_clean):
+        if not os.path.isdir(full):
+            continue
+        fl = f.lower()
+        # Prioritas 1: exact suffix (case-insensitive)
+        if fl.endswith(nama_lower):
             return full
-    return None
+        # Prioritas 2: semua kata nama ada di nama folder (word-set match)
+        words = set(nama_lower.split())
+        folder_words = set(fl.split())
+        common = len(words & folder_words)
+        if common > best_score and common == len(words):
+            best_score = common
+            best = full
+    return best
 
 
 def serap_penyedia_pl(progress_cb=None) -> dict:
