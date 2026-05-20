@@ -186,12 +186,13 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Buat Jadwal",
         "4️⃣ Setup Paket",
+        "5️⃣ Upload BA PL",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2215,6 +2216,128 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     _df_pp[["paket", "pesan"]],
                                     use_container_width=True, hide_index=True,
                                 )
+
+    # ── Tab 5: Upload BA PL ───────────────────────────────────────────────────
+    with _pl_tab5:
+        import ba_engine_pl as _ba_pl_engine5
+
+        st.markdown("## Upload Berita Acara — Pengadaan Langsung")
+        st.caption("Upload BA Evaluasi Penawaran, BA Hasil Non Tender, atau BA Penjelasan ke SPSE.")
+
+        _pl5_rows = []
+        try:
+            _pl5_rows = kirimpesan_engine._sb().table("draft_paket_pl").select(
+                "kode_paket, nama_paket, kode_unik, id_nontender"
+            ).order("kode_paket").execute().data or []
+        except Exception as _e5:
+            st.error(f"Gagal load paket PL: {_e5}")
+
+        _JENIS_PL5 = {
+            "UPLOAD_BA_EVALUASI_PENAWARAN": "BA Evaluasi Penawaran",
+            "UPLOAD_BA_HASIL_LELANG": "BA Hasil Non Tender (BAHNT)",
+            "UPLOAD_BA_PENJELASAN": "BA Penjelasan",
+            "PENGUMUMAN_PEMENANG_AKHIR": "Pengumuman Pemenang Akhir",
+        }
+        _JENIS_KEY_PL5 = {
+            "UPLOAD_BA_EVALUASI_PENAWARAN": "evaluasi",
+            "UPLOAD_BA_HASIL_LELANG": "hasil",
+            "UPLOAD_BA_PENJELASAN": "penjelasan",
+            "PENGUMUMAN_PEMENANG_AKHIR": "pengumuman",
+        }
+
+        _pl5c1, _pl5c2 = st.columns([1, 1])
+        with _pl5c1:
+            _jenis_pl5 = st.selectbox(
+                "Jenis BA",
+                options=list(_JENIS_PL5.keys()),
+                format_func=lambda k: _JENIS_PL5[k],
+                key="pl5_jenis",
+            )
+        with _pl5c2:
+            _tgl_mode_pl5 = st.radio("Mode Tanggal", ["Satu tanggal semua", "Tanggal per paket"], horizontal=True, key="pl5_tgl_mode")
+
+        _nomor_pl5 = st.text_input("Nomor BA", placeholder="Contoh: 000.3.3/06/PL/PP-01/KPP1/DPUPR/2026", key="pl5_nomor")
+        _info_pl5  = st.text_area("Keterangan Tambahan", value="", key="pl5_info", height=60)
+        _tempat_pl5 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl5_tempat") if _jenis_pl5 == "PENGUMUMAN_PEMENANG_AKHIR" else ""
+
+        _tgl_global_pl5 = None
+        if _tgl_mode_pl5 == "Satu tanggal semua":
+            _tgl_global_pl5 = st.date_input("Tanggal BA (semua paket)", value=datetime.now().date(), format="DD/MM/YYYY", key="pl5_tgl_global")
+            st.caption(f"{_HARI_NAMA[_tgl_global_pl5.weekday()]}, {_tgl_global_pl5.day} {_BULAN_NAMA[_tgl_global_pl5.month-1]} {_tgl_global_pl5.year}")
+
+        st.divider()
+        st.markdown("### Pilih Paket + Upload File BA")
+
+        if not _pl5_rows:
+            st.info("Tidak ada paket PL di database.")
+        else:
+            _pl5_selc1, _pl5_selc2, _ = st.columns([1, 1, 4])
+            with _pl5_selc1:
+                if st.button("☑️ Centang Semua", key="pl5_sel_all", use_container_width=True):
+                    for _p5 in _pl5_rows:
+                        st.session_state[f"pl5_chk_{_p5['kode_paket']}"] = True
+                    st.rerun()
+            with _pl5_selc2:
+                if st.button("🔲 Hapus Semua", key="pl5_clr_all", use_container_width=True):
+                    for _p5 in _pl5_rows:
+                        st.session_state[f"pl5_chk_{_p5['kode_paket']}"] = False
+                    st.rerun()
+
+            _pl5_valid = []
+            for _p5 in _pl5_rows:
+                _kode5 = _p5.get("kode_paket", "")
+                _id5   = _p5.get("id_nontender") or _kode5
+                with st.container():
+                    _p5r1c1, _p5r1c2 = st.columns([3, 2])
+                    with _p5r1c1:
+                        _chk5 = st.checkbox(
+                            f"**{_kode5}** — {_p5.get('nama_paket','')[:50]}",
+                            value=st.session_state.get(f"pl5_chk_{_kode5}", False),
+                            key=f"pl5_chk_{_kode5}",
+                        )
+                    with _p5r1c2:
+                        if _tgl_mode_pl5 == "Tanggal per paket":
+                            _tgl5 = st.date_input("Tanggal", value=datetime.now().date(), format="DD/MM/YYYY",
+                                                   key=f"pl5_tgl_{_kode5}", label_visibility="collapsed")
+                            st.caption(f"{_HARI_NAMA[_tgl5.weekday()]}, {_tgl5.day} {_BULAN_NAMA[_tgl5.month-1]} {_tgl5.year}")
+                        else:
+                            _tgl5 = _tgl_global_pl5
+
+                    _p5r2c1, _p5r2c2 = st.columns([4, 1])
+                    with _p5r2c1:
+                        _f5 = st.file_uploader("File BA PDF", type=["pdf"], key=f"pl5_file_{_kode5}", label_visibility="collapsed")
+                    with _p5r2c2:
+                        if _f5 and st.button("📤", key=f"pl5_up1_{_kode5}", help="Upload paket ini", use_container_width=True):
+                            with st.spinner(f"Upload {_kode5}..."):
+                                _r5 = _ba_pl_engine5.upload_ba_pl(
+                                    id_nontender=_id5, jenis_key=_JENIS_KEY_PL5[_jenis_pl5],
+                                    nomor_ba=_nomor_pl5, tanggal_ba=_tgl5.strftime("%d-%m-%Y"),
+                                    info=_info_pl5, file_bytes=_f5.read(), file_name=_f5.name, tempat=_tempat_pl5,
+                                )
+                            if _r5.get("ok"):
+                                st.success(f"✅ {_kode5} — upload berhasil")
+                            else:
+                                st.error(f"❌ {_kode5} — status {_r5.get('status')} {_r5.get('location','')}")
+
+                    if _chk5 and _f5:
+                        _pl5_valid.append({**_p5, "_id5": _id5, "_file": _f5, "_tgl": _tgl5})
+                st.divider()
+
+            if _pl5_valid:
+                if st.button(f"📤 Upload Semua BA ({len(_pl5_valid)} paket)", type="primary", key="pl5_upload_all", use_container_width=True):
+                    with st.status(f"Upload {len(_pl5_valid)} paket...", expanded=True) as _st5:
+                        for _pv5 in _pl5_valid:
+                            _st5.write(f"⏳ {_pv5['kode_paket']}...")
+                            _fv5 = _pv5["_file"]
+                            _rv5 = _ba_pl_engine5.upload_ba_pl(
+                                id_nontender=_pv5["_id5"], jenis_key=_JENIS_KEY_PL5[_jenis_pl5],
+                                nomor_ba=_nomor_pl5, tanggal_ba=_pv5["_tgl"].strftime("%d-%m-%Y"),
+                                info=_info_pl5, file_bytes=_fv5.read(), file_name=_fv5.name, tempat=_tempat_pl5,
+                            )
+                            if _rv5.get("ok"):
+                                _st5.write(f"✅ {_pv5['kode_paket']} — berhasil")
+                            else:
+                                _st5.write(f"❌ {_pv5['kode_paket']} — status {_rv5.get('status')}")
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
