@@ -144,7 +144,7 @@ def _upload_pdf_pl(id_nontender: str, file_bytes: bytes, file_name: str) -> dict
         r2 = requests.put(
             signed_url,
             data=file_bytes,
-            headers={"Content-Type": "multipart/formdata; charset=UTF-8"},
+            headers={"Content-Type": "application/pdf"},
             timeout=60,
         )
         r2.raise_for_status()

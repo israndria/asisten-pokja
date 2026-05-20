@@ -5030,37 +5030,50 @@ with tab_ba_pl:
     except Exception as _e_ba_pl:
         st.error(f"Gagal load paket PL: {_e_ba_pl}")
 
-    _JENIS_BA_PL = {
+    _JENIS_BA_PL_MAP = {
         "UPLOAD_BA_EVALUASI_PENAWARAN": "BA Evaluasi Penawaran",
         "UPLOAD_BA_HASIL_LELANG": "BA Hasil Non Tender (BAHNT)",
         "UPLOAD_BA_PENJELASAN": "BA Penjelasan",
         "PENGUMUMAN_PEMENANG_AKHIR": "Pengumuman Pemenang Akhir",
+    }
+    # Mapping jenis key → jenis_key pendek untuk ba_engine_pl
+    _JENIS_KEY_MAP = {
+        "UPLOAD_BA_EVALUASI_PENAWARAN": "evaluasi",
+        "UPLOAD_BA_HASIL_LELANG": "hasil",
+        "UPLOAD_BA_PENJELASAN": "penjelasan",
+        "PENGUMUMAN_PEMENANG_AKHIR": "pengumuman",
     }
 
     _baplcol1, _baplcol2 = st.columns([1, 1])
     with _baplcol1:
         _jenis_ba_pl = st.selectbox(
             "Jenis BA",
-            options=list(_JENIS_BA_PL.keys()),
-            format_func=lambda k: _JENIS_BA_PL[k],
+            options=list(_JENIS_BA_PL_MAP.keys()),
+            format_func=lambda k: _JENIS_BA_PL_MAP[k],
             key="bapl_jenis",
         )
     with _baplcol2:
-        _tgl_ba_pl = st.date_input(
-            "Tanggal BA",
-            value=datetime.now().date(),
-            format="DD/MM/YYYY",
-            key="bapl_tgl",
-        )
-        st.caption(f"{_HARI_NAMA[_tgl_ba_pl.weekday()]}, {_tgl_ba_pl.day} {_BULAN_NAMA[_tgl_ba_pl.month-1]} {_tgl_ba_pl.year}")
+        # Mode tanggal: global atau per paket
+        _tgl_mode = st.radio("Mode Tanggal", ["Satu tanggal semua", "Tanggal per paket"], horizontal=True, key="bapl_tgl_mode")
 
-    _nomor_ba_pl = st.text_input("Nomor BA", placeholder="Contoh: 001/BAHNT/POKJA/2026", key="bapl_nomor")
-    _info_ba_pl  = st.text_area("Keterangan / Info", value="", key="bapl_info", height=80)
+    _nomor_ba_pl = st.text_input("Nomor BA", placeholder="Contoh: 000.3.3/06/PL/PP-01/KPP1/DPUPR/2026", key="bapl_nomor")
+    _info_ba_pl  = st.text_area("Keterangan Tambahan", value="", key="bapl_info", height=60)
 
     if _jenis_ba_pl == "PENGUMUMAN_PEMENANG_AKHIR":
         _tempat_ba_pl = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="bapl_tempat")
     else:
         _tempat_ba_pl = ""
+
+    # Tanggal global (hanya tampil jika mode satu tanggal)
+    _tgl_global_pl = None
+    if _tgl_mode == "Satu tanggal semua":
+        _tgl_global_pl = st.date_input(
+            "Tanggal BA (semua paket)",
+            value=datetime.now().date(),
+            format="DD/MM/YYYY",
+            key="bapl_tgl_global",
+        )
+        st.caption(f"{_HARI_NAMA[_tgl_global_pl.weekday()]}, {_tgl_global_pl.day} {_BULAN_NAMA[_tgl_global_pl.month-1]} {_tgl_global_pl.year}")
 
     st.divider()
     st.markdown("### Pilih Paket PL + Upload File BA")
@@ -5083,60 +5096,81 @@ with tab_ba_pl:
         _bapl_valid = []
         for _pp in _pl_rows_ba_pl:
             _kode_pl = _pp.get("kode_paket", "")
-            _id_nt = _pp.get("id_nontender") or _kode_pl
-            _bapl_c1, _bapl_c2, _bapl_c3 = st.columns([3, 3, 1])
-            with _bapl_c1:
-                _chk_pl = st.checkbox(
-                    f"**{_kode_pl}** — {_pp.get('nama_paket', '')[:50]}",
-                    value=st.session_state.get(f"bapl_chk_{_kode_pl}", False),
-                    key=f"bapl_chk_{_kode_pl}",
-                )
-            with _bapl_c2:
-                _f_ba = st.file_uploader(
-                    "File BA PDF",
-                    type=["pdf"],
-                    key=f"bapl_file_{_kode_pl}",
-                    label_visibility="collapsed",
-                )
-            with _bapl_c3:
-                if _f_ba and st.button("📤", key=f"bapl_up1_{_kode_pl}", help="Upload paket ini", use_container_width=True):
-                    _tgl_str = _tgl_ba_pl.strftime("%d-%m-%Y")
-                    with st.spinner(f"Upload {_kode_pl}..."):
-                        _r = _ba_pl_engine.upload_ba_pl(
-                            id_nontender=_id_nt,
-                            jenis=_jenis_ba_pl,
-                            nomor=_nomor_ba_pl,
-                            tanggal=_tgl_str,
-                            info=_info_ba_pl,
-                            file_bytes=_f_ba.read(),
-                            file_name=_f_ba.name,
-                            tempat=_tempat_ba_pl,
+            _id_nt   = _pp.get("id_nontender") or _kode_pl
+            _nama_pl = _pp.get("nama_paket", "")[:50]
+
+            with st.container():
+                _bapl_r1_c1, _bapl_r1_c2 = st.columns([3, 2])
+                with _bapl_r1_c1:
+                    _chk_pl = st.checkbox(
+                        f"**{_kode_pl}** — {_nama_pl}",
+                        value=st.session_state.get(f"bapl_chk_{_kode_pl}", False),
+                        key=f"bapl_chk_{_kode_pl}",
+                    )
+                with _bapl_r1_c2:
+                    # Tanggal per paket (hanya tampil jika mode per paket)
+                    if _tgl_mode == "Tanggal per paket":
+                        _tgl_pp = st.date_input(
+                            "Tanggal",
+                            value=datetime.now().date(),
+                            format="DD/MM/YYYY",
+                            key=f"bapl_tgl_{_kode_pl}",
+                            label_visibility="collapsed",
                         )
-                    if _r.get("sukses"):
-                        st.success(f"✅ {_kode_pl} — {_r.get('pesan')}")
+                        st.caption(f"{_HARI_NAMA[_tgl_pp.weekday()]}, {_tgl_pp.day} {_BULAN_NAMA[_tgl_pp.month-1]} {_tgl_pp.year}")
                     else:
-                        st.error(f"❌ {_kode_pl} — {_r.get('pesan')}")
-            if _chk_pl and _f_ba:
-                _bapl_valid.append({**_pp, "_id_nt": _id_nt, "_file": _f_ba})
+                        _tgl_pp = _tgl_global_pl
+
+                _bapl_r2_c1, _bapl_r2_c2 = st.columns([4, 1])
+                with _bapl_r2_c1:
+                    _f_ba = st.file_uploader(
+                        "File BA PDF",
+                        type=["pdf"],
+                        key=f"bapl_file_{_kode_pl}",
+                        label_visibility="collapsed",
+                    )
+                with _bapl_r2_c2:
+                    if _f_ba and st.button("📤", key=f"bapl_up1_{_kode_pl}", help="Upload paket ini", use_container_width=True):
+                        _tgl_str = _tgl_pp.strftime("%d-%m-%Y")
+                        with st.spinner(f"Upload {_kode_pl}..."):
+                            _r = _ba_pl_engine.upload_ba_pl(
+                                id_nontender=_id_nt,
+                                jenis_key=_JENIS_KEY_MAP[_jenis_ba_pl],
+                                nomor_ba=_nomor_ba_pl,
+                                tanggal_ba=_tgl_str,
+                                info=_info_ba_pl,
+                                file_bytes=_f_ba.read(),
+                                file_name=_f_ba.name,
+                                tempat=_tempat_ba_pl,
+                            )
+                        if _r.get("ok"):
+                            st.success(f"✅ {_kode_pl} — upload berhasil")
+                        else:
+                            st.error(f"❌ {_kode_pl} — status {_r.get('status')} loc={_r.get('location','')}")
+
+                if _chk_pl and _f_ba:
+                    _bapl_valid.append({**_pp, "_id_nt": _id_nt, "_file": _f_ba, "_tgl": _tgl_pp})
+
+            st.divider()
 
         if _bapl_valid:
             if st.button(f"📤 Upload Semua BA ({len(_bapl_valid)} paket)", type="primary", key="bapl_upload_all", use_container_width=True):
-                _tgl_str = _tgl_ba_pl.strftime("%d-%m-%Y")
                 with st.status(f"Upload {len(_bapl_valid)} paket...", expanded=True) as _st_bapl:
                     for _pp2 in _bapl_valid:
                         _st_bapl.write(f"⏳ {_pp2['kode_paket']}...")
-                        _f2 = _pp2["_file"]
-                        _r2 = _ba_pl_engine.upload_ba_pl(
+                        _f2  = _pp2["_file"]
+                        _tgl2 = _pp2["_tgl"].strftime("%d-%m-%Y")
+                        _r2  = _ba_pl_engine.upload_ba_pl(
                             id_nontender=_pp2["_id_nt"],
-                            jenis=_jenis_ba_pl,
-                            nomor=_nomor_ba_pl,
-                            tanggal=_tgl_str,
+                            jenis_key=_JENIS_KEY_MAP[_jenis_ba_pl],
+                            nomor_ba=_nomor_ba_pl,
+                            tanggal_ba=_tgl2,
                             info=_info_ba_pl,
                             file_bytes=_f2.read(),
                             file_name=_f2.name,
                             tempat=_tempat_ba_pl,
                         )
-                        if _r2.get("sukses"):
-                            _st_bapl.write(f"✅ {_pp2['kode_paket']} — {_r2.get('pesan')}")
+                        if _r2.get("ok"):
+                            _st_bapl.write(f"✅ {_pp2['kode_paket']} — berhasil")
                         else:
-                            _st_bapl.write(f"❌ {_pp2['kode_paket']} — {_r2.get('pesan')}")
+                            _st_bapl.write(f"❌ {_pp2['kode_paket']} — status {_r2.get('status')}")
