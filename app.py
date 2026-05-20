@@ -1289,6 +1289,19 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         st.warning(f"⚠️ {_ok} berhasil, {_fail} gagal.")
                     st.dataframe(hasil, use_container_width=True, hide_index=True)
 
+                # Centang Semua / Hapus Semua
+                _ba_col_sel, _ba_col_clr, _ = st.columns([1, 1, 4])
+                with _ba_col_sel:
+                    if st.button("☑️ Centang Semua", key="plba_sel_all", use_container_width=True):
+                        for _pp2 in _pl_rows_ba:
+                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = True
+                        st.rerun()
+                with _ba_col_clr:
+                    if st.button("🔲 Hapus Semua", key="plba_clr_all", use_container_width=True):
+                        for _pp2 in _pl_rows_ba:
+                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = False
+                        st.rerun()
+
                 # Daftar paket — per baris: checkbox + file uploader + tombol upload per paket
                 _ba_pl_selected = []
                 for _pp in _pl_rows_ba:
