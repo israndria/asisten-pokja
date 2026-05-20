@@ -1251,14 +1251,53 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             if not _pl_rows_ba:
                 st.info("⚠️ Belum ada paket PL.")
             else:
+                # Tanggal BA — di atas daftar paket
+                _ba_pl_tgl = st.date_input(
+                    "Tanggal BA Reviu",
+                    value=datetime.now().date(),
+                    key="plba_tgl",
+                    format="DD/MM/YYYY",
+                )
+                st.caption(f"{_HARI_NAMA[_ba_pl_tgl.weekday()]}, {_ba_pl_tgl.day} {_BULAN_NAMA[_ba_pl_tgl.month-1]} {_ba_pl_tgl.year}")
+
+                def _do_upload_ba_pl(paket_list, tgl):
+                    hasil = []
+                    prog = st.progress(0, text="Memulai upload...")
+                    for _i, _p in enumerate(paket_list):
+                        prog.progress(
+                            (_i + 1) / len(paket_list),
+                            text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...",
+                        )
+                        _res = _ubrpl.upload_ba_reviu_pl(
+                            kode_paket=_p["kode_paket"],
+                            file_bytes=_p["_ba_file"].getvalue(),
+                            file_name=_p["_ba_file"].name,
+                            tgl_ba=tgl.strftime("%d-%m-%Y"),
+                        )
+                        hasil.append({
+                            "kode":   _p["kode_paket"],
+                            "nama":   _p["nama_paket"][:50],
+                            "sukses": _res["ok"],
+                            "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
+                        })
+                    prog.empty()
+                    _ok = sum(1 for h in hasil if h["sukses"])
+                    _fail = len(hasil) - _ok
+                    if _fail == 0:
+                        st.success(f"✅ {_ok} BA Reviu berhasil diupload!")
+                    else:
+                        st.warning(f"⚠️ {_ok} berhasil, {_fail} gagal.")
+                    st.dataframe(hasil, use_container_width=True, hide_index=True)
+
+                # Daftar paket — per baris: checkbox + file uploader + tombol upload per paket
                 _ba_pl_selected = []
                 for _pp in _pl_rows_ba:
-                    _ba_key = f"plba_chk_{_pp['kode_paket']}"
+                    _ba_key  = f"plba_chk_{_pp['kode_paket']}"
                     _ba_fkey = f"plba_file_{_pp['kode_paket']}"
-                    _bcol_chk, _bcol_file = st.columns([3, 2])
+                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([3, 3, 1])
                     with _bcol_chk:
                         _ba_chk = st.checkbox(
-                            f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:45]}",
+                            f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:40]}",
                             value=st.session_state.get(_ba_key, False),
                             key=_ba_key,
                         )
@@ -1271,52 +1310,22 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         )
                         if _ba_up:
                             st.caption(f"📋 {_ba_up.name}")
+                    with _bcol_btn:
+                        if _ba_up and st.button("📤", key=f"plba_up1_{_pp['kode_paket']}", help="Upload paket ini"):
+                            _do_upload_ba_pl([{**_pp, "_ba_file": _ba_up}], _ba_pl_tgl)
                     if _ba_chk:
                         _ba_pl_selected.append({**_pp, "_ba_file": _ba_up})
 
-                _ba_pl_tgl = st.date_input(
-                    "Tanggal BA Reviu",
-                    value=datetime.now().date(),
-                    key="plba_tgl",
-                    format="DD/MM/YYYY",
-                )
-                st.caption(f"{_HARI_NAMA[_ba_pl_tgl.weekday()]}, {_ba_pl_tgl.day} {_BULAN_NAMA[_ba_pl_tgl.month-1]} {_ba_pl_tgl.year}")
-
+                # Tombol upload semua yang sudah centang + ada file
                 _ba_pl_valid = [_p for _p in _ba_pl_selected if _p.get("_ba_file")]
                 if st.button(
-                    f"📤 Upload BA Reviu ({len(_ba_pl_valid)} file)",
+                    f"📤 Upload Semua BA Reviu ({len(_ba_pl_valid)} file)",
                     key="plba_upload",
                     type="primary",
                     disabled=len(_ba_pl_valid) == 0,
                     use_container_width=True,
                 ):
-                    _ba_pl_progress = st.progress(0, text="Memulai upload...")
-                    _ba_pl_hasil = []
-                    for _i, _p in enumerate(_ba_pl_valid):
-                        _ba_pl_progress.progress(
-                            (_i + 1) / len(_ba_pl_valid),
-                            text=f"Upload {_p['kode_paket']} ({_i+1}/{len(_ba_pl_valid)})...",
-                        )
-                        _res = _ubrpl.upload_ba_reviu_pl(
-                            kode_paket=_p["kode_paket"],
-                            file_bytes=_p["_ba_file"].getvalue(),
-                            file_name=_p["_ba_file"].name,
-                            tgl_ba=_ba_pl_tgl.strftime("%d-%m-%Y"),
-                        )
-                        _ba_pl_hasil.append({
-                            "kode":   _p["kode_paket"],
-                            "nama":   _p["nama_paket"][:50],
-                            "sukses": _res["ok"],
-                            "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
-                        })
-                    _ba_pl_progress.empty()
-                    _ba_pl_ok = sum(1 for h in _ba_pl_hasil if h["sukses"])
-                    _ba_pl_fail = len(_ba_pl_hasil) - _ba_pl_ok
-                    if _ba_pl_fail == 0:
-                        st.success(f"✅ {_ba_pl_ok} BA Reviu berhasil diupload!")
-                    else:
-                        st.warning(f"⚠️ {_ba_pl_ok} berhasil, {_ba_pl_fail} gagal.")
-                    st.dataframe(_ba_pl_hasil, use_container_width=True, hide_index=True)
+                    _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
     # ── Tab 3: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
     with _pl_tab3:
