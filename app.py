@@ -19,6 +19,18 @@ def _pokja_label(p: dict) -> str:
     pokja_no = m.group() if m else p.get("kode", "")
     return f"Pokja {pokja_no} · {p['kode']} — {p['nama']}"
 
+
+def _get_paket_gabungan() -> list[dict]:
+    """Gabung global_paket_draft + global_paket_aktif, deduplikasi by kode."""
+    draft_list = st.session_state.get("global_paket_draft", {}).get("paket", [])
+    aktif_list = st.session_state.get("global_paket_aktif", {}).get("paket", [])
+    seen, result = set(), []
+    for p in draft_list + aktif_list:
+        if p["kode"] not in seen:
+            seen.add(p["kode"])
+            result.append(p)
+    return result
+
 from config import SPSE_BASE_URL
 import spse_browser
 import ldk_engine
@@ -2209,12 +2221,12 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 # ============================================================
 # MODE: TENDER
 # ============================================================
-tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
+tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo, tab_ba_pl = st.tabs([
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
     "5️⃣ Upload & Cetak 5 BA", "6️⃣ Download Kualifikasi",
-    "7️⃣ Dokumen Penawaran",
+    "7️⃣ Dokumen Penawaran", "8️⃣ BA Pengadaan Langsung",
 ])
 
 # ============================================================
@@ -2960,57 +2972,51 @@ with tab_setup:
         st.markdown("### 1. Pilih Paket")
         col_spfetch, col_spall, col_spnone = st.columns([3, 1, 1])
         with col_spfetch:
-            if "global_paket_draft" not in st.session_state:
+            if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
+                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
 
         sp_selected = []
-        if "global_paket_draft" in st.session_state:
-            r = st.session_state["global_paket_draft"]
-            if not r["sukses"]:
-                st.error(f"❌ {r['pesan']}")
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+            paket_list_sp = _get_paket_gabungan()
+            if not paket_list_sp:
+                st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                paket_list_sp = r.get("paket", [])
-                if not paket_list_sp:
-                    st.warning("⚠️ Tidak ada paket ditemukan.")
-                else:
-                    with col_spall:
-                        if st.button("✅ Semua", key="sp_sel_all", use_container_width=True):
-                            for p in paket_list_sp:
-                                st.session_state[f"sp_chk_{p['id_lelang']}"] = True
-                            st.rerun()
-                    with col_spnone:
-                        if st.button("⬜ Kosong", key="sp_sel_none", use_container_width=True):
-                            for p in paket_list_sp:
-                                st.session_state[f"sp_chk_{p['id_lelang']}"] = False
-                            st.rerun()
+                with col_spall:
+                    if st.button("✅ Semua", key="sp_sel_all", use_container_width=True):
+                        for p in paket_list_sp:
+                            st.session_state[f"sp_chk_{p['id_lelang']}"] = True
+                        st.rerun()
+                with col_spnone:
+                    if st.button("⬜ Kosong", key="sp_sel_none", use_container_width=True):
+                        for p in paket_list_sp:
+                            st.session_state[f"sp_chk_{p['id_lelang']}"] = False
+                        st.rerun()
 
-                    for p in paket_list_sp:
-                        key_chk  = f"sp_chk_{p['id_lelang']}"
-                        key_dokpil = f"sp_dokpil_{p['id_lelang']}"
-                        col_chk, col_dokpil = st.columns([3, 2])
-                        with col_chk:
-                            checked = st.checkbox(
-                                _pokja_label(p),
-                                value=st.session_state.get(key_chk, True),
-                                key=key_chk,
-                            )
-                        with col_dokpil:
-                            up_dokpil = st.file_uploader(
-                                "DOKPIL",
-                                type=["pdf"],
-                                key=key_dokpil,
-                                label_visibility="collapsed",
-                            )
-                            if up_dokpil:
-                                st.caption(f"📄 {up_dokpil.name}")
-                        if checked:
-                            sp_selected.append({**p, "_dokpil": up_dokpil})
+                for p in paket_list_sp:
+                    key_chk  = f"sp_chk_{p['id_lelang']}"
+                    key_dokpil = f"sp_dokpil_{p['id_lelang']}"
+                    col_chk, col_dokpil = st.columns([3, 2])
+                    with col_chk:
+                        checked = st.checkbox(
+                            _pokja_label(p),
+                            value=st.session_state.get(key_chk, True),
+                            key=key_chk,
+                        )
+                    with col_dokpil:
+                        up_dokpil = st.file_uploader(
+                            "DOKPIL",
+                            type=["pdf"],
+                            key=key_dokpil,
+                            label_visibility="collapsed",
+                        )
+                        if up_dokpil:
+                            st.caption(f"📄 {up_dokpil.name}")
+                    if checked:
+                        sp_selected.append({**p, "_dokpil": up_dokpil})
 
-                    st.caption(f"**{len(sp_selected)}** dari **{len(paket_list_sp)}** paket dipilih")
-        else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket.")
+                st.caption(f"**{len(sp_selected)}** dari **{len(paket_list_sp)}** paket dipilih")
 
     with _sp_col_kiri:
         st.markdown("### 2. Upload Dokumen Pemilihan")
@@ -3372,42 +3378,36 @@ with tab7:
             if "global_paket_draft" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
+                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
 
         pj_selected = []
-        if "global_paket_draft" in st.session_state:
-            r = st.session_state["global_paket_draft"]
-            if not r["sukses"]:
-                st.error(f"❌ {r['pesan']}")
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+            paket_list_pj = _get_paket_gabungan()
+            if not paket_list_pj:
+                st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                paket_list_pj = r.get("paket", [])
-                if not paket_list_pj:
-                    st.warning("⚠️ Tidak ada paket ditemukan.")
-                else:
-                    with col_pjall:
-                        if st.button("✅ Semua", key="pj_sel_all", use_container_width=True):
-                            for p in paket_list_pj:
-                                st.session_state[f"pj_chk_{p['id_lelang']}"] = True
-                            st.rerun()
-                    with col_pjnone:
-                        if st.button("⬜ Kosong", key="pj_sel_none", use_container_width=True):
-                            for p in paket_list_pj:
-                                st.session_state[f"pj_chk_{p['id_lelang']}"] = False
-                            st.rerun()
+                with col_pjall:
+                    if st.button("✅ Semua", key="pj_sel_all", use_container_width=True):
+                        for p in paket_list_pj:
+                            st.session_state[f"pj_chk_{p['id_lelang']}"] = True
+                        st.rerun()
+                with col_pjnone:
+                    if st.button("⬜ Kosong", key="pj_sel_none", use_container_width=True):
+                        for p in paket_list_pj:
+                            st.session_state[f"pj_chk_{p['id_lelang']}"] = False
+                        st.rerun()
 
-                    for p in paket_list_pj:
-                        key_chk = f"pj_chk_{p['id_lelang']}"
-                        checked = st.checkbox(
-                            _pokja_label(p),
-                            value=st.session_state.get(key_chk, True),
-                            key=key_chk,
-                        )
-                        if checked:
-                            pj_selected.append(p)
+                for p in paket_list_pj:
+                    key_chk = f"pj_chk_{p['id_lelang']}"
+                    checked = st.checkbox(
+                        _pokja_label(p),
+                        value=st.session_state.get(key_chk, True),
+                        key=key_chk,
+                    )
+                    if checked:
+                        pj_selected.append(p)
 
-                    st.caption(f"**{len(pj_selected)}** dari **{len(paket_list_pj)}** paket dipilih")
-        else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket.")
+                st.caption(f"**{len(pj_selected)}** dari **{len(paket_list_pj)}** paket dipilih")
 
         # ── Status Antrian ─────────────────────────────────────────────────
         st.divider()
@@ -3592,40 +3592,36 @@ with tab8:
             if "global_paket_draft" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(st.session_state['global_paket_draft'].get('paket',[]))} paket draft tersedia")
+                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
 
         jd_selected = []
-        if "global_paket_draft" in st.session_state:
-            r = st.session_state["global_paket_draft"]
-            if not r["sukses"]:
-                st.error(f"❌ {r['pesan']}")
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+            paket_list = _get_paket_gabungan()
+            if not paket_list:
+                st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                paket_list = r.get("paket", [])
-                if not paket_list:
-                    st.warning("⚠️ Tidak ada paket ditemukan.")
-                else:
-                    with col_all:
-                        if st.button("✅ Semua", key="jd_sel_all", use_container_width=True):
-                            for p in paket_list:
-                                st.session_state[f"jd_chk_{p['id_lelang']}"] = True
-                            st.rerun()
-                    with col_none:
-                        if st.button("⬜ Kosong", key="jd_sel_none", use_container_width=True):
-                            for p in paket_list:
-                                st.session_state[f"jd_chk_{p['id_lelang']}"] = False
-                            st.rerun()
+                with col_all:
+                    if st.button("✅ Semua", key="jd_sel_all", use_container_width=True):
+                        for p in paket_list:
+                            st.session_state[f"jd_chk_{p['id_lelang']}"] = True
+                        st.rerun()
+                with col_none:
+                    if st.button("⬜ Kosong", key="jd_sel_none", use_container_width=True):
+                        for p in paket_list:
+                            st.session_state[f"jd_chk_{p['id_lelang']}"] = False
+                        st.rerun()
 
-                    for p in paket_list:
-                        key_chk = f"jd_chk_{p['id_lelang']}"
-                        checked = st.checkbox(
-                            _pokja_label(p),
-                            value=st.session_state.get(key_chk, True),
-                            key=key_chk,
-                        )
-                        if checked:
-                            jd_selected.append(p)
+                for p in paket_list:
+                    key_chk = f"jd_chk_{p['id_lelang']}"
+                    checked = st.checkbox(
+                        _pokja_label(p),
+                        value=st.session_state.get(key_chk, True),
+                        key=key_chk,
+                    )
+                    if checked:
+                        jd_selected.append(p)
 
-                    st.caption(f"**{len(jd_selected)}** dari **{len(paket_list)}** paket dipilih")
+                st.caption(f"**{len(jd_selected)}** dari **{len(paket_list)}** paket dipilih")
         else:
             st.info("Klik tombol di atas untuk mengambil daftar paket.")
 
@@ -3948,61 +3944,56 @@ with tab9:
         st.markdown("### 1. Pilih Paket")
         
         kp_selected = []
-        
-        # Menggunakan data paket yang sudah disinkronkan di Tab 0
-        if "global_paket_draft" not in st.session_state:
+
+        if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
-            r = st.session_state["global_paket_draft"]
-            if not r.get("sukses"):
-                st.error(f"❌ {r.get('pesan', 'Gagal memuat data paket')}")
+            paket_list = _get_paket_gabungan()
+            if not paket_list:
+                st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                paket_list = r.get("paket", [])
-                if not paket_list:
-                    st.warning("⚠️ Tidak ada paket draft ditemukan.")
-                else:
-                    st.caption(f"📋 {len(paket_list)} paket draft tersedia — pilih target:")
-                    
-                    _kp_sel_col1, _kp_sel_col2 = st.columns(2)
-                    with _kp_sel_col1:
-                        if st.button("✅ Semua", key="kp_sel_all", use_container_width=True):
-                            for p in paket_list:
-                                st.session_state[f"kp_chk_{p['id_lelang']}"] = True
-                            st.rerun()
-                    with _kp_sel_col2:
-                        if st.button("⬜ Kosong", key="kp_sel_none", use_container_width=True):
-                            for p in paket_list:
-                                st.session_state[f"kp_chk_{p['id_lelang']}"] = False
-                            st.rerun()
+                st.caption(f"📋 {len(paket_list)} paket tersedia (draft + aktif) — pilih target:")
 
-                    for p in paket_list:
-                        key_chk     = f"kp_chk_{p['id_lelang']}"
-                        key_tgl_acara = f"kp_tgl_acara_{p['id_lelang']}"
+                _kp_sel_col1, _kp_sel_col2 = st.columns(2)
+                with _kp_sel_col1:
+                    if st.button("✅ Semua", key="kp_sel_all", use_container_width=True):
+                        for p in paket_list:
+                            st.session_state[f"kp_chk_{p['id_lelang']}"] = True
+                        st.rerun()
+                with _kp_sel_col2:
+                    if st.button("⬜ Kosong", key="kp_sel_none", use_container_width=True):
+                        for p in paket_list:
+                            st.session_state[f"kp_chk_{p['id_lelang']}"] = False
+                        st.rerun()
 
-                        col_chk, col_tgl_p = st.columns([3, 2])
-                        with col_chk:
-                            checked = st.checkbox(
-                                _pokja_label(p),
-                                value=st.session_state.get(key_chk, True),
-                                key=key_chk,
-                            )
-                        with col_tgl_p:
-                            tgl_acara_p = st.date_input(
-                                "Tanggal Acara",
-                                value=st.session_state.get(key_tgl_acara, datetime.now().date()),
-                                format="DD/MM/YYYY",
-                                key=key_tgl_acara,
-                                label_visibility="collapsed",
-                            )
-                            st.caption(f"{_HARI_NAMA[tgl_acara_p.weekday()]}, {tgl_acara_p.day} {_BULAN_NAMA[tgl_acara_p.month-1]} {tgl_acara_p.year}")
+                for p in paket_list:
+                    key_chk     = f"kp_chk_{p['id_lelang']}"
+                    key_tgl_acara = f"kp_tgl_acara_{p['id_lelang']}"
 
-                        if checked:
-                            kp_selected.append({
-                                **p,
-                                "_tgl_acara": tgl_acara_p,
-                            })
+                    col_chk, col_tgl_p = st.columns([3, 2])
+                    with col_chk:
+                        checked = st.checkbox(
+                            _pokja_label(p),
+                            value=st.session_state.get(key_chk, True),
+                            key=key_chk,
+                        )
+                    with col_tgl_p:
+                        tgl_acara_p = st.date_input(
+                            "Tanggal Acara",
+                            value=st.session_state.get(key_tgl_acara, datetime.now().date()),
+                            format="DD/MM/YYYY",
+                            key=key_tgl_acara,
+                            label_visibility="collapsed",
+                        )
+                        st.caption(f"{_HARI_NAMA[tgl_acara_p.weekday()]}, {tgl_acara_p.day} {_BULAN_NAMA[tgl_acara_p.month-1]} {tgl_acara_p.year}")
 
-                    st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
+                    if checked:
+                        kp_selected.append({
+                            **p,
+                            "_tgl_acara": tgl_acara_p,
+                        })
+
+                st.caption(f"**{len(kp_selected)}** dari **{len(paket_list)}** paket dipilih")
 
         # ── Auto Pre-fill dari Excel (jika ada 1 paket terpilih & folder ada) ──
         if len(kp_selected) == 1:
@@ -4188,37 +4179,31 @@ with tab9:
             st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
 
         ba_selected = []
-        if "global_paket_draft" in st.session_state:
-            _ba_r = st.session_state["global_paket_draft"]
-            if not _ba_r["sukses"]:
-                st.error(f"❌ {_ba_r['pesan']}")
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+            _ba_paket_list = _get_paket_gabungan()
+            if not _ba_paket_list:
+                st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                _ba_paket_list = _ba_r.get("paket", [])
-                if not _ba_paket_list:
-                    st.warning("⚠️ Tidak ada paket ditemukan.")
-                else:
-                    for _p in _ba_paket_list:
-                        _key_chk = f"r1_ba_chk_{_p['id_lelang']}"
-                        _col_chk, _col_file = st.columns([3, 2])
-                        with _col_chk:
-                            _checked = st.checkbox(
-                                f"**{_p['kode']}** — {_p['nama']}",
-                                value=st.session_state.get(_key_chk, False),
-                                key=_key_chk,
-                            )
-                        with _col_file:
-                            _ba_up = st.file_uploader(
-                                "BA Reviu",
-                                type=["pdf"],
-                                key=f"r1_ba_file_{_p['id_lelang']}",
-                                label_visibility="collapsed",
-                            )
-                            if _ba_up:
-                                st.caption(f"📋 {_ba_up.name}")
-                        if _checked:
-                            ba_selected.append({**_p, "_ba_file": _ba_up})
-        else:
-            st.info("Klik tombol di atas untuk mengambil daftar paket.")
+                for _p in _ba_paket_list:
+                    _key_chk = f"r1_ba_chk_{_p['id_lelang']}"
+                    _col_chk, _col_file = st.columns([3, 2])
+                    with _col_chk:
+                        _checked = st.checkbox(
+                            f"**{_p['kode']}** — {_p['nama']}",
+                            value=st.session_state.get(_key_chk, False),
+                            key=_key_chk,
+                        )
+                    with _col_file:
+                        _ba_up = st.file_uploader(
+                            "BA Reviu",
+                            type=["pdf"],
+                            key=f"r1_ba_file_{_p['id_lelang']}",
+                            label_visibility="collapsed",
+                        )
+                        if _ba_up:
+                            st.caption(f"📋 {_ba_up.name}")
+                    if _checked:
+                        ba_selected.append({**_p, "_ba_file": _ba_up})
 
         st.divider()
         ba_tgl = st.date_input(
@@ -4289,56 +4274,52 @@ with tab_ba:
 
     # ── Pilih Paket ──────────────────────────────────────────────────────
     st.markdown("### Pilih Paket")
-    if "global_paket_draft" not in st.session_state:
+    if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
         st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
     else:
-        _ba_r = st.session_state["global_paket_draft"]
-        if not _ba_r.get("sukses"):
-            st.error(f"❌ {_ba_r.get('pesan', 'Gagal memuat data paket')}")
+        paket_list_ba = _get_paket_gabungan()
+        if not paket_list_ba:
+            st.warning("⚠️ Tidak ada paket ditemukan.")
         else:
-            paket_list_ba = _ba_r.get("paket", [])
-            if not paket_list_ba:
-                st.warning("⚠️ Tidak ada paket draft ditemukan.")
-            else:
-                st.caption(f"📋 {len(paket_list_ba)} paket draft tersedia — pilih:")
-                _ba_sel_c1, _ba_sel_c2 = st.columns(2)
-                with _ba_sel_c1:
-                    if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
-                        for p in paket_list_ba:
-                            st.session_state[f"ba_chk_{p['id_lelang']}"] = True
-                        st.rerun()
-                with _ba_sel_c2:
-                    if st.button("⬜ Kosong", key="ba_sel_none", use_container_width=True):
-                        for p in paket_list_ba:
-                            st.session_state[f"ba_chk_{p['id_lelang']}"] = False
-                        st.rerun()
-                for p in paket_list_ba:
-                    key_chk = f'ba_chk_{p["id_lelang"]}'
-                    _chk_col, _super_col = st.columns([3, 1])
-                    with _chk_col:
-                        checked = st.checkbox(
-                            _pokja_label(p),
-                            value=st.session_state.get(key_chk, True), key=key_chk,
-                        )
-                    with _super_col:
-                        if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
-                            st.session_state["ba_pending_target"] = "SEMUA"
-                            st.session_state["ba_pending_paket"] = [p]
-                            st.rerun()
-                    if checked:
-                        ba_selected.append(p)
-                st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
-                st.divider()
-                if st.button(
-                    f"🚀 Cetak & Upload SEMUA BA — {len(ba_selected)} Paket",
-                    key="ba_super_all",
-                    disabled=len(ba_selected) == 0,
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    st.session_state["ba_pending_target"] = "SEMUA"
-                    st.session_state["ba_pending_paket"] = ba_selected[:]
+            st.caption(f"📋 {len(paket_list_ba)} paket tersedia (draft + aktif) — pilih:")
+            _ba_sel_c1, _ba_sel_c2 = st.columns(2)
+            with _ba_sel_c1:
+                if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
+                    for p in paket_list_ba:
+                        st.session_state[f"ba_chk_{p['id_lelang']}"] = True
                     st.rerun()
+            with _ba_sel_c2:
+                if st.button("⬜ Kosong", key="ba_sel_none", use_container_width=True):
+                    for p in paket_list_ba:
+                        st.session_state[f"ba_chk_{p['id_lelang']}"] = False
+                    st.rerun()
+            for p in paket_list_ba:
+                key_chk = f'ba_chk_{p["id_lelang"]}'
+                _chk_col, _super_col = st.columns([3, 1])
+                with _chk_col:
+                    checked = st.checkbox(
+                        _pokja_label(p),
+                        value=st.session_state.get(key_chk, True), key=key_chk,
+                    )
+                with _super_col:
+                    if st.button('🚀', key=f'btn_super_{p["id_lelang"]}', use_container_width=True, help='Cetak & Upload SEMUA BA untuk paket ini'):
+                        st.session_state["ba_pending_target"] = "SEMUA"
+                        st.session_state["ba_pending_paket"] = [p]
+                        st.rerun()
+                if checked:
+                    ba_selected.append(p)
+            st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
+            st.divider()
+            if st.button(
+                f"🚀 Cetak & Upload SEMUA BA — {len(ba_selected)} Paket",
+                key="ba_super_all",
+                disabled=len(ba_selected) == 0,
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["ba_pending_target"] = "SEMUA"
+                st.session_state["ba_pending_paket"] = ba_selected[:]
+                st.rerun()
 
     # ── Inisialisasi session state BA ─────────────────────────────────────
     for jenis_key in ba_config.JENIS_KEYS:
@@ -4539,9 +4520,9 @@ with tab_ba:
 
 with tab_kual:
     # ── Pre-render: fetch semua paket yang dicek tapi belum ada datanya ────────
-    if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+    if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
         _kl_perlu_fetch = [
-            p for p in st.session_state["global_paket_draft"].get("paket", [])
+            p for p in _get_paket_gabungan()
             if p.get("kode") != "00000000000"
             and st.session_state.get(f"kl_chk_{p['kode']}", False)
             and f"kl_peserta_{p['kode']}" not in st.session_state
@@ -4556,37 +4537,32 @@ with tab_kual:
 
     with _kl_col1:
         st.markdown("#### 1. Pilih Paket")
-        if "global_paket_draft" not in st.session_state:
+        if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
-            _kl_draft = st.session_state["global_paket_draft"]
-            if not _kl_draft.get("sukses"):
-                st.error(f"❌ {_kl_draft.get('pesan', 'Gagal memuat data paket')}")
+            _kl_paket_list = sorted(
+                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
+                key=lambda p: p.get("tanggal", ""),
+                reverse=True,
+            )
+            if not _kl_paket_list:
+                st.warning("⚠️ Tidak ada paket aktif ditemukan.")
             else:
-                _kl_paket_list = sorted(
-                    [p for p in _kl_draft.get("paket", []) if p.get("kode") != "00000000000"],
-                    key=lambda p: p.get("tanggal", ""),
-                    reverse=True,
-                )
-                if not _kl_paket_list:
-                    st.warning("⚠️ Tidak ada paket aktif ditemukan.")
-                else:
-                    st.caption(f"📋 {len(_kl_paket_list)} paket — centang satu atau lebih:")
-                    for p in _kl_paket_list:
-                        _kl_chk_key = f"kl_chk_{p['kode']}"
-                        # auto-centang pertama kali (session key belum ada)
-                        if _kl_chk_key not in st.session_state:
-                            st.session_state[_kl_chk_key] = True
-                        _checked = st.checkbox(
-                            f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
-                            key=_kl_chk_key,
-                        )
+                st.caption(f"📋 {len(_kl_paket_list)} paket — centang satu atau lebih:")
+                for p in _kl_paket_list:
+                    _kl_chk_key = f"kl_chk_{p['kode']}"
+                    if _kl_chk_key not in st.session_state:
+                        st.session_state[_kl_chk_key] = True
+                    _checked = st.checkbox(
+                        f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
+                        key=_kl_chk_key,
+                    )
 
         st.divider()
         st.markdown("#### 2. Peserta per Paket")
-        if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
             _kl_paket_list2 = sorted(
-                [p for p in st.session_state["global_paket_draft"].get("paket", []) if p.get("kode") != "00000000000"],
+                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
@@ -4633,9 +4609,9 @@ with tab_kual:
 
         # ── Ringkasan paket terpilih + status folder ───────────────────────────
         _kl_paket_dipilih = []
-        if "global_paket_draft" in st.session_state and st.session_state["global_paket_draft"].get("sukses"):
+        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
             _kl_all_list = sorted(
-                [p for p in st.session_state["global_paket_draft"].get("paket", []) if p.get("kode") != "00000000000"],
+                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
@@ -5035,3 +5011,132 @@ with tab_apendo:
                             st.error(f"❌ {len(_semua_gagal)} gagal:")
                             for _e in _semua_gagal:
                                 st.caption(f"• {_e}")
+
+# ============================================================
+# Tab 8: BA Pengadaan Langsung
+# ============================================================
+
+with tab_ba_pl:
+    import ba_engine_pl as _ba_pl_engine
+
+    st.markdown("## Upload Berita Acara — Pengadaan Langsung (PL)")
+    st.caption("Upload BA Evaluasi Penawaran, BA Hasil Non Tender, atau BA Penjelasan ke SPSE.")
+
+    _pl_rows_ba_pl = []
+    try:
+        _sb_ba_pl = kirimpesan_engine._sb()
+        _res_ba_pl = _sb_ba_pl.table("draft_paket_pl").select("kode_paket, nama_paket, kode_unik, id_nontender").order("kode_paket").execute()
+        _pl_rows_ba_pl = _res_ba_pl.data or []
+    except Exception as _e_ba_pl:
+        st.error(f"Gagal load paket PL: {_e_ba_pl}")
+
+    _JENIS_BA_PL = {
+        "UPLOAD_BA_EVALUASI_PENAWARAN": "BA Evaluasi Penawaran",
+        "UPLOAD_BA_HASIL_LELANG": "BA Hasil Non Tender (BAHNT)",
+        "UPLOAD_BA_PENJELASAN": "BA Penjelasan",
+        "PENGUMUMAN_PEMENANG_AKHIR": "Pengumuman Pemenang Akhir",
+    }
+
+    _baplcol1, _baplcol2 = st.columns([1, 1])
+    with _baplcol1:
+        _jenis_ba_pl = st.selectbox(
+            "Jenis BA",
+            options=list(_JENIS_BA_PL.keys()),
+            format_func=lambda k: _JENIS_BA_PL[k],
+            key="bapl_jenis",
+        )
+    with _baplcol2:
+        _tgl_ba_pl = st.date_input(
+            "Tanggal BA",
+            value=datetime.now().date(),
+            format="DD/MM/YYYY",
+            key="bapl_tgl",
+        )
+        st.caption(f"{_HARI_NAMA[_tgl_ba_pl.weekday()]}, {_tgl_ba_pl.day} {_BULAN_NAMA[_tgl_ba_pl.month-1]} {_tgl_ba_pl.year}")
+
+    _nomor_ba_pl = st.text_input("Nomor BA", placeholder="Contoh: 001/BAHNT/POKJA/2026", key="bapl_nomor")
+    _info_ba_pl  = st.text_area("Keterangan / Info", value="", key="bapl_info", height=80)
+
+    if _jenis_ba_pl == "PENGUMUMAN_PEMENANG_AKHIR":
+        _tempat_ba_pl = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="bapl_tempat")
+    else:
+        _tempat_ba_pl = ""
+
+    st.divider()
+    st.markdown("### Pilih Paket PL + Upload File BA")
+
+    if not _pl_rows_ba_pl:
+        st.info("Tidak ada paket PL di database.")
+    else:
+        _bapl_sel_c1, _bapl_sel_c2, _ = st.columns([1, 1, 4])
+        with _bapl_sel_c1:
+            if st.button("☑️ Centang Semua", key="bapl_sel_all", use_container_width=True):
+                for _pp in _pl_rows_ba_pl:
+                    st.session_state[f"bapl_chk_{_pp['kode_paket']}"] = True
+                st.rerun()
+        with _bapl_sel_c2:
+            if st.button("🔲 Hapus Semua", key="bapl_clr_all", use_container_width=True):
+                for _pp in _pl_rows_ba_pl:
+                    st.session_state[f"bapl_chk_{_pp['kode_paket']}"] = False
+                st.rerun()
+
+        _bapl_valid = []
+        for _pp in _pl_rows_ba_pl:
+            _kode_pl = _pp.get("kode_paket", "")
+            _id_nt = _pp.get("id_nontender") or _kode_pl
+            _bapl_c1, _bapl_c2, _bapl_c3 = st.columns([3, 3, 1])
+            with _bapl_c1:
+                _chk_pl = st.checkbox(
+                    f"**{_kode_pl}** — {_pp.get('nama_paket', '')[:50]}",
+                    value=st.session_state.get(f"bapl_chk_{_kode_pl}", False),
+                    key=f"bapl_chk_{_kode_pl}",
+                )
+            with _bapl_c2:
+                _f_ba = st.file_uploader(
+                    "File BA PDF",
+                    type=["pdf"],
+                    key=f"bapl_file_{_kode_pl}",
+                    label_visibility="collapsed",
+                )
+            with _bapl_c3:
+                if _f_ba and st.button("📤", key=f"bapl_up1_{_kode_pl}", help="Upload paket ini", use_container_width=True):
+                    _tgl_str = _tgl_ba_pl.strftime("%d-%m-%Y")
+                    with st.spinner(f"Upload {_kode_pl}..."):
+                        _r = _ba_pl_engine.upload_ba_pl(
+                            id_nontender=_id_nt,
+                            jenis=_jenis_ba_pl,
+                            nomor=_nomor_ba_pl,
+                            tanggal=_tgl_str,
+                            info=_info_ba_pl,
+                            file_bytes=_f_ba.read(),
+                            file_name=_f_ba.name,
+                            tempat=_tempat_ba_pl,
+                        )
+                    if _r.get("sukses"):
+                        st.success(f"✅ {_kode_pl} — {_r.get('pesan')}")
+                    else:
+                        st.error(f"❌ {_kode_pl} — {_r.get('pesan')}")
+            if _chk_pl and _f_ba:
+                _bapl_valid.append({**_pp, "_id_nt": _id_nt, "_file": _f_ba})
+
+        if _bapl_valid:
+            if st.button(f"📤 Upload Semua BA ({len(_bapl_valid)} paket)", type="primary", key="bapl_upload_all", use_container_width=True):
+                _tgl_str = _tgl_ba_pl.strftime("%d-%m-%Y")
+                with st.status(f"Upload {len(_bapl_valid)} paket...", expanded=True) as _st_bapl:
+                    for _pp2 in _bapl_valid:
+                        _st_bapl.write(f"⏳ {_pp2['kode_paket']}...")
+                        _f2 = _pp2["_file"]
+                        _r2 = _ba_pl_engine.upload_ba_pl(
+                            id_nontender=_pp2["_id_nt"],
+                            jenis=_jenis_ba_pl,
+                            nomor=_nomor_ba_pl,
+                            tanggal=_tgl_str,
+                            info=_info_ba_pl,
+                            file_bytes=_f2.read(),
+                            file_name=_f2.name,
+                            tempat=_tempat_ba_pl,
+                        )
+                        if _r2.get("sukses"):
+                            _st_bapl.write(f"✅ {_pp2['kode_paket']} — {_r2.get('pesan')}")
+                        else:
+                            _st_bapl.write(f"❌ {_pp2['kode_paket']} — {_r2.get('pesan')}")
