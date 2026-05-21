@@ -38,11 +38,12 @@ def main():
     result = fetch_semua_penawaran_pl(kode_paket)
 
     if not result["ok"] or not result["peserta"]:
-        error_msg = result.get("error", "Tidak ada peserta")
+        # Penawaran belum masuk — tulis JSON kosong, exit 0 (bukan error)
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump({"error": error_msg, "peserta": []}, f, ensure_ascii=False)
-        print(f"ERROR: {error_msg}", file=sys.stderr)
-        sys.exit(1)
+            json.dump([], f)
+        error_msg = result.get("error", "Tidak ada peserta")
+        print(f"INFO: {error_msg} — sheet dibiarkan kosong")
+        sys.exit(0)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result["peserta"], f, ensure_ascii=False, indent=2)
