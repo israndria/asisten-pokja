@@ -180,17 +180,30 @@ def cari_draft_pl_di_folder(folder: str) -> str | None:
 
 
 def parse_draft_pl(pdf_path: str) -> dict:
-    """Parse Draft_PL PDF — ekstrak nama_penyedia + npwp_penyedia dari halaman SURAT REKOMENDASI.
+    """Parse Draft_PL PDF — ekstrak nama_penyedia, npwp_penyedia, nomor_rekomendasi,
+    tgl_rekomendasi, nomor_nota_dinas dari halaman SURAT REKOMENDASI + NOTA DINAS.
 
     Format yang dicari:
         Nama Perusahaan : CV. MEDIA TALENTA MUDA
         NPWP Perusahaan : 31854730733000
+        SURAT REKOMENDASI
+        Nomor : 600.1.15.4/009/Srt-Rekom/PPK/BM/V/2026
+        Tanggal : 12 Mei 2026
+        NOTA DINAS
+        Nomor : 000.4.1/066/PPK/DPUPR-BM/V/2026
     """
+    import datetime
     teks = _text_dari_pdf(pdf_path)
     if not teks:
         return {}
 
-    out = {"nama_penyedia": "", "npwp_penyedia": ""}
+    out = {
+        "nama_penyedia": "",
+        "npwp_penyedia": "",
+        "nomor_rekomendasi": "",
+        "tgl_rekomendasi": None,
+        "nomor_nota_dinas": "",
+    }
 
     m_nama = re.search(
         r"Nama\s+Perusahaan\s*:\s*(.+?)(?:\n|$)",
@@ -206,6 +219,52 @@ def parse_draft_pl(pdf_path: str) -> dict:
     if m_npwp:
         npwp = re.sub(r"[.\-\s]", "", m_npwp.group(1)).strip()
         out["npwp_penyedia"] = npwp
+
+    # Nomor Surat Rekomendasi
+    m_rekom_no = re.search(
+        r"SURAT\s+REKOMENDASI\s*\n[^\n]*Nomor\s*:\s*(.+?)[\n\r]",
+        teks, re.IGNORECASE,
+    )
+    if not m_rekom_no:
+        m_rekom_no = re.search(
+            r"SURAT\s+REKOMENDASI.*?Nomor\s*:\s*(.+?)[\n\r]",
+            teks, re.IGNORECASE | re.DOTALL,
+        )
+    if m_rekom_no:
+        out["nomor_rekomendasi"] = m_rekom_no.group(1).strip()
+
+    # Tanggal Surat Rekomendasi → date
+    _BULAN = {
+        "januari": 1, "februari": 2, "maret": 3, "april": 4,
+        "mei": 5, "juni": 6, "juli": 7, "agustus": 8,
+        "september": 9, "oktober": 10, "november": 11, "desember": 12,
+    }
+    m_rekom_tgl = re.search(
+        r"SURAT\s+REKOMENDASI.*?Tanggal\s*:\s*(\d{1,2})\s+(\w+)\s+(\d{4})",
+        teks, re.IGNORECASE | re.DOTALL,
+    )
+    if m_rekom_tgl:
+        hari = int(m_rekom_tgl.group(1))
+        bln = _BULAN.get(m_rekom_tgl.group(2).lower())
+        thn = int(m_rekom_tgl.group(3))
+        if bln:
+            try:
+                out["tgl_rekomendasi"] = datetime.date(thn, bln, hari).isoformat()
+            except ValueError:
+                pass
+
+    # Nomor Nota Dinas
+    m_nota = re.search(
+        r"NOTA\s+DINAS\s*\n[^\n]*Nomor\s*:\s*(.+?)[\n\r]",
+        teks, re.IGNORECASE,
+    )
+    if not m_nota:
+        m_nota = re.search(
+            r"NOTA\s+DINAS.*?Nomor\s*:\s*(.+?)[\n\r]",
+            teks, re.IGNORECASE | re.DOTALL,
+        )
+    if m_nota:
+        out["nomor_nota_dinas"] = m_nota.group(1).strip()
 
     return out
 
