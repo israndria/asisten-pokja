@@ -1480,19 +1480,25 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 "pesan":  f"HTTP {_sub['status']}",
                                 "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
                             })
-                            # Simpan T1 + T5 selesai ke Supabase
-                            try:
-                                _jad = _r["jadwal_list"]
-                                pl_engine.simpan_paket_pl({
-                                    "kode_paket":            _p["kode_paket"],
-                                    "tgl_batas_penawaran":   _jad[0]["selesai"].strftime("%Y-%m-%d"),
-                                    "tgl_buka_penawaran":    _jad[1]["mulai"].strftime("%Y-%m-%d"),
-                                    "tgl_evaluasi":          _jad[2]["mulai"].strftime("%Y-%m-%d"),
-                                    "tgl_negosiasi":         _jad[3]["mulai"].strftime("%Y-%m-%d"),
-                                    "tgl_penetapan":         _jad[4]["mulai"].strftime("%Y-%m-%d"),
-                                })
-                            except Exception:
-                                pass
+                            # Simpan tgl ke Supabase + push GCal
+                            if _sub["ok"]:
+                                try:
+                                    _jad = _r["jadwal_list"]
+                                    pl_engine.simpan_paket_pl({
+                                        "kode_paket":            _p["kode_paket"],
+                                        "tgl_batas_penawaran":   _jad[0]["selesai"].strftime("%Y-%m-%d"),
+                                        "tgl_buka_penawaran":    _jad[1]["mulai"].strftime("%Y-%m-%d"),
+                                        "tgl_evaluasi":          _jad[2]["selesai"].strftime("%Y-%m-%d"),
+                                        "tgl_negosiasi":         _jad[3]["mulai"].strftime("%Y-%m-%d"),
+                                        "tgl_penetapan":         _jad[4]["mulai"].strftime("%Y-%m-%d"),
+                                    })
+                                except Exception:
+                                    pass
+                                try:
+                                    import gcal_pl_helper as _gcalpl
+                                    _gcalpl.push_jadwal_pl_ke_gcal(_kp, _p["nama_paket"], _r["jadwal_list"])
+                                except Exception:
+                                    pass
                         except Exception as _e:
                             _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": str(_e)[:100]})
 
@@ -1512,6 +1518,41 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
                     for d in _sisa[:15]:
                         st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_libur_map_pl[d]}")
+
+        st.divider()
+        st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
+        st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
+        _gcalpl_col1, _gcalpl_col2 = st.columns([2, 3])
+        with _gcalpl_col1:
+            _sync_gcal_pl_btn = st.button("🔄 Sync GCal PL", key="sync_gcal_pl_btn", use_container_width=True, type="primary")
+        if _sync_gcal_pl_btn:
+            import gcal_pl_helper as _gcalpl
+            _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
+            _gcalpl_results = _gcalpl.sync_semua_paket_pl(
+                progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
+            )
+            _gcalpl_prog.empty()
+            _gcalpl_ok = sum(1 for r in _gcalpl_results if r["ok"])
+            _gcalpl_skip = sum(1 for r in _gcalpl_results if not r["ok"] and "kosong" in r.get("error", ""))
+            _gcalpl_err = len(_gcalpl_results) - _gcalpl_ok - _gcalpl_skip
+            if _gcalpl_err == 0:
+                st.success(f"✅ {_gcalpl_ok} paket sync OK, {_gcalpl_skip} skip (jadwal belum diisi SPSE).")
+            else:
+                st.warning(f"⚠️ {_gcalpl_ok} OK, {_gcalpl_skip} skip, {_gcalpl_err} error.")
+            _gcalpl_display = [
+                {
+                    "Paket": r["nama_paket"],
+                    "Status": "✅" if r["ok"] else ("⏭ Skip" if "kosong" in r.get("error","") else "❌"),
+                    "GCal +": r["gcal_inserted"],
+                    "GCal -": r["gcal_deleted"],
+                    "Tgl Evaluasi": r["tgl_evaluasi"],
+                    "Tgl Negosiasi": r["tgl_negosiasi"],
+                    "Tgl Penetapan": r["tgl_penetapan"],
+                    "Error": r["error"][:60] if r["error"] else "",
+                }
+                for r in _gcalpl_results
+            ]
+            st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
 
     # ── Tab 4: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     with _pl_tab4:
