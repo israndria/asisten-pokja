@@ -406,6 +406,27 @@ def generate_undangan_pdf_pl(
             _files = {n: _zin.read(n) for n in _zin.namelist()}
 
         _doc_xml = _files["word/document.xml"].decode()
+        # Kurangi margin bawah + atas agar TTD muat halaman 1
+        _doc_xml = _re3.sub(r'(<w:pgMar[^>]*\bw:bottom=")[^"]*(")', r'\g<1>360\g<2>', _doc_xml)
+        _doc_xml = _re3.sub(r'(<w:pgMar[^>]*\bw:top=")[^"]*(")', r'\g<1>0\g<2>', _doc_xml)
+        # Hapus w:before/w:after spacing di semua paragraf (hemat ruang vertikal)
+        _doc_xml = _re3.sub(r'\bw:before="\d+"', 'w:before="0"', _doc_xml)
+        _doc_xml = _re3.sub(r'\bw:after="\d+"', 'w:after="0"', _doc_xml)
+        # Kurangi line spacing dari 240 ke 220 (single=240, tighter)
+        _doc_xml = _re3.sub(r'\bw:line="240"', 'w:line="220"', _doc_xml)
+        # Inject keepWithNext ke blok TTD agar jabatan+TTD+nama tidak terpisah halaman
+        import re as _re_ttd
+        for _kw_ph in ['\xabTTD_PP\xbb', 'UKPBJ Kabupaten Tapin', 'Kelompok Kerja Pemilihan PP']:
+            _ki = _doc_xml.find(_kw_ph)
+            if _ki > 0:
+                _kp_start = _doc_xml.rfind('<w:p ', 0, _ki)
+                _kp_end = _doc_xml.find('</w:p>', _ki) + len('</w:p>')
+                _kp = _doc_xml[_kp_start:_kp_end]
+                if '<w:pPr>' in _kp:
+                    _kp = _re_ttd.sub(r'(<w:pPr>)', r'\1<w:keepNext/>', _kp, count=1)
+                else:
+                    _kp = _kp.replace(f'<w:p ', f'<w:p ').replace('</w:p>', '<w:pPr><w:keepNext/></w:pPr></w:p>', 1)
+                _doc_xml = _doc_xml[:_kp_start] + _kp + _doc_xml[_kp_end:]
         # Hapus paragraph borders (pBdr) — sumber 853 garis "single" di PDF
         _doc_xml = _re3.sub(r'<w:pBdr>.*?</w:pBdr>', '', _doc_xml, flags=_re3.DOTALL)
         # Hapus tabel style + tblLook (conditional formatting inject border)
@@ -448,15 +469,53 @@ def generate_undangan_pdf_pl(
             "||NIP||",
             f'</w:t></w:r><w:r>{_RPR}<w:br/></w:r><w:r>{_RPR}<w:t xml:space="preserve">'
         )
-        # Fix TEMPAT_RAPAT: run tanpa rPr (ListParagraph style) → inject rPr Arial 14pt
-        # Cari run <w:r><w:t>...hasil replace tempat...</w:t></w:r> dan tambah rPr
+        # Fix TEMPAT_RAPAT: ganti seluruh <w:tc> yang berisi teks tempat
+        # — inject XML run baru dengan rPr Arial, bypass regex fragile
         _tempat_val = replacements.get("\xabTEMPAT_RAPAT\xbb", "")
         if _tempat_val:
+            import re as _re_tmp
             _tempat_escaped = (_tempat_val.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
-            _doc_xml = _doc_xml.replace(
-                f'<w:r><w:t>{_tempat_escaped}</w:t></w:r>',
-                f'<w:r>{_RPR}<w:t xml:space="preserve">{_tempat_escaped}</w:t></w:r>',
+            _MARKER = "___TEMPAT_XML_MARKER___"
+            _MARKER_END = "___TEMPAT_XML_MARKER_END___"
+            # Ganti run yang berisi teks tempat: tandai dengan marker wrapping run lama
+            # Pattern: <w:r ...>...<w:t...>TEKS TEMPAT</w:t></w:r> → MARKER...MARKER_END
+            _doc_xml = _re_tmp.sub(
+                r'<w:r\b[^>]*>(?:<w:rPr>.*?</w:rPr>)?<w:t[^>]*>' + _re_tmp.escape(_tempat_escaped) + r'</w:t></w:r>',
+                _MARKER + _MARKER_END,
+                _doc_xml,
+                flags=_re_tmp.DOTALL,
             )
+            if _MARKER in _doc_xml:
+                _RPR_TEMPAT = (
+                    '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+                    '<w:color w:val="000000" w:themeColor="text1"/>'
+                    '<w:sz w:val="22"/><w:szCs w:val="22"/>'
+                    '<w:lang w:eastAsia="id-ID"/></w:rPr>'
+                )
+                _new_run = f'<w:r>{_RPR_TEMPAT}<w:t xml:space="preserve">{_tempat_escaped}</w:t></w:r>'
+                _PPR_ARIAL = (
+                    '<w:pPr><w:rPr>'
+                    '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+                    '<w:color w:val="000000"/>'
+                    '<w:sz w:val="28"/><w:szCs w:val="28"/>'
+                    '</w:rPr></w:pPr>'
+                )
+                # Inject pPr Arial ke <w:p> yang berisi marker sebelum replace
+                def _fix_p_tempat(m):
+                    p_inner = m.group(1)
+                    if (_MARKER + _MARKER_END) not in p_inner:
+                        return m.group(0)
+                    if '<w:pPr>' not in p_inner:
+                        p_inner = _PPR_ARIAL + p_inner
+                    else:
+                        p_inner = _re_tmp.sub(
+                            r'<w:pPr>(.*?)</w:pPr>',
+                            lambda mp: '<w:pPr>' + mp.group(1) + '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:pPr>',
+                            p_inner, count=1, flags=_re_tmp.DOTALL
+                        )
+                    return '<w:p>' + p_inner + '</w:p>'
+                _doc_xml = _re_tmp.sub(r'<w:p>(.*?)</w:p>', _fix_p_tempat, _doc_xml, flags=_re_tmp.DOTALL)
+                _doc_xml = _doc_xml.replace(_MARKER + _MARKER_END, _new_run)
         _files["word/document.xml"] = _doc_xml.encode()
 
         # Fix Content_Types — python-docx drop entry png dari header
@@ -470,7 +529,7 @@ def generate_undangan_pdf_pl(
         if os.path.isfile(_ttd_path):
             with _PIL_Image.open(_ttd_path) as _im:
                 _px_w, _px_h = _im.size
-            _emu_target_w = int(2 / 2.54 * 914400)
+            _emu_target_w = int(0.8 / 2.54 * 914400)
             _emu_target_h = int(_emu_target_w * _px_h / _px_w)
 
             with open(_ttd_path, "rb") as _fimg:
