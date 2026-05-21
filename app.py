@@ -2298,7 +2298,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _tgl_mode_pl5 = st.radio("Mode Tanggal", ["Satu tanggal semua", "Tanggal per paket"], horizontal=True, key="pl5_tgl_mode")
 
         _nomor_pl5 = st.text_input("Nomor BA", placeholder="Contoh: 000.3.3/06/PL/PP-01/KPP1/DPUPR/2026", key="pl5_nomor")
-        _info_pl5  = st.text_area("Keterangan Tambahan", value="", key="pl5_info", height=60)
+        _info_pl5  = st.text_area("Keterangan Tambahan", value="", key="pl5_info", height=68)
         _tempat_pl5 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl5_tempat") if _jenis_pl5 == "PENGUMUMAN_PEMENANG_AKHIR" else ""
 
         _tgl_global_pl5 = None
