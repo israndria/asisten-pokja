@@ -31,6 +31,7 @@ TZ = "Asia/Jakarta"
 # Mapping index tahap → kolom Supabase yang di-upsert
 # index 0-based sesuai urutan 5 tahap
 _SUPABASE_COL = {
+    1: "tgl_pembukaan",   # T2 Pembukaan → ambil tanggal mulai
     2: "tgl_evaluasi",    # T3 Evaluasi → ambil tanggal selesai
     3: "tgl_negosiasi",   # T4 Klarifikasi+Nego → ambil tanggal mulai
     4: "tgl_penetapan",   # T5 Penandatanganan → ambil tanggal mulai
@@ -262,9 +263,9 @@ def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
             continue
         # T3 evaluasi → ambil selesai; T4 nego + T5 penetapan → ambil mulai
         if i == 2:
-            dt = tahap["selesai"]
+            dt = tahap["selesai"]   # T3 Evaluasi → selesai
         else:
-            dt = tahap["mulai"]
+            dt = tahap["mulai"]     # T2/T4/T5 → mulai
         sb_update[col] = dt.date().isoformat()
 
     sb_result = {"ok": False, "error": ""}
