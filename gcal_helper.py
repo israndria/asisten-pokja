@@ -115,3 +115,53 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
             pass
 
     return hasil
+
+
+def get_jadwal_klarifikasi_pl(kode_nontender: str) -> dict | None:
+    """
+    Cari event GCal 'Klarifikasi Teknis dan Negosiasi' untuk paket PL.
+    Match via description yang mengandung kode_nontender (lebih akurat dari nama_paket).
+
+    Returns: {"start_date": date, "end_date": date} atau None jika tidak ditemukan.
+    GCal end date eksklusif → end_date = end_date - 1 hari.
+    """
+    from datetime import timedelta
+
+    service = _build_service()
+
+    time_min = datetime(date.today().year, 1, 1).isoformat() + "Z"
+    time_max = datetime(date.today().year + 1, 12, 31).isoformat() + "Z"
+
+    resp = service.events().list(
+        calendarId="primary",
+        timeMin=time_min,
+        timeMax=time_max,
+        maxResults=2500,
+        singleEvents=True,
+        q="Klarifikasi Teknis dan Negosiasi",
+    ).execute()
+
+    for ev in resp.get("items", []):
+        desc = ev.get("description", "") or ""
+        if kode_nontender not in desc:
+            continue
+        summary = ev.get("summary", "")
+        if "Klarifikasi Teknis dan Negosiasi" not in summary:
+            continue
+
+        start_str = ev.get("start", {}).get("date") or ev.get("start", {}).get("dateTime", "")
+        end_str = ev.get("end", {}).get("date") or ev.get("end", {}).get("dateTime", "")
+        if not start_str or not end_str:
+            continue
+
+        try:
+            start_date = datetime.fromisoformat(start_str[:10]).date()
+            end_date = datetime.fromisoformat(end_str[:10]).date()
+            # GCal all-day event: end eksklusif → kurangi 1 hari
+            if len(end_str) == 10:  # format date (all-day), bukan dateTime
+                end_date = end_date - timedelta(days=1)
+            return {"start_date": start_date, "end_date": end_date}
+        except ValueError:
+            continue
+
+    return None

@@ -186,13 +186,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Buat Jadwal",
         "4️⃣ Setup Paket",
-        "5️⃣ Upload BA PL",
+        "5️⃣ Kirim Verifikasi",
+        "6️⃣ Upload BA PL",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2258,8 +2259,129 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     use_container_width=True, hide_index=True,
                                 )
 
-    # ── Tab 5: Upload BA PL ───────────────────────────────────────────────────
+    # ── Tab 5: Kirim Verifikasi Penyedia ─────────────────────────────────────
     with _pl_tab5:
+        import verifikasi_penyedia_pl as _verif_pl
+        from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
+
+        st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
+        st.caption("Kirim undangan pembuktian kualifikasi ke penyedia via SPSE non-tender.")
+
+        # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
+        _verif_rows = []
+        try:
+            _verif_rows = kirimpesan_engine._sb().table("draft_paket_pl").select(
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi"
+            ).order("kode_paket").execute().data or []
+        except Exception as _ev_err:
+            st.error(f"Gagal load paket PL: {_ev_err}")
+
+        if not _verif_rows:
+            st.info("Belum ada paket PL di database.")
+        else:
+            _verif_opts = {
+                f"{r['kode_unik'] or r['kode_paket']} — {r['nama_paket'][:50]}": r
+                for r in _verif_rows if r.get("id_nontender")
+            }
+            _verif_sel_label = st.selectbox(
+                "Pilih Paket PL",
+                options=list(_verif_opts.keys()),
+                key="verif_paket_sel",
+            )
+            _verif_paket = _verif_opts.get(_verif_sel_label)
+
+            if _verif_paket:
+                _verif_id_nt = _verif_paket.get("id_nontender", "")
+                _verif_kode = _verif_paket.get("kode_paket", "")
+
+                # Info penyedia
+                st.markdown("#### 🏢 Info Penyedia")
+                _vc1, _vc2 = st.columns(2)
+                _vc1.markdown(f"**Nama:** {_verif_paket.get('nama_penyedia') or '—'}")
+                _vc2.markdown(f"**NPWP:** {_verif_paket.get('npwp_penyedia') or '—'}")
+
+                # Hitung waktu verifikasi dari GCal
+                st.markdown("#### 🕐 Waktu Verifikasi")
+                _tgl_nego_raw = _verif_paket.get("tgl_negosiasi")
+                _fallback_tgl = None
+                if _tgl_nego_raw:
+                    try:
+                        from datetime import date as _date_cls
+                        _fallback_tgl = _date_cls.fromisoformat(str(_tgl_nego_raw)[:10])
+                    except Exception:
+                        pass
+
+                _verif_start_default = ""
+                _verif_end_default = ""
+                _verif_warning = None
+                try:
+                    _verif_start_default, _verif_end_default, _verif_warning = (
+                        _verif_pl.hitung_waktu_verifikasi(_verif_kode, fallback_tgl=_fallback_tgl)
+                    )
+                except Exception as _wt_err:
+                    _verif_warning = f"Error hitung waktu: {_wt_err}"
+
+                if _verif_warning:
+                    st.warning(_verif_warning)
+
+                _vt1, _vt2 = st.columns(2)
+                _verif_start = _vt1.text_input(
+                    "Mulai (DD-MM-YYYY HH:MM)",
+                    value=_verif_start_default or "",
+                    key="verif_waktu_start",
+                    placeholder="02-06-2026 09:00",
+                )
+                _verif_end = _vt2.text_input(
+                    "Selesai (DD-MM-YYYY HH:MM)",
+                    value=_verif_end_default or "",
+                    key="verif_waktu_end",
+                    placeholder="02-06-2026 15:00",
+                )
+
+                # Form fields
+                st.markdown("#### 📋 Detail Undangan")
+                _verif_tempat = st.text_area(
+                    "Tempat",
+                    value=_verif_pl.TEMPAT_DEFAULT,
+                    height=80,
+                    key="verif_tempat",
+                )
+                _verif_hadir = st.text_area(
+                    "Yang harus hadir",
+                    value=_verif_pl.YANG_HARUS_HADIR_DEFAULT,
+                    height=140,
+                    key="verif_hadir",
+                )
+                _verif_dibawa = st.text_area(
+                    "Yang harus dibawa",
+                    value=_verif_pl.YANG_HARUS_DIBAWA_DEFAULT,
+                    height=80,
+                    key="verif_dibawa",
+                )
+
+                # Tombol kirim
+                if st.button("📨 Kirim Verifikasi ke Penyedia", key="btn_kirim_verifikasi"):
+                    if not _verif_id_nt:
+                        st.error("id_nontender kosong — sinkron paket PL dari SPSE dulu.")
+                    elif not _verif_start or not _verif_end:
+                        st.error("Waktu mulai dan selesai wajib diisi.")
+                    else:
+                        with st.spinner("Mengirim undangan verifikasi ke SPSE..."):
+                            _verif_result = _verif_pl.kirim_verifikasi(
+                                id_nontender=_verif_id_nt,
+                                waktu_start=_verif_start,
+                                waktu_end=_verif_end,
+                                tempat=_verif_tempat,
+                                yang_harus_hadir=_verif_hadir,
+                                yang_harus_dibawa=_verif_dibawa,
+                            )
+                        if _verif_result["ok"]:
+                            st.success(f"✅ {_verif_result['msg']}")
+                        else:
+                            st.error(f"❌ Gagal: {_verif_result['msg']}")
+
+    # ── Tab 6: Upload BA PL ───────────────────────────────────────────────────
+    with _pl_tab6:
         import ba_engine_pl as _ba_pl_engine5
 
         st.markdown("## Upload Berita Acara — Pengadaan Langsung")
