@@ -452,7 +452,7 @@ def fetch_paket_aktif() -> dict:
     params = {
         "draw": 1,
         "start": 0,
-        "length": 200,
+        "length": 500,
         "order[0][column]": 3,
         "order[0][dir]": "desc",
         "search[value]": "",
