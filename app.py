@@ -2276,6 +2276,43 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
 
+        # ── Monitoring Pendaftaran Peserta (semua paket) ──────────────────────
+        with st.expander("📊 Monitoring Pendaftaran Peserta — Semua Paket", expanded=False):
+            import peserta_monitor_pl as _pm_pl
+            _mon_col1, _mon_col2 = st.columns([6, 1])
+            _mon_col1.caption("Jumlah peserta yang sudah mendaftar per paket (data publik SPSE).")
+            if _mon_col2.button("🔄 Refresh", key="btn_refresh_peserta_pl"):
+                st.cache_data.clear()
+            if _verif_rows:
+                _mon_kodes = [r["kode_paket"] for r in _verif_rows if r.get("kode_paket")]
+                with st.spinner("Mengambil data pendaftaran..."):
+                    _mon_hasil = _pm_pl.fetch_status_semua_paket(_mon_kodes)
+                # Hitung summary
+                _mon_belum = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) == 0]
+                _mon_sudah = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) > 0]
+                _mc1, _mc2 = st.columns(2)
+                _mc1.metric("✅ Sudah Ada Peserta", len(_mon_sudah))
+                _mc2.metric("⚠️ Belum Ada Peserta", len(_mon_belum))
+                if _mon_belum:
+                    st.warning("⚠️ Paket berikut belum ada peserta mendaftar — pertimbangkan perpanjangan jadwal:")
+                    for _br in _mon_belum:
+                        st.write(f"- **{_br.get('kode_unik') or _br['kode_paket']}** — {_br['nama_paket']}")
+                # Tabel lengkap
+                _mon_data = []
+                for r in _verif_rows:
+                    _kp = r["kode_paket"]
+                    _info = _mon_hasil.get(_kp, {})
+                    _jml = _info.get("jumlah", 0)
+                    _mon_data.append({
+                        "Paket": r.get("kode_unik") or _kp,
+                        "Nama Paket": r["nama_paket"][:45],
+                        "Peserta Daftar": _jml,
+                        "Status": "✅ Ada" if _jml > 0 else "⚠️ Belum",
+                    })
+                st.dataframe(_mon_data, use_container_width=True, hide_index=True)
+            else:
+                st.info("Belum ada paket PL di database.")
+
         if not _verif_rows:
             st.info("Belum ada paket PL di database.")
         else:
@@ -2299,6 +2336,33 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 _vc1, _vc2 = st.columns(2)
                 _vc1.markdown(f"**Nama:** {_verif_paket.get('nama_penyedia') or '—'}")
                 _vc2.markdown(f"**NPWP:** {_verif_paket.get('npwp_penyedia') or '—'}")
+
+                # Debug GCal — expander tersembunyi
+                with st.expander("🔍 Debug GCal Search", expanded=False):
+                    try:
+                        from gcal_helper import _build_service as _gcal_svc
+                        from datetime import datetime as _dt_gcal, timedelta as _td_gcal, date as _d_gcal
+                        _svc = _gcal_svc()
+                        _now = _d_gcal.today()
+                        _tmin = (_now - _td_gcal(days=60)).isoformat() + "T00:00:00Z"
+                        _tmax = (_now + _td_gcal(days=120)).isoformat() + "T23:59:59Z"
+                        _gevents = _svc.events().list(
+                            calendarId="primary",
+                            timeMin=_tmin, timeMax=_tmax,
+                            maxResults=100, singleEvents=True,
+                            q="Klarifikasi",
+                        ).execute().get("items", [])
+                        st.write(f"**Mencari kode_nontender:** `{_verif_kode}`")
+                        st.write(f"**Event GCal mengandung 'Klarifikasi' ({len(_gevents)} event):**")
+                        for _ge in _gevents:
+                            _gs = _ge.get("start", {}).get("date") or _ge.get("start", {}).get("dateTime", "")[:10]
+                            _gdesc = (_ge.get("description") or "").replace("\n", " ")[:100]
+                            _match = "✅ MATCH" if _verif_kode in (_ge.get("description") or "") else ""
+                            st.write(f"- `{_gs}` **{_ge.get('summary','')}** | desc: {_gdesc} {_match}")
+                        if not _gevents:
+                            st.warning("Tidak ada event GCal mengandung 'Klarifikasi' di rentang ±60-120 hari")
+                    except Exception as _dbg_err:
+                        st.error(f"Debug GCal error: {_dbg_err}")
 
                 # Hitung waktu verifikasi dari GCal
                 st.markdown("#### 🕐 Waktu Verifikasi")
@@ -2379,6 +2443,146 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             st.success(f"✅ {_verif_result['msg']}")
                         else:
                             st.error(f"❌ Gagal: {_verif_result['msg']}")
+
+        # ── Kirim Batch ke Semua Paket ───────────────────────────────────────
+        st.divider()
+        st.markdown("### 📨 Kirim Undangan Verifikasi — Batch (Semua Paket)")
+        st.caption("Centang paket yang ingin dikirim sekaligus. Hanya paket dengan peserta terdaftar yang tampil.")
+
+        # Load status peserta untuk filter
+        _batch_rows = _verif_rows  # sudah di-load di atas
+        if _batch_rows:
+            # Fetch jumlah peserta semua paket
+            import peserta_monitor_pl as _pm_batch
+            _batch_kodes = [r["kode_paket"] for r in _batch_rows if r.get("kode_paket")]
+            with st.spinner("Mengecek peserta terdaftar..."):
+                _batch_mon = _pm_batch.fetch_status_semua_paket(_batch_kodes)
+
+            # Filter hanya paket yang ada peserta
+            _batch_eligible = [
+                r for r in _batch_rows
+                if _batch_mon.get(r["kode_paket"], {}).get("jumlah", 0) > 0
+                and r.get("id_nontender")
+            ]
+
+            if not _batch_eligible:
+                st.info("Belum ada paket dengan peserta terdaftar.")
+            else:
+                st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
+
+                # Waktu — dropdown dari GCal + fallback input manual
+                _batch_gcal_opts = {}
+                try:
+                    from gcal_helper import _build_service as _bsvc
+                    from datetime import timedelta as _td2
+                    _gsvc2 = _bsvc()
+                    _gnow2 = __import__('datetime').date.today()
+                    _gevs2 = _gsvc2.events().list(
+                        calendarId="primary",
+                        timeMin=(_gnow2 - _td2(days=7)).isoformat() + "T00:00:00Z",
+                        timeMax=(_gnow2 + _td2(days=120)).isoformat() + "T23:59:59Z",
+                        maxResults=200, singleEvents=True, q="Klarifikasi",
+                    ).execute().get("items", [])
+                    _seen_tgl = set()
+                    for _ge2 in _gevs2:
+                        _gs2 = (_ge2.get("start", {}).get("date") or _ge2.get("start", {}).get("dateTime", ""))[:10]
+                        if _gs2 and _gs2 not in _seen_tgl:
+                            _seen_tgl.add(_gs2)
+                            try:
+                                from datetime import datetime as _dtp
+                                _d2 = _dtp.strptime(_gs2, "%Y-%m-%d")
+                                _label2 = _d2.strftime("%d-%m-%Y")  # tampilan
+                                _batch_gcal_opts[f"📅 {_label2} (dari GCal)"] = (_label2 + " 09:00", _label2 + " 15:00")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                _batch_gcal_opts["✏️ Isi manual"] = ("", "")
+                _bwc0 = st.selectbox(
+                    "Pilih Jadwal Klarifikasi",
+                    options=list(_batch_gcal_opts.keys()),
+                    key="batch_verif_jadwal",
+                )
+                _sel_start, _sel_end = _batch_gcal_opts[_bwc0]
+                _bwc1, _bwc2 = st.columns(2)
+                _batch_start = _bwc1.text_input(
+                    "Waktu Mulai (DD-MM-YYYY HH:MM)",
+                    value=_sel_start,
+                    placeholder="02-06-2026 09:00",
+                    key="batch_verif_start",
+                )
+                _batch_end = _bwc2.text_input(
+                    "Waktu Selesai (DD-MM-YYYY HH:MM)",
+                    value=_sel_end,
+                    placeholder="02-06-2026 15:00",
+                    key="batch_verif_end",
+                )
+
+                # Checkbox list paket
+                st.markdown("**Pilih paket yang akan dikirim:**")
+                _batch_selected = []
+                _bc1, _bc2 = st.columns(2)
+                for _bi, _br in enumerate(_batch_eligible):
+                    _label = f"{_br.get('kode_unik') or _br['kode_paket']} — {_br['nama_paket'][:40]}"
+                    _col = _bc1 if _bi % 2 == 0 else _bc2
+                    if _col.checkbox(_label, value=True, key=f"batch_chk_{_br['kode_paket']}"):
+                        _batch_selected.append(_br)
+
+                st.markdown(f"**{len(_batch_selected)} paket dipilih**")
+
+                # Tombol Preview dulu
+                if st.button("👁 Preview Sebelum Kirim", key="btn_batch_preview"):
+                    if not _batch_start or not _batch_end:
+                        st.error("Waktu mulai dan selesai wajib diisi.")
+                    elif not _batch_selected:
+                        st.warning("Tidak ada paket yang dipilih.")
+                    else:
+                        st.session_state["batch_verif_preview"] = True
+
+                if st.session_state.get("batch_verif_preview"):
+                    st.markdown("#### 📋 Preview Pengiriman")
+                    st.write(f"- **Waktu:** {_batch_start} s/d {_batch_end}")
+                    st.write(f"- **Jumlah paket:** {len(_batch_selected)}")
+                    for _bp in _batch_selected:
+                        _jp = _batch_mon.get(_bp["kode_paket"], {}).get("jumlah", 0)
+                        st.write(f"  ✅ {_bp.get('kode_unik') or _bp['kode_paket']} — {_bp['nama_paket']} ({_jp} peserta)")
+                    st.write(f"- **Penyedia (referensi Supabase):** nama_penyedia per paket")
+
+                    if st.button("📨 Konfirmasi & Kirim Semua", key="btn_batch_kirim_konfirm", type="primary"):
+                        if not _batch_start or not _batch_end:
+                            st.error("Waktu wajib diisi.")
+                        else:
+                            import verifikasi_penyedia_pl as _vpl_batch
+                            _hasil_batch = []
+                            _prog = st.progress(0, text="Mengirim...")
+                            for _bi2, _bp2 in enumerate(_batch_selected):
+                                _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
+                                _res = _vpl_batch.kirim_verifikasi(
+                                    id_nontender=_bp2["id_nontender"],
+                                    waktu_start=_batch_start,
+                                    waktu_end=_batch_end,
+                                )
+                                _hasil_batch.append({
+                                    "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
+                                    "nama": _bp2["nama_paket"][:40],
+                                    "ok": _res["ok"],
+                                    "msg": _res["msg"],
+                                })
+                            _prog.empty()
+                            st.session_state["batch_verif_preview"] = False
+
+                            # Tampilkan hasil
+                            _ok_list = [h for h in _hasil_batch if h["ok"]]
+                            _fail_list = [h for h in _hasil_batch if not h["ok"]]
+                            if _ok_list:
+                                st.success(f"✅ Berhasil: {len(_ok_list)} paket")
+                                for h in _ok_list:
+                                    st.write(f"  ✅ {h['paket']} — {h['nama']}")
+                            if _fail_list:
+                                st.error(f"❌ Gagal: {len(_fail_list)} paket")
+                                for h in _fail_list:
+                                    st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 6: Upload BA PL ───────────────────────────────────────────────────
     with _pl_tab6:

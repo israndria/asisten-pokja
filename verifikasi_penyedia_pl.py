@@ -53,10 +53,11 @@ def hitung_waktu_verifikasi(
 
     warning_msg = None
     jadwal = None
+    _gcal_err = None
     try:
         jadwal = get_jadwal_klarifikasi_pl(kode_nontender)
-    except Exception:
-        pass
+    except Exception as _e:
+        _gcal_err = str(_e)
 
     if jadwal:
         start_date = jadwal["start_date"]
@@ -65,6 +66,13 @@ def hitung_waktu_verifikasi(
         max_end = start_date + timedelta(days=1)
         if end_date > max_end:
             end_date = max_end
+    elif _gcal_err:
+        if fallback_tgl:
+            start_date = fallback_tgl
+            end_date = fallback_tgl
+            warning_msg = f"GCal error: {_gcal_err}. Pakai fallback tgl_negosiasi."
+        else:
+            return None, None, f"GCal error: {_gcal_err}. Isi waktu manual."
     elif fallback_tgl:
         start_date = fallback_tgl
         end_date = fallback_tgl
