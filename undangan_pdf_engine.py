@@ -20,8 +20,8 @@ _HARI  = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]
 
 _TEMPLATE_REL    = r"Paket Experiment\4. Undangan Full PK - Template.docx"
 _TEMPLATE_REL_PL = (
-    r"Paket Experiment - Pengadaan Langsung - Konsultan Konstuksi"
-    r"\Development\4. Undangan Full PLJK - Template.docx"
+    r"Paket Experiment - Pengadaan Langsung"
+    r"\Development - PL - JKK\4. Undangan Full PLJK - Template.docx"
 )
 _TEMPAT_UKPBJ = (
     "Ruang Aula Rapat Lantai 2 Kantor UKPBJ Kabupaten Tapin, "
@@ -384,7 +384,7 @@ def generate_undangan_pdf_pl(
     os.makedirs(output_dir, exist_ok=True)
     tmp_docx = os.path.join(output_dir, f"_tmp_undangan_pl_{os.getpid()}.docx")
 
-    # Cari file TTD gambar di folder Development template
+    # Cari file TTD gambar di folder Development - PL - JKK template
     _template_dir = os.path.dirname(template_path)
     _ttd_path = os.path.join(_template_dir, "ttd_pp.png")
     # Fallback: cari di semua subfolder paket PL

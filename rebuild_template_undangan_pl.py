@@ -9,8 +9,8 @@ from docx.oxml import OxmlElement
 
 OUT = (
     r"D:\Dokumen\@ POKJA 2026"
-    r"\Paket Experiment - Pengadaan Langsung - Konsultan Konstuksi"
-    r"\Development\4. Undangan Full PLJK - Template.docx"
+    r"\Paket Experiment - Pengadaan Langsung"
+    r"\Development - PL - JKK\4. Undangan Full PLJK - Template.docx"
 )
 
 doc = Document()

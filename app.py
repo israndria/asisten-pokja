@@ -600,8 +600,9 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             )
 
             def _pl_match(r):
-                if _pl_filter == "JKK":    return r.get("jenis_pl") == "JKK"
-                if _pl_filter == "PK":     return r.get("jenis_pl") == "PK"
+                _jp = (r.get("jenis_pl") or "").upper()
+                if _pl_filter == "JKK":    return _jp == "JKK"
+                if _pl_filter == "PK":     return _jp == "PK"
                 if _pl_filter == "Belum Folder": return not bool(r.get("folder_dibuat"))
                 if _pl_filter == "Sudah Folder": return bool(r.get("folder_dibuat"))
                 return True
@@ -614,7 +615,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 for _pr in _pl_filtered:
                     _pr_kode   = _pr.get("kode_paket", "")
                     _pr_nama   = _pr.get("nama_paket", "-")
-                    _pr_jenis  = _pr.get("jenis_pl", "")
+                    _pr_jenis  = (_pr.get("jenis_pl") or "").upper()
                     _pr_hps    = _pr.get("nilai_hps", "-")
                     _pr_status = _pr.get("status", "draft")
                     _pr_folder = bool(_pr.get("folder_dibuat"))
@@ -721,7 +722,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     continue
                 _nm = _r.get("nama_paket", "")
                 _no = _pl_no_dari_nama(_nm, _i)
-                _jenis = _r.get("jenis_pl", "")
+                _jenis = (_r.get("jenis_pl") or "").upper()
                 _sudah = " ✅" if _r.get("folder_dibuat") else ""
                 _lbl = f"{_no}. {_nm} - {_jenis}{_sudah}"
                 _pl_opsi_map[_lbl] = _r
@@ -734,7 +735,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _pl_jenis_sel = "JKK"
             if _pl_row_sel:
                 _pl_nm      = _pl_row_sel.get("nama_paket", "")
-                _pl_jenis_sel = _pl_row_sel.get("jenis_pl", "JKK")
+                _pl_jenis_sel = (_pl_row_sel.get("jenis_pl") or "JKK").upper()
                 _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis_sel, f"PL{_pl_jenis_sel}")
                 _pl_no_urut = _pl_no_dari_nama(_pl_nm, len(_pl_rows))
                 _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
@@ -884,7 +885,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
-                _bj0   = _br0.get("jenis_pl", "JKK")
+                _bj0   = (_br0.get("jenis_pl") or "JKK").upper()
                 _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
                 _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
