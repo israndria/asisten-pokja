@@ -5746,13 +5746,26 @@ with tab_apendo:
 
     if _gab_paket_list:
         from config import POKJA_ROOT as _POKJA_ROOT_GAB
-        for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", "")):
+        _gab_valid = [
+            _gp for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", ""))
+            if os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
+            or os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Kualifikasi"))
+        ]
+        if st.button("📎 Gabung Semua Paket", key="gab2_semua", type="primary", use_container_width=False):
+            _gab_all_log = st.empty()
+            _gab_all_lines = []
+            _gab_all_ok = 0
+            for _gp in _gab_valid:
+                _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
+                def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
+                    _lines.append(m)
+                    _area.code("\n".join(_lines[-20:]))
+                _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
+                _gab_all_ok += _r["ok"]
+            st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_valid)} paket.")
+        st.divider()
+        for _gp in _gab_valid:
             _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
-            _gp_penawaran = os.path.join(_gp_folder, "1. Dokumen Penawaran")
-            _gp_kualif    = os.path.join(_gp_folder, "1. Dokumen Kualifikasi")
-            _gp_ada = os.path.isdir(_gp_penawaran) or os.path.isdir(_gp_kualif)
-            if not _gp_ada:
-                continue
             _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
             _gp_c1, _gp_c2 = st.columns([4, 1])
             with _gp_c1:
