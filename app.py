@@ -186,7 +186,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
@@ -194,6 +194,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         "4️⃣ Setup Paket",
         "5️⃣ Kirim Verifikasi",
         "6️⃣ Upload BA PL",
+        "7️⃣ Download Dok Kualifikasi",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2779,6 +2780,129 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 _st5.write(f"✅ {_pv5['kode_paket']} — berhasil")
                             else:
                                 _st5.write(f"❌ {_pv5['kode_paket']} — status {_rv5.get('status')}")
+
+    # ── Tab 7: Download Dok Kualifikasi PL ───────────────────────────────────
+    with _pl_tab7:
+        import kualifikasi_engine_pl as _ke_pl
+        import kualifikasi_parser_pl as _kp_pl
+        import hasil_evaluasi_pl_engine as _he_pl
+
+        st.markdown("## Download Dokumen Kualifikasi — Pengadaan Langsung")
+        st.caption("Fetch peserta dari SPSE, download dokumen kualifikasi, populate sheet Hasil Evaluasi di BAPLJKK .xlsm.")
+
+        # Load daftar paket PL
+        _pl7_rows = []
+        try:
+            _pl7_rows = pl_engine._sb().table("draft_paket_pl").select(
+                "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
+            ).order("nomor_urut").execute().data or []
+        except Exception as _e7:
+            st.error(f"Gagal load paket PL: {_e7}")
+
+        if not _pl7_rows:
+            st.info("Tidak ada paket PL di database.")
+        else:
+            _pl7c1, _pl7c2 = st.columns([1, 1])
+
+            with _pl7c1:
+                st.markdown("#### Pilih Paket")
+
+                # State: peserta per paket
+                if "pl7_peserta_cache" not in st.session_state:
+                    st.session_state["pl7_peserta_cache"] = {}
+                if "pl7_checked" not in st.session_state:
+                    st.session_state["pl7_checked"] = {}
+
+                for _rpl7 in _pl7_rows:
+                    _kpl7 = _rpl7["kode_paket"]
+                    _nomor7 = _rpl7.get("nomor_urut") or ""
+                    _label7 = f"{_nomor7}. {_rpl7.get('nama_paket','?')}" if _nomor7 else _rpl7.get("nama_paket", "?") or "?"
+                    _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
+                    st.session_state["pl7_checked"][_kpl7] = _chk7
+
+                    if _chk7:
+                        # Auto-fetch peserta saat pertama kali centang
+                        if _kpl7 not in st.session_state["pl7_peserta_cache"]:
+                            with st.spinner(f"Fetch peserta {_kpl7}..."):
+                                _fp7 = _ke_pl.fetch_peserta_pl(_kpl7)
+                                st.session_state["pl7_peserta_cache"][_kpl7] = _fp7
+                        _fp7 = st.session_state["pl7_peserta_cache"].get(_kpl7, {})
+                        if _fp7.get("ok"):
+                            _plist7 = _fp7["peserta"]
+                            st.caption(f"  → {len(_plist7)} peserta: {', '.join(p['nama'] for p in _plist7)}")
+                        else:
+                            st.caption(f"  ⚠️ {_fp7.get('pesan','')}")
+
+            with _pl7c2:
+                st.markdown("#### Aksi")
+
+                # Kumpulkan paket terpilih
+                _pl7_selected = []
+                for _rpl7 in _pl7_rows:
+                    _kpl7 = _rpl7["kode_paket"]
+                    if st.session_state["pl7_checked"].get(_kpl7):
+                        _fp7 = st.session_state["pl7_peserta_cache"].get(_kpl7, {})
+                        if _fp7.get("ok"):
+                            _pl7_selected.append({
+                                "row": _rpl7,
+                                "peserta": _fp7["peserta"],
+                            })
+
+                if not _pl7_selected:
+                    st.info("Centang minimal 1 paket di kiri.")
+                else:
+                    _n_paket7 = len(_pl7_selected)
+                    _n_peserta7 = sum(len(x["peserta"]) for x in _pl7_selected)
+                    st.markdown(f"**{_n_paket7} paket** | **{_n_peserta7} peserta** terpilih")
+
+                    _do_download7 = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
+                    _do_parse7    = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
+
+                    _btn7 = st.button(
+                        f"▶ Jalankan — {_n_paket7} paket, {_n_peserta7} peserta",
+                        type="primary", key="pl7_run", use_container_width=True,
+                    )
+
+                    if _btn7:
+                        _log7 = st.empty()
+                        _pb7  = st.progress(0.0)
+                        _total_steps7 = _n_peserta7 or 1
+                        _step7 = [0]
+
+                        def _lcb7(msg):
+                            _log7.code(msg)
+                            _step7[0] += 1
+                            _pb7.progress(min(_step7[0] / _total_steps7, 1.0))
+
+                        for _sel7 in _pl7_selected:
+                            _kpl7 = _sel7["row"]["kode_paket"]
+                            _peserta7 = _sel7["peserta"]
+                            _lcb7(f"=== Paket {_kpl7} ===")
+
+                            # Resolve folder Dok Kualifikasi
+                            _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
+                            if not _folder7.get("ok"):
+                                _lcb7(f"⚠️ Folder tidak ditemukan: {_folder7['pesan']}")
+                                continue
+
+                            _folder_kual7 = _folder7["path"]
+
+                            if _do_download7:
+                                for _ui7, _p7 in enumerate(_peserta7, 1):
+                                    _ke_pl.download_kualifikasi_peserta_pl(
+                                        _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
+                                    )
+
+                            if _do_parse7:
+                                _lcb7(f"Populate sheet Hasil Evaluasi...")
+                                _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
+                                if _hasil7.get("ok"):
+                                    _lcb7(f"✅ {_hasil7['pesan']}")
+                                else:
+                                    _lcb7(f"❌ {_hasil7['pesan']}")
+
+                        _pb7.progress(1.0)
+                        st.success("Selesai.")
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
