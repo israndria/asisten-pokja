@@ -245,71 +245,92 @@ def get_kswp_status_pl(kualifikasi_id: str, folder_peserta: str) -> str:
 def _parse_pq_pdf(folder_peserta: str) -> dict:
     """
     Parse dokumen PQ (formulir isian kualifikasi) dari folder peserta.
-    Cari PDF terbesar di folder (kemungkinan dokumen PQ lengkap).
+    Cari PDF terbesar di folder (exclude gabungan + checklist).
+    Reuse _pdf_to_text dari kualifikasi_parser (fitz + OCR fallback).
     Return: {"direktur": str, "npwp_pdf": str, "bidang_pengalaman": [str]}
     """
+    from kualifikasi_parser import _pdf_to_text
+
     result = {"direktur": "", "npwp_pdf": "", "bidang_pengalaman": []}
     if not folder_peserta or not os.path.isdir(folder_peserta):
         return result
 
-    # Cari PDF terbesar di folder (exclude gabungan Kualifikasi *.pdf)
+    # Cari PDF kandidat: exclude gabungan + checklist, urutkan terbesar dulu
     pdfs = []
     for f in os.listdir(folder_peserta):
         if not f.lower().endswith(".pdf"):
             continue
-        if f.startswith("Kualifikasi ") or f.startswith("checklist_"):
+        if f.startswith("Kualifikasi ") or f.startswith("checklist_") or f.startswith("~$"):
             continue
         fpath = os.path.join(folder_peserta, f)
         pdfs.append((os.path.getsize(fpath), fpath))
-
     if not pdfs:
         return result
-
-    # Urutkan terbesar dulu
     pdfs.sort(reverse=True)
 
-    try:
-        import fitz
-        for _, pq_path in pdfs[:2]:  # coba 2 PDF terbesar
-            doc = fitz.open(pq_path)
-            full_text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
-            doc.close()
+    for _, pq_path in pdfs[:2]:  # coba 2 PDF terbesar
+        try:
+            full_text = _pdf_to_text(pq_path)  # fitz text + OCR fallback per-page
+        except Exception:
+            continue
 
-            # Direktur: cari pola "Jabatan ... Direktur" di tabel pengurus
-            if not result["direktur"]:
-                # Pola: nama diikuti jabatan "Direktur" di tabel
-                # "Abdul Malik, ST\n6311...\nDirektur"
-                m = re.search(
-                    r'Direksi/Pengurus.*?1\.\s*\n?([\w,\s\.]+?)\s*\n[\d]+\s*\n(Direktur)',
-                    full_text, re.DOTALL | re.IGNORECASE
+        # ── Direktur ──────────────────────────────────────────────────────────
+        if not result["direktur"]:
+            # Pola 1: tabel Direksi — "1.\nAbdul Malik, ST\n631...\nDirektur"
+            m = re.search(
+                r'Direksi/Pengurus[^1]*1\.\s*\n?([\w,\s\.]+?)\s*\n\s*\d{16}\s*\n\s*(Direktur)',
+                full_text, re.DOTALL | re.IGNORECASE
+            )
+            if m:
+                result["direktur"] = m.group(1).strip()
+            else:
+                # Pola 2: "Nama : X\nJabatan : Direktur" (form pakta integritas/surat pernyataan)
+                m2 = re.search(
+                    r'Nama\s*[:\-]\s*(.+?)\s*\nJabatan\s*[:\-]\s*Direktur',
+                    full_text, re.IGNORECASE
                 )
-                if m:
-                    result["direktur"] = m.group(1).strip()
-                else:
-                    # Fallback: "Nama : ABDUL MALIK\nJabatan : Direktur"
-                    m2 = re.search(
-                        r'Nama\s*[:\-]\s*(.+?)\s*\nJabatan\s*[:\-]\s*Direktur',
-                        full_text, re.IGNORECASE
-                    )
-                    if m2:
-                        result["direktur"] = m2.group(1).strip()
+                if m2:
+                    result["direktur"] = m2.group(1).strip()
+            # Pola 3: "ABDUL MALIK, ST\nDirektur" (ttd di akhir dokumen)
+            if not result["direktur"]:
+                m3 = re.search(
+                    r'\n([\w,\.\s]{5,40})\s*\nDirektur\s*\n',
+                    full_text, re.IGNORECASE
+                )
+                if m3:
+                    cand = m3.group(1).strip()
+                    if len(cand.split()) >= 2:  # minimal 2 kata
+                        result["direktur"] = cand
 
-            # NPWP dari dokumen (format XX.XXX.XXX.X-XXX.XXX)
-            if not result["npwp_pdf"]:
-                m_npwp = re.search(r'(\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3})', full_text)
-                if m_npwp:
-                    result["npwp_pdf"] = m_npwp.group(1)
+        # ── NPWP ──────────────────────────────────────────────────────────────
+        if not result["npwp_pdf"]:
+            # Format baku: XX.XXX.XXX.X-XXX.XXX
+            m_npwp = re.search(r'(\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3})', full_text)
+            if m_npwp:
+                result["npwp_pdf"] = m_npwp.group(1)
 
-            # Bidang pengalaman: kode SBU di kolom bidang tabel pengalaman
-            kode_sbu = re.findall(r'\b([A-Z]{1,3}[0-9]{3})\b', full_text.upper())
-            if kode_sbu:
-                result["bidang_pengalaman"] = list(dict.fromkeys(kode_sbu))  # unique, preserve order
+        # ── Bidang pengalaman (kode SBU di kolom bidang tabel pengalaman) ─────
+        # Cari section pengalaman dulu, ekstrak kode SBU dari sana
+        lower = full_text.lower()
+        sbu_kodes = []
+        # Cari di seluruh teks (kode SBU: 1-3 huruf + 3 digit, e.g. RK003, AR001)
+        kode_all = re.findall(r'\b([A-Z]{1,3}[0-9]{3})\b', full_text.upper())
+        # Filter: exclude kode yang bukan SBU (NIK 16 digit dst sudah dibuang oleh \b)
+        # Prioritaskan kode yang muncul di area pengalaman/bidang
+        pengalaman_idx = lower.find("pengalaman kerja")
+        if pengalaman_idx == -1:
+            pengalaman_idx = lower.find("pengalaman")
+        if pengalaman_idx != -1:
+            section_pengalaman = full_text[pengalaman_idx:pengalaman_idx + 2000]
+            sbu_kodes = list(dict.fromkeys(
+                re.findall(r'\b([A-Z]{1,3}[0-9]{3})\b', section_pengalaman.upper())
+            ))
+        if not sbu_kodes:
+            sbu_kodes = list(dict.fromkeys(kode_all))
+        result["bidang_pengalaman"] = sbu_kodes
 
-            if result["direktur"] or result["npwp_pdf"]:
-                break  # cukup dari 1 PDF
-
-    except Exception:
-        pass
+        if result["direktur"] or result["npwp_pdf"]:
+            break  # cukup dari 1 PDF
 
     return result
 
