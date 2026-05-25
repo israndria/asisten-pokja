@@ -42,11 +42,11 @@ def scan_apendo() -> list[dict]:
                     continue
                 path_teknis = os.path.join(unpacked, TEKNIS_DIR)
                 path_harga  = os.path.join(unpacked, HARGA_DIR)
-                # Skip jika kedua folder kosong (sudah dipindah)
+                # Skip peserta tanpa dokumen teknis (tidak submit penawaran lengkap)
                 ada_teknis = os.path.isdir(path_teknis) and bool(_collect_files(path_teknis))
-                ada_harga  = os.path.isdir(path_harga)  and bool(_collect_files(path_harga))
-                if not ada_teknis and not ada_harga:
+                if not ada_teknis:
                     continue
+                ada_harga = os.path.isdir(path_harga) and bool(_collect_files(path_harga))
                 hasil.append({
                     "kode_tender": kode_tender,
                     "peserta_id":  peserta_id,
@@ -95,17 +95,16 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     except Exception:
         pass
 
-    # Fallback nama dari kk_evaluasi_peserta (tersedia setelah Parse KK)
+    # Urutan + nama dari kk_evaluasi_peserta (urutan = ranking harga terendah SPSE)
+    # kk tidak punya kualifikasi_id — join by nama setelah nama_map terisi
+    _kk_rows: list[dict] = []
     try:
-        r = sb.table("kk_evaluasi_peserta").select("kualifikasi_id,nama,kode_tender").in_("kualifikasi_id", peserta_ids).execute()
-        for row in (r.data or []):
-            pid = row.get("kualifikasi_id", "")
-            if pid and pid not in nama_map and row.get("nama"):
-                nama_map[pid] = row["nama"]
+        r = sb.table("kk_evaluasi_peserta").select("kode_tender,urutan,nama").in_("kode_tender", kode_tenders).execute()
+        _kk_rows = r.data or []
     except Exception:
         pass
 
-    # Urutan peserta dari tender_peserta (ranking SPSE, sorted by urutan asc)
+    # Urutan peserta dari tender_peserta (fallback jika ada)
     try:
         r = sb.table("tender_peserta").select("kode_tender,kualifikasi_id,urutan").in_("kode_tender", kode_tenders).execute()
         for row in (r.data or []):
@@ -113,7 +112,7 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     except Exception:
         pass
 
-    # Fallback: scrape /preview untuk peserta yang belum ada namanya
+    # Fallback: scrape /preview untuk peserta yang belum ada namanya (sebelum sort)
     missing_ids = [i["peserta_id"] for i in items if i["peserta_id"] not in nama_map]
     if missing_ids:
         try:
@@ -127,6 +126,21 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
                     pass
         except Exception:
             pass
+
+    # Build urutan dari kk_evaluasi_peserta by nama match (setelah nama_map lengkap)
+    for row in _kk_rows:
+        kt = row.get("kode_tender", "")
+        nama_kk = (row.get("nama") or "").strip().upper()
+        urutan_kk = row.get("urutan", 999)
+        # Cari peserta_id yang nama_map-nya cocok
+        for item in items:
+            if item["kode_tender"] != kt:
+                continue
+            pid = item["peserta_id"]
+            nama_pid = (nama_map.get(pid) or "").strip().upper()
+            if nama_pid and nama_pid == nama_kk:
+                if (kt, pid) not in urutan_map:
+                    urutan_map[(kt, pid)] = urutan_kk
 
     # Sort items per paket by urutan SPSE
     from collections import defaultdict
