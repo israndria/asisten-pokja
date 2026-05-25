@@ -90,6 +90,7 @@ def scrape_preview(peserta_id: str) -> dict:
     url = f"{SPSE_BASE_URL}kualifikasi/{peserta_id}/preview"
     resp = requests.get(url, headers=_headers(), timeout=15)
     resp.raise_for_status()
+    resp.encoding = resp.apparent_encoding or "utf-8"
 
     soup = BeautifulSoup(resp.text, "html.parser")
     result = {"nama_perusahaan": "", "npwp_raw": "", "alamat": "", "nama_direktur": ""}
@@ -359,8 +360,15 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
         nama = p.get("nama_peserta") or p.get("nama", "")
         if not pid:
             return
+
+        def _safe_log(msg):
+            try:
+                log(msg)
+            except Exception:
+                pass
+
         try:
-            log(f"Scraping preview: {nama} ({pid})...")
+            _safe_log(f"Scraping preview: {nama} ({pid})...")
             data = scrape_preview(pid)
 
             # Personel & peralatan: coba dari /preview dulu via kualifikasi_parser
@@ -369,9 +377,9 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                 html_data = kualifikasi_parser.parse_preview_html(pid)
                 personel_list  = html_data.get("personel_list", [])
                 peralatan_list = html_data.get("peralatan_list", [])
-                log(f"  /preview → {len(personel_list)} personel, {len(peralatan_list)} alat")
+                _safe_log(f"  /preview → {len(personel_list)} personel, {len(peralatan_list)} alat")
             except Exception as ep:
-                log(f"  ⚠️ parse_preview_html error: {ep}")
+                _safe_log(f"  ⚠️ parse_preview_html error: {ep}")
                 personel_list  = []
                 peralatan_list = []
 
@@ -387,26 +395,26 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                     if os.path.isdir(fp):
                         folder_peserta = fp
                 except Exception as ef:
-                    log(f"  ⚠️ lookup folder peserta error: {ef}")
+                    _safe_log(f"  ⚠️ lookup folder peserta error: {ef}")
 
             # Gabung semua PDF → DokkualifFull_{nama}_{nomor_pokja}.pdf (selalu dilakukan)
             if folder_peserta:
                 import re as _re
                 _m = _re.search(r"Pokja\s+(\d+)", folder_dibuat, _re.IGNORECASE) if folder_dibuat else None
                 _nomor_pokja = _m.group(1) if _m else ""
-                gabung_pdf_peserta(folder_peserta, nama, nomor_pokja=_nomor_pokja, log=log)
+                gabung_pdf_peserta(folder_peserta, nama, nomor_pokja=_nomor_pokja, log=_safe_log)
 
             # Parse personel & alat dari Formulir Isian Kualifikasi jika /preview kosong
             if folder_peserta and (not personel_list or not peralatan_list):
                 res_pdf = parse_formulir_kualifikasi(folder_peserta)
                 if res_pdf["personel"] or res_pdf["peralatan"]:
-                    log(f"  Formulir PDF → {len(res_pdf['personel'])} personel, {len(res_pdf['peralatan'])} alat")
+                    _safe_log(f"  Formulir PDF → {len(res_pdf['personel'])} personel, {len(res_pdf['peralatan'])} alat")
                     personel_list  = personel_list  or res_pdf["personel"]
                     peralatan_list = peralatan_list or res_pdf["peralatan"]
                 else:
-                    log(f"  ⚠️ Personel/alat tidak ditemukan di /preview maupun PDF — isi manual")
+                    _safe_log(f"  ⚠️ Personel/alat tidak ditemukan di /preview maupun PDF — isi manual")
             elif not folder_peserta and (not personel_list or not peralatan_list):
-                log(f"  ⚠️ Folder peserta tidak ditemukan di disk — personel/alat kosong")
+                _safe_log(f"  ⚠️ Folder peserta tidak ditemukan di disk — personel/alat kosong")
 
             data["personel_1"] = personel_list[0] if len(personel_list) > 0 else ""
             data["personel_2"] = personel_list[1] if len(personel_list) > 1 else ""
@@ -418,11 +426,11 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
             data["alat_6"]     = peralatan_list[5] if len(peralatan_list) > 5 else ""
 
             upsert_peserta_identitas(kode_tender, pid, data)
-            log(f"  OK: {data['nama_perusahaan']} | direktur: {data['nama_direktur']}")
+            _safe_log(f"  OK: {data['nama_perusahaan']} | direktur: {data['nama_direktur']}")
         except Exception as e:
             with _errors_lock:
                 errors.append(f"{nama} ({pid}): {e}")
-            log(f"  ERROR {nama}: {e}")
+            _safe_log(f"  ERROR {nama}: {e}")
 
     # max_workers=3: aman untuk concurrent HTTP ke SPSE (tidak trigger rate limit)
     with _cf_id.ThreadPoolExecutor(max_workers=3) as _pool_id:

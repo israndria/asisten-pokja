@@ -5196,6 +5196,15 @@ with tab_ba:
 # ============================================================
 
 with tab_kual:
+    # ── Auto-fetch paket jika belum ada di session (decouple dari Tab 0) ────────
+    if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
+        with st.spinner("Memuat daftar paket dari SPSE..."):
+            try:
+                st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_draft()
+                st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
+            except Exception as _kl_fe:
+                st.warning(f"⚠️ Gagal memuat paket otomatis: {_kl_fe}. Coba klik 'Sinkronkan Paket' di Tab 0.")
+
     # ── Pre-render: fetch semua paket yang dicek tapi belum ada datanya ────────
     if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
         _kl_perlu_fetch = [
@@ -5236,7 +5245,11 @@ with tab_kual:
                     )
 
         st.divider()
-        st.markdown("#### 2. Peserta per Paket")
+        _kl_top3_col, _kl_top3_spacer = st.columns([3, 1])
+        with _kl_top3_col:
+            st.markdown("#### 2. Peserta per Paket")
+        _kl_hanya_top3 = st.checkbox("✅ Hanya 3 peserta teratas (harga terendah)", value=True, key="kl_hanya_top3")
+
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
             _kl_paket_list2 = sorted(
                 [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
@@ -5260,23 +5273,32 @@ with tab_kual:
                         st.rerun()
                 else:
                     n_p = len(kl_res_p["peserta"])
-                    with st.expander(f"**{p['kode']}** — {n_p} peserta", expanded=True):
-                        c1, c2 = st.columns(2)
+                    _kl_limit = min(3, n_p) if _kl_hanya_top3 else n_p
+                    _kl_badge = f"Top {_kl_limit} dari {n_p}" if (_kl_hanya_top3 and n_p > 3) else str(n_p)
+                    with st.expander(f"**{p['kode']}** — {_kl_badge} peserta", expanded=True):
+                        c1, c2, c3 = st.columns(3)
                         with c1:
+                            if st.button("🏆 Top 3", key=f"kl_top3_{p['kode']}", use_container_width=True):
+                                for j, ps in enumerate(kl_res_p["peserta"], 1):
+                                    st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = (j <= 3)
+                                st.rerun()
+                        with c2:
                             if st.button("✅ Semua", key=f"kl_all_{p['kode']}", use_container_width=True):
                                 for ps in kl_res_p["peserta"]:
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = True
                                 st.rerun()
-                        with c2:
+                        with c3:
                             if st.button("⬜ Batal", key=f"kl_none_{p['kode']}", use_container_width=True):
                                 for ps in kl_res_p["peserta"]:
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = False
                                 st.rerun()
                         for i, ps in enumerate(kl_res_p["peserta"], 1):
+                            # Default: centang top-3 saja jika toggle aktif
+                            _kl_default_cek = (i <= 3) if _kl_hanya_top3 else True
                             st.checkbox(
                                 f"{i}. {ps['nama']}",
                                 key=f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}",
-                                value=st.session_state.get(f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}", True),
+                                value=st.session_state.get(f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}", _kl_default_cek),
                             )
             if not _kl_ada_terpilih:
                 st.caption("← Centang paket di atas untuk memuat peserta.")

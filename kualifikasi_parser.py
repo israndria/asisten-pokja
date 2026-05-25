@@ -121,6 +121,7 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
         r = requests.get(url, headers=_headers(), timeout=15)
         if r.status_code != 200:
             return {"ok": False, "pesan": f"HTTP {r.status_code}"}
+        r.encoding = r.apparent_encoding or "utf-8"
         soup = BeautifulSoup(r.text, "html.parser")
     except Exception as e:
         return {"ok": False, "pesan": str(e)}
