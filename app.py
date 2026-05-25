@@ -5738,7 +5738,8 @@ with tab_apendo:
     # Ambil daftar paket dari Supabase
     _gab_paket_list = []
     try:
-        _gab_r = _sb().table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").not_.is_("folder_dibuat", "null").execute()
+        from config import sb as _sb_gab
+        _gab_r = _sb_gab().table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").not_.is_("folder_dibuat", "null").execute()
         _gab_paket_list = [r for r in (_gab_r.data or []) if r.get("folder_dibuat")]
     except Exception as _gab_e:
         st.warning(f"⚠️ Gagal ambil daftar paket: {_gab_e}")
