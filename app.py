@@ -5745,9 +5745,9 @@ with tab_apendo:
         st.warning(f"⚠️ Gagal ambil daftar paket: {_gab_e}")
 
     if _gab_paket_list:
+        from config import POKJA_ROOT as _POKJA_ROOT_GAB
         for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", "")):
-            from config import POKJA_ROOT as _POKJA_ROOT_GAB
-        _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
+            _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
             _gp_penawaran = os.path.join(_gp_folder, "1. Dokumen Penawaran")
             _gp_kualif    = os.path.join(_gp_folder, "1. Dokumen Kualifikasi")
             _gp_ada = os.path.isdir(_gp_penawaran) or os.path.isdir(_gp_kualif)
