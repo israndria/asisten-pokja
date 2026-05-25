@@ -113,6 +113,21 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     except Exception:
         pass
 
+    # Fallback: scrape /preview untuk peserta yang belum ada namanya
+    missing_ids = [i["peserta_id"] for i in items if i["peserta_id"] not in nama_map]
+    if missing_ids:
+        try:
+            import identitas_engine as _ie
+            for pid in missing_ids:
+                try:
+                    d = _ie.scrape_preview(pid)
+                    if d.get("nama_perusahaan"):
+                        nama_map[pid] = d["nama_perusahaan"]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # Sort items per paket by urutan SPSE
     from collections import defaultdict
     by_paket: dict[str, list] = defaultdict(list)
