@@ -174,6 +174,44 @@ def _download_file(url: str, dest_path: str) -> dict:
         return {"ok": False, "pesan": str(e), "ukuran": 0}
 
 
+def _gabung_pdf_kualifikasi(output_path: str, file_list: list, progress_cb=None) -> str:
+    """
+    Gabung PDF kualifikasi peserta PL tanpa limit ukuran file.
+    Berbeda dengan inbox_engine.gabung_pdf yang skip file >5MB.
+    """
+    import fitz
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    merged = fitz.open()
+    for fpath in file_list:
+        if not os.path.isfile(fpath):
+            log(f"  [skip] tidak ditemukan: {os.path.basename(fpath)}")
+            continue
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext != ".pdf":
+            log(f"  [skip] non-PDF: {os.path.basename(fpath)}")
+            continue
+        size_mb = os.path.getsize(fpath) / 1024 / 1024
+        try:
+            doc = fitz.open(fpath)
+            n_hal = doc.page_count
+            merged.insert_pdf(doc)
+            doc.close()
+            log(f"  OK {os.path.basename(fpath)} ({size_mb:.1f}MB, {n_hal} hal)")
+        except Exception as e:
+            log(f"  GAGAL {os.path.basename(fpath)}: {e}")
+
+    if merged.page_count == 0:
+        raise ValueError("Tidak ada halaman berhasil digabung")
+
+    merged.save(output_path)
+    merged.close()
+    return output_path
+
+
 def download_kualifikasi_peserta_pl(
     peserta: dict,
     folder_output: str,
@@ -239,19 +277,18 @@ def download_kualifikasi_peserta_pl(
     else:
         _log(f"  ⚠️ Gagal buat checklist PDF: {res_pdf['pesan']}")
 
-    # 4. Gabung semua PDF di dest_folder (bukan hanya yang baru didownload)
-    # Ambil dari folder langsung agar re-run pun bisa gabung ulang
+    # 4. Gabung semua PDF di dest_folder tanpa limit ukuran
     gabungan_nama = f"Kualifikasi {slug_nama}.pdf"
     gabungan_path = os.path.join(dest_folder, gabungan_nama)
     semua_pdf = sorted([
         os.path.join(dest_folder, f) for f in os.listdir(dest_folder)
         if f.lower().endswith(".pdf") and f != gabungan_nama
+        and not f.startswith("~$")
     ])
     _log(f"  Menggabung {len(semua_pdf)} PDF di folder → {gabungan_nama}")
     if semua_pdf:
         try:
-            import inbox_engine
-            inbox_engine.gabung_pdf(gabungan_path, semua_pdf, _log)
+            _gabung_pdf_kualifikasi(gabungan_path, semua_pdf, _log)
             _log(f"  Gabungan selesai: {gabungan_nama}")
         except Exception as e:
             _log(f"  Gagal gabung PDF: {e}")
