@@ -95,7 +95,10 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
 
     # ── Administrasi ───────────────────────────────────────────────────────────
     _r("Nama Perusahaan", "Administrasi", "preview t0", "ADA" if nama else "PERIKSA", nama)
-    _r("NPWP", "Administrasi", "preview t0", catatan=peserta_data.get("npwp", ""))
+    # NPWP: prefix ' agar Excel tidak convert ke scientific notation
+    _npwp_raw = str(peserta_data.get("npwp", "") or "")
+    _npwp_val = ("'" + _npwp_raw) if _npwp_raw.replace(".", "").replace("-", "").isdigit() else _npwp_raw
+    _r("NPWP", "Administrasi", "preview t0", catatan=_npwp_val)
     _r("Alamat", "Administrasi", "preview t0", catatan=peserta_data.get("alamat", ""))
     _r("Email", "Administrasi", "preview t0", catatan=peserta_data.get("email", ""))
 
@@ -127,8 +130,13 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
     _r("Akta Perubahan Terakhir", "Administrasi", "preview t2",
        catatan=f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {akta_u.get('notaris','')}" if akta_u else "")
 
+    # Direktur: ambil 1 (baris pertama tabel manajerial = direktur utama/pimpinan)
     pemilik = peserta_data.get("pemilik", [])
-    _r("Direktur/Pemilik", "Administrasi", "preview t3", catatan="; ".join(pemilik) if pemilik else "")
+    direktur_utama = pemilik[0] if pemilik else ""
+    semua_pemilik = "; ".join(pemilik) if len(pemilik) > 1 else ""
+    _r("Direktur Utama/Pimpinan", "Administrasi", "preview t3",
+       "ADA" if direktur_utama else "PERIKSA",
+       direktur_utama + (f" (+ {len(pemilik)-1} lain: {semua_pemilik})" if semua_pemilik else ""))
 
     # ── Teknis JKK ─────────────────────────────────────────────────────────────
     personel = peserta_data.get("personel_list", [])
@@ -163,16 +171,27 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
         r = sb().table("draft_paket_pl").select("sbu_baru").eq("kode_paket", kode_paket).maybe_single().execute()
         if r.data and r.data.get("sbu_baru"):
             sbu_syarat_raw = r.data["sbu_baru"]
-            # sbu_baru bisa list atau string
             if isinstance(sbu_syarat_raw, list):
-                sbu_syarat_list = [str(s).strip().upper() for s in sbu_syarat_raw]
+                sbu_syarat_items = [str(s) for s in sbu_syarat_raw]
             else:
-                sbu_syarat_list = [str(sbu_syarat_raw).strip().upper()]
+                sbu_syarat_items = [str(sbu_syarat_raw)]
 
+            # Ekstrak kode SBU dari string panjang: "Subklasifikasi RK003 (KBLI 2020) ..."
+            # → kode = token yang cocok pola [A-Z]{1,3}[0-9]{3}
+            def _ekstrak_kode_sbu(teks):
+                m = re.search(r'\b([A-Z]{1,3}[0-9]{3})\b', teks.upper())
+                return m.group(1) if m else teks.upper().strip()
+
+            sbu_syarat_kodes = [_ekstrak_kode_sbu(s) for s in sbu_syarat_items]
+            # Kode SBU peserta dari sbu_label: "M71102 - NAMA SBU" → ambil bagian sebelum " - "
             sbu_peserta_kode = (sbu_label.split(" - ")[0].strip().upper() if sbu_label else "")
-            cocok = any(sbu_peserta_kode.startswith(s.split(" - ")[0].strip().upper()) for s in sbu_syarat_list)
+
+            cocok = sbu_peserta_kode in sbu_syarat_kodes
             sbu_match_status = "MEMENUHI" if cocok else "TIDAK MEMENUHI"
-            sbu_match_catatan = f"SBU peserta: {sbu_label} | SBU syarat: {', '.join(sbu_syarat_list)}"
+            sbu_match_catatan = (
+                f"SBU peserta: {sbu_peserta_kode} ({sbu_label}) | "
+                f"SBU syarat: {', '.join(sbu_syarat_kodes)} ({'; '.join(sbu_syarat_items)})"
+            )
     except Exception:
         pass
     _r("Sub-bidang KAK match SBU", "Teknis JKK", "cross-check draft_paket_pl.sbu_baru",
