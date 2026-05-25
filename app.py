@@ -3482,6 +3482,56 @@ with tab0:
                     else:
                         st.warning(_rtt_label)
 
+        # ── Monitor Peserta Tender ────────────────────────────────────────────
+        st.divider()
+        with st.expander("👀 Monitor Peserta Tender"):
+            st.caption("Cek jumlah peserta per paket tender via Chrome SPSE (butuh Chrome CDP aktif + login akun PP).")
+            import peserta_monitor_tender as _pmt
+
+            _mon_rows_ada = [r for r in _draft_rows if r.get("folder_dibuat") and r.get("kode_tender")]
+            if not _mon_rows_ada:
+                st.info("Belum ada paket tender dengan folder yang sudah dibuat.")
+            else:
+                _mon_opsi = {
+                    f"{r.get('nama_tender','')[:70]} (Pokja {r.get('kode_pokja','?')})": r
+                    for r in _mon_rows_ada
+                }
+                _mon_all = st.checkbox("Pilih Semua", key="mon_all")
+                _mon_pilih = st.multiselect(
+                    "Pilih paket:",
+                    list(_mon_opsi.keys()),
+                    default=list(_mon_opsi.keys()) if _mon_all else [],
+                    key="mon_ms",
+                )
+
+                if _mon_pilih and st.button("🔄 Cek Peserta", type="primary", key="mon_btn"):
+                    _mon_kode_list = [_mon_opsi[k]["kode_tender"] for k in _mon_pilih]
+                    _mon_nama_map  = {_mon_opsi[k]["kode_tender"]: k for k in _mon_pilih}
+
+                    with st.spinner(f"Mengambil data {len(_mon_kode_list)} paket via browser..."):
+                        _mon_hasil = _pmt.fetch_semua_paket(_mon_kode_list)
+
+                    # Tabel ringkasan
+                    _mon_tbl = []
+                    for _mk, _mv in sorted(_mon_hasil.items()):
+                        _mon_tbl.append({
+                            "Paket": _mon_nama_map.get(_mk, _mk)[:60],
+                            "Peserta": _mv["jumlah"],
+                            "Status": "⚠️ Error" if _mv["error"] else ("✅ Ada" if _mv["jumlah"] > 0 else "⬜ Belum ada"),
+                        })
+                    st.dataframe(_mon_tbl, use_container_width=True)
+
+                    # Detail per paket (nama peserta)
+                    for _mk, _mv in sorted(_mon_hasil.items()):
+                        if _mv.get("peserta"):
+                            with st.container(border=True):
+                                st.markdown(f"**📋 {_mon_nama_map.get(_mk,_mk)[:60]}**")
+                                for _mp in _mv["peserta"]:
+                                    _bintang = " ⭐ (Pemenang)" if _mp.get("is_pemenang") else ""
+                                    st.caption(f"{_mp['nama']}{' — ' + _mp['npwp'] if _mp['npwp'] else ''}{_bintang}")
+                        elif _mv.get("error"):
+                            st.warning(f"❌ {_mon_nama_map.get(_mk,_mk)[:50]}: {_mv['error']}")
+
     # ══════════════════════════════════════════
     # BAWAH — 3. Data Draft Paket
     # ══════════════════════════════════════════
