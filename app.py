@@ -5730,3 +5730,45 @@ with tab_apendo:
                             for _m in _gab_log:
                                 st.caption(_m)
 
+    # ── Seksi 2: Gabung Dok Lengkap (independen dari Scan Apendo) ─────────────
+    st.divider()
+    st.markdown("### 📎 Gabung Dokumen Lengkap")
+    st.caption("Gabung `DoktekFull` + `DokkualifFull` per peserta → `1. Dokumen Gabungan/`. Tidak perlu Scan Apendo dulu.")
+
+    # Ambil daftar paket dari Supabase
+    _gab_paket_list = []
+    try:
+        _gab_r = _sb().table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").not_.is_("folder_dibuat", "null").execute()
+        _gab_paket_list = [r for r in (_gab_r.data or []) if r.get("folder_dibuat")]
+    except Exception as _gab_e:
+        st.warning(f"⚠️ Gagal ambil daftar paket: {_gab_e}")
+
+    if _gab_paket_list:
+        for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", "")):
+            _gp_folder = os.path.join(POKJA_ROOT, _gp["folder_dibuat"])
+            _gp_penawaran = os.path.join(_gp_folder, "1. Dokumen Penawaran")
+            _gp_kualif    = os.path.join(_gp_folder, "1. Dokumen Kualifikasi")
+            _gp_ada = os.path.isdir(_gp_penawaran) or os.path.isdir(_gp_kualif)
+            if not _gp_ada:
+                continue
+            _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
+            _gp_c1, _gp_c2 = st.columns([4, 1])
+            with _gp_c1:
+                st.markdown(f"**{_gp_label}**")
+            with _gp_c2:
+                if st.button("📎 Gabung", key=f"gab2_{_gp['kode_tender']}", use_container_width=True):
+                    _gab2_log = []
+                    _gab2_hasil = _pe.gabung_dokumen_lengkap(_gp_folder, log=_gab2_log.append)
+                    if _gab2_hasil["ok"] > 0:
+                        st.success(f"✅ {_gab2_hasil['ok']} peserta digabung → `1. Dokumen Gabungan/`")
+                    elif not _gab2_hasil["gagal"]:
+                        st.info("ℹ️ Tidak ada DoktekFull ditemukan di folder Dokumen Penawaran.")
+                    if _gab2_hasil["gagal"]:
+                        st.error(f"❌ {len(_gab2_hasil['gagal'])} gagal:")
+                        for _ge in _gab2_hasil["gagal"]:
+                            st.caption(f"• {_ge}")
+                    for _gm in _gab2_log:
+                        st.caption(_gm)
+    else:
+        st.info("Tidak ada paket ditemukan di Supabase.")
+
