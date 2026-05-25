@@ -69,14 +69,15 @@ def _collect_files(folder: str, ext_filter=None) -> list[str]:
 
 def lookup_supabase(items: list[dict]) -> list[dict]:
     """
-    Enrichment: tambah nama_perusahaan dan folder_paket ke setiap item.
-    Hitung urutan peserta per paket untuk penamaan subfolder.
+    Enrichment: tambah nama_perusahaan, urutan SPSE, dan folder_paket ke setiap item.
+    Urutan peserta ikut ranking di tender_peserta (bukan urutan filesystem).
+    Nama peserta: cari dari peserta_identitas → kk_evaluasi_peserta → fallback ID.
     """
     kode_tenders = list({i["kode_tender"] for i in items})
     peserta_ids  = list({i["peserta_id"]  for i in items})
 
     sb = _sb()
-    paket_map, nama_map = {}, {}
+    paket_map, nama_map, urutan_map = {}, {}, {}
 
     try:
         r = sb.table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").in_("kode_tender", kode_tenders).execute()
@@ -85,29 +86,55 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     except Exception:
         pass
 
+    # Nama dari peserta_identitas (sudah terisi setelah Download+Parse KK)
     try:
         r = sb.table("peserta_identitas").select("peserta_id,nama_perusahaan").in_("peserta_id", peserta_ids).execute()
         for row in (r.data or []):
-            nama_map[row["peserta_id"]] = row.get("nama_perusahaan", "")
+            if row.get("nama_perusahaan"):
+                nama_map[row["peserta_id"]] = row["nama_perusahaan"]
     except Exception:
         pass
 
-    urutan_counter: dict[str, int] = {}
-    hasil = []
+    # Fallback nama dari kk_evaluasi_peserta (tersedia setelah Parse KK)
+    try:
+        r = sb.table("kk_evaluasi_peserta").select("kualifikasi_id,nama,kode_tender").in_("kualifikasi_id", peserta_ids).execute()
+        for row in (r.data or []):
+            pid = row.get("kualifikasi_id", "")
+            if pid and pid not in nama_map and row.get("nama"):
+                nama_map[pid] = row["nama"]
+    except Exception:
+        pass
+
+    # Urutan peserta dari tender_peserta (ranking SPSE, sorted by urutan asc)
+    try:
+        r = sb.table("tender_peserta").select("kode_tender,kualifikasi_id,urutan").in_("kode_tender", kode_tenders).execute()
+        for row in (r.data or []):
+            urutan_map[(row["kode_tender"], row.get("kualifikasi_id", ""))] = row.get("urutan", 999)
+    except Exception:
+        pass
+
+    # Sort items per paket by urutan SPSE
+    from collections import defaultdict
+    by_paket: dict[str, list] = defaultdict(list)
     for item in items:
-        kt = item["kode_tender"]
-        urutan_counter[kt] = urutan_counter.get(kt, 0) + 1
-        paket = paket_map.get(kt, {})
-        folder_nama = paket.get("folder_dibuat", "")
-        hasil.append({
-            **item,
-            "urutan":          urutan_counter[kt],
-            "nama_tender":     paket.get("nama_tender", kt),
-            "folder_dibuat":   folder_nama,
-            "nomor_pokja":     _nomor_pokja(folder_nama),
-            "folder_paket":    os.path.join(POKJA_ROOT, folder_nama) if folder_nama else "",
-            "nama_perusahaan": nama_map.get(item["peserta_id"], f"Peserta {item['peserta_id']}"),
-        })
+        by_paket[item["kode_tender"]].append(item)
+    for kt in by_paket:
+        by_paket[kt].sort(key=lambda x: urutan_map.get((kt, x["peserta_id"]), 999))
+
+    hasil = []
+    for kt in by_paket:
+        for seq, item in enumerate(by_paket[kt], 1):
+            paket = paket_map.get(kt, {})
+            folder_nama = paket.get("folder_dibuat", "")
+            hasil.append({
+                **item,
+                "urutan":          seq,
+                "nama_tender":     paket.get("nama_tender", kt),
+                "folder_dibuat":   folder_nama,
+                "nomor_pokja":     _nomor_pokja(folder_nama),
+                "folder_paket":    os.path.join(POKJA_ROOT, folder_nama) if folder_nama else "",
+                "nama_perusahaan": nama_map.get(item["peserta_id"], f"Peserta {item['peserta_id']}"),
+            })
     return hasil
 
 
