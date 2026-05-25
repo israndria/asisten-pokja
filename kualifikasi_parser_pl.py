@@ -270,7 +270,13 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
 
     for _, pq_path in pdfs[:2]:  # coba 2 PDF terbesar
         try:
-            full_text = _pdf_to_text(pq_path)  # fitz text + OCR fallback per-page
+            # Hanya pakai fitz text layer — TANPA OCR (OCR terlalu lambat untuk batch 15+ paket)
+            import fitz as _fitz
+            _doc = _fitz.open(pq_path)
+            full_text = "\n".join(_doc[i].get_text() for i in range(_doc.page_count))
+            _doc.close()
+            if len(full_text.strip()) < 50:
+                continue  # PDF murni scan, tidak ada text layer — skip
         except Exception:
             continue
 
