@@ -257,15 +257,18 @@ def populate_hasil_evaluasi_pl(
         peserta_data = _kpp.parse_peserta_lengkap_pl(kual_id, folder_peserta, _log)
         if not peserta_data.get("ok"):
             _log(f"  ⚠️ Gagal parse: {peserta_data.get('pesan','')}")
-            peserta_data = {"ok": False, "nama": nama, **{k: "" for k in [
-                "npwp","alamat","email","nib_nomor","nib_berlaku",
-                "ss_nomor","ss_berlaku","ss_kualifikasi","ss_terverifikasi",
-                "sbu_nomor","sbu_berlaku","sbu_kualifikasi","sbu_subklas_label",
-                "pengalaman","pemilik","akta_pendirian","akta_perubahan",
-                "skp","skp_jp","skp_catatan","skp_berbeda",
-                "kswp_status","kinerja_ada","kinerja_nilai","kinerja_kategori",
-                "personel_list","peralatan_list","jp_preview",
-            ]}}
+            peserta_data = {
+            "ok": False, "nama": nama,
+            "npwp": "", "alamat": "", "email": "",
+            "nib_nomor": "", "nib_berlaku": "",
+            "ss_nomor": "", "ss_berlaku": "", "ss_kualifikasi": "", "ss_terverifikasi": "PERIKSA",
+            "sbu_nomor": "", "sbu_berlaku": "", "sbu_kualifikasi": "", "sbu_subklas_label": "",
+            "pengalaman": [], "pemilik": [], "akta_pendirian": {}, "akta_perubahan": {},
+            "skp": 5, "skp_jp": 0, "skp_catatan": "", "skp_berbeda": False,
+            "kswp_status": "TIDAK DIKETAHUI",
+            "kinerja_ada": False, "kinerja_nilai": "-", "kinerja_kategori": "-",
+            "personel_list": [], "peralatan_list": [], "jp_preview": 0,
+        }
 
         rows = _build_rows_peserta(peserta_data, kode_paket, no_start=len(all_rows) + 2)
         all_rows.extend(rows)
@@ -296,10 +299,14 @@ def populate_hasil_evaluasi_pl(
         header = [["No", "Field", "Kategori", "Sumber", "Status", "Catatan"]]
         ws.Range(ws.Cells(1, 1), ws.Cells(1, 6)).Value = header
 
-        # Sanitasi: COM tidak terima None; string mulai = / + / - bisa diparse Excel sbg formula
+        # Sanitasi: COM hanya terima str/int/float/bool/None→""; list/dict → str repr
         def _san(v):
             if v is None:
                 return ""
+            if isinstance(v, (list, dict)):
+                return str(v)
+            if not isinstance(v, (str, int, float, bool)):
+                return str(v)
             if isinstance(v, str) and v.startswith(("=", "+", "-", "@")):
                 return "'" + v  # prefix ' → Excel treat as literal text
             return v
