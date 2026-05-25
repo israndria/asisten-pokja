@@ -483,6 +483,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
+        _TEMPLATE_DIR_PL    = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - JKK")
+        _TEMPLATE_DIR_PL_PK = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - PK")
 
         _PL_PY     = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "python" / "python.exe")
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
@@ -1046,6 +1048,77 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         st.markdown(f"**{_pl_nf[:70]}**")
                         st.code("\n".join(_pl_logs))
                 st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+
+            # ── Refresh Template ke Folder PL Existing ────────────────────────
+            st.divider()
+            with st.expander("🔄 Refresh Template ke Folder PL Existing"):
+                st.caption("Copy file template terbaru ke folder paket yang sudah dibuat (tanpa download ulang SPSE).")
+                from refresh_template import refresh_template_paket as _rt_refresh
+                from pathlib import Path as _rt_Path
+
+                # Scan folder fisik (folder_dibuat di Supabase = True boolean, bukan nama folder)
+                _rt_scan_jkk = [
+                    ("JKK", p) for p in _rt_Path(_PL_DIR_JKK).iterdir()
+                    if p.is_dir()
+                ] if _rt_Path(_PL_DIR_JKK).exists() else []
+                _rt_scan_pk = [
+                    ("PK", p) for p in _rt_Path(_PL_DIR_PK).iterdir()
+                    if p.is_dir()
+                ] if _rt_Path(_PL_DIR_PK).exists() else []
+                _rt_semua_folder = _rt_scan_jkk + _rt_scan_pk
+
+                if not _rt_semua_folder:
+                    st.info("Belum ada folder paket PL di output directory.")
+                else:
+                    _rt_opsi_pl = {
+                        f"{p.name} ({jenis})": (jenis, p)
+                        for jenis, p in _rt_semua_folder
+                    }
+                    _rt_all_pl = st.checkbox("Pilih Semua", key="rt_all_pl")
+                    _rt_pilih_pl = st.multiselect(
+                        "Pilih paket PL:",
+                        list(_rt_opsi_pl.keys()),
+                        default=list(_rt_opsi_pl.keys()) if _rt_all_pl else [],
+                        key="rt_ms_pl",
+                    )
+                    _rt_dry_pl = st.checkbox("Dry-run (preview saja, tidak ada perubahan)", value=True, key="rt_dry_pl")
+                    _rt_relink_pl = st.checkbox("Auto-relink Word → Excel setelah copy", value=True, key="rt_relink_pl")
+
+                    if _rt_pilih_pl and st.button(
+                        f"🔄 Refresh Template PL ke {len(_rt_pilih_pl)} Paket",
+                        type="primary",
+                        key="rt_btn_pl",
+                    ):
+                        _rt_folder_pl = []
+                        for _rt_k in _rt_pilih_pl:
+                            _rt_jenis, _rt_full = _rt_opsi_pl[_rt_k]
+                            _rt_folder_pl.append((_rt_jenis, _rt_full))
+
+                        _rt_ok_pl, _rt_fail_pl = 0, 0
+                        _rt_log_container = st.container(border=True)
+                        for _rt_jenis_f, _rt_fld in _rt_folder_pl:
+                            _rt_mode = "pl_jkk" if _rt_jenis_f == "JKK" else "pl_pk"
+                            _rt_src   = _rt_Path(_TEMPLATE_DIR_PL if _rt_jenis_f == "JKK" else _TEMPLATE_DIR_PL_PK)
+                            _rt_res   = _rt_refresh(
+                                [_rt_fld], _rt_src, _rt_mode,
+                                auto_relink=_rt_relink_pl, dry_run=_rt_dry_pl,
+                            )
+                            for _rt_fk, _rt_logs in _rt_res.items():
+                                _ok_f = all("❌" not in l for l in _rt_logs)
+                                if _ok_f:
+                                    _rt_ok_pl += 1
+                                else:
+                                    _rt_fail_pl += 1
+                                _rt_log_container.markdown(f"**{_rt_Path(_rt_fk).name[:60]}**")
+                                for _l in _rt_logs:
+                                    _rt_log_container.caption(_l)
+                        _rt_label = f"✅ {_rt_ok_pl} OK, ❌ {_rt_fail_pl} gagal"
+                        if _rt_dry_pl:
+                            _rt_label = "[DRY-RUN] " + _rt_label
+                        if _rt_fail_pl == 0:
+                            st.success(_rt_label)
+                        else:
+                            st.warning(_rt_label)
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     with _pl_tab2:
@@ -3345,6 +3418,69 @@ with tab0:
                 st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil dibuat"
         else:
             st.info("Semua paket sudah punya folder.")
+
+        # ── Refresh Template ke Folder Tender Existing ────────────────────────
+        st.divider()
+        with st.expander("🔄 Refresh Template ke Folder Tender Existing"):
+            st.caption("Copy file template terbaru ke folder paket tender yang sudah dibuat (tanpa download ulang SPSE).")
+            from refresh_template import refresh_template_paket as _rtt_refresh
+            from config import POKJA_ROOT as _rtt_POKJA_ROOT
+            from pathlib import Path as _rtt_Path
+            _TEMPLATE_DIR_TENDER = str(_rtt_Path(_rtt_POKJA_ROOT) / "Paket Experiment")
+
+            _rtt_rows_ada = [r for r in _draft_rows if r.get("folder_dibuat")]
+            if not _rtt_rows_ada:
+                st.info("Belum ada paket tender dengan folder yang sudah dibuat.")
+            else:
+                _rtt_opsi = {
+                    f"{r.get('nama_tender','')[:70]} (Pokja {r.get('kode_pokja','?')})": r
+                    for r in _rtt_rows_ada
+                }
+                _rtt_all = st.checkbox("Pilih Semua", key="rtt_all")
+                _rtt_pilih = st.multiselect(
+                    "Pilih paket tender:",
+                    list(_rtt_opsi.keys()),
+                    default=list(_rtt_opsi.keys()) if _rtt_all else [],
+                    key="rtt_ms",
+                )
+                _rtt_dry = st.checkbox("Dry-run (preview saja, tidak ada perubahan)", value=True, key="rtt_dry")
+                _rtt_relink = st.checkbox("Auto-relink Word → Excel setelah copy", value=True, key="rtt_relink")
+
+                if _rtt_pilih and st.button(
+                    f"🔄 Refresh Template Tender ke {len(_rtt_pilih)} Paket",
+                    type="primary",
+                    key="rtt_btn",
+                ):
+                    _rtt_folders = []
+                    for _rtt_k in _rtt_pilih:
+                        _rtt_r = _rtt_opsi[_rtt_k]
+                        _rtt_fd = _rtt_r.get("folder_dibuat", "")
+                        if _rtt_fd:
+                            _rtt_folders.append(_rtt_Path(_rtt_POKJA_ROOT) / _rtt_fd)
+
+                    _rtt_src = _rtt_Path(_TEMPLATE_DIR_TENDER)
+                    _rtt_ok, _rtt_fail = 0, 0
+                    _rtt_log_container = st.container(border=True)
+                    _rtt_res = _rtt_refresh(
+                        _rtt_folders, _rtt_src, "tender",
+                        auto_relink=_rtt_relink, dry_run=_rtt_dry,
+                    )
+                    for _rtt_fk, _rtt_logs in _rtt_res.items():
+                        _rtt_ok_f = all("❌" not in l for l in _rtt_logs)
+                        if _rtt_ok_f:
+                            _rtt_ok += 1
+                        else:
+                            _rtt_fail += 1
+                        _rtt_log_container.markdown(f"**{_rtt_Path(_rtt_fk).name[:60]}**")
+                        for _l in _rtt_logs:
+                            _rtt_log_container.caption(_l)
+                    _rtt_label = f"✅ {_rtt_ok} OK, ❌ {_rtt_fail} gagal"
+                    if _rtt_dry:
+                        _rtt_label = "[DRY-RUN] " + _rtt_label
+                    if _rtt_fail == 0:
+                        st.success(_rtt_label)
+                    else:
+                        st.warning(_rtt_label)
 
     # ══════════════════════════════════════════
     # BAWAH — 3. Data Draft Paket
