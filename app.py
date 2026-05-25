@@ -2813,6 +2813,21 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 if "pl7_checked" not in st.session_state:
                     st.session_state["pl7_checked"] = {}
 
+                # Tombol Pilih Semua / Batal Semua
+                _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
+                _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
+                if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
+                    for _k in _pl7_kodes:
+                        st.session_state[f"pl7_chk_{_k}"] = True
+                        st.session_state["pl7_checked"][_k] = True
+                        if _k not in st.session_state["pl7_peserta_cache"]:
+                            _fp7_all = _ke_pl.fetch_peserta_pl(_k)
+                            st.session_state["pl7_peserta_cache"][_k] = _fp7_all
+                if _pl7_btn_col2.button("❌ Batal Semua", key="pl7_deselect_all", use_container_width=True):
+                    for _k in _pl7_kodes:
+                        st.session_state[f"pl7_chk_{_k}"] = False
+                        st.session_state["pl7_checked"][_k] = False
+
                 for _rpl7 in _pl7_rows:
                     _kpl7 = _rpl7["kode_paket"]
                     _nomor7 = _rpl7.get("nomor_urut") or ""
