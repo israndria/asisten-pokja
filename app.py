@@ -5680,34 +5680,53 @@ with tab_apendo:
                     st.markdown(f"**Peserta {_ps['urutan']} = {_nama}** — {_n_teknis} file teknis, {_n_harga} file harga")
 
                 if _folder_ada:
-                    _dp_run_key = f"dp_run_{_kt}"
-                    if st.button(
-                        f"🚚 Pindahkan & Gabung PDF — {_paket_label[:40]}",
-                        key=_dp_run_key,
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        _log_msgs = []
-                        _semua_sukses, _semua_gagal = [], []
-                        _dest_dirs = []
-                        for _ps in _peserta_list:
-                            _dest = _pe.resolve_dest(_ps, _dp_total)
-                            _dest_dirs.append(_dest)
-                            _hasil = _pe.pindah_dan_gabung(_ps, _dest, log=_log_msgs.append)
-                            _semua_sukses.extend(_hasil["sukses"])
-                            _semua_gagal.extend(_hasil["gagal"])
-                        if _semua_sukses:
-                            _notif = (
-                                f"✅ {len(_semua_sukses)} file dipindah dari **{_paket_label}** "
-                                f"→ `{_dest_dirs[0]}`"
-                            )
-                            st.session_state["dp_notif"] = _notif
-                            st.session_state.pop("dp_scan_result", None)
-                            st.rerun()
-                        for _msg in _log_msgs:
-                            st.caption(_msg)
-                        if _semua_gagal:
-                            st.error(f"❌ {len(_semua_gagal)} gagal:")
-                            for _e in _semua_gagal:
-                                st.caption(f"• {_e}")
+                    _dp_btn_col1, _dp_btn_col2 = st.columns(2)
+                    with _dp_btn_col1:
+                        _dp_run_key = f"dp_run_{_kt}"
+                        if st.button(
+                            f"🚚 Pindahkan & Gabung PDF",
+                            key=_dp_run_key,
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            _log_msgs = []
+                            _semua_sukses, _semua_gagal = [], []
+                            _dest_dirs = []
+                            for _ps in _peserta_list:
+                                _dest = _pe.resolve_dest(_ps, _dp_total)
+                                _dest_dirs.append(_dest)
+                                _hasil = _pe.pindah_dan_gabung(_ps, _dest, log=_log_msgs.append)
+                                _semua_sukses.extend(_hasil["sukses"])
+                                _semua_gagal.extend(_hasil["gagal"])
+                            if _semua_sukses:
+                                _notif = (
+                                    f"✅ {len(_semua_sukses)} file dipindah dari **{_paket_label}** "
+                                    f"→ `{_dest_dirs[0]}`"
+                                )
+                                st.session_state["dp_notif"] = _notif
+                                st.session_state.pop("dp_scan_result", None)
+                                st.rerun()
+                            for _msg in _log_msgs:
+                                st.caption(_msg)
+                            if _semua_gagal:
+                                st.error(f"❌ {len(_semua_gagal)} gagal:")
+                                for _e in _semua_gagal:
+                                    st.caption(f"• {_e}")
+                    with _dp_btn_col2:
+                        if st.button(
+                            f"📎 Gabung Dok Lengkap",
+                            key=f"dp_gabung_{_kt}",
+                            use_container_width=True,
+                            help="Gabung DoktekFull + DokkualifFull per peserta → 1. Dokumen Gabungan/",
+                        ):
+                            _gab_log = []
+                            _gab_hasil = _pe.gabung_dokumen_lengkap(_folder_paket, log=_gab_log.append)
+                            if _gab_hasil["ok"] > 0:
+                                st.success(f"✅ {_gab_hasil['ok']} peserta digabung → `1. Dokumen Gabungan/`")
+                            if _gab_hasil["gagal"]:
+                                st.error(f"❌ {len(_gab_hasil['gagal'])} gagal:")
+                                for _e in _gab_hasil["gagal"]:
+                                    st.caption(f"• {_e}")
+                            for _m in _gab_log:
+                                st.caption(_m)
 

@@ -238,3 +238,102 @@ def pindah_dan_gabung(item: dict, dest_dir: str, log=None) -> dict:
                 gagal.append(f"Gabung PDF: {e}")
 
     return {"sukses": sukses, "gagal": gagal, "gabung_path": gabung_path}
+
+
+GABUNGAN_SUBFOLDER = "1. Dokumen Gabungan"
+
+
+def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
+    """
+    Gabung DoktekFull + DokkualifFull per peserta → 1. Dokumen Gabungan/{urutan}. {nama}/1. DokFull_{nama}_{pokja}.pdf
+
+    Scan:
+      - {folder_paket}/1. Dokumen Penawaran/{urutan}. {nama}/1. DoktekFull_*.pdf
+      - {folder_paket}/1. Dokumen Kualifikasi/{urutan}. {nama}/1. DokkualifFull_*.pdf
+
+    Return: {"ok": int, "gagal": [...]}
+    """
+    def _log(m):
+        if log: log(m)
+
+    try:
+        import fitz
+    except ImportError:
+        return {"ok": 0, "gagal": ["PyMuPDF tidak tersedia"]}
+
+    folder_penawaran  = os.path.join(folder_paket, DEST_SUBFOLDER)
+    folder_kualifikasi = os.path.join(folder_paket, "1. Dokumen Kualifikasi")
+    folder_gabungan   = os.path.join(folder_paket, GABUNGAN_SUBFOLDER)
+
+    if not os.path.isdir(folder_penawaran):
+        return {"ok": 0, "gagal": [f"Folder Dokumen Penawaran tidak ditemukan: {folder_penawaran}"]}
+
+    ok_count = 0
+    gagal = []
+
+    # Iterasi subfolder peserta di Dokumen Penawaran (format: "{urutan}. {nama}")
+    for entry in sorted(os.listdir(folder_penawaran)):
+        sub_penawaran = os.path.join(folder_penawaran, entry)
+        if not os.path.isdir(sub_penawaran):
+            continue
+
+        # Cari DoktekFull_*.pdf
+        doktek = next(
+            (os.path.join(sub_penawaran, f) for f in os.listdir(sub_penawaran)
+             if f.startswith("1. DoktekFull_") and f.endswith(".pdf")),
+            None,
+        )
+        if not doktek:
+            _log(f"  ⚠️ {entry}: DoktekFull tidak ditemukan, skip")
+            continue
+
+        # Cari subfolder kualifikasi yang cocok (nama prefix sama)
+        dokkualif = None
+        if os.path.isdir(folder_kualifikasi):
+            sub_kualif = os.path.join(folder_kualifikasi, entry)
+            if os.path.isdir(sub_kualif):
+                dokkualif = next(
+                    (os.path.join(sub_kualif, f) for f in os.listdir(sub_kualif)
+                     if f.startswith("1. DokkualifFull_") and f.endswith(".pdf")),
+                    None,
+                )
+            if not dokkualif:
+                # Coba cari subfolder dengan prefix urutan yang sama (e.g. "1. " prefix)
+                urutan_prefix = entry.split(".")[0].strip() + "."
+                for sub in os.listdir(folder_kualifikasi):
+                    if sub.startswith(urutan_prefix) and os.path.isdir(os.path.join(folder_kualifikasi, sub)):
+                        sub_kualif2 = os.path.join(folder_kualifikasi, sub)
+                        dokkualif = next(
+                            (os.path.join(sub_kualif2, f) for f in os.listdir(sub_kualif2)
+                             if f.startswith("1. DokkualifFull_") and f.endswith(".pdf")),
+                            None,
+                        )
+                        if dokkualif:
+                            break
+
+        # Tentukan nama output dari nama DoktekFull (ganti prefix)
+        doktek_basename = os.path.basename(doktek)
+        # "1. DoktekFull_CV. SAMATA_001.pdf" → "1. DokFull_CV. SAMATA_001.pdf"
+        out_name = doktek_basename.replace("DoktekFull_", "DokFull_", 1)
+
+        dest_sub = os.path.join(folder_gabungan, entry)
+        os.makedirs(dest_sub, exist_ok=True)
+        out_path = os.path.join(dest_sub, out_name)
+
+        pdf_list = [p for p in [doktek, dokkualif] if p and os.path.isfile(p)]
+        _log(f"  {entry}: gabung {len(pdf_list)} PDF → {out_name}")
+
+        try:
+            merged = fitz.open()
+            for p in pdf_list:
+                doc = fitz.open(p)
+                merged.insert_pdf(doc)
+                doc.close()
+            merged.save(out_path)
+            merged.close()
+            ok_count += 1
+        except Exception as e:
+            gagal.append(f"{entry}: {e}")
+            _log(f"  ❌ {entry}: {e}")
+
+    return {"ok": ok_count, "gagal": gagal}
