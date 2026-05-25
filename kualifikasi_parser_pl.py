@@ -242,6 +242,78 @@ def get_kswp_status_pl(kualifikasi_id: str, folder_peserta: str) -> str:
     return get_kswp_from_dom_pl(kualifikasi_id)
 
 
+def _parse_pq_pdf(folder_peserta: str) -> dict:
+    """
+    Parse dokumen PQ (formulir isian kualifikasi) dari folder peserta.
+    Cari PDF terbesar di folder (kemungkinan dokumen PQ lengkap).
+    Return: {"direktur": str, "npwp_pdf": str, "bidang_pengalaman": [str]}
+    """
+    result = {"direktur": "", "npwp_pdf": "", "bidang_pengalaman": []}
+    if not folder_peserta or not os.path.isdir(folder_peserta):
+        return result
+
+    # Cari PDF terbesar di folder (exclude gabungan Kualifikasi *.pdf)
+    pdfs = []
+    for f in os.listdir(folder_peserta):
+        if not f.lower().endswith(".pdf"):
+            continue
+        if f.startswith("Kualifikasi ") or f.startswith("checklist_"):
+            continue
+        fpath = os.path.join(folder_peserta, f)
+        pdfs.append((os.path.getsize(fpath), fpath))
+
+    if not pdfs:
+        return result
+
+    # Urutkan terbesar dulu
+    pdfs.sort(reverse=True)
+
+    try:
+        import fitz
+        for _, pq_path in pdfs[:2]:  # coba 2 PDF terbesar
+            doc = fitz.open(pq_path)
+            full_text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
+            doc.close()
+
+            # Direktur: cari pola "Jabatan ... Direktur" di tabel pengurus
+            if not result["direktur"]:
+                # Pola: nama diikuti jabatan "Direktur" di tabel
+                # "Abdul Malik, ST\n6311...\nDirektur"
+                m = re.search(
+                    r'Direksi/Pengurus.*?1\.\s*\n?([\w,\s\.]+?)\s*\n[\d]+\s*\n(Direktur)',
+                    full_text, re.DOTALL | re.IGNORECASE
+                )
+                if m:
+                    result["direktur"] = m.group(1).strip()
+                else:
+                    # Fallback: "Nama : ABDUL MALIK\nJabatan : Direktur"
+                    m2 = re.search(
+                        r'Nama\s*[:\-]\s*(.+?)\s*\nJabatan\s*[:\-]\s*Direktur',
+                        full_text, re.IGNORECASE
+                    )
+                    if m2:
+                        result["direktur"] = m2.group(1).strip()
+
+            # NPWP dari dokumen (format XX.XXX.XXX.X-XXX.XXX)
+            if not result["npwp_pdf"]:
+                m_npwp = re.search(r'(\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3})', full_text)
+                if m_npwp:
+                    result["npwp_pdf"] = m_npwp.group(1)
+
+            # Bidang pengalaman: kode SBU di kolom bidang tabel pengalaman
+            kode_sbu = re.findall(r'\b([A-Z]{1,3}[0-9]{3})\b', full_text.upper())
+            if kode_sbu:
+                result["bidang_pengalaman"] = list(dict.fromkeys(kode_sbu))  # unique, preserve order
+
+            if result["direktur"] or result["npwp_pdf"]:
+                break  # cukup dari 1 PDF
+
+    except Exception:
+        pass
+
+    return result
+
+
 def parse_peserta_lengkap_pl(
     kualifikasi_id: str,
     folder_peserta: str,
@@ -263,6 +335,9 @@ def parse_peserta_lengkap_pl(
     if not html_data.get("ok"):
         return {"ok": False, "pesan": html_data.get("pesan", "Gagal fetch preview")}
 
+    _log("[Parser PL] Parse PDF kualifikasi (direktur, NPWP, bidang)...")
+    pdf_data = _parse_pq_pdf(folder_peserta)
+
     _log("[Parser PL] Cek KSWP...")
     kswp = get_kswp_status_pl(kualifikasi_id, folder_peserta)
 
@@ -272,10 +347,26 @@ def parse_peserta_lengkap_pl(
     _log("[Parser PL] Hitung SKP...")
     skp_data = get_skp(folder_peserta, html_data.get("jp_preview", 0))
 
+    # Enrichment dari PDF: direktur + NPWP + bidang pengalaman
+    # PDF lebih akurat karena dokumen yang diupload peserta (bukan input form SPSE)
+    _pemilik_spse = html_data.get("pemilik", [])
+    _direktur_pdf = pdf_data.get("direktur", "")
+    _npwp_final = pdf_data.get("npwp_pdf", "") or html_data.get("npwp", "")
+
+    # Pemilik: direktur dari PDF jadi baris pertama, sisanya dari SPSE
+    if _direktur_pdf:
+        # Jika direktur PDF sudah ada di list SPSE, reorder; jika tidak, prepend
+        _pemilik_merged = [_direktur_pdf] + [
+            p for p in _pemilik_spse
+            if _direktur_pdf.upper() not in p.upper()
+        ]
+    else:
+        _pemilik_merged = _pemilik_spse
+
     return {
         "ok": True,
         "nama":    html_data.get("nama", ""),
-        "npwp":    html_data.get("npwp", ""),
+        "npwp":    _npwp_final,
         "alamat":  html_data.get("alamat", ""),
         "email":   html_data.get("email", ""),
         "nib_nomor":   html_data.get("nib_nomor", ""),
@@ -292,8 +383,10 @@ def parse_peserta_lengkap_pl(
         "sbu_kualifikasi": html_data.get("sbu_kualifikasi", "Kecil"),
         "sbu_klasifikasi": html_data.get("sbu_klasifikasi", ""),
         "sbu_subklas_label": html_data.get("sbu_subklas_label", ""),
+        "bidang_pengalaman_pdf": pdf_data.get("bidang_pengalaman", []),  # kode SBU dari dok PQ
+        "direktur_pdf": _direktur_pdf,
         "pengalaman": html_data.get("pengalaman", []),
-        "pemilik":    html_data.get("pemilik", []),
+        "pemilik":    _pemilik_merged,
         "akta_pendirian": html_data.get("akta_pendirian", {}),
         "akta_perubahan": html_data.get("akta_perubahan", {}),
         "skp":          skp_data["skp"],

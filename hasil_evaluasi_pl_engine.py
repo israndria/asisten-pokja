@@ -183,14 +183,22 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
                 return m.group(1) if m else teks.upper().strip()
 
             sbu_syarat_kodes = [_ekstrak_kode_sbu(s) for s in sbu_syarat_items]
-            # Kode SBU peserta dari sbu_label: "M71102 - NAMA SBU" → ambil bagian sebelum " - "
-            sbu_peserta_kode = (sbu_label.split(" - ")[0].strip().upper() if sbu_label else "")
 
-            cocok = sbu_peserta_kode in sbu_syarat_kodes
+            # Kode SBU peserta: dari sbu_label (SPSE) + dari bidang pengalaman di dok PDF
+            sbu_peserta_kode_spse = (sbu_label.split(" - ")[0].strip().upper() if sbu_label else "")
+            sbu_dari_pdf = peserta_data.get("bidang_pengalaman_pdf", [])  # kode2 dari dok PQ
+
+            # Cocok jika kode SPSE match, ATAU ada kode dari dok PDF yang match syarat
+            cocok_spse = sbu_peserta_kode_spse in sbu_syarat_kodes
+            cocok_pdf  = any(k in sbu_syarat_kodes for k in sbu_dari_pdf)
+            cocok = cocok_spse or cocok_pdf
+
             sbu_match_status = "MEMENUHI" if cocok else "TIDAK MEMENUHI"
+            _pdf_kode_str = ", ".join(sbu_dari_pdf) if sbu_dari_pdf else "-"
             sbu_match_catatan = (
-                f"SBU peserta: {sbu_peserta_kode} ({sbu_label}) | "
-                f"SBU syarat: {', '.join(sbu_syarat_kodes)} ({'; '.join(sbu_syarat_items)})"
+                f"SBU SPSE: {sbu_peserta_kode_spse} | "
+                f"Bidang dok PQ: {_pdf_kode_str} | "
+                f"Syarat: {', '.join(sbu_syarat_kodes)}"
             )
     except Exception:
         pass
