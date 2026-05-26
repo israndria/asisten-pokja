@@ -2936,6 +2936,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     with _pl_tab8:
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
+        import penawaran_pl_engine as _penawaran_pl
 
         st.markdown("## Evaluasi SPSE & Download Teknis/Biaya — Pengadaan Langsung")
         st.caption("Submit evaluasi Admin+Kualifikasi LULUS di SPSE, lalu download dokumen teknis/biaya peserta.")
@@ -2992,6 +2993,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                     _do_eval8    = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval")
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
+                    _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
                     st.divider()
                     st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
@@ -3064,6 +3066,23 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                                 progress_cb=_lcb8,
                                             )
                                             _lcb8(f"{'[OK]' if _res_tb8['ok'] else '[GAGAL]'} {_res_tb8['pesan']}")
+
+                                # Tulis penawaran ke sheet 6. Penawaran
+                                if _do_penawaran8:
+                                    if not _folder_paket8:
+                                        _lcb8("[SKIP] Folder paket tidak ditemukan, skip penawaran")
+                                    else:
+                                        _pb8.progress((_i8 + 0.8) / _n_paket8, text=f"{_nama8} — tulis penawaran")
+                                        _lcb8("--- Tulis rincian penawaran ke Excel ---")
+                                        for _ep8_p in _peserta8:
+                                            _lcb8(f"  Peserta: {_ep8_p['nama']}")
+                                            _res_pnw8 = _penawaran_pl.tulis_penawaran_ke_excel(
+                                                folder_paket=_folder_paket8,
+                                                id_nontender=_ep8_p["id_nontender"],
+                                                progress_cb=_lcb8,
+                                            )
+                                            _lcb8(f"  {'[OK]' if _res_pnw8['ok'] else '[GAGAL]'} {_res_pnw8['pesan']}" +
+                                                  (f" — Total Rp {_res_pnw8['total_penawaran']:,.0f}" if _res_pnw8.get('total_penawaran') else ""))
 
                                 _status8.update(label=f"Selesai — {_nama8}", state="complete", expanded=False)
 

@@ -243,3 +243,171 @@ def fetch_semua_penawaran_pl(kode_paket: str, cookie_str: str = "") -> dict:
 
     except Exception as e:
         return {"ok": False, "peserta": [], "error": str(e)}
+
+
+def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=None) -> dict:
+    """
+    Scrape rincian_penawaran untuk 1 peserta (via id_nontender = peserta_id),
+    lalu tulis ke sheet '6. Penawaran' di file .xlsm dalam folder_paket.
+
+    Args:
+        folder_paket : folder root paket PL (berisi .xlsm)
+        id_nontender : ID peserta (dipakai langsung sebagai peserta_id di URL)
+        progress_cb  : callback(str)
+
+    Return: {"ok": bool, "pesan": str, "total_penawaran": float}
+    """
+    import os, glob, pythoncom, win32com.client
+
+    def _log(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    # 1. Scrape data penawaran
+    _log(f"  Scrape rincian_penawaran id={id_nontender}...")
+    try:
+        data = scrape_rincian_penawaran_pl(id_nontender)
+    except Exception as e:
+        return {"ok": False, "pesan": f"Gagal scrape: {e}", "total_penawaran": 0.0}
+
+    items = data.get("items", [])
+    total = data.get("total_penawaran", 0.0)
+    _log(f"  {len(items)} item, total Rp {total:,.0f}")
+
+    if not items:
+        return {"ok": False, "pesan": "Tidak ada item penawaran", "total_penawaran": 0.0}
+
+    # 2. Cari file .xlsm di folder_paket (1 level, bukan rekursif)
+    xlsm_files = [
+        f for f in glob.glob(os.path.join(folder_paket, "*.xlsm"))
+        if not os.path.basename(f).startswith("~$")
+    ]
+    if not xlsm_files:
+        return {"ok": False, "pesan": "File .xlsm tidak ditemukan di folder paket", "total_penawaran": total}
+
+    xlsm_path = xlsm_files[0]
+    _log(f"  Tulis ke {os.path.basename(xlsm_path)} → sheet '6. Penawaran'...")
+
+    # 3. Tulis via COM
+    try:
+        pythoncom.CoInitialize()
+        xl = win32com.client.DispatchEx("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        try:
+            wb = xl.Workbooks.Open(os.path.abspath(xlsm_path), ReadOnly=False)
+            ws = None
+            for i in range(1, wb.Sheets.Count + 1):
+                if wb.Sheets(i).Name == "6. Penawaran":
+                    ws = wb.Sheets(i)
+                    break
+            if ws is None:
+                wb.Close(False)
+                return {"ok": False, "pesan": "Sheet '6. Penawaran' tidak ditemukan", "total_penawaran": total}
+
+            # Hapus data lama (baris 2 dst)
+            last_row = ws.UsedRange.Rows.Count
+            if last_row > 1:
+                ws.Rows(f"2:{last_row}").Delete()
+
+            # Tulis header-compatible: No | Jenis | Satuan | Volume | Harga Satuan |
+            #   Total sbl Pajak | Pajak% | Total stlh Pajak | Keterangan
+            no_counter = 0
+            for row_idx, item in enumerate(items, start=2):
+                jenis = item.get("jenis_bj", "")
+                satuan = item.get("satuan") or ""
+                vol = item.get("vol", 0.0)
+                harga_sat = item.get("harga_satuan", 0.0)
+                total_sbl = item.get("total_sbl_pajak", 0.0)
+                pajak = item.get("pajak_pct", 0.0)
+                total_stlh = item.get("total_stlh_pajak", 0.0)
+
+                # Baris kategori (satuan kosong + nilai 0 semua) → tulis sebagai sub-header tanpa No
+                is_kategori = (not satuan and harga_sat == 0 and total_sbl == 0)
+                if is_kategori:
+                    ws.Cells(row_idx, 1).Value = ""
+                    ws.Cells(row_idx, 2).Value = jenis
+                else:
+                    no_counter += 1
+                    ws.Cells(row_idx, 1).Value = no_counter
+                    ws.Cells(row_idx, 2).Value = jenis
+                    ws.Cells(row_idx, 3).Value = satuan
+                    ws.Cells(row_idx, 4).Value = vol
+                    ws.Cells(row_idx, 5).Value = harga_sat
+                    ws.Cells(row_idx, 6).Value = total_sbl
+                    ws.Cells(row_idx, 7).Value = pajak
+                    ws.Cells(row_idx, 8).Value = total_stlh
+
+            # Baris Total Penawaran
+            total_row = len(items) + 2
+            ws.Cells(total_row, 2).Value = "Total Penawaran"
+            ws.Cells(total_row, 8).Value = total
+
+            wb.Save()
+            wb.Close(False)
+            _log(f"  Berhasil tulis {no_counter} item + Total → {os.path.basename(xlsm_path)}")
+            return {"ok": True, "pesan": f"{no_counter} item ditulis", "total_penawaran": total}
+        finally:
+            try:
+                xl.Quit()
+            except Exception:
+                pass
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        return {"ok": False, "pesan": f"COM error: {e}", "total_penawaran": total}
+
+
+def download_penawaran_batch(
+    paket_peserta_list: list,
+    progress_cb=None,
+) -> dict:
+    """
+    Batch tulis penawaran ke Excel untuk banyak paket.
+
+    paket_peserta_list: [
+        {
+            "kode_paket": str,
+            "folder_paket": str,
+            "peserta": [{"nama", "id_nontender"}, ...]
+        },
+        ...
+    ]
+    Return: {"ok": bool, "ringkasan": str, "detail": [...]}
+    """
+    def _log(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    detail = []
+    n_ok = n_total = 0
+
+    for item in paket_peserta_list:
+        kode = item["kode_paket"]
+        folder_paket = item["folder_paket"]
+        peserta_list = item.get("peserta", [])
+        _log(f"=== Paket {kode} ({len(peserta_list)} peserta) ===")
+
+        for p in peserta_list:
+            n_total += 1
+            _log(f"Peserta: {p['nama']}")
+            res = tulis_penawaran_ke_excel(
+                folder_paket=folder_paket,
+                id_nontender=p["id_nontender"],
+                progress_cb=progress_cb,
+            )
+            if res["ok"]:
+                n_ok += 1
+            detail.append({
+                "kode_paket": kode,
+                "nama": p["nama"],
+                **res,
+            })
+
+    ringkasan = f"{n_ok}/{n_total} peserta berhasil ditulis ke Excel"
+    return {"ok": n_ok == n_total, "ringkasan": ringkasan, "detail": detail}
