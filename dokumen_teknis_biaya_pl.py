@@ -189,6 +189,55 @@ def _convert_to_pdf(src_path: str, dest_pdf: str) -> bool:
     return False  # ekstensi tidak dikenal
 
 
+_7Z_EXE = r"C:\Users\MSI\scoop\shims\7z.exe"
+
+
+def _ekstrak_arsip(arsip_path: str, dest_folder: str, log_cb=None) -> list:
+    """
+    Ekstrak file ZIP/RAR/7z ke dest_folder via 7z.exe.
+    Return: list path file hasil ekstrak (rekursif, semua file di dalam arsip).
+    """
+    import subprocess
+    import glob
+
+    def _log(msg):
+        if log_cb:
+            try:
+                log_cb(msg)
+            except Exception:
+                pass
+
+    ext = os.path.splitext(arsip_path)[1].lower()
+    if ext not in (".zip", ".rar", ".7z"):
+        return []
+
+    sub_dir = os.path.join(dest_folder, os.path.splitext(os.path.basename(arsip_path))[0])
+    os.makedirs(sub_dir, exist_ok=True)
+
+    try:
+        hasil = subprocess.run(
+            [_7Z_EXE, "x", arsip_path, f"-o{sub_dir}", "-y", "-bd"],
+            capture_output=True, text=True,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        if hasil.returncode != 0:
+            _log(f"    [ekstrak gagal] {os.path.basename(arsip_path)}: {hasil.stderr.strip()[:200]}")
+            return []
+    except Exception as e:
+        _log(f"    [ekstrak error] {e}")
+        return []
+
+    # Kumpulkan semua file hasil ekstrak (bukan folder)
+    semua_file = []
+    for root, dirs, files in os.walk(sub_dir):
+        for fname in sorted(files):
+            if not fname.startswith("~$"):
+                semua_file.append(os.path.join(root, fname))
+
+    _log(f"    Ekstrak {os.path.basename(arsip_path)} → {len(semua_file)} file")
+    return semua_file
+
+
 def _gabung_pdf(output_path: str, file_list: list, progress_cb=None) -> bool:
     """Gabung file_list PDF jadi satu output_path. Tanpa limit ukuran."""
     import fitz
@@ -257,7 +306,7 @@ def download_teknis_biaya_peserta(
     for i, dok in enumerate(dokumen):
         _log(f"  [{i+1}/{len(dokumen)}] {dok['nama']}")
         nama_file = _slug(dok["nama"])
-        if not any(nama_file.lower().endswith(ext) for ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".jpg", ".png")):
+        if not any(nama_file.lower().endswith(ext) for ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".zip", ".rar", ".7z")):
             nama_file += ".pdf"
         dest_file = os.path.join(dest_folder, nama_file)
         res_dl = _download_file(dok["url"], dest_file)
@@ -267,8 +316,25 @@ def download_teknis_biaya_peserta(
         actual_path = res_dl["path"]
         n_dl += 1
 
-        # Konversi ke PDF jika perlu
         ext = os.path.splitext(actual_path)[1].lower()
+
+        # Ekstrak arsip ZIP/RAR/7z → proses tiap file di dalamnya
+        if ext in (".zip", ".rar", ".7z"):
+            extracted = _ekstrak_arsip(actual_path, dest_folder, _log)
+            for ef in extracted:
+                ef_ext = os.path.splitext(ef)[1].lower()
+                if ef_ext == ".pdf":
+                    files_pdf.append(ef)
+                elif ef_ext in (".docx", ".doc", ".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".bmp", ".tiff"):
+                    ef_pdf = os.path.splitext(ef)[0] + ".pdf"
+                    if _convert_to_pdf(ef, ef_pdf):
+                        files_pdf.append(ef_pdf)
+                        _log(f"    Konversi {ef_ext} -> PDF OK ({os.path.basename(ef)})")
+                    else:
+                        _log(f"    [skip] gagal konversi {ef_ext} ({os.path.basename(ef)})")
+            continue
+
+        # Konversi ke PDF jika perlu
         if ext != ".pdf":
             pdf_path = os.path.splitext(actual_path)[0] + ".pdf"
             ok_conv = _convert_to_pdf(actual_path, pdf_path)

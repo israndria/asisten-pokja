@@ -196,6 +196,50 @@ def _download_file(url: str, dest_path: str) -> dict:
         return {"ok": False, "pesan": str(e), "ukuran": 0}
 
 
+_7Z_EXE = r"C:\Users\MSI\scoop\shims\7z.exe"
+
+
+def _ekstrak_arsip(arsip_path: str, dest_folder: str, log_cb=None) -> list:
+    """Ekstrak ZIP/RAR/7z ke subfolder via 7z.exe. Return list path file hasil ekstrak."""
+    import subprocess
+
+    def _log(msg):
+        if log_cb:
+            try:
+                log_cb(msg)
+            except Exception:
+                pass
+
+    ext = os.path.splitext(arsip_path)[1].lower()
+    if ext not in (".zip", ".rar", ".7z"):
+        return []
+
+    sub_dir = os.path.join(dest_folder, os.path.splitext(os.path.basename(arsip_path))[0])
+    os.makedirs(sub_dir, exist_ok=True)
+
+    try:
+        hasil = subprocess.run(
+            [_7Z_EXE, "x", arsip_path, f"-o{sub_dir}", "-y", "-bd"],
+            capture_output=True, text=True,
+            creationflags=0x08000000,
+        )
+        if hasil.returncode != 0:
+            _log(f"    [ekstrak gagal] {os.path.basename(arsip_path)}: {hasil.stderr.strip()[:200]}")
+            return []
+    except Exception as e:
+        _log(f"    [ekstrak error] {e}")
+        return []
+
+    semua_file = []
+    for root, dirs, files in os.walk(sub_dir):
+        for fname in sorted(files):
+            if not fname.startswith("~$"):
+                semua_file.append(os.path.join(root, fname))
+
+    _log(f"    Ekstrak {os.path.basename(arsip_path)} → {len(semua_file)} file")
+    return semua_file
+
+
 def _gabung_pdf_kualifikasi(output_path: str, file_list: list, progress_cb=None) -> str:
     """
     Gabung PDF kualifikasi peserta PL tanpa limit ukuran file.
@@ -213,12 +257,64 @@ def _gabung_pdf_kualifikasi(output_path: str, file_list: list, progress_cb=None)
             log(f"  [skip] tidak ditemukan: {os.path.basename(fpath)}")
             continue
         ext = os.path.splitext(fpath)[1].lower()
-        if ext != ".pdf":
-            log(f"  [skip] non-PDF: {os.path.basename(fpath)}")
-            continue
         size_mb = os.path.getsize(fpath) / 1024 / 1024
         try:
-            doc = fitz.open(fpath)
+            if ext in (".jpg", ".jpeg", ".png", ".bmp", ".tiff"):
+                img_doc = fitz.open(fpath)
+                pdfbytes = img_doc.convert_to_pdf()
+                img_doc.close()
+                doc = fitz.open("pdf", pdfbytes)
+            elif ext == ".pdf":
+                doc = fitz.open(fpath)
+            elif ext in (".docx", ".doc", ".xlsx", ".xls"):
+                # Konversi via COM ke file PDF sementara, lalu gabung
+                import tempfile, shutil
+                tmp_pdf = tempfile.mktemp(suffix=".pdf")
+                ok_conv = False
+                try:
+                    if ext in (".docx", ".doc"):
+                        import pythoncom, win32com.client
+                        pythoncom.CoInitialize()
+                        word = win32com.client.DispatchEx("Word.Application")
+                        word.Visible = False; word.DisplayAlerts = False
+                        try:
+                            d = word.Documents.Open(os.path.abspath(fpath), ReadOnly=True)
+                            d.SaveAs(os.path.abspath(tmp_pdf), FileFormat=17)
+                            d.Close(False)
+                            ok_conv = True
+                        finally:
+                            word.Quit(); pythoncom.CoUninitialize()
+                    else:
+                        import pythoncom, win32com.client
+                        pythoncom.CoInitialize()
+                        xl = win32com.client.DispatchEx("Excel.Application")
+                        xl.Visible = False; xl.DisplayAlerts = False
+                        try:
+                            wb = xl.Workbooks.Open(os.path.abspath(fpath), ReadOnly=True)
+                            wb.ExportAsFixedFormat(0, os.path.abspath(tmp_pdf))
+                            wb.Close(False)
+                            ok_conv = True
+                        finally:
+                            xl.Quit(); pythoncom.CoUninitialize()
+                except Exception as ce:
+                    log(f"  [skip] gagal konversi {ext} {os.path.basename(fpath)}: {ce}")
+                if not ok_conv:
+                    continue
+                doc = fitz.open(tmp_pdf)
+                try:
+                    n_hal = doc.page_count
+                    merged.insert_pdf(doc)
+                finally:
+                    doc.close()
+                    try:
+                        os.remove(tmp_pdf)
+                    except Exception:
+                        pass
+                log(f"  OK {os.path.basename(fpath)} ({size_mb:.1f}MB, {n_hal} hal, via COM)")
+                continue
+            else:
+                log(f"  [skip] format tidak didukung: {os.path.basename(fpath)}")
+                continue
             n_hal = doc.page_count
             merged.insert_pdf(doc)
             doc.close()
@@ -281,14 +377,23 @@ def download_kualifikasi_peserta_pl(
     for i, dok in enumerate(dokumen):
         _log(f"  Downloading ({i+1}/{len(dokumen)}): {dok['nama']}")
         nama_file = _slug(dok["nama"])
-        if not nama_file.lower().endswith(".pdf"):
-            nama_file += ".pdf"
+        _ext = os.path.splitext(nama_file)[1].lower()
+        if not _ext:
+            nama_file += ".pdf"  # tidak ada ekstensi sama sekali → asumsi PDF
         dest_file = os.path.join(dest_folder, nama_file)
         res = _download_file(dok["url"], dest_file)
-        if res["ok"]:
-            file_didownload.append(res.get("path", dest_file))
-        else:
+        if not res["ok"]:
             _log(f"  [GAGAL] {dok['nama']} — {res['pesan']}")
+            continue
+        actual_path = res.get("path", dest_file)
+        actual_ext = os.path.splitext(actual_path)[1].lower()
+
+        # Ekstrak arsip ZIP/RAR/7z
+        if actual_ext in (".zip", ".rar", ".7z"):
+            extracted = _ekstrak_arsip(actual_path, dest_folder, _log)
+            file_didownload.extend(extracted)
+        else:
+            file_didownload.append(actual_path)
 
     # 3. Generate checklist PDF
     _log("  Membuat checklist PDF...")
@@ -299,13 +404,18 @@ def download_kualifikasi_peserta_pl(
     else:
         _log(f"  ⚠️ Gagal buat checklist PDF: {res_pdf['pesan']}")
 
-    # 4. Gabung semua PDF di dest_folder tanpa limit ukuran
+    # 4. Gabung semua file yang bisa dikonversi di dest_folder (rekursif — termasuk subfolder arsip)
     gabungan_nama = f"Kualifikasi {slug_nama}.pdf"
     gabungan_path = os.path.join(dest_folder, gabungan_nama)
+    _EXT_DIDUKUNG = (".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff",
+                     ".docx", ".doc", ".xlsx", ".xls")
     semua_pdf = sorted([
-        os.path.join(dest_folder, f) for f in os.listdir(dest_folder)
-        if f.lower().endswith(".pdf") and f != gabungan_nama
-        and not f.startswith("~$")
+        os.path.join(root, fname)
+        for root, _, files in os.walk(dest_folder)
+        for fname in files
+        if os.path.splitext(fname)[1].lower() in _EXT_DIDUKUNG
+        and fname != gabungan_nama
+        and not fname.startswith("~$")
     ])
     _log(f"  Menggabung {len(semua_pdf)} PDF di folder → {gabungan_nama}")
     if semua_pdf:

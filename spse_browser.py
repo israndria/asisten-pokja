@@ -8,6 +8,21 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 
 from config import SPSE_BASE_URL, BROWSER_SESSION_DIR, DOWNLOAD_DIR
 
+# Patch subprocess.Popen agar Playwright tidak spawn console hitam di Windows
+import subprocess as _subprocess
+_OrigPopen = _subprocess.Popen
+class _NoCmdWindowPopen(_OrigPopen):
+    def __init__(self, *args, **kwargs):
+        if os.name == "nt":
+            si = kwargs.pop("startupinfo", None) or _subprocess.STARTUPINFO()
+            si.dwFlags |= _subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = _subprocess.SW_HIDE
+            kwargs["startupinfo"] = si
+            kwargs.setdefault("creationflags", 0)
+            kwargs["creationflags"] |= _subprocess.CREATE_NO_WINDOW
+        super().__init__(*args, **kwargs)
+_subprocess.Popen = _NoCmdWindowPopen
+
 # ============================================================
 # Event loop di thread terpisah (agar tidak konflik dengan Streamlit)
 # ============================================================
