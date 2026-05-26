@@ -2,11 +2,28 @@
 
 import os
 import re
+import sys
 import requests
 from bs4 import BeautifulSoup
+from contextlib import contextmanager
 
 import spse_browser
 from config import SPSE_BASE_URL
+
+
+@contextmanager
+def _quiet():
+    """Suppress stderr saat CDP call agar terminal tidak kedap-kedip."""
+    _orig = sys.stderr
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+        yield
+    finally:
+        try:
+            sys.stderr.close()
+        except Exception:
+            pass
+        sys.stderr = _orig
 
 
 def _headers(referer: str = "") -> dict:
@@ -25,41 +42,44 @@ def _slug(nama: str) -> str:
 
 def fetch_peserta_pl(kode_paket: str) -> dict:
     """
-    Scrape daftar peserta dari /pesertanontender/{kode}/penawaran (HTML statis).
+    Scrape daftar peserta dari /pesertanontender/{kode}/penawaran via CDP.
+    Pakai CDP bukan requests — SPSE sering timeout via direct HTTP.
     Return: {"ok": bool, "peserta": [{"nama","kualifikasi_id","kode_paket"}], "pesan": str}
     """
+    import asyncio
+
     base = SPSE_BASE_URL.rstrip("/")
     url = f"{base}/pesertanontender/{kode_paket}/penawaran"
+
+    async def _fetch():
+        page = await spse_browser._connect_cdp_async(url, navigate=True)
+        await asyncio.sleep(2)
+        return await page.evaluate("""() => {
+            var peserta = [];
+            document.querySelectorAll('a[href]').forEach(function(a) {
+                var m = a.href.match(/kualifikasinontender\\/(\\d+)\\/preview/);
+                if (!m) return;
+                var kualifikasi_id = m[1];
+                var tr = a.closest('tr');
+                var nama = '';
+                if (tr) {
+                    var tds = tr.querySelectorAll('td');
+                    nama = tds.length > 1 ? tds[1].innerText.trim() : (tds[0] ? tds[0].innerText.trim() : '');
+                }
+                if (!nama) nama = 'Peserta ' + kualifikasi_id;
+                if (!peserta.some(function(p) { return p.kualifikasi_id === kualifikasi_id; }))
+                    peserta.push({nama: nama, kualifikasi_id: kualifikasi_id});
+            });
+            return peserta;
+        }""")
+
     try:
-        r = requests.get(url, headers=_headers(f"{base}/paket"), timeout=15)
-        if r.status_code not in (200, 500):
-            return {"ok": False, "peserta": [], "pesan": f"HTTP {r.status_code}"}
-        r.encoding = r.apparent_encoding or "utf-8"
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        peserta_list = []
-        for a in soup.find_all("a", href=re.compile(r"kualifikasinontender/\d+/preview")):
-            km = re.search(r"kualifikasinontender/(\d+)/preview", a["href"])
-            if not km:
-                continue
-            kualifikasi_id = km.group(1)
-            tr = a.find_parent("tr")
-            nama = ""
-            if tr:
-                tds = tr.find_all("td")
-                nama = tds[1].get_text(strip=True) if len(tds) > 1 else (tds[0].get_text(strip=True) if tds else "")
-            if not nama:
-                nama = f"Peserta {kualifikasi_id}"
-            peserta_list.append({
-                "nama": nama,
-                "kualifikasi_id": kualifikasi_id,
-                "kode_paket": kode_paket,
-            })
-
+        with _quiet():
+            peserta_list = spse_browser._run(_fetch())
         if not peserta_list:
             return {"ok": False, "peserta": [], "pesan": "Tidak ada peserta ditemukan"}
-        return {"ok": True, "peserta": peserta_list, "pesan": f"{len(peserta_list)} peserta ditemukan"}
-
+        result = [dict(p, kode_paket=kode_paket) for p in peserta_list]
+        return {"ok": True, "peserta": result, "pesan": f"{len(result)} peserta ditemukan"}
     except Exception as e:
         return {"ok": False, "peserta": [], "pesan": str(e)}
 
@@ -86,7 +106,8 @@ def fetch_dokumen_kualifikasi_pl(kualifikasi_id: str) -> dict:
         return result
 
     try:
-        dokumen_raw = spse_browser._run(_fetch())
+        with _quiet():
+            dokumen_raw = spse_browser._run(_fetch())
         if not dokumen_raw:
             return {"ok": False, "dokumen": [], "url_preview": url_preview, "pesan": "Tidak ada dokumen ditemukan"}
         return {"ok": True, "dokumen": dokumen_raw, "url_preview": url_preview, "pesan": f"{len(dokumen_raw)} dokumen ditemukan"}
@@ -113,7 +134,8 @@ def generate_checklist_pdf_pl(kualifikasi_id: str, dest_path: str) -> dict:
         return True
 
     try:
-        spse_browser._run(_pdf())
+        with _quiet():
+            spse_browser._run(_pdf())
         return {"ok": True, "pesan": f"PDF disimpan: {dest_path}"}
     except Exception as e:
         return {"ok": False, "pesan": str(e)}

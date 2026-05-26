@@ -11,6 +11,20 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Suppress Playwright/CDP/Node stderr noise di console Streamlit
+import io as _io
+_devnull = open(os.devnull, "w", encoding="utf-8")
+
+
+class _SuppressPlaywrightStderr:
+    """Context manager: mute stderr selama operasi CDP agar terminal tidak kedap-kedip."""
+    def __enter__(self):
+        self._orig = sys.stderr
+        sys.stderr = _devnull
+        return self
+    def __exit__(self, *_):
+        sys.stderr = self._orig
+
 
 def _pokja_label(p: dict) -> str:
     """Buat label ringkas paket: 'Pokja 086 · 10096884000 — Nama Paket'."""
@@ -186,7 +200,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
@@ -194,7 +208,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         "4️⃣ Setup Paket",
         "5️⃣ Kirim Verifikasi",
         "6️⃣ Upload BA PL",
-        "7️⃣ Download Dok Kualifikasi",
+        "7️⃣ Download Kualifikasi",
+        "8️⃣ Evaluasi & Teknis/Biaya",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2788,41 +2803,39 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         import hasil_evaluasi_pl_engine as _he_pl
 
         st.markdown("## Download Dokumen Kualifikasi — Pengadaan Langsung")
-        st.caption("Fetch peserta dari SPSE, download dokumen kualifikasi, populate sheet Hasil Evaluasi di BAPLJKK .xlsm.")
+        st.caption("Download dok kualifikasi peserta dari SPSE + populate sheet Hasil Evaluasi di BAPLJKK.")
 
-        # Load daftar paket PL
-        _pl7_rows = []
-        try:
-            _pl7_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
-            ).order("nomor_urut").execute().data or []
-        except Exception as _e7:
-            st.error(f"Gagal load paket PL: {_e7}")
+        # Cache paket list di session state — hindari query Supabase tiap render
+        if "pl7_rows" not in st.session_state:
+            try:
+                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
+                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
+                ).order("nomor_urut").execute().data or []
+            except Exception as _e7:
+                st.session_state["pl7_rows"] = []
+                st.error(f"Gagal load paket PL: {_e7}")
+        _pl7_rows = st.session_state["pl7_rows"]
 
         if not _pl7_rows:
             st.info("Tidak ada paket PL di database.")
+            if st.button("🔄 Reload", key="pl7_reload"):
+                del st.session_state["pl7_rows"]
+                st.rerun()
         else:
             _pl7c1, _pl7c2 = st.columns([1, 1])
 
             with _pl7c1:
                 st.markdown("#### Pilih Paket")
-
-                # State: peserta per paket
-                if "pl7_peserta_cache" not in st.session_state:
-                    st.session_state["pl7_peserta_cache"] = {}
                 if "pl7_checked" not in st.session_state:
                     st.session_state["pl7_checked"] = {}
 
-                # Tombol Pilih Semua / Batal Semua
                 _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
                 _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
+                # Pilih Semua / Batal Semua — hanya set state, TIDAK fetch CDP
                 if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
                     for _k in _pl7_kodes:
                         st.session_state[f"pl7_chk_{_k}"] = True
                         st.session_state["pl7_checked"][_k] = True
-                        if _k not in st.session_state["pl7_peserta_cache"]:
-                            _fp7_all = _ke_pl.fetch_peserta_pl(_k)
-                            st.session_state["pl7_peserta_cache"][_k] = _fp7_all
                 if _pl7_btn_col2.button("❌ Batal Semua", key="pl7_deselect_all", use_container_width=True):
                     for _k in _pl7_kodes:
                         st.session_state[f"pl7_chk_{_k}"] = False
@@ -2835,89 +2848,229 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
                     st.session_state["pl7_checked"][_kpl7] = _chk7
 
-                    if _chk7:
-                        # Auto-fetch peserta saat pertama kali centang
-                        if _kpl7 not in st.session_state["pl7_peserta_cache"]:
-                            with st.spinner(f"Fetch peserta {_kpl7}..."):
-                                _fp7 = _ke_pl.fetch_peserta_pl(_kpl7)
-                                st.session_state["pl7_peserta_cache"][_kpl7] = _fp7
-                        _fp7 = st.session_state["pl7_peserta_cache"].get(_kpl7, {})
-                        if _fp7.get("ok"):
-                            _plist7 = _fp7["peserta"]
-                            st.caption(f"  → {len(_plist7)} peserta: {', '.join(p['nama'] for p in _plist7)}")
-                        else:
-                            st.caption(f"  ⚠️ {_fp7.get('pesan','')}")
-
             with _pl7c2:
                 st.markdown("#### Aksi")
 
-                # Kumpulkan paket terpilih
-                _pl7_selected = []
-                for _rpl7 in _pl7_rows:
-                    _kpl7 = _rpl7["kode_paket"]
-                    if st.session_state["pl7_checked"].get(_kpl7):
-                        _fp7 = st.session_state["pl7_peserta_cache"].get(_kpl7, {})
-                        if _fp7.get("ok"):
-                            _pl7_selected.append({
-                                "row": _rpl7,
-                                "peserta": _fp7["peserta"],
-                            })
+                _pl7_selected_kodes = [k for k in _pl7_kodes if st.session_state["pl7_checked"].get(k)]
+                _pl7_selected_rows  = [r for r in _pl7_rows if r["kode_paket"] in _pl7_selected_kodes]
+                _n_paket7 = len(_pl7_selected_rows)
 
-                if not _pl7_selected:
+                if not _pl7_selected_rows:
                     st.info("Centang minimal 1 paket di kiri.")
                 else:
-                    _n_paket7 = len(_pl7_selected)
-                    _n_peserta7 = sum(len(x["peserta"]) for x in _pl7_selected)
-                    st.markdown(f"**{_n_paket7} paket** | **{_n_peserta7} peserta** terpilih")
+                    st.markdown(f"**{_n_paket7} paket** dipilih")
+                    st.caption("Peserta akan di-fetch via CDP saat tombol Jalankan diklik.")
 
                     _do_download7 = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
                     _do_parse7    = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
 
                     _btn7 = st.button(
-                        f"▶ Jalankan — {_n_paket7} paket, {_n_peserta7} peserta",
+                        f"▶ Jalankan — {_n_paket7} paket",
                         type="primary", key="pl7_run", use_container_width=True,
                     )
 
                     if _btn7:
-                        _log7 = st.empty()
-                        _pb7  = st.progress(0.0)
-                        _total_steps7 = _n_peserta7 or 1
-                        _step7 = [0]
+                        _pb7 = st.progress(0.0, text="Memulai...")
+                        _log7_lines = []  # akumulasi log — update sekali per paket, bukan per baris
 
-                        def _lcb7(msg):
-                            _log7.code(msg)
-                            _step7[0] += 1
-                            _pb7.progress(min(_step7[0] / _total_steps7, 1.0))
+                        def _flush7(container):
+                            """Render log terakumulasi ke container — 1 update per paket."""
+                            container.code("\n".join(_log7_lines[-60:]))  # max 60 baris terakhir
 
-                        for _sel7 in _pl7_selected:
-                            _kpl7 = _sel7["row"]["kode_paket"]
-                            _peserta7 = _sel7["peserta"]
-                            _lcb7(f"=== Paket {_kpl7} ===")
+                        for _i7, _rpl7 in enumerate(_pl7_selected_rows):
+                            _kpl7    = _rpl7["kode_paket"]
+                            _nama7   = _rpl7.get("nama_paket", "?")
+                            _status7 = st.status(f"Paket {_i7+1}/{_n_paket7} — {_nama7}", expanded=True)
 
-                            # Resolve folder Dok Kualifikasi
-                            _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
-                            if not _folder7.get("ok"):
-                                _lcb7(f"⚠️ Folder tidak ditemukan: {_folder7['pesan']}")
-                                continue
+                            with _status7:
+                                _log7_lines.clear()
+                                _log7_box = st.empty()
 
-                            _folder_kual7 = _folder7["path"]
+                                def _lcb7(msg, _box=_log7_box, _lines=_log7_lines):
+                                    _lines.append(msg)
+                                    _box.code("\n".join(_lines[-40:]))
 
-                            if _do_download7:
-                                for _ui7, _p7 in enumerate(_peserta7, 1):
-                                    _ke_pl.download_kualifikasi_peserta_pl(
-                                        _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
-                                    )
+                                # Fetch peserta
+                                _lcb7(f"[{_i7+1}/{_n_paket7}] Fetch peserta SPSE...")
+                                _pb7.progress((_i7) / _n_paket7, text=f"{_nama7} — fetch peserta")
+                                _fp7 = _ke_pl.fetch_peserta_pl(_kpl7)
+                                if not _fp7.get("ok"):
+                                    _lcb7(f"[SKIP] Peserta: {_fp7['pesan']}")
+                                    _status7.update(label=f"SKIP {_nama7} — {_fp7['pesan']}", state="error", expanded=False)
+                                    continue
+                                _peserta7 = _fp7["peserta"]
+                                _lcb7(f"Peserta ({len(_peserta7)}): {', '.join(p['nama'] for p in _peserta7)}")
 
-                            if _do_parse7:
-                                _lcb7(f"Populate sheet Hasil Evaluasi...")
-                                _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
-                                if _hasil7.get("ok"):
-                                    _lcb7(f"✅ {_hasil7['pesan']}")
-                                else:
-                                    _lcb7(f"❌ {_hasil7['pesan']}")
+                                # Resolve folder
+                                _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
+                                if not _folder7.get("ok"):
+                                    _lcb7(f"[SKIP] Folder: {_folder7['pesan']}")
+                                    _status7.update(label=f"SKIP {_nama7} — folder tidak ditemukan", state="error", expanded=False)
+                                    continue
+                                _folder_kual7 = _folder7["path"]
 
-                        _pb7.progress(1.0)
-                        st.success("Selesai.")
+                                # Download kualifikasi
+                                if _do_download7:
+                                    _pb7.progress((_i7 + 0.3) / _n_paket7, text=f"{_nama7} — download kualifikasi")
+                                    for _ui7, _p7 in enumerate(_peserta7, 1):
+                                        _lcb7(f"--- Download [{_ui7}/{len(_peserta7)}] {_p7['nama']} ---")
+                                        _ke_pl.download_kualifikasi_peserta_pl(
+                                            _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
+                                        )
+
+                                # Parse evaluasi
+                                if _do_parse7:
+                                    _pb7.progress((_i7 + 0.7) / _n_paket7, text=f"{_nama7} — parse evaluasi")
+                                    _lcb7("--- Populate sheet Hasil Evaluasi ---")
+                                    _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
+                                    _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
+
+                                _status7.update(label=f"Selesai — {_nama7}", state="complete", expanded=False)
+
+                            _pb7.progress((_i7 + 1) / _n_paket7, text=f"Selesai {_i7+1}/{_n_paket7} paket")
+
+                        _pb7.progress(1.0, text="Semua paket selesai.")
+                        st.success(f"Selesai — {_n_paket7} paket diproses.")
+
+    # ── Tab 8: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
+    with _pl_tab8:
+        import evaluasi_admin_kualifikasi_pl as _eval_pl
+        import dokumen_teknis_biaya_pl as _dtb_pl
+
+        st.markdown("## Evaluasi SPSE & Download Teknis/Biaya — Pengadaan Langsung")
+        st.caption("Submit evaluasi Admin+Kualifikasi LULUS di SPSE, lalu download dokumen teknis/biaya peserta.")
+
+        # Cache paket list (share dengan Tab 7)
+        if "pl7_rows" not in st.session_state:
+            try:
+                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
+                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
+                ).order("nomor_urut").execute().data or []
+            except Exception:
+                st.session_state["pl7_rows"] = []
+        _pl8_rows = st.session_state["pl7_rows"]
+
+        if not _pl8_rows:
+            st.info("Tidak ada paket PL. Reload di Tab 7.")
+        else:
+            _pl8c1, _pl8c2 = st.columns([1, 1])
+
+            with _pl8c1:
+                st.markdown("#### Pilih Paket")
+                if "pl8_checked" not in st.session_state:
+                    st.session_state["pl8_checked"] = {}
+
+                _pl8_kodes = [r["kode_paket"] for r in _pl8_rows]
+                _pl8bc1, _pl8bc2 = st.columns(2)
+                if _pl8bc1.button("✅ Pilih Semua", key="pl8_select_all", use_container_width=True):
+                    for _k in _pl8_kodes:
+                        st.session_state[f"pl8_chk_{_k}"] = True
+                        st.session_state["pl8_checked"][_k] = True
+                if _pl8bc2.button("❌ Batal Semua", key="pl8_deselect_all", use_container_width=True):
+                    for _k in _pl8_kodes:
+                        st.session_state[f"pl8_chk_{_k}"] = False
+                        st.session_state["pl8_checked"][_k] = False
+
+                for _rpl8 in _pl8_rows:
+                    _kpl8 = _rpl8["kode_paket"]
+                    _nomor8 = _rpl8.get("nomor_urut") or ""
+                    _label8 = f"{_nomor8}. {_rpl8.get('nama_paket','?')}" if _nomor8 else _rpl8.get("nama_paket", "?") or "?"
+                    _chk8 = st.checkbox(_label8, key=f"pl8_chk_{_kpl8}")
+                    st.session_state["pl8_checked"][_kpl8] = _chk8
+
+            with _pl8c2:
+                st.markdown("#### Aksi")
+
+                _pl8_selected_rows = [r for r in _pl8_rows if st.session_state["pl8_checked"].get(r["kode_paket"])]
+                _n_paket8 = len(_pl8_selected_rows)
+
+                if not _pl8_selected_rows:
+                    st.info("Centang minimal 1 paket di kiri.")
+                else:
+                    st.markdown(f"**{_n_paket8} paket** dipilih")
+                    st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
+
+                    _do_eval8    = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval")
+                    _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
+
+                    st.divider()
+                    st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
+                    _konfirmasi8 = st.checkbox(
+                        "Saya paham tindakan ini tidak bisa dibatalkan.",
+                        value=False, key="pl8_konfirmasi",
+                    )
+
+                    _btn8_disabled = _do_eval8 and not _konfirmasi8
+                    if _btn8_disabled:
+                        st.info("Centang konfirmasi untuk mengaktifkan tombol.")
+
+                    _btn8 = st.button(
+                        f"▶ Jalankan — {_n_paket8} paket",
+                        type="primary", key="pl8_run", use_container_width=True,
+                        disabled=_btn8_disabled,
+                    )
+
+                    if _btn8:
+                        _pb8 = st.progress(0.0, text="Memulai...")
+
+                        for _i8, _rpl8 in enumerate(_pl8_selected_rows):
+                            _kpl8  = _rpl8["kode_paket"]
+                            _nama8 = _rpl8.get("nama_paket", "?")
+                            _status8 = st.status(f"Paket {_i8+1}/{_n_paket8} — {_nama8}", expanded=True)
+
+                            with _status8:
+                                _log8_lines = []
+                                _log8_box   = st.empty()
+
+                                def _lcb8(msg, _box=_log8_box, _lines=_log8_lines):
+                                    _lines.append(msg)
+                                    _box.code("\n".join(_lines[-40:]))
+
+                                # Scrape id_nontender per peserta
+                                _lcb8("Scrape peserta evaluasi dari SPSE...")
+                                _pb8.progress(_i8 / _n_paket8, text=f"{_nama8} — scrape peserta")
+                                _res_peserta8 = _eval_pl.scrape_peserta_evaluasi(_kpl8)
+                                if not _res_peserta8.get("ok"):
+                                    _lcb8(f"[SKIP] {_res_peserta8['pesan']}")
+                                    _status8.update(label=f"SKIP {_nama8} — {_res_peserta8['pesan']}", state="error", expanded=False)
+                                    continue
+                                _peserta8 = _res_peserta8["peserta"]
+                                _lcb8(f"Peserta ({len(_peserta8)}): {', '.join(p['nama'] for p in _peserta8)}")
+
+                                # Resolve folder paket root
+                                _folder8      = _ke_pl.resolve_folder_paket_pl(_kpl8)
+                                _folder_paket8 = _folder8.get("pesan", "") if _folder8.get("ok") else ""
+
+                                # Evaluasi LULUS
+                                if _do_eval8:
+                                    _pb8.progress((_i8 + 0.3) / _n_paket8, text=f"{_nama8} — evaluasi LULUS")
+                                    _lcb8("--- Submit evaluasi Admin + Kualifikasi LULUS ---")
+                                    _eval8 = _eval_pl.evaluasi_batch_lulus(_kpl8, progress_cb=_lcb8)
+                                    _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
+
+                                # Download teknis/biaya
+                                if _do_tekbio8:
+                                    if not _folder_paket8:
+                                        _lcb8("[SKIP] Folder paket tidak ditemukan")
+                                    else:
+                                        _pb8.progress((_i8 + 0.6) / _n_paket8, text=f"{_nama8} — download teknis/biaya")
+                                        for _ui8, _ep8 in enumerate(_peserta8, 1):
+                                            _lcb8(f"--- Download [{_ui8}/{len(_peserta8)}] {_ep8['nama']} ---")
+                                            _res_tb8 = _dtb_pl.download_teknis_biaya_peserta(
+                                                id_nontender=_ep8["id_nontender"],
+                                                nama_peserta=_ep8["nama"],
+                                                folder_paket=_folder_paket8,
+                                                urutan=_ui8,
+                                                progress_cb=_lcb8,
+                                            )
+                                            _lcb8(f"{'[OK]' if _res_tb8['ok'] else '[GAGAL]'} {_res_tb8['pesan']}")
+
+                                _status8.update(label=f"Selesai — {_nama8}", state="complete", expanded=False)
+
+                            _pb8.progress((_i8 + 1) / _n_paket8, text=f"Selesai {_i8+1}/{_n_paket8} paket")
+
+                        _pb8.progress(1.0, text="Semua paket selesai.")
+                        st.success(f"Selesai — {_n_paket8} paket diproses.")
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
