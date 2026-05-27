@@ -325,21 +325,16 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
                 pajak = item.get("pajak_pct", 0.0)
                 total_stlh = item.get("total_stlh_pajak", 0.0)
 
-                # Baris kategori (satuan kosong + nilai 0 semua) → tulis sebagai sub-header tanpa No
-                is_kategori = (not satuan and harga_sat == 0 and total_sbl == 0)
-                if is_kategori:
-                    ws.Cells(row_idx, 1).Value = ""
-                    ws.Cells(row_idx, 2).Value = jenis
-                else:
-                    no_counter += 1
-                    ws.Cells(row_idx, 1).Value = no_counter
-                    ws.Cells(row_idx, 2).Value = jenis
-                    ws.Cells(row_idx, 3).Value = satuan
-                    ws.Cells(row_idx, 4).Value = vol
-                    ws.Cells(row_idx, 5).Value = harga_sat
-                    ws.Cells(row_idx, 6).Value = total_sbl
-                    ws.Cells(row_idx, 7).Value = pajak
-                    ws.Cells(row_idx, 8).Value = total_stlh
+                # Semua baris dapat nomor urut 1-n (tidak ada skip/kosong)
+                no_counter += 1
+                ws.Cells(row_idx, 1).Value = no_counter
+                ws.Cells(row_idx, 2).Value = jenis
+                ws.Cells(row_idx, 3).Value = satuan
+                ws.Cells(row_idx, 4).Value = vol
+                ws.Cells(row_idx, 5).Value = harga_sat
+                ws.Cells(row_idx, 6).Value = total_sbl
+                ws.Cells(row_idx, 7).Value = pajak
+                ws.Cells(row_idx, 8).Value = total_stlh
 
             # Baris Total Penawaran
             total_row = len(items) + 2
