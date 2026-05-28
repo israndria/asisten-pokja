@@ -28,10 +28,16 @@ def _headers(cookie_override: str = "") -> dict:
 
 
 def _parse_rp(s: str) -> float:
-    """Parse 'Rp. 8.000.000,00' → 8000000.0"""
+    """Parse 'Rp. 8.000.000,00' → 8000000.0  |  '1.0' atau '3.0' → float langsung"""
     if not s:
         return 0.0
-    cleaned = re.sub(r"[Rp\.\s]", "", s).replace(".", "").replace(",", ".")
+    # Volume SPSE: '1.0', '3.0' — titik = desimal, tidak ada prefix Rp
+    # Harga SPSE:  'Rp. 8.000.000,00' — titik = ribuan, koma = desimal
+    # Deteksi: ada 'Rp' atau koma → format Rp; sisanya → float langsung
+    if "Rp" in s or "," in s:
+        cleaned = re.sub(r"[Rp\s]", "", s).replace(".", "").replace(",", ".")
+    else:
+        cleaned = s.strip()
     try:
         return float(cleaned)
     except ValueError:
@@ -316,31 +322,53 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
 
             # Tulis header-compatible: No | Jenis | Satuan | Volume | Harga Satuan |
             #   Total sbl Pajak | Pajak% | Total stlh Pajak | Keterangan
+            # Replicate format sheet 5. HPS persis
+            FMT_RP  = '#.##0,00'   # harga/total: 21.000.000,00
+            FMT_VOL = '#.##0,00'   # volume: 1,00 / 3,00
+            FMT_PCT = '0,00'       # pajak: 11,00
+
+            def _fmt_rp(v: float) -> float:
+                return round(v, 2)
+
+            def _fmt_vol(v: float) -> float:
+                return round(v, 2)
+
             no_counter = 0
             for row_idx, item in enumerate(items, start=2):
-                jenis = item.get("jenis_bj", "")
-                satuan = item.get("satuan") or ""
-                vol = item.get("vol", 0.0)
+                jenis     = item.get("jenis_bj", "")
+                satuan    = item.get("satuan") or ""
+                vol       = item.get("vol", 0.0)
                 harga_sat = item.get("harga_satuan", 0.0)
                 total_sbl = item.get("total_sbl_pajak", 0.0)
-                pajak = item.get("pajak_pct", 0.0)
+                pajak     = item.get("pajak_pct", 0.0)
                 total_stlh = item.get("total_stlh_pajak", 0.0)
+                is_kategori = not satuan and harga_sat == 0.0 and total_sbl == 0.0
 
-                # Semua baris dapat nomor urut 1-n (tidak ada skip/kosong)
                 no_counter += 1
                 ws.Cells(row_idx, 1).Value = no_counter
                 ws.Cells(row_idx, 2).Value = jenis
                 ws.Cells(row_idx, 3).Value = satuan
-                ws.Cells(row_idx, 4).Value = vol
-                ws.Cells(row_idx, 5).Value = harga_sat
-                ws.Cells(row_idx, 6).Value = total_sbl
-                ws.Cells(row_idx, 7).Value = pajak
-                ws.Cells(row_idx, 8).Value = total_stlh
+
+                if is_kategori:
+                    for col in (4, 5, 6, 7, 8):
+                        ws.Cells(row_idx, col).Value = ""
+                else:
+                    ws.Cells(row_idx, 4).Value = _fmt_vol(vol)
+                    ws.Cells(row_idx, 4).NumberFormat = FMT_VOL
+                    ws.Cells(row_idx, 5).Value = _fmt_rp(harga_sat)
+                    ws.Cells(row_idx, 5).NumberFormat = FMT_RP
+                    ws.Cells(row_idx, 6).Value = _fmt_rp(total_sbl)
+                    ws.Cells(row_idx, 6).NumberFormat = FMT_RP
+                    ws.Cells(row_idx, 7).Value = int(round(pajak))
+                    ws.Cells(row_idx, 7).NumberFormat = FMT_PCT
+                    ws.Cells(row_idx, 8).Value = _fmt_rp(total_stlh)
+                    ws.Cells(row_idx, 8).NumberFormat = FMT_RP
 
             # Baris Total Penawaran
             total_row = len(items) + 2
             ws.Cells(total_row, 2).Value = "Total Penawaran"
-            ws.Cells(total_row, 8).Value = total
+            ws.Cells(total_row, 8).Value = _fmt_rp(total)
+            ws.Cells(total_row, 8).NumberFormat = FMT_RP
 
             wb.Save()
             wb.Close(False)
