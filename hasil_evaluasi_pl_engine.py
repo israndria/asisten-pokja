@@ -11,7 +11,6 @@ ATURAN:
 
 import os
 import re
-import shutil
 import subprocess
 
 from config import POKJA_ROOT
@@ -258,15 +257,7 @@ def populate_hasil_evaluasi_pl(
     if _xlsm_locked(xlsm_path) or _excel_running():
         return {"ok": False, "pesan": "File BAPLJKK sedang dibuka di Excel. Tutup dulu, lalu coba lagi.", "rows_written": 0}
 
-    # 3. Backup
-    backup_path = xlsm_path.replace(".xlsm", ".backup.xlsm")
-    try:
-        shutil.copy2(xlsm_path, backup_path)
-        _log(f"Backup: {os.path.basename(backup_path)}")
-    except Exception as e:
-        _log(f"⚠️ Backup gagal (lanjut): {e}")
-
-    # 4. Parse tiap peserta
+    # 3. Parse tiap peserta
     import kualifikasi_parser_pl as _kpp
 
     all_rows = []

@@ -267,38 +267,63 @@ def _gabung_pdf_kualifikasi(output_path: str, file_list: list, progress_cb=None)
             elif ext == ".pdf":
                 doc = fitz.open(fpath)
             elif ext in (".docx", ".doc", ".xlsx", ".xls"):
-                # Konversi via COM ke file PDF sementara, lalu gabung
-                import tempfile, shutil
+                # Konversi via subprocess COM terpisah (anti-hang Streamlit)
+                import tempfile, subprocess, sys
                 tmp_pdf = tempfile.mktemp(suffix=".pdf")
                 ok_conv = False
+                py_exe = sys.executable
+                if ext in (".docx", ".doc"):
+                    script = (
+                        "import sys, pythoncom, win32com.client\n"
+                        "pythoncom.CoInitialize()\n"
+                        "word = win32com.client.DispatchEx('Word.Application')\n"
+                        "word.Visible = False\n"
+                        "word.DisplayAlerts = 0\n"
+                        "word.AutomationSecurity = 3\n"  # msoAutomationSecurityForceDisable
+                        "try:\n"
+                        f"    d = word.Documents.Open(r'{os.path.abspath(fpath)}', ReadOnly=True, OpenAndRepair=True)\n"
+                        f"    d.SaveAs(r'{os.path.abspath(tmp_pdf)}', FileFormat=17)\n"
+                        "    d.Close(False)\n"
+                        "finally:\n"
+                        "    word.Quit()\n"
+                        "    pythoncom.CoUninitialize()\n"
+                    )
+                else:
+                    script = (
+                        "import sys, pythoncom, win32com.client\n"
+                        "pythoncom.CoInitialize()\n"
+                        "xl = win32com.client.DispatchEx('Excel.Application')\n"
+                        "xl.Visible = False\n"
+                        "xl.DisplayAlerts = False\n"
+                        "try:\n"
+                        f"    wb = xl.Workbooks.Open(r'{os.path.abspath(fpath)}', ReadOnly=True)\n"
+                        f"    wb.ExportAsFixedFormat(0, r'{os.path.abspath(tmp_pdf)}')\n"
+                        "    wb.Close(False)\n"
+                        "finally:\n"
+                        "    xl.Quit()\n"
+                        "    pythoncom.CoUninitialize()\n"
+                    )
                 try:
-                    if ext in (".docx", ".doc"):
-                        import pythoncom, win32com.client
-                        pythoncom.CoInitialize()
-                        word = win32com.client.DispatchEx("Word.Application")
-                        word.Visible = False; word.DisplayAlerts = False
-                        try:
-                            d = word.Documents.Open(os.path.abspath(fpath), ReadOnly=True)
-                            d.SaveAs(os.path.abspath(tmp_pdf), FileFormat=17)
-                            d.Close(False)
-                            ok_conv = True
-                        finally:
-                            word.Quit(); pythoncom.CoUninitialize()
+                    result = subprocess.run(
+                        [py_exe, "-c", script],
+                        timeout=60,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode == 0 and os.path.isfile(tmp_pdf):
+                        ok_conv = True
                     else:
-                        import pythoncom, win32com.client
-                        pythoncom.CoInitialize()
-                        xl = win32com.client.DispatchEx("Excel.Application")
-                        xl.Visible = False; xl.DisplayAlerts = False
-                        try:
-                            wb = xl.Workbooks.Open(os.path.abspath(fpath), ReadOnly=True)
-                            wb.ExportAsFixedFormat(0, os.path.abspath(tmp_pdf))
-                            wb.Close(False)
-                            ok_conv = True
-                        finally:
-                            xl.Quit(); pythoncom.CoUninitialize()
+                        err_msg = (result.stderr or "").strip().splitlines()[-1] if result.stderr else "exit non-zero"
+                        log(f"  [skip] gagal konversi {ext} {os.path.basename(fpath)}: {err_msg}")
+                except subprocess.TimeoutExpired:
+                    log(f"  [skip] timeout konversi {ext} {os.path.basename(fpath)} (>60s)")
                 except Exception as ce:
                     log(f"  [skip] gagal konversi {ext} {os.path.basename(fpath)}: {ce}")
                 if not ok_conv:
+                    try:
+                        os.remove(tmp_pdf)
+                    except Exception:
+                        pass
                     continue
                 doc = fitz.open(tmp_pdf)
                 try:

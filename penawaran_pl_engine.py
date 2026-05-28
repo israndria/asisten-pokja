@@ -284,6 +284,7 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
     xlsm_files = [
         f for f in glob.glob(os.path.join(folder_paket, "*.xlsm"))
         if not os.path.basename(f).startswith("~$")
+        and ".backup" not in os.path.basename(f)
     ]
     if not xlsm_files:
         return {"ok": False, "pesan": "File .xlsm tidak ditemukan di folder paket", "total_penawaran": total}
