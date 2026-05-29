@@ -175,6 +175,16 @@ def kirim_verifikasi(
         )
         # Sukses: redirect kembali ke halaman form + ada alert sukses di HTML
         if "berhasil terkirim" in r.text.lower() or "berhasil" in r.text.lower():
+            # Catat history ke Supabase
+            try:
+                from datetime import datetime, timezone
+                from config import sb as _sb_f
+                _sb_f().table("draft_paket_pl").update({
+                    "tgl_undangan_verifikasi": datetime.now(timezone.utc).isoformat(),
+                    "status_undangan_verifikasi": "terkirim",
+                }).eq("id_nontender", id_nontender).execute()
+            except Exception:
+                pass
             return {"ok": True, "msg": "Undangan verifikasi berhasil terkirim", "status_code": r.status_code}
         # Cari pesan error di HTML
         m = re.search(r'class="alert[^"]*"[^>]*>\s*<[^>]+>([^<]{5,200})', r.text)

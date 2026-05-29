@@ -206,10 +206,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Buat Jadwal",
         "4️⃣ Setup Paket",
-        "5️⃣ Kirim Verifikasi",
-        "6️⃣ Upload BA PL",
-        "7️⃣ Download Kualifikasi",
-        "8️⃣ Evaluasi & Teknis/Biaya",
+        "5️⃣ Download Kualifikasi",
+        "6️⃣ Evaluasi & Teknis/Biaya",
+        "7️⃣ Kirim Verifikasi",
+        "8️⃣ Upload BA PL",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2349,8 +2349,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     use_container_width=True, hide_index=True,
                                 )
 
-    # ── Tab 5: Kirim Verifikasi Penyedia ─────────────────────────────────────
-    with _pl_tab5:
+    # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
+    with _pl_tab7:
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -2361,7 +2361,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         _verif_rows = []
         try:
             _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi"
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi"
             ).order("kode_paket").execute().data or []
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
@@ -2477,6 +2477,15 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                 if _verif_warning:
                     st.warning(_verif_warning)
+                    if "invalid_grant" in str(_verif_warning) or "expired" in str(_verif_warning).lower() or "tidak ditemukan" in str(_verif_warning):
+                        if st.button("🔑 Login Google Calendar", key="btn_reset_gcal_token"):
+                            try:
+                                import gcal_helper as _gcalh
+                                _gcalh.generate_token()
+                                st.success("✅ Token GCal berhasil dibuat. Refresh halaman.")
+                                st.rerun()
+                            except Exception as _ge:
+                                st.error(f"Gagal generate token: {_ge}")
 
                 _vt1, _vt2 = st.columns(2)
                 _verif_start = _vt1.text_input(
@@ -2500,19 +2509,6 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     height=80,
                     key="verif_tempat",
                 )
-                _verif_hadir = st.text_area(
-                    "Yang harus hadir",
-                    value=_verif_pl.YANG_HARUS_HADIR_DEFAULT,
-                    height=140,
-                    key="verif_hadir",
-                )
-                _verif_dibawa = st.text_area(
-                    "Yang harus dibawa",
-                    value=_verif_pl.YANG_HARUS_DIBAWA_DEFAULT,
-                    height=80,
-                    key="verif_dibawa",
-                )
-
                 # Tombol kirim
                 if st.button("📨 Kirim Verifikasi ke Penyedia", key="btn_kirim_verifikasi"):
                     if not _verif_id_nt:
@@ -2526,8 +2522,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 waktu_start=_verif_start,
                                 waktu_end=_verif_end,
                                 tempat=_verif_tempat,
-                                yang_harus_hadir=_verif_hadir,
-                                yang_harus_dibawa=_verif_dibawa,
+                                yang_harus_hadir=_verif_pl.YANG_HARUS_HADIR_DEFAULT,
+                                yang_harus_dibawa=_verif_pl.YANG_HARUS_DIBAWA_DEFAULT,
                             )
                         if _verif_result["ok"]:
                             st.success(f"✅ {_verif_result['msg']}")
@@ -2561,62 +2557,46 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                 st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
 
                 # Waktu — dropdown dari GCal + fallback input manual
-                _batch_gcal_opts = {}
-                try:
-                    from gcal_helper import _build_service as _bsvc
-                    from datetime import timedelta as _td2
-                    _gsvc2 = _bsvc()
-                    _gnow2 = __import__('datetime').date.today()
-                    _gevs2 = _gsvc2.events().list(
-                        calendarId="primary",
-                        timeMin=(_gnow2 - _td2(days=7)).isoformat() + "T00:00:00Z",
-                        timeMax=(_gnow2 + _td2(days=120)).isoformat() + "T23:59:59Z",
-                        maxResults=200, singleEvents=True, q="Klarifikasi",
-                    ).execute().get("items", [])
-                    _seen_tgl = set()
-                    for _ge2 in _gevs2:
-                        _gs2 = (_ge2.get("start", {}).get("date") or _ge2.get("start", {}).get("dateTime", ""))[:10]
-                        if _gs2 and _gs2 not in _seen_tgl:
-                            _seen_tgl.add(_gs2)
-                            try:
-                                from datetime import datetime as _dtp
-                                _d2 = _dtp.strptime(_gs2, "%Y-%m-%d")
-                                _label2 = _d2.strftime("%d-%m-%Y")  # tampilan
-                                _batch_gcal_opts[f"📅 {_label2} (dari GCal)"] = (_label2 + " 09:00", _label2 + " 15:00")
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                import datetime as _dt_bv
+                _today_bv = _dt_bv.date.today()
 
-                _batch_gcal_opts["✏️ Isi manual"] = ("", "")
-                _bwc0 = st.selectbox(
-                    "Pilih Jadwal Klarifikasi",
-                    options=list(_batch_gcal_opts.keys()),
-                    key="batch_verif_jadwal",
-                )
-                _sel_start, _sel_end = _batch_gcal_opts[_bwc0]
                 _bwc1, _bwc2 = st.columns(2)
-                _batch_start = _bwc1.text_input(
-                    "Waktu Mulai (DD-MM-YYYY HH:MM)",
-                    value=_sel_start,
-                    placeholder="02-06-2026 09:00",
-                    key="batch_verif_start",
-                )
-                _batch_end = _bwc2.text_input(
-                    "Waktu Selesai (DD-MM-YYYY HH:MM)",
-                    value=_sel_end,
-                    placeholder="02-06-2026 15:00",
-                    key="batch_verif_end",
-                )
+                with _bwc1:
+                    st.caption("**Waktu Mulai**")
+                    _bv_start_d = st.date_input("Tanggal Mulai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_start_d")
+                    _bv_start_t = st.time_input("Jam Mulai", value=_dt_bv.time(9, 0), step=300, key="batch_verif_start_t")
+                with _bwc2:
+                    st.caption("**Waktu Selesai**")
+                    _bv_end_d = st.date_input("Tanggal Selesai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_end_d")
+                    _bv_end_t = st.time_input("Jam Selesai", value=_dt_bv.time(15, 0), step=300, key="batch_verif_end_t")
+
+                _batch_start = f"{_bv_start_d.strftime('%d-%m-%Y')} {_bv_start_t.strftime('%H:%M')}"
+                _batch_end   = f"{_bv_end_d.strftime('%d-%m-%Y')} {_bv_end_t.strftime('%H:%M')}"
 
                 # Checkbox list paket
                 st.markdown("**Pilih paket yang akan dikirim:**")
+                _sudah_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") == "terkirim"]
+                _belum_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") != "terkirim"]
+                if _sudah_kirim:
+                    st.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
                 _batch_selected = []
                 _bc1, _bc2 = st.columns(2)
                 for _bi, _br in enumerate(_batch_eligible):
-                    _label = f"{_br.get('kode_unik') or _br['kode_paket']} — {_br['nama_paket'][:40]}"
+                    _ku = _br.get('kode_unik') or _br['kode_paket']
+                    _tgl_kirim = _br.get("tgl_undangan_verifikasi")
+                    _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
+                    if _sudah and _tgl_kirim:
+                        import datetime as _dtlb
+                        try:
+                            _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
+                        except Exception:
+                            _tgl_fmt = _tgl_kirim[:10]
+                        _label = f"{_ku} — {_br['nama_paket'][:35]} ✅ {_tgl_fmt}"
+                    else:
+                        _label = f"{_ku} — {_br['nama_paket'][:40]}"
                     _col = _bc1 if _bi % 2 == 0 else _bc2
-                    if _col.checkbox(_label, value=True, key=f"batch_chk_{_br['kode_paket']}"):
+                    _default_chk = not _sudah  # belum terkirim → default centang; sudah → default uncheck
+                    if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
                         _batch_selected.append(_br)
 
                 st.markdown(f"**{len(_batch_selected)} paket dipilih**")
@@ -2674,8 +2654,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 for h in _fail_list:
                                     st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
-    # ── Tab 6: Upload BA PL ───────────────────────────────────────────────────
-    with _pl_tab6:
+    # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
+    with _pl_tab8:
         import ba_engine_pl as _ba_pl_engine5
 
         st.markdown("## Upload Berita Acara — Pengadaan Langsung")
@@ -2796,8 +2776,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             else:
                                 _st5.write(f"❌ {_pv5['kode_paket']} — status {_rv5.get('status')}")
 
-    # ── Tab 7: Download Dok Kualifikasi PL ───────────────────────────────────
-    with _pl_tab7:
+    # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
+    with _pl_tab5:
         import kualifikasi_engine_pl as _ke_pl
         import kualifikasi_parser_pl as _kp_pl
         import hasil_evaluasi_pl_engine as _he_pl
@@ -2932,8 +2912,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         _pb7.progress(1.0, text="Semua paket selesai.")
                         st.success(f"Selesai — {_n_paket7} paket diproses.")
 
-    # ── Tab 8: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    with _pl_tab8:
+    # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
+    with _pl_tab6:
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl

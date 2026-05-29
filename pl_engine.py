@@ -160,13 +160,29 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     scraped = 0
 
     for row in rows:
-        id_nontender = str(row[0])   # ID internal
+        id_paket_internal = str(row[0])  # ID paket-level (kolom 0), bukan untuk kirim verifikasi
         nama_paket   = row[1]
         status_spse  = row[2]
         satker       = row[4]
         kode_paket   = str(row[5])   # kode resmi non-tender
 
         log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
+
+        # Ambil ID peserta dari halaman evaluasi (untuk kirimundanganverifikasi)
+        id_nontender = id_paket_internal  # fallback jika belum ada peserta
+        try:
+            import re as _re
+            r_eval = requests.get(
+                f"{base_url}evaluasinontender/{kode_paket}",
+                headers=headers, timeout=15
+            )
+            ids_peserta = _re.findall(
+                r'/evaluasinontender/(\d+)/kirimundanganverifikasi', r_eval.text
+            )
+            if ids_peserta:
+                id_nontender = ids_peserta[0]
+        except Exception:
+            pass
 
         # 2. Fetch detail dari halaman edit
         jenis_kontrak = ""

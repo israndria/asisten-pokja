@@ -4,10 +4,25 @@ import os
 import json
 from datetime import datetime, date
 
-TOKEN_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "V19_Scheduler", "WPy64-313110", "token.json",
-)
+_BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "V19_Scheduler", "WPy64-313110")
+TOKEN_PATH = os.path.normpath(os.path.join(_BASE, "token.json"))
+CRED_PATH  = os.path.normpath(os.path.join(_BASE, "credentials.json"))
+
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
+
+
+def generate_token():
+    """Buka browser OAuth → simpan token.json baru. Panggil saat token expired/hilang."""
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    if not os.path.isfile(CRED_PATH):
+        raise FileNotFoundError(f"credentials.json tidak ditemukan: {CRED_PATH}")
+    if os.path.isfile(TOKEN_PATH):
+        os.remove(TOKEN_PATH)
+    flow = InstalledAppFlow.from_client_secrets_file(CRED_PATH, SCOPES)
+    creds = flow.run_local_server(port=0)
+    with open(TOKEN_PATH, "w") as f:
+        f.write(creds.to_json())
+    return TOKEN_PATH
 
 # Mapping jenis_key → keyword yang dicari di judul event GCal
 _TAHAP_KEYWORD = {
