@@ -128,11 +128,14 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
     hasil["akta_perubahan"] = _akta_block(t2, perubahan_idx)
 
     # Tabel 3: MANAJERIAL (pemilik/direktur)
+    # Filter baris yang awalan nama perusahaan (CV/PT/UD/dll) — hanya nama orang masuk list
+    _re_pt_filter = re.compile(r'^(CV|PT|UD|PD|Koperasi|Firma)\b\.?\s', re.IGNORECASE)
     t3 = _tbl(3)
     pemilik_list = []
     for row in t3[1:]:
         if row and len(row) >= 1 and row[0] and row[0] != "No data available in table":
-            pemilik_list.append(row[0])
+            if not _re_pt_filter.match(row[0].strip()):
+                pemilik_list.append(row[0])
     hasil["pemilik"] = pemilik_list
 
     # PERSONEL — table#table-tenaga-ahli
@@ -255,20 +258,36 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
     if not folder_peserta or not os.path.isdir(folder_peserta):
         return result
 
-    # Cari PDF kandidat: exclude gabungan + checklist, urutkan terbesar dulu
-    pdfs = []
+    # Regex filter: nama perusahaan diawali CV/PT/UD/PD/Koperasi/Firma
+    _re_pt = re.compile(r'^(CV|PT|UD|PD|Koperasi|Firma)\b\.?\s', re.IGNORECASE)
+
+    # Prioritas: "Kualifikasi *.pdf" (PDF gabungan) → "2. Dokumen Kualifikasi*.pdf" → PDF lain terbesar
+    # TIDAK exclude Kualifikasi *.pdf — justru itu sumber terbaik
+    pdfs_prioritas = []
+    pdfs_lain = []
     for f in os.listdir(folder_peserta):
         if not f.lower().endswith(".pdf"):
             continue
-        if f.startswith("Kualifikasi ") or f.startswith("checklist_") or f.startswith("~$"):
+        if f.startswith("checklist_") or f.startswith("~$"):
             continue
         fpath = os.path.join(folder_peserta, f)
-        pdfs.append((os.path.getsize(fpath), fpath))
-    if not pdfs:
-        return result
-    pdfs.sort(reverse=True)
+        sz = os.path.getsize(fpath)
+        # Kualifikasi *.pdf → slot pertama; 2. Dokumen Kualifikasi* → slot kedua
+        if f.startswith("Kualifikasi "):
+            pdfs_prioritas.insert(0, (0, fpath))     # paling depan
+        elif f.lower().startswith("2. dokumen kualifikasi") or f.startswith("2. Dokumen Kualifikasi"):
+            pdfs_prioritas.append((1, fpath))        # kedua
+        else:
+            pdfs_lain.append((sz, fpath))
 
-    for _, pq_path in pdfs[:2]:  # coba 2 PDF terbesar
+    pdfs_lain.sort(reverse=True)
+    # Urutan final: [Kualifikasi*.pdf, 2.DokumenKualifikasi*.pdf, PDF lain terbesar…]
+    ordered_pdfs = [p for _, p in pdfs_prioritas] + [p for _, p in pdfs_lain[:2]]
+
+    if not ordered_pdfs:
+        return result
+
+    for pq_path in ordered_pdfs:  # coba berurutan sesuai prioritas
         try:
             # Hanya pakai fitz text layer — TANPA OCR (OCR terlalu lambat untuk batch 15+ paket)
             import fitz as _fitz
@@ -307,6 +326,35 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                     cand = m3.group(1).strip()
                     if len(cand.split()) >= 2:  # minimal 2 kata
                         result["direktur"] = cand
+
+            # Pola 4 (PDF gabungan Kualifikasi): multiline — nama diikuti "Direktur" di baris
+            # bawahnya, mungkin ada baris kosong di antara. Contoh:
+            # "Ir. Muhammad Dhiya Khairi Ananda, M.T. \nDirektur "
+            if not result["direktur"]:
+                m4 = re.search(
+                    r'\n([A-Z][a-zA-Z\s\.,]+(?:M\.T\.|S\.T\.|S\.H\.|M\.M\.|Ir\.|ST|SH)?)\s*\n\s*Direktur\s*\n',
+                    full_text, re.IGNORECASE
+                )
+                if m4:
+                    cand4 = m4.group(1).strip()
+                    if len(cand4.split()) >= 2 and not _re_pt.match(cand4):
+                        result["direktur"] = cand4
+
+            # Pola 5: "Direktur\n\n{NAMA}" (urutan terbalik, form Cover/Cap)
+            # Contoh: "Direktur \n \n Ir. Muhammad Dhiya Khairi Ananda, M.T. "
+            if not result["direktur"]:
+                m5 = re.search(
+                    r'\bDirektur\b\s*\n[\s\n]*([A-Z][a-zA-Z\s\.,]+(?:M\.T\.|S\.T\.|Ir\.)?)\s*\n',
+                    full_text, re.IGNORECASE
+                )
+                if m5:
+                    cand5 = m5.group(1).strip()
+                    if len(cand5.split()) >= 2 and not _re_pt.match(cand5):
+                        result["direktur"] = cand5
+
+            # Validasi: jika hasil diawali nama PT/CV → reset ke kosong, lanjut PDF berikutnya
+            if result["direktur"] and _re_pt.match(result["direktur"]):
+                result["direktur"] = ""
 
         # ── NPWP ──────────────────────────────────────────────────────────────
         if not result["npwp_pdf"]:

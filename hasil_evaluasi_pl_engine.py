@@ -129,13 +129,14 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
     _r("Akta Perubahan Terakhir", "Administrasi", "preview t2",
        catatan=f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {akta_u.get('notaris','')}" if akta_u else "")
 
-    # Direktur: ambil 1 (baris pertama tabel manajerial = direktur utama/pimpinan)
+    # Direktur: prioritas dari PDF (direktur_pdf), fallback pemilik[0] (sudah ter-filter nama PT)
+    _direktur_pdf = peserta_data.get("direktur_pdf", "")
     pemilik = peserta_data.get("pemilik", [])
-    direktur_utama = pemilik[0] if pemilik else ""
-    semua_pemilik = "; ".join(pemilik) if len(pemilik) > 1 else ""
-    _r("Direktur Utama/Pimpinan", "Administrasi", "preview t3",
+    direktur_utama = _direktur_pdf if _direktur_pdf else (pemilik[0] if pemilik else "")
+    # Satu nama saja — TIDAK tampilkan "(+ N lain)" supaya bersih untuk mail-merge
+    _r("Direktur Utama/Pimpinan", "Administrasi", "PDF/preview t3",
        "ADA" if direktur_utama else "PERIKSA",
-       direktur_utama + (f" (+ {len(pemilik)-1} lain: {semua_pemilik})" if semua_pemilik else ""))
+       direktur_utama)
 
     # ── Teknis JKK ─────────────────────────────────────────────────────────────
     personel = peserta_data.get("personel_list", [])
