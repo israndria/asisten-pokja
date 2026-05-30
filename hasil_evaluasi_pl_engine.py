@@ -46,6 +46,34 @@ def _xlsm_locked(xlsm_path: str) -> bool:
     return os.path.exists(os.path.join(folder, lock_name))
 
 
+def _hapus_lock_orphan(xlsm_path: str, log=None) -> bool:
+    """
+    Cek & hapus lock file orphan (~$<basename>) jika Excel tidak beneran jalan.
+    Return True  = aman lanjut (tidak ada lock, atau orphan berhasil dihapus).
+    Return False = lock ada DAN Excel sedang jalan (jangan hapus, tolak proses).
+    """
+    folder    = os.path.dirname(xlsm_path)
+    lock_name = "~$" + os.path.basename(xlsm_path)
+    lock_path = os.path.join(folder, lock_name)
+
+    if not os.path.exists(lock_path):
+        return True  # tidak ada lock, aman
+
+    if _excel_running():
+        return False  # Excel jalan + lock ada = beneran terbuka, tolak
+
+    # Lock ada tapi Excel mati → orphan, hapus
+    try:
+        os.remove(lock_path)
+        if log:
+            log(f"[INFO] Lock orphan dihapus: {lock_name}")
+    except Exception as e:
+        if log:
+            log(f"[WARN] Gagal hapus lock orphan ({lock_name}): {e}")
+        # Tetap lanjut — mungkin sudah hilang sendiri
+    return True
+
+
 def _find_xlsm(kode_paket: str) -> str:
     """Cari file 0. BAPLJKK - *.xlsm di folder paket PL."""
     try:
@@ -255,8 +283,12 @@ def populate_hasil_evaluasi_pl(
         return {"ok": False, "pesan": "File BAPLJKK .xlsm tidak ditemukan di folder paket.", "rows_written": 0}
 
     # 2. Cek Excel running / file locked
-    if _xlsm_locked(xlsm_path) or _excel_running():
-        return {"ok": False, "pesan": "File BAPLJKK sedang dibuka di Excel. Tutup dulu, lalu coba lagi.", "rows_written": 0}
+    # Lock ada DAN Excel jalan = beneran dibuka user → tolak
+    if _excel_running() and _xlsm_locked(xlsm_path):
+        return {"ok": False, "pesan": "Excel sedang berjalan + file BAPLJKK terkunci. Tutup Excel dulu.", "rows_written": 0}
+    # Lock orphan (Excel mati tapi lock nyangkut dari crash sebelumnya) → hapus otomatis
+    if _xlsm_locked(xlsm_path):
+        _hapus_lock_orphan(xlsm_path, _log)
 
     # 3. Parse tiap peserta
     import kualifikasi_parser_pl as _kpp

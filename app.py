@@ -2852,6 +2852,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     if _btn7:
                         _pb7 = st.progress(0.0, text="Memulai...")
                         _log7_lines = []  # akumulasi log — update sekali per paket, bukan per baris
+                        _ringkasan7: list = []  # kumpul status tiap paket untuk ringkasan akhir
 
                         def _flush7(container):
                             """Render log terakumulasi ke container — 1 update per paket."""
@@ -2877,6 +2878,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 if not _fp7.get("ok"):
                                     _lcb7(f"[SKIP] Peserta: {_fp7['pesan']}")
                                     _status7.update(label=f"SKIP {_nama7} — {_fp7['pesan']}", state="error", expanded=False)
+                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _fp7["pesan"]})
                                     continue
                                 _peserta7 = _fp7["peserta"]
                                 _lcb7(f"Peserta ({len(_peserta7)}): {', '.join(p['nama'] for p in _peserta7)}")
@@ -2886,6 +2888,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 if not _folder7.get("ok"):
                                     _lcb7(f"[SKIP] Folder: {_folder7['pesan']}")
                                     _status7.update(label=f"SKIP {_nama7} — folder tidak ditemukan", state="error", expanded=False)
+                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _folder7.get("pesan", "folder tidak ditemukan")})
                                     continue
                                 _folder_kual7 = _folder7["path"]
 
@@ -2904,13 +2907,22 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                     _lcb7("--- Populate sheet Hasil Evaluasi ---")
                                     _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
                                     _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
+                                    _ringkasan7.append({
+                                        "nama"  : _nama7,
+                                        "status": "ok" if _hasil7.get("ok") else "gagal",
+                                        "detail": _hasil7.get("pesan", ""),
+                                    })
+                                else:
+                                    # Tidak ada parse → anggap OK (hanya download)
+                                    _ringkasan7.append({"nama": _nama7, "status": "ok", "detail": "download saja"})
 
                                 _status7.update(label=f"Selesai — {_nama7}", state="complete", expanded=False)
 
                             _pb7.progress((_i7 + 1) / _n_paket7, text=f"Selesai {_i7+1}/{_n_paket7} paket")
 
                         _pb7.progress(1.0, text="Semua paket selesai.")
-                        st.success(f"Selesai — {_n_paket7} paket diproses.")
+                        from batch_summary import render_ringkasan_batch as _rrb7
+                        _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
     with _pl_tab6:
@@ -2994,6 +3006,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 
                     if _btn8:
                         _pb8 = st.progress(0.0, text="Memulai...")
+                        _ringkasan8: list = []  # kumpul status tiap paket untuk ringkasan akhir
 
                         for _i8, _rpl8 in enumerate(_pl8_selected_rows):
                             _kpl8  = _rpl8["kode_paket"]
@@ -3015,6 +3028,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 if not _res_peserta8.get("ok"):
                                     _lcb8(f"[SKIP] {_res_peserta8['pesan']}")
                                     _status8.update(label=f"SKIP {_nama8} — {_res_peserta8['pesan']}", state="error", expanded=False)
+                                    _ringkasan8.append({"nama": _nama8, "status": "skip", "detail": _res_peserta8["pesan"]})
                                     continue
                                 _peserta8 = _res_peserta8["peserta"]
                                 _lcb8(f"Peserta ({len(_peserta8)}): {', '.join(p['nama'] for p in _peserta8)}")
@@ -3064,12 +3078,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                             _lcb8(f"  {'[OK]' if _res_pnw8['ok'] else '[GAGAL]'} {_res_pnw8['pesan']}" +
                                                   (f" — Total Rp {_res_pnw8['total_penawaran']:,.0f}" if _res_pnw8.get('total_penawaran') else ""))
 
+                                _ringkasan8.append({"nama": _nama8, "status": "ok", "detail": ""})
                                 _status8.update(label=f"Selesai — {_nama8}", state="complete", expanded=False)
 
                             _pb8.progress((_i8 + 1) / _n_paket8, text=f"Selesai {_i8+1}/{_n_paket8} paket")
 
                         _pb8.progress(1.0, text="Semua paket selesai.")
-                        st.success(f"Selesai — {_n_paket8} paket diproses.")
+                        from batch_summary import render_ringkasan_batch as _rrb8
+                        _rrb8(st, _ringkasan8)
 
     st.stop()  # Jangan render tab Tender jika mode PL
 
