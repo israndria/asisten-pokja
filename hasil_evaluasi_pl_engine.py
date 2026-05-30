@@ -361,8 +361,12 @@ def populate_hasil_evaluasi_pl(
                 return str(v)
             if not isinstance(v, (str, int, float, bool)):
                 return str(v)
-            if isinstance(v, str) and v.startswith(("=", "+", "-", "@")):
-                return "'" + v  # prefix ' → Excel treat as literal text
+            if isinstance(v, str):
+                # bersihkan line break (CR/LF/_x000D_) → spasi, hindari multiline di cell
+                v = v.replace("_x000D_", "\n").replace("\r\n", "\n").replace("\r", "\n")
+                v = re.sub(r"\s*\n\s*", " ", v).strip()
+                if v.startswith(("=", "+", "-", "@")):
+                    return "'" + v  # prefix ' → Excel treat as literal text
             return v
 
         clean_rows = [[_san(v) for v in row] for row in all_rows]
