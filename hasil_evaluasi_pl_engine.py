@@ -262,6 +262,7 @@ def populate_hasil_evaluasi_pl(
     import kualifikasi_parser_pl as _kpp
 
     all_rows = []
+    peserta_md = []  # kumpul per-penyedia untuk export MD
     for idx, peserta in enumerate(peserta_list, 1):
         nama = peserta.get("nama", "")
         kual_id = peserta.get("kualifikasi_id", "")
@@ -292,6 +293,8 @@ def populate_hasil_evaluasi_pl(
         rows = _build_rows_peserta(peserta_data, kode_paket, no_start=len(all_rows) + 2)
         all_rows.extend(rows)
         all_rows.append(["", "", "", "", "", ""])  # baris kosong antar peserta
+        # Kumpul per-penyedia untuk export MD (rows tanpa baris kosong separator)
+        peserta_md.append({"nama": nama, "rows": rows})
 
     if not all_rows:
         return {"ok": False, "pesan": "Tidak ada data untuk ditulis.", "rows_written": 0}
@@ -340,6 +343,23 @@ def populate_hasil_evaluasi_pl(
         wb = None
         _log(f"✅ Sheet Hasil Evaluasi terisi {len(all_rows)} baris.")
         result = {"ok": True, "pesan": f"✅ {len(all_rows)} baris ditulis ke sheet Hasil Evaluasi.", "rows_written": len(all_rows)}
+
+        # Export MD — additive, jangan gagalkan jika error
+        try:
+            from hasil_evaluasi_md import export_hasil_md as _export_md
+            from config import sb as _sb
+            # Ambil nama_paket dari Supabase
+            _nama_paket = kode_paket
+            try:
+                resp = _sb().table("draft_paket_pl").select("nama_paket").eq("kode_paket", kode_paket).single().execute()
+                if resp.data:
+                    _nama_paket = resp.data.get("nama_paket", kode_paket)
+            except Exception:
+                pass
+            folder_paket = os.path.dirname(os.path.abspath(xlsm_path))
+            _export_md(folder_paket, _nama_paket, peserta_md, _log)
+        except Exception as _md_err:
+            _log(f"[MD Export] Warning: gagal export MD — {_md_err}")
 
     except Exception as e:
         result = {"ok": False, "pesan": f"COM error: {e}", "rows_written": 0}
