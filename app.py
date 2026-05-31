@@ -1,6 +1,7 @@
 """Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
+import glob as _glob_mod
 import pathlib
 import re
 import sys
@@ -5563,9 +5564,26 @@ with tab_kual:
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
+            # Selectbox: pilih 1 paket aktif untuk tampil pesertanya
+            _kl_paket_aktif_opsi = [p for p in _kl_paket_list2 if st.session_state.get(f"kl_chk_{p['kode']}", False)]
+            if _kl_paket_aktif_opsi:
+                _kl_kode_aktif = st.selectbox(
+                    "📌 Paket aktif (pilih untuk lihat pesertanya):",
+                    options=[p["kode"] for p in _kl_paket_aktif_opsi],
+                    format_func=lambda k: next(
+                        (f"{_pokja_label(pp)[:55]}" for pp in _kl_paket_aktif_opsi if pp["kode"] == k), k
+                    ),
+                    key="kl_paket_aktif",
+                )
+            else:
+                _kl_kode_aktif = None
+                st.caption("← Centang paket di Section 1 dulu.")
+
             _kl_ada_terpilih = False
             for p in _kl_paket_list2:
                 if not st.session_state.get(f"kl_chk_{p['kode']}", False):
+                    continue
+                if p["kode"] != _kl_kode_aktif:
                     continue
                 _kl_ada_terpilih = True
                 kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
@@ -5643,52 +5661,8 @@ with tab_kual:
         if not _kl_paket_dipilih:
             st.info("← Centang paket dan tunggu peserta dimuat.")
         else:
-            # Tampilkan status folder tiap paket
-            _kl_semua_folder_ok = True
-            for item in _kl_paket_dipilih:
-                p = item["paket"]
-                fc1, fc2 = st.columns([4, 1])
-                with fc1:
-                    if item["folder_ok"]:
-                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\1. Dokumen Kualifikasi`")
-                    else:
-                        st.error(f"❌ **{p['kode']}** — {item['folder_info']}")
-                        _kl_semua_folder_ok = False
-                with fc2:
-                    if item["folder_ok"] and st.button("📂", key=f"kl_open_{p['kode']}", help="Buka folder", use_container_width=True):
-                        os.startfile(item["folder"])
-
-                n_ps = len(item["peserta"])
-                st.caption(f"  → {n_ps} peserta dipilih" if n_ps else "  → ⚠️ Tidak ada peserta dipilih")
-
-            st.divider()
-
-            # Hitung total peserta
-            _kl_total_semua = sum(len(item["peserta"]) for item in _kl_paket_dipilih)
-            _kl_total_paket = len(_kl_paket_dipilih)
-
-            # ── Opsi aksi ──────────────────────────────────────────────────────
-            _kl_do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="kl_opt_download")
-            _kl_do_kk = st.checkbox("📋 Parse & simpan KK Evaluasi ke Supabase", value=True, key="kl_opt_kk")
-
-            _kl_btn_label = []
-            if _kl_do_download: _kl_btn_label.append("Download")
-            if _kl_do_kk: _kl_btn_label.append("Parse KK")
-            _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
-
-            _kl_disabled = (not _kl_btn_label) or (_kl_do_download and not _kl_semua_folder_ok) or (_kl_total_semua == 0)
-            if not _kl_semua_folder_ok and _kl_do_download:
-                st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
-
-            st.divider()
-
-            if st.button(
-                f"▶ Jalankan: {_kl_btn_text} — {_kl_total_paket} paket, {_kl_total_semua} peserta",
-                key="kl_jalankan",
-                type="primary",
-                use_container_width=True,
-                disabled=_kl_disabled,
-            ):
+            # ── Fungsi proses (dipakai tombol global + per-paket) ──────────────
+            def _proses_paket_kk(items_to_run, do_download, do_kk, do_excel):
                 log_area = st.empty()
                 log_lines = []
 
@@ -5697,10 +5671,12 @@ with tab_kual:
                     log_area.code("\n".join(log_lines[-30:]))
 
                 progress = st.progress(0, text="Memulai...")
-                _kl_total_steps = _kl_total_paket * (2 if (_kl_do_download and _kl_do_kk) else 1)
-                _kl_step = 0
+                _total_paket = len(items_to_run)
+                _total_semua = sum(len(it["peserta"]) for it in items_to_run)
+                _total_steps = _total_paket * (2 if (do_download and do_kk) else 1)
+                _step = 0
 
-                for item in _kl_paket_dipilih:
+                for item in items_to_run:
                     p = item["paket"]
                     folder_out = item["folder"]
                     peserta_list = item["peserta"]
@@ -5710,11 +5686,11 @@ with tab_kual:
                     _log_cb(f"=== Paket {kode_tender}: {p['nama'][:50]} ({n_ps} peserta) ===")
 
                     # ── Download dokumen ───────────────────────────────────────
-                    if _kl_do_download and folder_out:
+                    if do_download and folder_out:
                         kualifikasi_engine.save_last_dir(folder_out)
                         for i, ps in enumerate(peserta_list):
                             progress.progress(
-                                _kl_step / _kl_total_steps + (i / n_ps) / _kl_total_steps * (0.5 if _kl_do_kk else 1.0),
+                                _step / _total_steps + (i / n_ps) / _total_steps * (0.5 if do_kk else 1.0),
                                 text=f"[{kode_tender}] Download {i+1}/{n_ps}: {ps['nama'][:35]}...",
                             )
                             kualifikasi_engine.download_kualifikasi_peserta(
@@ -5725,15 +5701,15 @@ with tab_kual:
                                 progress_cb=_log_cb,
                             )
                         _log_cb(f"--- [{kode_tender}] Download selesai ---")
-                        _kl_step += 1
+                        _step += 1
 
                     # ── Parse & simpan KK Evaluasi ─────────────────────────────
-                    if _kl_do_kk:
+                    if do_kk:
                         _log_cb(f"--- [{kode_tender}] Parse KK Evaluasi ---")
                         semua_data = []
                         for i, ps in enumerate(peserta_list):
                             progress.progress(
-                                _kl_step / _kl_total_steps + (i / n_ps) / _kl_total_steps,
+                                _step / _total_steps + (i / n_ps) / _total_steps,
                                 text=f"[{kode_tender}] Parse KK {i+1}/{n_ps}: {ps['nama'][:35]}...",
                             )
                             slug = re.sub(r'[\\/:*?"<>|]', "", ps["nama"]).strip()[:80]
@@ -5742,9 +5718,14 @@ with tab_kual:
                                 kualifikasi_id=ps["kualifikasi_id"],
                                 folder_peserta=folder_p,
                                 progress_cb=_log_cb,
+                                kode_tender=kode_tender,
                             )
                             if data_p.get("skp_berbeda"):
                                 _log_cb(f"  ⚠️ {ps['nama']}: SKP berbeda")
+                            if data_p.get("sbu_tidak_sesuai"):
+                                _log_cb(f"  ⚠️ {ps['nama']}: SBU tidak sesuai syarat paket (ambil baris pertama)")
+                            if data_p.get("ss_tidak_sesuai"):
+                                _log_cb(f"  ⚠️ {ps['nama']}: SS tidak sesuai syarat paket (ambil baris pertama)")
                             semua_data.append(data_p)
 
                         try:
@@ -5808,6 +5789,30 @@ with tab_kual:
                             _db_kk.table("kk_evaluasi_peserta").upsert(rows).execute()
                             _log_cb(f"✅ [{kode_tender}] {len(rows)} peserta tersimpan ke Supabase.")
 
+                            # Tulis langsung ke Excel folder paket
+                            if do_excel and folder_out:
+                                try:
+                                    # folder_out = .../{folder_paket}/1. Dokumen Kualifikasi
+                                    # xlsm ada di folder paket (parent), bukan subfolder kualifikasi
+                                    _folder_paket = os.path.dirname(folder_out)
+                                    _xlsm_list = (
+                                        _glob_mod.glob(os.path.join(_folder_paket, "0. BA*.xlsm")) or
+                                        _glob_mod.glob(os.path.join(_folder_paket, "*.xlsm"))
+                                    )
+                                    if _xlsm_list:
+                                        _excel_path = _xlsm_list[0]
+                                        _log_cb(f"  📝 [{kode_tender}] Menulis KK Evaluasi ke Excel: {os.path.basename(_excel_path)}")
+                                        _res_xl = kk_evaluasi_engine.fill_kk_evaluasi(
+                                            _excel_path, semua_data, _log_cb)
+                                        if _res_xl["ok"]:
+                                            _log_cb(f"✅ [{kode_tender}] KK Evaluasi ditulis ke Excel: {_res_xl['pesan']}")
+                                        else:
+                                            _log_cb(f"⚠️ [{kode_tender}] KK Evaluasi gagal tulis Excel: {_res_xl['pesan']}")
+                                    else:
+                                        _log_cb(f"⚠️ [{kode_tender}] File .xlsm tidak ditemukan di folder paket, skip tulis Excel.")
+                                except Exception as _e_xl:
+                                    _log_cb(f"⚠️ [{kode_tender}] Error tulis Excel: {_e_xl}")
+
                             # Harga Penawaran — scrape hanya peserta dari KK Evaluasi (presisi)
                             try:
                                 import penawaran_engine
@@ -5849,13 +5854,87 @@ with tab_kual:
                         except Exception as e_sb:
                             _log_cb(f"ERROR [{kode_tender}] Supabase: {e_sb}")
 
-                        _kl_step += 1
+                        _step += 1
 
                 progress.progress(1.0, text="Selesai!")
                 _parts = []
-                if _kl_do_download: _parts.append("dokumen didownload")
-                if _kl_do_kk: _parts.append("KK Evaluasi tersimpan")
-                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_kl_total_paket} paket, {_kl_total_semua} peserta. Buka Excel → **Muat KK Evaluasi**, **Muat Harga Penawaran**, **Muat Input BA**.")
+                if do_download: _parts.append("dokumen didownload")
+                if do_kk: _parts.append("KK Evaluasi tersimpan")
+                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Buka Excel → **Muat Harga Penawaran**, **Muat Input BA** (jika perlu).")
+
+            # Tampilkan status folder tiap paket
+            _kl_semua_folder_ok = True
+            for item in _kl_paket_dipilih:
+                p = item["paket"]
+                fc1, fc2 = st.columns([4, 1])
+                with fc1:
+                    if item["folder_ok"]:
+                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\1. Dokumen Kualifikasi`")
+                    else:
+                        st.error(f"❌ **{p['kode']}** — {item['folder_info']}")
+                        _kl_semua_folder_ok = False
+                with fc2:
+                    if item["folder_ok"] and st.button("📂", key=f"kl_open_{p['kode']}", help="Buka folder", use_container_width=True):
+                        os.startfile(item["folder"])
+
+                n_ps = len(item["peserta"])
+                st.caption(f"  → {n_ps} peserta dipilih" if n_ps else "  → ⚠️ Tidak ada peserta dipilih")
+
+                if st.button(
+                    f"▶ Jalankan paket ini",
+                    key=f"kl_run_{p['kode']}",
+                    use_container_width=True,
+                    disabled=(n_ps == 0) or (item.get("folder_ok") is False),
+                ):
+                    _proses_paket_kk(
+                        [item],
+                        st.session_state.get("kl_opt_download", True),
+                        st.session_state.get("kl_opt_kk", True),
+                        st.session_state.get("kl_opt_kk", True),  # excel ikut parse
+                    )
+
+            st.divider()
+
+            # Hitung total peserta
+            _kl_total_semua = sum(len(item["peserta"]) for item in _kl_paket_dipilih)
+            _kl_total_paket = len(_kl_paket_dipilih)
+
+            # ── Opsi aksi ──────────────────────────────────────────────────────
+            _kl_do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="kl_opt_download")
+            _kl_do_kk = st.checkbox("📝 Parse KK Evaluasi → tulis Excel folder paket", value=True, key="kl_opt_kk")
+            _kl_do_excel = _kl_do_kk  # Excel selalu ikut parse (parse wajib utk isi Excel); Supabase upsert otomatis
+
+            _kl_btn_label = []
+            if _kl_do_download: _kl_btn_label.append("Download")
+            if _kl_do_kk: _kl_btn_label.append("Parse → Excel")
+            _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
+
+            # Tombol global proses HANYA paket aktif (selectbox Section 2), bukan
+            # semua tercentang — cegah paket lain ikut terproses tanpa sadar.
+            _kl_kode_aktif_run = st.session_state.get("kl_paket_aktif")
+            _kl_item_aktif = next(
+                (it for it in _kl_paket_dipilih if it["paket"]["kode"] == _kl_kode_aktif_run),
+                None,
+            )
+            _kl_n_aktif = len(_kl_item_aktif["peserta"]) if _kl_item_aktif else 0
+
+            _kl_disabled = (
+                (not _kl_btn_label) or (_kl_item_aktif is None) or (_kl_n_aktif == 0)
+                or (_kl_do_download and _kl_item_aktif is not None and not _kl_item_aktif["folder_ok"])
+            )
+            if not _kl_semua_folder_ok and _kl_do_download:
+                st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
+
+            st.divider()
+
+            if st.button(
+                f"▶ Jalankan: {_kl_btn_text} — paket aktif ({_kl_kode_aktif_run or '-'}), {_kl_n_aktif} peserta",
+                key="kl_jalankan",
+                type="primary",
+                use_container_width=True,
+                disabled=_kl_disabled,
+            ):
+                _proses_paket_kk([_kl_item_aktif], _kl_do_download, _kl_do_kk, _kl_do_excel)
 
                 # ── Tampilkan konflik personil & alat lintas paket
                 if _kl_do_kk:

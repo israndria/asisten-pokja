@@ -110,7 +110,40 @@ def _find_file(folder: str, *patterns: str) -> str | None:
 
 # ── Parse halaman HTML /preview ───────────────────────────────────────────────
 
-def parse_preview_html(kualifikasi_id: str) -> dict:
+def _ambil_syarat_sbu_keywords(kode_tender: str) -> list[str] | None:
+    """
+    Ambil keyword nama SBU dari draft_paket untuk paket tertentu.
+    Dipakai untuk memilih baris izin usaha yang sesuai syarat (bukan selalu baris pertama).
+    Return list keyword uppercase, atau None kalau gagal/kosong.
+    """
+    try:
+        from config import sb as _sb_fn
+        row = _sb_fn().table("draft_paket").select("sbu_baru,sbu_lama") \
+                      .eq("kode_tender", kode_tender).maybe_single().execute()
+        if not row or not row.data:
+            return None
+        keywords: set[str] = set()
+        for field in ("sbu_baru", "sbu_lama"):
+            val = (row.data.get(field) or "").strip()
+            if not val:
+                continue
+            # Ekstrak nama setelah '(KBLI xxxx)': "Subklasifikasi BG005 (KBLI 2020) Konstruksi Gedung Kesehatan"
+            m = re.search(r'\(KBLI[^)]*\)\s*(.+)$', val, re.IGNORECASE)
+            if not m:
+                continue
+            nama = m.group(1).strip().upper()  # "KONSTRUKSI GEDUNG KESEHATAN"
+            keywords.add(nama)
+            words = nama.split()
+            if len(words) >= 2:
+                keywords.add(" ".join(words[-2:]))   # "GEDUNG KESEHATAN"
+            if words:
+                keywords.add(words[-1])               # "KESEHATAN"
+        return list(keywords) if keywords else None
+    except Exception:
+        return None
+
+
+def parse_preview_html(kualifikasi_id: str, syarat_keywords: list[str] | None = None) -> dict:
     """
     Scrape /kualifikasi/{id}/preview via requests.
     Return dict dengan semua field yang bisa diambil dari HTML.
@@ -154,8 +187,27 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
     # Tabel 1: IZIN USAHA (NIB, SS, SBU)
     t1 = _tbl(1)
     nib_row = next((r for r in t1 if r and ("Nomor Induk Berusaha" in r[0] or "NIB" == r[0].strip())), None)
-    ss_row  = next((r for r in t1 if r and "Sertifikat Standar" in r[0]), None)
-    sbu_row = next((r for r in t1 if r and "Sertifikat Badan Usaha" in r[0]), None)
+
+    def _pick_izin(jenis_str, keywords):
+        """
+        Pilih baris izin usaha yang cocok keyword syarat paket.
+        Kalau keyword None atau tidak ada match → fallback ke baris pertama.
+        Return (row, tidak_sesuai_flag).
+        """
+        rows = [r for r in t1 if r and jenis_str in r[0]]
+        if not rows:
+            return None, False
+        if keywords:
+            for r in rows:
+                klas = (r[5] if len(r) > 5 else "").upper()
+                if any(kw in klas for kw in keywords):
+                    return r, False   # match sesuai syarat
+            # Tidak ada match → fallback pertama, tandai tidak_sesuai
+            return rows[0], True
+        return rows[0], False         # perilaku lama
+
+    ss_row,  ss_tidak_sesuai  = _pick_izin("Sertifikat Standar",    syarat_keywords)
+    sbu_row, sbu_tidak_sesuai = _pick_izin("Sertifikat Badan Usaha", syarat_keywords)
 
     if nib_row and len(nib_row) >= 3:
         hasil["nib_nomor"]  = nib_row[1]
@@ -182,6 +234,10 @@ def parse_preview_html(kualifikasi_id: str) -> dict:
             hasil["sbu_subklas_label"] = f"{kode_sbu} - {nama_sbu}" if nama_sbu else kode_sbu
         else:
             hasil["sbu_subklas_label"] = ""
+
+    # Flag kesesuaian syarat paket
+    hasil["sbu_tidak_sesuai"] = sbu_tidak_sesuai
+    hasil["ss_tidak_sesuai"]  = ss_tidak_sesuai
 
     # Tabel 2: AKTA
     t2 = _tbl(2)
@@ -491,6 +547,7 @@ def parse_peserta_lengkap(
     kualifikasi_id: str,
     folder_peserta: str,
     progress_cb=None,
+    kode_tender: str = "",
 ) -> dict:
     """
     Parse semua data kualifikasi 1 peserta dari semua sumber.
@@ -516,7 +573,8 @@ def parse_peserta_lengkap(
             progress_cb(msg)
 
     _log(f"[Parser] Fetch HTML preview kualifikasi {kualifikasi_id}...")
-    html_data = parse_preview_html(kualifikasi_id)
+    syarat_keywords = _ambil_syarat_sbu_keywords(kode_tender) if kode_tender else None
+    html_data = parse_preview_html(kualifikasi_id, syarat_keywords=syarat_keywords)
     if not html_data.get("ok"):
         return {"ok": False, "pesan": html_data.get("pesan", "Gagal fetch preview")}
 
@@ -576,4 +634,7 @@ def parse_peserta_lengkap(
         # Personel & Peralatan dari /preview (kosong jika tidak diinput peserta)
         "personel_list":     html_data.get("personel_list", []),
         "peralatan_list":    html_data.get("peralatan_list", []),
+        # Flag kesesuaian syarat paket (True = tidak match, fallback baris pertama)
+        "sbu_tidak_sesuai":  html_data.get("sbu_tidak_sesuai", False),
+        "ss_tidak_sesuai":   html_data.get("ss_tidak_sesuai", False),
     }

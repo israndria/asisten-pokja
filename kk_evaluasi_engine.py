@@ -111,7 +111,10 @@ def fill_kk_evaluasi(
     """
     def _log(msg):
         if progress_cb:
-            progress_cb(msg)
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass  # callback error (mis. encode emoji ke console) tak boleh abort write
 
     try:
         import win32com.client
@@ -120,165 +123,193 @@ def fill_kk_evaluasi(
     except ImportError:
         return {"ok": False, "pesan": "win32com tidak tersedia — pastikan WinPython dipakai"}
 
+    # Excel COM butuh path absolut — relatif → "Sorry, we couldn't find ..."
+    excel_path = os.path.abspath(excel_path)
     if not os.path.isfile(excel_path):
         return {"ok": False, "pesan": f"File tidak ditemukan: {excel_path}"}
 
     _log(f"Membuka Excel: {os.path.basename(excel_path)}")
+
+    xl = None
+    wb = None
     try:
-        xl = win32com.client.Dispatch("Excel.Application")
+        # DispatchEx = instance Excel terisolasi, tidak ganggu file user yang sedang terbuka
+        xl = win32com.client.DispatchEx("Excel.Application")
         xl.Visible = False
         xl.DisplayAlerts = False
 
-        # Buka workbook — cek apakah sudah terbuka
-        wb = None
-        for w in xl.Workbooks:
-            if w.FullName.lower() == excel_path.lower():
-                wb = w
-                break
-        if wb is None:
-            wb = xl.Workbooks.Open(excel_path)
-
+        wb = xl.Workbooks.Open(excel_path)
         ws = wb.Sheets(_SHEET_NAME)
     except Exception as e:
+        if wb:
+            try: wb.Close(SaveChanges=False)
+            except Exception: pass
+        if xl:
+            try: xl.Quit()
+            except Exception: pass
+        try: pythoncom.CoUninitialize()
+        except Exception: pass
         return {"ok": False, "pesan": f"Gagal buka Excel: {e}"}
 
-    # Baris yang harus diformat teks (tidak boleh diinterpretasi Excel sebagai tanggal)
-    _TEXT_ROWS = {_ROW["akta_p_tanggal"], _ROW["akta_k_tanggal"]}
+    # Baris yang harus diformat teks:
+    #  - tanggal akta (jangan diinterpretasi Excel sebagai tanggal)
+    #  - SEMUA nomor panjang (NIB/SS/PBUMKU/NPWP/akta/kontrak) → cegah notasi
+    #    ilmiah (mis. 9120111234567 → 9,12011E+12) dan hilangnya leading zero.
+    _TEXT_ROWS = {
+        _ROW["akta_p_tanggal"], _ROW["akta_k_tanggal"],
+        _ROW["nib_nomor"], _ROW["ss_nomor"], _ROW["sbu_pbumku"],
+        _ROW["npwp_nomor"], _ROW["akta_p_nomor"], _ROW["akta_k_nomor"],
+        _ROW["pgl1_nomor"], _ROW["pgl2_nomor"],
+    }
 
     def _set(row, col, val):
         try:
             cell = ws.Cells(row, col)
             if row in _TEXT_ROWS:
                 cell.NumberFormat = "@"
+                # paksa string agar Excel tidak meng-cast ke float (scientific)
+                if val is not None:
+                    val = str(val)
             cell.Value = val
         except Exception:
             pass
 
-    for urutan, data in enumerate(semua_peserta, 1):
-        if not data.get("ok"):
-            _log(f"  Peserta {urutan}: data tidak lengkap, skip")
-            continue
-
-        col = _COL_PESERTA.get(urutan)
-        if col is None:
-            _log(f"  Peserta {urutan}: melebihi 3 peserta, skip")
-            continue
-
-        _log(f"  Mengisi kolom peserta {urutan}: {data.get('nama','')}")
-
-        # Nama & urutan
-        _set(_ROW["nama_peserta"], col, data.get("nama", ""))
-        _set(_ROW["urutan"], col, urutan)
-
-        # Syarat 1: NIB & Perizinan — tentukan poin a/b/c
-        # Poin a: NIB + SS + SBU semua ada
-        # Poin b: NIB + SS ada, SBU tidak ada (atau sebaliknya)
-        # Poin c: NIB ada saja (SS dan SBU tidak ada)
-        # Tidak memenuhi: NIB tidak ada
-        nib_ada = "Ada" if data.get("nib_nomor") else "Tidak Ada"
-        _has_nib = bool(data.get("nib_nomor"))
-        _has_ss  = bool(data.get("ss_nomor"))
-        _has_sbu = bool(data.get("sbu_nomor"))
-        if _has_nib and _has_ss and _has_sbu:
-            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin a)."
-        elif _has_nib and (_has_ss or _has_sbu):
-            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin b)."
-        elif _has_nib:
-            _poin1 = "Memenuhi Syarat Kualifikasi pada Poin c)."
-        else:
-            _poin1 = "Tidak Memenuhi"
-        _set(_ROW["syarat1_hasil"], col, _poin1)
-        _set(_ROW["nib_ada"],    col, nib_ada)
-        _set(_ROW["nib_nomor"],  col, data.get("nib_nomor", ""))
-        _set(_ROW["ss_status"],  col, data.get("ss_terverifikasi", ""))
-        _set(_ROW["ss_nomor"],   col, data.get("ss_nomor", ""))
-        _set(_ROW["ss_oss"],     col, "-")
-        _set(_ROW["sbu_ada"],    col, "-")
-
-        # Syarat 2: SBU — pakai sbu_subklas_label dari parser jika ada, fallback _format_sbu_label
-        sbu_label = data.get("sbu_subklas_label") or _format_sbu_label(
-            data.get("sbu_klasifikasi", ""), data.get("sbu_kualifikasi", ""))
-        _set(_ROW["sbu_subklas"],    col, sbu_label)
-        _set(_ROW["sbu_pbumku"],     col, data.get("sbu_nomor", ""))
-        _set(_ROW["sbu_berlaku"],    col, data.get("sbu_berlaku", ""))
-        _set(_ROW["sbu_kualifikasi"], col, data.get("sbu_kualifikasi", ""))
-        _set(_ROW["sbu_subbidang"],  col, _klasifikasi_ke_subbidang(data.get("sbu_klasifikasi", "")))
-
-        # Syarat 3: Pengalaman
-        pengalaman = data.get("pengalaman", [])
-        _set(_ROW["pgl_hasil"], col, "Memenuhi" if pengalaman else "Tidak Memenuhi")
-        if pengalaman:
-            p1 = pengalaman[0]
-            _set(_ROW["pgl1_nama"],    col, p1.get("nama", ""))
-            _set(_ROW["pgl1_pemilik"], col, p1.get("instansi", ""))
-            _set(_ROW["pgl1_nilai"],   col, p1.get("nilai", ""))
-            _set(_ROW["pgl1_tanggal"], col,
-                 f"{p1.get('tgl_mulai','')} s/d {p1.get('tgl_selesai','')}" if p1.get("tgl_mulai") else "")
-            _set(_ROW["pgl1_nomor"],   col, p1.get("nomor", ""))
-        if len(pengalaman) > 1:
-            p2 = pengalaman[1]
-            _set(_ROW["pgl2_nama"],    col, p2.get("nama", ""))
-            _set(_ROW["pgl2_pemilik"], col, p2.get("instansi", ""))
-            _set(_ROW["pgl2_nilai"],   col, p2.get("nilai", ""))
-            _set(_ROW["pgl2_tanggal"], col,
-                 f"{p2.get('tgl_mulai','')} s/d {p2.get('tgl_selesai','')}" if p2.get("tgl_mulai") else "")
-            _set(_ROW["pgl2_nomor"],   col, p2.get("nomor", ""))
-
-        # Syarat 4: SKP
-        skp = data.get("skp", 5)
-        skp_catatan = data.get("skp_catatan", f"{skp} SKP")
-        jp = data.get("skp_jp", 5 - skp)   # jumlah paket berjalan
-        _set(_ROW["skp_hasil"], col, "Memenuhi")
-        _set(_ROW["skp_jp"],    col, jp if jp > 0 else 0)
-        _set(_ROW["skp_nilai"], col, skp_catatan)
-
-        # Syarat 5: NPWP & KSWP
-        _set(_ROW["npwp_nomor"],  col, _format_npwp(data.get("npwp", "")))
-        _set(_ROW["kswp_status"], col, data.get("kswp_status", ""))
-
-        # Syarat 6: Akta
-        ap = data.get("akta_pendirian", {})
-        ak = data.get("akta_perubahan", {})
-        _set(_ROW["akta_pendirian_hasil"], col, "Memenuhi" if ap.get("nomor") else "")
-        _set(_ROW["akta_p_nomor"],   col, ap.get("nomor", ""))
-        _set(_ROW["akta_p_tanggal"], col, ap.get("tanggal", ""))
-        _set(_ROW["akta_p_notaris"], col, ap.get("notaris", ""))
-        _set(_ROW["akta_k_hasil"],   col, "Memenuhi" if ak.get("nomor") else "")
-        _set(_ROW["akta_k_nomor"],   col, ak.get("nomor", ""))
-        _set(_ROW["akta_k_tanggal"], col, ak.get("tanggal", ""))
-        _set(_ROW["akta_k_notaris"], col, ak.get("notaris", ""))
-
-        pemilik = data.get("pemilik", [])
-        _set(_ROW["pemilik_label"], col, "Memenuhi" if pemilik else "")
-        for pi, pk_row in enumerate([47, 48, 49, 50]):
-            _set(pk_row, col, pemilik[pi] if pi < len(pemilik) else "-")
-
-        # Syarat 7: SIKaP/Kinerja
-        kinerja_ada = data.get("kinerja_ada", False)
-        _set(_ROW["sikap_ada"],    col, "ADA" if kinerja_ada else "TIDAK MENYAMPAIKAN")
-        if kinerja_ada:
-            nilai_display = data.get("kinerja_nilai", "-")
-            kat = data.get("kinerja_kategori", "")
-            _set(_ROW["kinerja_nilai"], col,
-                 f"{nilai_display} ({kat})" if kat and kat != "-" else nilai_display)
-        else:
-            _set(_ROW["kinerja_nilai"], col, "-")
-
-        # Syarat 8: Daftar Hitam
-        _set(_ROW["daftar_hitam"], col, "Memenuhi")
-
-        # Hasil akhir MS/TMS
-        _set(_ROW["hasil_ms"], col, _ms_tms(data))
-
-    # Simpan
-    _log("Menyimpan Excel...")
     try:
-        wb.Save()
-    except Exception as e:
-        return {"ok": False, "pesan": f"Gagal simpan: {e}"}
+        for urutan, data in enumerate(semua_peserta, 1):
+            if not data.get("ok"):
+                _log(f"  Peserta {urutan}: data tidak lengkap, skip")
+                continue
 
-    _log("✅ KK Evaluasi Kualifikasi berhasil diisi.")
-    return {"ok": True, "pesan": f"Berhasil mengisi {len(semua_peserta)} peserta"}
+            col = _COL_PESERTA.get(urutan)
+            if col is None:
+                _log(f"  Peserta {urutan}: melebihi 3 peserta, skip")
+                continue
+
+            _log(f"  Mengisi kolom peserta {urutan}: {data.get('nama','')}")
+
+            # Nama & urutan
+            _set(_ROW["nama_peserta"], col, data.get("nama", ""))
+            _set(_ROW["urutan"], col, urutan)
+
+            # Syarat 1: NIB & Perizinan — tentukan poin a/b/c
+            # Poin a: NIB + SS + SBU semua ada
+            # Poin b: NIB + SS ada, SBU tidak ada (atau sebaliknya)
+            # Poin c: NIB ada saja (SS dan SBU tidak ada)
+            # Tidak memenuhi: NIB tidak ada
+            nib_ada = "Ada" if data.get("nib_nomor") else "Tidak Ada"
+            _has_nib = bool(data.get("nib_nomor"))
+            _has_ss  = bool(data.get("ss_nomor"))
+            _has_sbu = bool(data.get("sbu_nomor"))
+            if _has_nib and _has_ss and _has_sbu:
+                _poin1 = "Memenuhi Syarat Kualifikasi pada Poin a)."
+            elif _has_nib and (_has_ss or _has_sbu):
+                _poin1 = "Memenuhi Syarat Kualifikasi pada Poin b)."
+            elif _has_nib:
+                _poin1 = "Memenuhi Syarat Kualifikasi pada Poin c)."
+            else:
+                _poin1 = "Tidak Memenuhi"
+            _set(_ROW["syarat1_hasil"], col, _poin1)
+            _set(_ROW["nib_ada"],    col, nib_ada)
+            _set(_ROW["nib_nomor"],  col, data.get("nib_nomor", ""))
+            _set(_ROW["ss_status"],  col, data.get("ss_terverifikasi", ""))
+            _set(_ROW["ss_nomor"],   col, data.get("ss_nomor", ""))
+            _set(_ROW["ss_oss"],     col, "-")
+            _set(_ROW["sbu_ada"],    col, "-")
+
+            # Syarat 2: SBU — pakai sbu_subklas_label dari parser jika ada, fallback _format_sbu_label
+            sbu_label = data.get("sbu_subklas_label") or _format_sbu_label(
+                data.get("sbu_klasifikasi", ""), data.get("sbu_kualifikasi", ""))
+            _set(_ROW["sbu_subklas"],    col, sbu_label)
+            _set(_ROW["sbu_pbumku"],     col, data.get("sbu_nomor", ""))
+            _set(_ROW["sbu_berlaku"],    col, data.get("sbu_berlaku", ""))
+            _set(_ROW["sbu_kualifikasi"], col, data.get("sbu_kualifikasi", ""))
+            _set(_ROW["sbu_subbidang"],  col, _klasifikasi_ke_subbidang(data.get("sbu_klasifikasi", "")))
+
+            # Syarat 3: Pengalaman
+            pengalaman = data.get("pengalaman", [])
+            _set(_ROW["pgl_hasil"], col, "Memenuhi" if pengalaman else "Tidak Memenuhi")
+            if pengalaman:
+                p1 = pengalaman[0]
+                _set(_ROW["pgl1_nama"],    col, p1.get("nama", ""))
+                _set(_ROW["pgl1_pemilik"], col, p1.get("instansi", ""))
+                _set(_ROW["pgl1_nilai"],   col, p1.get("nilai", ""))
+                _set(_ROW["pgl1_tanggal"], col,
+                     f"{p1.get('tgl_mulai','')} s/d {p1.get('tgl_selesai','')}" if p1.get("tgl_mulai") else "")
+                _set(_ROW["pgl1_nomor"],   col, p1.get("nomor", ""))
+            if len(pengalaman) > 1:
+                p2 = pengalaman[1]
+                _set(_ROW["pgl2_nama"],    col, p2.get("nama", ""))
+                _set(_ROW["pgl2_pemilik"], col, p2.get("instansi", ""))
+                _set(_ROW["pgl2_nilai"],   col, p2.get("nilai", ""))
+                _set(_ROW["pgl2_tanggal"], col,
+                     f"{p2.get('tgl_mulai','')} s/d {p2.get('tgl_selesai','')}" if p2.get("tgl_mulai") else "")
+                _set(_ROW["pgl2_nomor"],   col, p2.get("nomor", ""))
+
+            # Syarat 4: SKP
+            skp = data.get("skp", 5)
+            skp_catatan = data.get("skp_catatan", f"{skp} SKP")
+            jp = data.get("skp_jp", 5 - skp)   # jumlah paket berjalan
+            _set(_ROW["skp_hasil"], col, "Memenuhi")
+            _set(_ROW["skp_jp"],    col, jp if jp > 0 else 0)
+            _set(_ROW["skp_nilai"], col, skp_catatan)
+
+            # Syarat 5: NPWP & KSWP
+            _set(_ROW["npwp_nomor"],  col, _format_npwp(data.get("npwp", "")))
+            _set(_ROW["kswp_status"], col, data.get("kswp_status", ""))
+
+            # Syarat 6: Akta
+            ap = data.get("akta_pendirian", {})
+            ak = data.get("akta_perubahan", {})
+            _set(_ROW["akta_pendirian_hasil"], col, "Memenuhi" if ap.get("nomor") else "")
+            _set(_ROW["akta_p_nomor"],   col, ap.get("nomor", ""))
+            _set(_ROW["akta_p_tanggal"], col, ap.get("tanggal", ""))
+            _set(_ROW["akta_p_notaris"], col, ap.get("notaris", ""))
+            _set(_ROW["akta_k_hasil"],   col, "Memenuhi" if ak.get("nomor") else "")
+            _set(_ROW["akta_k_nomor"],   col, ak.get("nomor", ""))
+            _set(_ROW["akta_k_tanggal"], col, ak.get("tanggal", ""))
+            _set(_ROW["akta_k_notaris"], col, ak.get("notaris", ""))
+
+            pemilik = data.get("pemilik", [])
+            _set(_ROW["pemilik_label"], col, "Memenuhi" if pemilik else "")
+            for pi, pk_row in enumerate([47, 48, 49, 50]):
+                _set(pk_row, col, pemilik[pi] if pi < len(pemilik) else "-")
+
+            # Syarat 7: SIKaP/Kinerja
+            kinerja_ada = data.get("kinerja_ada", False)
+            _set(_ROW["sikap_ada"],    col, "ADA" if kinerja_ada else "TIDAK MENYAMPAIKAN")
+            if kinerja_ada:
+                nilai_display = data.get("kinerja_nilai", "-")
+                kat = data.get("kinerja_kategori", "")
+                _set(_ROW["kinerja_nilai"], col,
+                     f"{nilai_display} ({kat})" if kat and kat != "-" else nilai_display)
+            else:
+                _set(_ROW["kinerja_nilai"], col, "-")
+
+            # Syarat 8: Daftar Hitam
+            _set(_ROW["daftar_hitam"], col, "Memenuhi")
+
+            # Hasil akhir MS/TMS
+            _set(_ROW["hasil_ms"], col, _ms_tms(data))
+
+        # Simpan
+        _log("Menyimpan Excel...")
+        wb.Save()
+        _log("✅ KK Evaluasi Kualifikasi berhasil diisi.")
+        return {"ok": True, "pesan": f"Berhasil mengisi {len(semua_peserta)} peserta"}
+
+    except Exception as e:
+        return {"ok": False, "pesan": f"Error saat menulis: {e}"}
+
+    finally:
+        # Anti-zombie: selalu close wb dan quit xl
+        if wb:
+            try: wb.Close(SaveChanges=False)
+            except Exception: pass
+        if xl:
+            try: xl.Quit()
+            except Exception: pass
+        try: pythoncom.CoUninitialize()
+        except Exception: pass
 
 
 # ── Helpers format ─────────────────────────────────────────────────────────────
