@@ -3513,6 +3513,31 @@ with tab0:
                 else:
                     _hps_st.update(label="❌ HPS gagal", state="error")
                     st.error(f"HPS gagal: {_hps_r.get('pesan', '-')}")
+            if _hps_xlsm and st.button("💰 Scrape Penawaran → Excel", use_container_width=True, key="btn_scrape_penawaran_saja"):
+                import penawaran_engine as _pen_eng
+                _pen_log = []
+                _pen_st = st.status("💰 Scraping Penawaran + tulis ke Excel...", expanded=True)
+                _pen_area = _pen_st.empty()
+                def _pen_cb(m):
+                    _pen_log.append(m)
+                    _pen_area.code("\n".join(_pen_log[-12:]))
+                _pen_r = _pen_eng.scrape_penawaran_ke_excel(
+                    _row_terpilih["kode_tender"], _hps_xlsm, progress_cb=_pen_cb)
+                if _pen_r.get("peserta"):
+                    _pen_st.update(label=f"✅ Penawaran: {_pen_r['peserta']} peserta → Excel", state="complete", expanded=False)
+                    st.success(f"✅ {_pen_r['peserta']} peserta: " + ", ".join(_pen_r.get("nama_peserta", [])))
+                    if _pen_r.get("items_per_peserta"):
+                        for _pi, (_pn, _pc) in enumerate(zip(_pen_r["nama_peserta"], _pen_r["items_per_peserta"])):
+                            st.caption(f"  {_pi+1}. {_pn} — {_pc} item")
+                    # Update rumus kolom L di sheet 7.2
+                    _pen_rumus = _pen_eng.update_rumus_penawaran_72(_hps_xlsm)
+                    if _pen_rumus.get("ok"):
+                        st.info(f"Rumus 7.2 diupdate: {_pen_rumus['rows_updated']} baris")
+                    elif _pen_rumus.get("error"):
+                        st.warning(f"Rumus 7.2: {_pen_rumus['error']}")
+                else:
+                    _pen_st.update(label="❌ Penawaran gagal / kosong", state="error")
+                    st.error(f"Penawaran gagal: {_pen_r.get('errors', ['-'])}")
 
         # Tombol download dokumen mandiri (untuk folder yang sudah ada)
         if _folder_ada and _row_terpilih:
@@ -3619,6 +3644,20 @@ with tab0:
                                         _hps_res = _hps_eng_par.scrape_hps_ke_excel(_kt_par, _hps_xlsm_par)
                                     except Exception as _hps_exc:
                                         st.warning(f"Scrape HPS error: {_hps_exc}")
+                                # Scrape Penawaran → Excel SEQUENTIAL (setelah HPS)
+                                try:
+                                    import penawaran_engine as _pen_eng_par
+                                    with st.spinner("💰 Scraping Penawaran → tulis ke Excel..."):
+                                        _pen_res = _pen_eng_par.scrape_penawaran_ke_excel(_kt_par, _hps_xlsm_par)
+                                    if _pen_res.get("peserta"):
+                                        st.success(f"✅ Penawaran: {_pen_res['peserta']} peserta → Excel")
+                                        _pen_rumus_par = _pen_eng_par.update_rumus_penawaran_72(_hps_xlsm_par)
+                                        if _pen_rumus_par.get("ok"):
+                                            st.info(f"Rumus 7.2 diupdate: {_pen_rumus_par['rows_updated']} baris")
+                                    else:
+                                        st.warning(f"Penawaran: {_pen_res.get('errors', ['-'])}")
+                                except Exception as _pen_exc:
+                                    st.warning(f"Scrape Penawaran error: {_pen_exc}")
                             else:
                                 st.caption("📊 HPS dilewati — tidak ada .xlsm di folder baru.")
 
@@ -3775,6 +3814,20 @@ with tab0:
                                         _paket_log.append("⚠ HPS dilewati — tidak ada .xlsm di folder")
                                 except Exception as _hps_e2:
                                     _paket_log.append(f"⚠ HPS gagal: {_hps_e2}")
+                            # Scrape Penawaran → Excel per paket
+                            if _bp.get("kode_tender") and _xl_bulk:
+                                try:
+                                    import penawaran_engine as _pen_eng_bulk
+                                    _pen_res_bulk = _pen_eng_bulk.scrape_penawaran_ke_excel(_bp["kode_tender"], _xl_bulk)
+                                    if _pen_res_bulk.get("peserta"):
+                                        _paket_log.append(f"💰 Penawaran: {_pen_res_bulk['peserta']} peserta → Excel")
+                                        _pen_rumus_bulk = _pen_eng_bulk.update_rumus_penawaran_72(_xl_bulk)
+                                        if _pen_rumus_bulk.get("ok"):
+                                            _paket_log.append(f"  Rumus 7.2: {_pen_rumus_bulk['rows_updated']} baris")
+                                    else:
+                                        _paket_log.append(f"⚠ Penawaran: {_pen_res_bulk.get('errors', ['-'])}")
+                                except Exception as _pen_e:
+                                    _paket_log.append(f"⚠ Penawaran gagal: {_pen_e}")
                         else:
                             _fail += 1
                             _paket_log.append(f"❌ Gagal buat folder: {_r2.stderr[:100]}")
