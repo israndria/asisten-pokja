@@ -496,6 +496,117 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         elif _dpa_search_q and len(_dpa_search_q.strip()) < 3:
             st.caption("Ketik minimal 3 karakter.")
 
+        # ── Tools: Gabung Semua BA PL JKK (Bulk Print) ────────────────────────
+        st.divider()
+        st.markdown("### 🖨️ Gabung Semua BA PL JKK")
+        st.caption(
+            "Scan semua folder paket di **@ Pengadaan Langsung JKK** → ambil file `BA_PLJKK_*.pdf` "
+            "tiap folder → gabung jadi satu file untuk print sekali."
+        )
+
+        import os as _ba_os
+        import re as _ba_re
+
+        # Root folder PL JKK (parent dari semua folder paket)
+        _ba_root = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK"
+        _ba_root_in = st.text_input(
+            "Folder root PL JKK:",
+            value=_ba_root,
+            key="ba_bulk_root",
+        )
+
+        def _ba_nomor_folder(nama):
+            """Ambil nomor urut dari nama folder (mis. '10. PLJKK...' → 10). Tanpa nomor → 9999."""
+            m = _ba_re.match(r"\s*(\d+)", nama)
+            return int(m.group(1)) if m else 9999
+
+        _ba_found = []  # (nomor, nama_folder, path_pdf)
+        if _ba_os.path.isdir(_ba_root_in):
+            for _entry in _ba_os.listdir(_ba_root_in):
+                _sub = _ba_os.path.join(_ba_root_in, _entry)
+                if not _ba_os.path.isdir(_sub):
+                    continue
+                # Match BA_PLJKK_*.pdf (bukan BA_REVIU_* / BA lain)
+                _matches = [
+                    f for f in _ba_os.listdir(_sub)
+                    if _ba_re.match(r"(?i)^BA_PLJKK_.*\.pdf$", f)
+                ]
+                for _mf in _matches:
+                    _ba_found.append((
+                        _ba_nomor_folder(_entry), _entry,
+                        _ba_os.path.join(_sub, _mf),
+                    ))
+            _ba_found.sort(key=lambda x: (x[0], x[1]))
+        else:
+            st.error(f"Folder tidak ditemukan: {_ba_root_in}")
+
+        if _ba_found:
+            st.success(f"✅ Ditemukan {len(_ba_found)} file BA_PLJKK (urut nomor paket):")
+            _ba_prev = [
+                {"No": n, "Folder": fol, "File": _ba_os.path.basename(p)}
+                for n, fol, p in _ba_found
+            ]
+            st.dataframe(_ba_prev, use_container_width=True, hide_index=True)
+
+            _ba_out_nama = st.text_input(
+                "Nama file gabungan:",
+                value="_KUMPULAN_BA_PL_JKK.pdf",
+                key="ba_bulk_out_nama",
+            )
+
+            if st.button("🖨️ Gabung Semua BA", type="primary", key="ba_bulk_run"):
+                from pypdf import PdfReader as _BaReader, PdfWriter as _BaWriter
+
+                _writer = _BaWriter()
+                _ok, _err = 0, []
+                with st.status("Menggabungkan BA...", expanded=True) as _ba_status:
+                    for _n, _fol, _path in _ba_found:
+                        try:
+                            _rdr = _BaReader(_path)
+                            for _pg in _rdr.pages:
+                                _writer.add_page(_pg)
+                            st.write(f"✅ Paket {_n} — {len(_rdr.pages)} hlm")
+                            _ok += 1
+                        except Exception as _ex:
+                            st.write(f"❌ Paket {_n} ({_fol}): {_ex}")
+                            _err.append(_fol)
+
+                    if len(_writer.pages) == 0:
+                        _ba_status.update(label="❌ Tidak ada halaman tergabung.", state="error")
+                    else:
+                        # Tulis ke root folder; fallback suffix jika file terkunci (Nitro/dll)
+                        _out_nama = _ba_out_nama.strip() or "_KUMPULAN_BA_PL_JKK.pdf"
+                        if not _out_nama.lower().endswith(".pdf"):
+                            _out_nama += ".pdf"
+                        _base, _ext = _ba_os.path.splitext(_out_nama)
+                        _target = _ba_os.path.join(_ba_root_in, _out_nama)
+                        _written = None
+                        for _attempt in range(6):
+                            _try_path = _target if _attempt == 0 else \
+                                _ba_os.path.join(_ba_root_in, f"{_base}_v{_attempt + 1}{_ext}")
+                            try:
+                                with open(_try_path, "wb") as _fh:
+                                    _writer.write(_fh)
+                                _written = _try_path
+                                break
+                            except PermissionError:
+                                continue
+                        if _written:
+                            _ba_status.update(
+                                label=f"✅ {_ok} BA digabung → {len(_writer.pages)} halaman.",
+                                state="complete",
+                            )
+                            st.success(f"📁 Tersimpan: `{_written}`")
+                            if _err:
+                                st.warning(f"⚠️ Gagal: {', '.join(_err)}")
+                        else:
+                            _ba_status.update(
+                                label="❌ Gagal tulis (file terkunci). Tutup PDF viewer dulu.",
+                                state="error",
+                            )
+        elif _ba_os.path.isdir(_ba_root_in):
+            st.info("Tidak ada file `BA_PLJKK_*.pdf` ditemukan di folder paket manapun.")
+
     # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
