@@ -1,5 +1,6 @@
 """Scrape + upsert data HPS dari SPSE ke Supabase tabel hps_items."""
 
+import os
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from config import sb as _sb, SPSE_BASE_URL
@@ -26,14 +27,26 @@ def _fetch_data_var(kode_tender: str) -> list:
     url = f"{SPSE_BASE_URL}dokumen/{kode_tender}/hps"
     spse_browser.buka_browser(navigate=False)
 
+    # Cari tab yang sudah buka halaman HPS ini
     page = next((p for p in spse_browser._context.pages if f"/{kode_tender}/hps" in p.url), None)
-    if page is None:
-        page = spse_browser._context.pages[0]
-        spse_browser._run(page.goto(url, wait_until="networkidle", timeout=30000))
-    else:
+    if page is not None:
         spse_browser._run(page.reload(wait_until="networkidle", timeout=30000))
+    else:
+        # Buka tab baru — jangan pakai pages[0] yang mungkin sedang navigasi (→ frame detach)
+        page = spse_browser._run(spse_browser._context.new_page())
+        try:
+            spse_browser._run(page.goto(url, wait_until="networkidle", timeout=30000))
+        except Exception:
+            # Fallback: domcontentloaded lebih toleran kalau networkidle timeout
+            spse_browser._run(page.goto(url, wait_until="domcontentloaded", timeout=30000))
 
-    return spse_browser._run(page.evaluate("() => typeof data !== 'undefined' ? data : []"))
+    result = spse_browser._run(page.evaluate("() => typeof data !== 'undefined' ? data : []"))
+    # Tutup tab sementara biar tidak numpuk
+    try:
+        spse_browser._run(page.close())
+    except Exception:
+        pass
+    return result
 
 
 def scrape_hps(kode_tender: str, session=None) -> dict:
@@ -125,6 +138,11 @@ def upsert_hps(kode_tender: str, hasil: dict) -> dict:
             "total_nilai_bulat":  hasil["total_nilai_bulat"],
         })
 
+    # Hapus dulu semua row lama paket ini — cegah baris hantu kalau BoQ
+    # menyusut (upsert PK (kode_tender,urutan) cuma overwrite, surplus urutan
+    # lama tidak ikut terhapus).
+    sb.table("hps_items").delete().eq("kode_tender", kode_tender).execute()
+
     if records:
         sb.table("hps_items").upsert(records).execute()
 
@@ -155,6 +173,205 @@ def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
     except Exception as e:
         return {"count": 0, "warning": [], "total_nilai": 0.0,
                 "total_nilai_bulat": 0.0, "error": str(e)}
+
+
+# ============================================================
+# Tulis HPS langsung ke Excel sheet "5. HPS" (tanpa Supabase)
+# ============================================================
+
+_SHEET_HPS = "5. HPS"
+
+
+def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
+    """
+    Tulis hasil scrape HPS ke sheet '5. HPS' via COM. Pola identik input_ba_engine.
+
+    Layout sheet (port dari VBA MuatHPS):
+      Header baris 1, data dari baris 2.
+      A=urutan, B=jenis_bj, C=satuan, D=vol, E=harga, F=pajak_pct,
+      G=total_spse, H=total_hitung, I=selisih.
+      Divisi: hanya A+B terisi. Baris selisih>1 di-highlight kuning.
+      Setelah item: TOTAL NILAI (SPSE) / (Setelah Pembulatan SPSE) / HITUNG MANUAL.
+
+    Return: {"ok": bool, "pesan": str, "count": int, "warning": list}
+    """
+    def _log(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    items = hasil["items"]
+
+    try:
+        import win32com.client
+        import pythoncom
+        pythoncom.CoInitialize()
+    except ImportError:
+        return {"ok": False, "pesan": "win32com tidak tersedia", "count": 0, "warning": []}
+
+    excel_path = os.path.abspath(excel_path)
+    if not os.path.isfile(excel_path):
+        return {"ok": False, "pesan": f"File tidak ditemukan: {excel_path}", "count": 0, "warning": []}
+
+    _log(f"Membuka Excel: {os.path.basename(excel_path)}")
+
+    xl = None
+    wb = None
+    try:
+        xl = win32com.client.DispatchEx("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        wb = xl.Workbooks.Open(excel_path)
+        try:
+            ws = wb.Sheets(_SHEET_HPS)
+        except Exception:
+            raise RuntimeError(f"Sheet '{_SHEET_HPS}' tidak ditemukan")
+    except Exception as e:
+        if wb:
+            try: wb.Close(SaveChanges=False)
+            except Exception: pass
+        if xl:
+            try: xl.Quit()
+            except Exception: pass
+        try: pythoncom.CoUninitialize()
+        except Exception: pass
+        return {"ok": False, "pesan": f"Gagal buka Excel: {e}", "count": 0, "warning": []}
+
+    try:
+        try: ws.Unprotect()
+        except Exception: pass
+
+        # ── Bersih A2:I bawah + highlight ────────────────────────────────────
+        # Ambil baris terakhir dari kolom A DAN B (data lama bisa lebih panjang
+        # di salah satunya), pakai yang terbesar agar baris hantu ikut terhapus.
+        last_a = ws.Cells(ws.Rows.Count, 1).End(-4162).Row  # xlUp
+        last_b = ws.Cells(ws.Rows.Count, 2).End(-4162).Row
+        last_row = max(last_a, last_b, 60)  # min 60: jangkau baris total lama
+        if last_row >= 2:
+            rng = ws.Range(f"A2:I{last_row}")
+            rng.ClearContents()   # WAJIB pakai () — tanpa kurung = property, tidak eksekusi
+            rng.Interior.ColorIndex = -4142  # xlNone
+
+        RGB_KUNING = 65535  # RGB(255,255,0)
+        baris = 2
+        total_hitung_all = 0.0
+        total_nilai = hasil["total_nilai"]
+        total_bulat = hasil["total_nilai_bulat"]
+        warning = []
+
+        for it in items:
+            ws.Cells(baris, 1).Value = it["urutan"]
+            ws.Cells(baris, 2).Value = it["jenis_bj"]
+            if not it["is_divisi"]:
+                if it["satuan"]:
+                    ws.Cells(baris, 3).Value = it["satuan"]
+                if it["vol"]:
+                    ws.Cells(baris, 4).Value = it["vol"]
+                    ws.Cells(baris, 4).NumberFormat = "#,##0.00"
+                if it["harga"]:
+                    ws.Cells(baris, 5).Value = it["harga"]
+                    ws.Cells(baris, 5).NumberFormat = "#,##0.00"
+                if it["pajak_pct"]:
+                    ws.Cells(baris, 6).Value = it["pajak_pct"]
+                    ws.Cells(baris, 6).NumberFormat = "0.00"
+                if it["total_spse"]:
+                    ws.Cells(baris, 7).Value = it["total_spse"]
+                    ws.Cells(baris, 7).NumberFormat = "#,##0.00"
+                if it["total_hitung"]:
+                    ws.Cells(baris, 8).Value = it["total_hitung"]
+                    ws.Cells(baris, 8).NumberFormat = "#,##0.00"
+                ws.Cells(baris, 9).Value = it["selisih"]
+                ws.Cells(baris, 9).NumberFormat = "#,##0.00"
+                total_hitung_all += it["total_hitung"] or 0.0
+                if not it["selisih_ok"]:
+                    ws.Range(ws.Cells(baris, 1), ws.Cells(baris, 9)).Interior.Color = RGB_KUNING
+                    warning.append(it)
+            baris += 1
+
+        # Header H–I jika kosong
+        if not ws.Cells(1, 8).Value:
+            ws.Cells(1, 8).Value = "Total (Hitung)"
+            ws.Cells(1, 8).Font.Bold = True
+        if not ws.Cells(1, 9).Value:
+            ws.Cells(1, 9).Value = "Selisih"
+            ws.Cells(1, 9).Font.Bold = True
+
+        # ── Baris total ──────────────────────────────────────────────────────
+        bt = baris + 1
+        ws.Cells(bt, 2).Value = "TOTAL NILAI (SPSE)"
+        ws.Cells(bt, 2).Font.Bold = True
+        ws.Cells(bt, 7).Value = total_nilai
+        ws.Cells(bt, 7).NumberFormat = "#,##0.00"
+
+        ws.Cells(bt + 1, 2).Value = "TOTAL NILAI (Setelah Pembulatan SPSE)"
+        ws.Cells(bt + 1, 2).Font.Bold = True
+        ws.Cells(bt + 1, 7).Value = total_bulat
+        ws.Cells(bt + 1, 7).NumberFormat = "#,##0.00"
+
+        ws.Cells(bt + 2, 2).Value = "TOTAL HITUNG MANUAL"
+        ws.Cells(bt + 2, 2).Font.Bold = True
+        ws.Cells(bt + 2, 8).Value = total_hitung_all
+        ws.Cells(bt + 2, 8).NumberFormat = "#,##0.00"
+
+        _log("Menyimpan Excel...")
+        wb.Save()
+        _log(f"HPS berhasil ditulis: {len(items)} baris.")
+        return {
+            "ok": True,
+            "pesan": f"{len(items)} baris HPS ditulis ke sheet '{_SHEET_HPS}'",
+            "count": len(items),
+            "warning": warning,
+        }
+    except Exception as e:
+        return {"ok": False, "pesan": f"Error saat menulis: {e}", "count": 0, "warning": []}
+    finally:
+        if wb:
+            try: wb.Close(SaveChanges=False)
+            except Exception: pass
+        if xl:
+            try: xl.Quit()
+            except Exception: pass
+        try: pythoncom.CoUninitialize()
+        except Exception: pass
+
+
+def scrape_hps_ke_excel(kode_tender: str, excel_path: str, progress_cb=None) -> dict:
+    """Tender: scrape HPS dari SPSE → tulis langsung sheet '5. HPS'. Tanpa DB."""
+    try:
+        hasil = scrape_hps(kode_tender)
+        if not hasil["items"]:
+            return {"ok": False, "pesan": "Tidak ada item HPS ditemukan", "count": 0,
+                    "warning": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+        r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
+        r["total_nilai"] = hasil["total_nilai"]
+        r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+        return r
+    except Exception as e:
+        return {"ok": False, "pesan": str(e), "count": 0, "warning": [],
+                "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+
+
+def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -> dict:
+    """PL: scrape HPS non-tender (cari id_nontender dari draft_paket_pl) → tulis sheet '5. HPS'."""
+    try:
+        row = _sb().table("draft_paket_pl").select("id_nontender").eq("kode_paket", kode_paket).maybe_single().execute()
+        id_nt = (row.data or {}).get("id_nontender") if row else None
+        if not id_nt:
+            return {"ok": False, "pesan": "id_nontender tidak ditemukan", "count": 0,
+                    "warning": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+        hasil = scrape_hps_pl(id_nt)
+        if not hasil["items"]:
+            return {"ok": False, "pesan": "Tidak ada item HPS", "count": 0,
+                    "warning": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+        r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
+        r["total_nilai"] = hasil["total_nilai"]
+        r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+        return r
+    except Exception as e:
+        return {"ok": False, "pesan": str(e), "count": 0, "warning": [],
+                "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
 
 # ============================================================
@@ -277,6 +494,9 @@ def upsert_hps_pl(kode_paket: str, hasil: dict) -> dict:
             "total_nilai":       hasil["total_nilai"],
             "total_nilai_bulat": hasil["total_nilai_bulat"],
         })
+
+    # Hapus row lama dulu — cegah baris hantu saat BoQ menyusut (lihat upsert_hps).
+    sb.table("hps_items_pl").delete().eq("kode_paket", kode_paket).execute()
 
     if records:
         sb.table("hps_items_pl").upsert(records).execute()

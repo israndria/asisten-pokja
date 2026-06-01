@@ -507,6 +507,18 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
+        def _cari_xlsm_pl(folder):
+            """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
+            try:
+                xs = [f for f in _pl_os.listdir(folder)
+                      if f.lower().endswith(".xlsm") and "backup" not in f.lower()]
+            except Exception:
+                return None
+            if not xs:
+                return None
+            xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
+            return _pl_os.path.join(folder, xs[0])
+
         _pl_rows = pl_engine.load_draft_pl()
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
@@ -815,30 +827,38 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         if _kak_u:
                             pl_engine.simpan_paket_pl({"kode_paket": _pl_kode_dl, **_kak_u})
                             st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
-                    # Scrape HPS PL otomatis
+                    # Scrape HPS PL otomatis → tulis langsung ke Excel (tanpa DB)
                     try:
                         import hps_engine as _hps_pl
-                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kode_dl)
-                        if _hps_r.get("error"):
-                            st.warning(f"⚠ HPS: {_hps_r['error']}")
+                        _xl_pl = _cari_xlsm_pl(_pl_target)
+                        if _xl_pl:
+                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_dl, _xl_pl)
+                            if _hps_r.get("ok"):
+                                st.success(f"💰 {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
+                            else:
+                                st.warning(f"⚠ HPS: {_hps_r.get('pesan','-')}")
                         else:
-                            st.success(f"💰 HPS: {_hps_r['count']} item, total Rp {_hps_r['total_nilai']:,.0f}")
+                            st.caption("💰 HPS dilewati — tidak ada .xlsm di folder.")
                     except Exception as _he:
                         st.warning(f"⚠ HPS error: {_he}")
 
             # Tombol scrape HPS mandiri (kalau download sebelumnya tidak include)
             if _pl_folder_ada and _pl_row_sel:
                 _pl_kode_hps = _pl_row_sel.get("kode_paket", "")
-                if _pl_kode_hps and st.button("💰 Scrape HPS PL", use_container_width=True, key="pl_btn_hps_saja"):
+                if _pl_kode_hps and st.button("💰 Scrape HPS PL → Excel", use_container_width=True, key="pl_btn_hps_saja"):
                     import hps_engine as _hps_pl
-                    with st.spinner("Scrape HPS dari SPSE..."):
-                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kode_hps)
-                    if _hps_r.get("error"):
-                        st.error(f"Gagal: {_hps_r['error']}")
+                    _xl_pl2 = _cari_xlsm_pl(_pl_target)
+                    if not _xl_pl2:
+                        st.error("Tidak ada file .xlsm di folder paket untuk diisi HPS.")
                     else:
-                        st.success(f"✅ {_hps_r['count']} item, total Rp {_hps_r['total_nilai']:,.0f}, pembulatan Rp {_hps_r['total_nilai_bulat']:,.0f}")
-                        if _hps_r.get("warning"):
-                            st.warning(f"⚠ {len(_hps_r['warning'])} item selisih")
+                        with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
+                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_hps, _xl_pl2)
+                        if _hps_r.get("ok"):
+                            st.success(f"✅ {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
+                            if _hps_r.get("warning"):
+                                st.warning(f"⚠ {len(_hps_r['warning'])} item selisih (highlight kuning di Excel)")
+                        else:
+                            st.error(f"Gagal: {_hps_r.get('pesan','-')}")
 
             if _pl_buat_btn and _pl_nama_folder:
                 with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
@@ -877,12 +897,14 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                         if _pl_kak_update:
                                             pl_engine.simpan_paket_pl({"kode_paket": _pl_kp, **_pl_kak_update})
                                             st.info(f"📋 KAK ter-parse: {', '.join(_pl_kak_update.keys())}")
-                                    # Scrape HPS PL
+                                    # Scrape HPS PL → tulis langsung ke Excel
                                     try:
                                         import hps_engine as _hps_pl
-                                        _hps_r = _hps_pl.scrape_dan_upsert_hps_pl(_pl_kp)
-                                        if not _hps_r.get("error"):
-                                            st.success(f"💰 HPS: {_hps_r['count']} item, Rp {_hps_r['total_nilai']:,.0f}")
+                                        _xl_pl3 = _cari_xlsm_pl(_pl_target)
+                                        if _xl_pl3:
+                                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kp, _xl_pl3)
+                                            if _hps_r.get("ok"):
+                                                st.success(f"💰 {_hps_r['pesan']} — Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
                                     except Exception:
                                         pass
                             st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
@@ -1036,12 +1058,19 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                             _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
                                 except Exception as _pl_kak_e:
                                     _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
-                            # Scrape HPS
+                            # Scrape HPS → tulis langsung ke Excel
                             if _pl_kp_b:
                                 try:
                                     import hps_engine as _pl_hps_eng
-                                    _pl_hps_res = _pl_hps_eng.scrape_dan_upsert_hps_pl(_pl_kp_b)
-                                    _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} item")
+                                    _xl_plb = _cari_xlsm_pl(_pl_target_b)
+                                    if _xl_plb:
+                                        _pl_hps_res = _pl_hps_eng.scrape_hps_pl_ke_excel(_pl_kp_b, _xl_plb)
+                                        if _pl_hps_res.get("ok"):
+                                            _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} baris → Excel")
+                                        else:
+                                            _pl_paket_log.append(f"⚠ HPS: {_pl_hps_res.get('pesan','-')}")
+                                    else:
+                                        _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
                                 except Exception as _pl_hps_e:
                                     _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
                         else:
@@ -3451,18 +3480,39 @@ with tab0:
             if _cb2.button("📂 Buka Explorer", use_container_width=True, key="btn_buka_folder"):
                 _sp.Popen(f'explorer "{_target_path.replace("/", chr(92))}"')
 
-        # Tombol scrape HPS — muncul selama ada paket dipilih (tidak perlu folder ada)
+        # Tombol scrape HPS — tulis langsung ke sheet "5. HPS" di Excel paket (tanpa DB).
+        # Butuh folder paket ada + ada file .xlsm di dalamnya.
         if _row_terpilih and _row_terpilih.get("kode_tender"):
-            if st.button("📊 Scrape HPS dari SPSE", use_container_width=True, key="btn_scrape_hps_saja"):
+            # Cari .xlsm di folder paket (utamakan "0. BAPK")
+            _hps_xlsm = None
+            if _folder_ada and _target_path:
+                _xlsms = [f for f in _os.listdir(_target_path) if f.lower().endswith(".xlsm")]
+                _xlsms.sort(key=lambda f: (not f.lower().startswith("0. bapk"), f))
+                if _xlsms:
+                    _hps_xlsm = _os.path.join(_target_path, _xlsms[0])
+
+            if not _folder_ada:
+                st.caption("📊 Buat folder paket dulu untuk Scrape HPS (ditulis ke Excel-nya).")
+            elif not _hps_xlsm:
+                st.caption("📊 Tidak ada file .xlsm di folder paket untuk diisi HPS.")
+            elif st.button("📊 Scrape HPS → Excel", use_container_width=True, key="btn_scrape_hps_saja"):
                 import hps_engine as _hps_eng3
-                with st.spinner("Scraping HPS... (scroll virtual, mungkin 30-60 detik)"):
-                    _hps_r = _hps_eng3.scrape_dan_upsert_hps(_row_terpilih["kode_tender"])
-                if _hps_r.get("error") is None and _hps_r.get("count", 0) > 0:
-                    st.success(f"✅ HPS tersimpan: {_hps_r['count']} item")
+                _hps_log = []
+                _hps_st = st.status("📊 Scraping HPS + tulis ke Excel...", expanded=True)
+                _hps_area = _hps_st.empty()
+                def _hps_cb(m):
+                    _hps_log.append(m)
+                    _hps_area.code("\n".join(_hps_log[-12:]))
+                _hps_r = _hps_eng3.scrape_hps_ke_excel(
+                    _row_terpilih["kode_tender"], _hps_xlsm, progress_cb=_hps_cb)
+                if _hps_r.get("ok"):
+                    _hps_st.update(label=f"✅ HPS: {_hps_r['count']} baris ke Excel", state="complete", expanded=False)
+                    st.success(f"✅ {_hps_r['pesan']} — Total Rp {_hps_r['total_nilai_bulat']:,.0f}")
                     if _hps_r.get("warning"):
-                        st.warning(f"⚠️ {len(_hps_r['warning'])} item ada selisih hitung")
+                        st.warning(f"⚠️ {len(_hps_r['warning'])} item selisih hitung (highlight kuning di Excel)")
                 else:
-                    st.warning(f"HPS gagal/kosong: {_hps_r.get('error', '-')}")
+                    _hps_st.update(label="❌ HPS gagal", state="error")
+                    st.error(f"HPS gagal: {_hps_r.get('pesan', '-')}")
 
         # Tombol download dokumen mandiri (untuk folder yang sudah ada)
         if _folder_ada and _row_terpilih:
@@ -3528,8 +3578,8 @@ with tab0:
                                 }).eq("kode_tender", _row_terpilih["kode_tender"]).execute()
                             except Exception as _e2:
                                 st.warning(f"Gagal update riwayat: {_e2}")
-                        # Download dokumen + Scrape HPS secara PARALEL
-                        import concurrent.futures as _cf
+                        # Download dokumen (boleh dulu), lalu Scrape HPS → Excel SEQUENTIAL.
+                        # HPS pakai COM Excel — JANGAN paralel dgn Playwright download (race COM init).
                         _do_dl = _dl_dokumen and _row_terpilih and _target_path
                         _do_hps = bool(_row_terpilih and _row_terpilih.get("kode_tender"))
                         _dl_msgs = []
@@ -3538,38 +3588,39 @@ with tab0:
                         _kt_par = _row_terpilih.get("kode_tender", "") if _row_terpilih else ""
                         _ip_par = str(_row_terpilih.get("id_pesan", "")) if _row_terpilih else ""
 
-                        def _run_dl():
-                            if not (_do_dl and _kt_par and _ip_par):
-                                return None
+                        if _do_dl and _kt_par and _ip_par:
                             from streamlit.runtime.scriptrunner import get_script_run_ctx as _grc
                             _ctx_par = _grc()
                             def _dl_cb_par(msg):
                                 _dl_msgs.append(msg)
-                            return inbox_engine.download_dokumen_paket(
-                                _kt_par, _ip_par, _target_path,
-                                kode_pokja=_row_terpilih.get("kode_pokja",""),
-                                progress_cb=_dl_cb_par,
-                                st_ctx=_ctx_par
-                            )
-
-                        def _run_hps():
-                            if not _do_hps:
-                                return None
-                            import hps_engine as _hps_eng_par
-                            return _hps_eng_par.scrape_dan_upsert_hps(_kt_par)
-
-                        with st.spinner("⏳ Mengunduh dokumen + scraping HPS secara paralel..."):
-                            with _cf.ThreadPoolExecutor(max_workers=2) as _pool:
-                                _fut_dl = _pool.submit(_run_dl)
-                                _fut_hps = _pool.submit(_run_hps)
+                            with st.spinner("⏳ Mengunduh dokumen SPSE..."):
                                 try:
-                                    _dl_hasil = _fut_dl.result()
+                                    _dl_hasil = inbox_engine.download_dokumen_paket(
+                                        _kt_par, _ip_par, _target_path,
+                                        kode_pokja=_row_terpilih.get("kode_pokja",""),
+                                        progress_cb=_dl_cb_par, st_ctx=_ctx_par)
                                 except Exception as _dl_exc:
                                     st.warning(f"Download error: {_dl_exc}")
-                                try:
-                                    _hps_res = _fut_hps.result()
-                                except Exception as _hps_exc:
-                                    st.warning(f"Scrape HPS error: {_hps_exc}")
+
+                        if _do_hps:
+                            # Cari .xlsm di folder baru (template "0. BAPK")
+                            _hps_xlsm_par = None
+                            try:
+                                _xl2 = [f for f in _os.listdir(_target_path) if f.lower().endswith(".xlsm")]
+                                _xl2.sort(key=lambda f: (not f.lower().startswith("0. bapk"), f))
+                                if _xl2:
+                                    _hps_xlsm_par = _os.path.join(_target_path, _xl2[0])
+                            except Exception:
+                                pass
+                            if _hps_xlsm_par:
+                                import hps_engine as _hps_eng_par
+                                with st.spinner("📊 Scraping HPS → tulis ke Excel..."):
+                                    try:
+                                        _hps_res = _hps_eng_par.scrape_hps_ke_excel(_kt_par, _hps_xlsm_par)
+                                    except Exception as _hps_exc:
+                                        st.warning(f"Scrape HPS error: {_hps_exc}")
+                            else:
+                                st.caption("📊 HPS dilewati — tidak ada .xlsm di folder baru.")
 
                         # Tampilkan hasil download
                         if _dl_hasil is not None:
@@ -3599,10 +3650,12 @@ with tab0:
 
                         # Tampilkan hasil HPS
                         if _hps_res is not None:
-                            if _hps_res.get("error") is None and _hps_res.get("count", 0) > 0:
-                                st.success(f"✅ HPS tersimpan: {_hps_res['count']} item")
+                            if _hps_res.get("ok"):
+                                st.success(f"✅ {_hps_res['pesan']} — Total Rp {_hps_res.get('total_nilai_bulat',0):,.0f}")
+                                if _hps_res.get("warning"):
+                                    st.warning(f"⚠️ {len(_hps_res['warning'])} item selisih (highlight kuning di Excel)")
                             else:
-                                st.warning(f"HPS gagal/kosong: {_hps_res.get('error', '-')}")
+                                st.warning(f"HPS gagal/kosong: {_hps_res.get('pesan', '-')}")
                         # Simpan snapshot dokumen PPK saat folder dibuat
                         if _row_terpilih and _row_terpilih.get("kode_tender") and _target_path:
                             try:
@@ -3700,12 +3753,26 @@ with tab0:
                                         _paket_log.append(f"  ❌ {_e}")
                                 except Exception as _dl_e:
                                     _paket_log.append(f"❌ Download error: {_dl_e}")
-                            # Scrape HPS ke Supabase
+                            # Scrape HPS → tulis langsung ke Excel paket (tanpa DB)
                             if _bp.get("kode_tender"):
                                 try:
                                     import hps_engine as _hps_eng2
-                                    _hps_res2 = _hps_eng2.scrape_dan_upsert_hps(_bp["kode_tender"])
-                                    _paket_log.append(f"📊 HPS: {_hps_res2.get('count',0)} item")
+                                    _xl_bulk = None
+                                    try:
+                                        _xlb = [f for f in _os.listdir(_bp_target) if f.lower().endswith(".xlsm")]
+                                        _xlb.sort(key=lambda f: (not f.lower().startswith("0. bapk"), f))
+                                        if _xlb:
+                                            _xl_bulk = _os.path.join(_bp_target, _xlb[0])
+                                    except Exception:
+                                        pass
+                                    if _xl_bulk:
+                                        _hps_res2 = _hps_eng2.scrape_hps_ke_excel(_bp["kode_tender"], _xl_bulk)
+                                        if _hps_res2.get("ok"):
+                                            _paket_log.append(f"📊 HPS: {_hps_res2.get('count',0)} baris → Excel")
+                                        else:
+                                            _paket_log.append(f"⚠ HPS: {_hps_res2.get('pesan','-')}")
+                                    else:
+                                        _paket_log.append("⚠ HPS dilewati — tidak ada .xlsm di folder")
                                 except Exception as _hps_e2:
                                     _paket_log.append(f"⚠ HPS gagal: {_hps_e2}")
                         else:
@@ -6172,4 +6239,300 @@ with tab_apendo:
                         st.caption(_gm)
     else:
         st.info("Tidak ada paket ditemukan di Supabase.")
+
+    # ── Seksi 3: Input BA → tulis Excel langsung via COM ─────────────────────
+    st.divider()
+    st.markdown("### 📋 Input BA → tulis Excel")
+    st.caption(
+        "Isi sheet '0. Input BA' (identitas peserta, dokumen penawaran, SKP) "
+        "langsung ke file .xlsm via COM. Urutan peserta dari KK Evaluasi."
+    )
+
+    # Ambil daftar paket (folder sudah dibuat)
+    _iba_paket_list = []
+    try:
+        from config import sb as _sb_iba, POKJA_ROOT as _POKJA_ROOT_IBA
+        _iba_r = _sb_iba().table("draft_paket").select(
+            "kode_tender,nama_tender,folder_dibuat"
+        ).not_.is_("folder_dibuat", "null").execute()
+        _iba_paket_list = [r for r in (_iba_r.data or []) if r.get("folder_dibuat")]
+        _iba_paket_list = sorted(_iba_paket_list, key=lambda x: x.get("folder_dibuat", ""))
+    except Exception as _iba_e:
+        st.warning(f"Gagal ambil daftar paket: {_iba_e}")
+
+    if not _iba_paket_list:
+        st.info("Tidak ada paket dengan folder dibuat.")
+    else:
+        import input_ba_engine as _iba_eng
+
+        # Opsi global
+        _iba_col_opt1, _iba_col_opt2 = st.columns(2)
+        with _iba_col_opt1:
+            _iba_do_teknis = st.checkbox(
+                "Parse Dok Teknis (override alat/personel)",
+                value=True,
+                key="iba_do_teknis",
+            )
+        with _iba_col_opt2:
+            _iba_do_gcal = st.checkbox(
+                "Sync tanggal dari Google Calendar",
+                value=True,
+                key="iba_do_gcal",
+            )
+
+        # Fungsi proses (dipakai per-paket maupun global)
+        def _proses_input_ba(kode_tender, nama_tender, folder_kualifikasi, xlsm_path, do_teknis, do_gcal):
+            """Isi sheet '0. Input BA' untuk satu paket."""
+            log_area = st.empty()
+            log_lines = []
+
+            def _log_cb(msg):
+                log_lines.append(msg)
+                try:
+                    log_area.code("\n".join(log_lines[-30:]))
+                except Exception:
+                    pass
+
+            _log_cb(f"=== Input BA: {kode_tender} ===")
+
+            # Folder dok teknis ada di "1. Dokumen Penawaran" (sibling folder kualifikasi),
+            # BUKAN di "1. Dokumen Kualifikasi". Resolve dari parent folder paket.
+            _folder_paket_root = os.path.dirname(folder_kualifikasi) if folder_kualifikasi else ""
+            _folder_penawaran = os.path.join(_folder_paket_root, "1. Dokumen Penawaran") if _folder_paket_root else ""
+
+            # ── 1. (Opsional) parse dok teknis untuk update alat/personel ke Supabase ──
+            if do_teknis:
+                try:
+                    import dokumen_teknis_engine as _dte
+                    from config import sb as _sb_dte
+                    _ids_r = _sb_dte().table("peserta_identitas").select(
+                        "peserta_id,nama_perusahaan"
+                    ).eq("kode_tender", kode_tender).execute()
+                    _ps_ids = _ids_r.data or []
+                    # Daftar subfolder peserta di Dokumen Penawaran (mis. "1. CV SAMATA")
+                    _sub_penawaran = []
+                    if os.path.isdir(_folder_penawaran):
+                        _sub_penawaran = [
+                            d for d in os.listdir(_folder_penawaran)
+                            if os.path.isdir(os.path.join(_folder_penawaran, d))
+                        ]
+                    else:
+                        _log_cb(f"  ⚠️ Folder '1. Dokumen Penawaran' tidak ada — skip parse teknis")
+
+                    def _cari_folder_peserta(nama):
+                        """Cari subfolder yang namanya cocok peserta (abaikan prefix nomor)."""
+                        _nrm = re.sub(r'[\s.,]+', '', re.sub(r'[\\/:*?"<>|]', "", nama)).lower()
+                        for _d in _sub_penawaran:
+                            # Buang prefix "N. " lalu normalisasi
+                            _dn = re.sub(r'^\s*\d+\.\s*', '', _d)
+                            _dnrm = re.sub(r'[\s.,]+', '', _dn).lower()
+                            if _nrm and (_nrm in _dnrm or _dnrm in _nrm):
+                                return os.path.join(_folder_penawaran, _d)
+                        return None
+
+                    for _ps_id_row in _ps_ids:
+                        _pid = _ps_id_row.get("peserta_id", "")
+                        _pnama = _ps_id_row.get("nama_perusahaan", "")
+                        _folder_ps = _cari_folder_peserta(_pnama)
+                        if not _folder_ps:
+                            _log_cb(f"  ⚠️ Folder teknis {_pnama} tidak ketemu, skip")
+                            continue
+                        try:
+                            _res_dt = _dte.parse_dan_upsert(
+                                kode_tender, _pid, _folder_ps, _log_cb
+                            )
+                            if not _res_dt.get("ok"):
+                                _log_cb(f"  ⚠️ Teknis {_pnama}: {_res_dt.get('pesan','tidak ada file teknis')}")
+                        except Exception as _e_dt:
+                            _log_cb(f"  ⚠️ Teknis error {_pnama}: {_e_dt}")
+                except Exception as _e_dte:
+                    _log_cb(f"  ⚠️ Modul teknis error: {_e_dte}")
+
+            # ── 2. Ambil urutan peserta dari kk_evaluasi_peserta ─────────────────────
+            peserta_rows = []
+            skp_rows = []
+            try:
+                from config import sb as _sb_kk2
+                _kk_r = _sb_kk2().table("kk_evaluasi_peserta").select(
+                    "*"
+                ).eq("kode_tender", kode_tender).order("urutan").execute()
+                _kk_rows = _kk_r.data or []
+
+                # Dict identitas by nama lowercase
+                _id_r = _sb_kk2().table("peserta_identitas").select(
+                    "nama_perusahaan,npwp_raw,alamat,nama_direktur,"
+                    "personel_1,personel_2,alat_1,alat_2,alat_3,alat_4,alat_5,alat_6"
+                ).eq("kode_tender", kode_tender).execute()
+                _id_by_nama = {
+                    (r.get("nama_perusahaan") or "").lower(): r
+                    for r in (_id_r.data or [])
+                }
+
+                if _kk_rows:
+                    # Susun peserta sesuai urutan KK Evaluasi (maks 3)
+                    for _kr in _kk_rows[:3]:
+                        _nama_kk = (_kr.get("nama") or "").lower()
+                        _id_data = _id_by_nama.get(_nama_kk, {})
+                        # Fallback: partial match
+                        if not _id_data:
+                            for _k, _v in _id_by_nama.items():
+                                if _nama_kk and (_nama_kk in _k or _k in _nama_kk):
+                                    _id_data = _v
+                                    break
+                        peserta_rows.append({
+                            "nama_perusahaan": _id_data.get("nama_perusahaan") or _kr.get("nama", ""),
+                            "npwp":         kk_evaluasi_engine._format_npwp(_id_data.get("npwp_raw") or ""),
+                            "alamat":       _id_data.get("alamat", ""),
+                            "nama_direktur": _id_data.get("nama_direktur", ""),
+                            "personel_1":   _id_data.get("personel_1", ""),
+                            "personel_2":   _id_data.get("personel_2", ""),
+                            "alat_1":       _id_data.get("alat_1", ""),
+                            "alat_2":       _id_data.get("alat_2", ""),
+                            "alat_3":       _id_data.get("alat_3", ""),
+                            "alat_4":       _id_data.get("alat_4", ""),
+                            "alat_5":       _id_data.get("alat_5", ""),
+                            "alat_6":       _id_data.get("alat_6", ""),
+                        })
+                    _log_cb(f"  Peserta (urutan KK): {len(peserta_rows)} dari {len(_kk_rows)}")
+                else:
+                    # Fallback: urut peserta_identitas apa adanya
+                    _log_cb("  ⚠️ kk_evaluasi_peserta kosong, fallback urut peserta_identitas")
+                    for _id_row in (_id_r.data or [])[:3]:
+                        peserta_rows.append({
+                            "nama_perusahaan": _id_row.get("nama_perusahaan", ""),
+                            "npwp":         kk_evaluasi_engine._format_npwp(_id_row.get("npwp_raw") or ""),
+                            "alamat":       _id_row.get("alamat", ""),
+                            "nama_direktur": _id_row.get("nama_direktur", ""),
+                            "personel_1":   _id_row.get("personel_1", ""),
+                            "personel_2":   _id_row.get("personel_2", ""),
+                            "alat_1":       _id_row.get("alat_1", ""),
+                            "alat_2":       _id_row.get("alat_2", ""),
+                            "alat_3":       _id_row.get("alat_3", ""),
+                            "alat_4":       _id_row.get("alat_4", ""),
+                            "alat_5":       _id_row.get("alat_5", ""),
+                            "alat_6":       _id_row.get("alat_6", ""),
+                        })
+
+                # SKP + Hasil Pembuktian per peserta (urut sama dgn peserta_rows)
+                def _hitung_hasil_ms(_kr):
+                    """Tentukan Memenuhi/Tidak Memenuhi dari field KK Evaluasi."""
+                    if (_kr.get("kswp_status") or "").upper() in ("TIDAK VALID", "INVALID"):
+                        return "Tidak Memenuhi"
+                    if not _kr.get("nib_nomor"):
+                        return "Tidak Memenuhi"
+                    if not _kr.get("sbu_nomor"):
+                        return "Tidak Memenuhi"
+                    if not _kr.get("pgl1_nama"):
+                        return "Tidak Memenuhi"
+                    return "Memenuhi"
+
+                skp_rows = []
+                for _kr in _kk_rows[:3]:
+                    _skp_int = None
+                    try:
+                        _skp_int = int(_kr.get("skp")) if _kr.get("skp") is not None else None
+                    except (ValueError, TypeError):
+                        pass
+                    skp_rows.append({
+                        "skp": _skp_int,
+                        "skp_catatan": _kr.get("skp_catatan") or (f"{_skp_int} SKP" if _skp_int is not None else ""),
+                        "hasil": _hitung_hasil_ms(_kr),
+                    })
+
+            except Exception as _e_kk:
+                _log_cb(f"  ⚠️ Gagal ambil peserta dari Supabase: {_e_kk}")
+                skp_rows = []
+
+            # ── 3. Dokumen penawaran ─────────────────────────────────────────────────
+            dokpen = None
+            try:
+                from config import sb as _sb_dp
+                _dp_r = _sb_dp().table("dokumen_penawaran").select("*").eq(
+                    "kode_tender", kode_tender
+                ).limit(1).execute()
+                if _dp_r.data:
+                    dokpen = _dp_r.data[0]
+                    _log_cb(f"  Dokpen: daftar={dokpen.get('jml_daftar')} kirim={dokpen.get('jml_kirim')}")
+            except Exception as _e_dp:
+                _log_cb(f"  ⚠️ Gagal ambil dokpen: {_e_dp}")
+
+            # ── 4. (Opsional) Tanggal dari Google Calendar ───────────────────────────
+            tgl_pembukaan = None
+            tgl_pembuktian = None
+            if do_gcal:
+                try:
+                    import gcal_helper
+                    _gcal_hasil = gcal_helper.get_tanggal_ba_dari_gcal(nama_tender)
+                    tgl_pembukaan  = _gcal_hasil.get("pembukaan")
+                    tgl_pembuktian = _gcal_hasil.get("negosiasi")
+                    _log_cb(f"  GCal pembukaan={tgl_pembukaan} pembuktian={tgl_pembuktian}")
+                except Exception as _e_gc:
+                    _log_cb(f"  ⚠️ GCal error (token expired?): {_e_gc} — tanggal diisi manual")
+
+            # ── 5. Tulis ke Excel ─────────────────────────────────────────────────────
+            if not peserta_rows:
+                st.warning(f"Tidak ada peserta untuk {kode_tender} — skip tulis Excel.")
+                return
+
+            _res = _iba_eng.fill_input_ba(
+                xlsm_path,
+                peserta_rows,
+                dokpen,
+                tgl_pembukaan,
+                tgl_pembuktian,
+                skp_rows,
+                _log_cb,
+            )
+            if _res["ok"]:
+                st.success(f"Input BA {kode_tender}: {_res['pesan']}")
+            else:
+                st.warning(f"Input BA {kode_tender} gagal: {_res['pesan']}")
+
+        # Tombol per-paket
+        st.divider()
+        for _iba_p in _iba_paket_list:
+            _iba_kode  = _iba_p["kode_tender"]
+            _iba_nama  = _iba_p.get("nama_tender", _iba_kode)
+            _iba_label = _iba_p.get("folder_dibuat", _iba_kode)
+
+            # Resolve folder & xlsm
+            _iba_folder_res = kualifikasi_engine.resolve_folder_paket(_iba_kode)
+            _iba_folder_kual = _iba_folder_res.get("path", "")
+            _iba_folder_paket = os.path.dirname(_iba_folder_kual) if _iba_folder_kual else ""
+
+            # Cari xlsm di folder paket (parent dari folder kualifikasi)
+            _iba_xlsm = ""
+            if _iba_folder_paket and os.path.isdir(_iba_folder_paket):
+                _iba_cand = (
+                    _glob_mod.glob(os.path.join(_iba_folder_paket, "0. BA*.xlsm")) or
+                    _glob_mod.glob(os.path.join(_iba_folder_paket, "*.xlsm"))
+                )
+                if _iba_cand:
+                    _iba_xlsm = _iba_cand[0]
+
+            _iba_c1, _iba_c2 = st.columns([4, 1])
+            with _iba_c1:
+                _iba_info = f"**{_iba_label}**"
+                if _iba_xlsm:
+                    _iba_info += f"  \n`{os.path.basename(_iba_xlsm)}`"
+                else:
+                    _iba_info += "  \n⚠️ xlsm tidak ditemukan"
+                st.markdown(_iba_info)
+            with _iba_c2:
+                if st.button(
+                    "▶ Input BA",
+                    key=f"iba_{_iba_kode}",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not bool(_iba_xlsm),
+                ):
+                    if _iba_xlsm:
+                        _proses_input_ba(
+                            _iba_kode,
+                            _iba_nama,
+                            _iba_folder_kual,
+                            _iba_xlsm,
+                            st.session_state.get("iba_do_teknis", True),
+                            st.session_state.get("iba_do_gcal", True),
+                        )
 

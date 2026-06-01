@@ -30,6 +30,7 @@ _TAHAP_KEYWORD = {
     "evaluasi":        "Evaluasi Administrasi, Kualifikasi, Teknis, dan Harga",
     "hasil_pemilihan": "Penetapan Pemenang",
     "negosiasi":       "Pembuktian Kualifikasi",
+    "pembukaan":       "Pembukaan Penawaran",
 }
 
 # Untuk evaluasi, ambil tanggal END (hari terakhir); sisanya ambil START

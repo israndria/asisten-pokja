@@ -31,96 +31,202 @@ def parse_peralatan(pdf_path: str) -> list[str]:
     """
     Parse daftar peralatan dari PDF 04E.
     Return list string, misal ["Motor Grader (1 Unit)", "Dump Truck (2 Unit)"]
+
+    Header-aware: deteksi index kolom JENIS dan JUMLAH dari baris header tabel.
+    Mendukung variasi format: SAMATA (JUMLAH idx2), BAYU/EXTRA (JUMLAH idx4), dll.
     """
     import pdfplumber
+
+    def _norm(cell) -> str:
+        """Normalisasi cell: strip, ganti newline jadi spasi, buang karakter aneh."""
+        if cell is None:
+            return ""
+        return re.sub(r"\s+", " ", str(cell)).strip()
+
+    def _cari_indeks_header(header_row):
+        """
+        Dari baris header, cari index kolom JENIS dan JUMLAH.
+        Return (idx_jenis, idx_jumlah) — idx_jumlah bisa None kalau tidak ditemukan.
+        """
+        idx_jenis = None
+        idx_jumlah = None
+        for i, cell in enumerate(header_row):
+            teks = (cell or "").upper().replace("\n", " ").strip()
+            # Deteksi kolom JENIS: mengandung kata kunci nama peralatan
+            if idx_jenis is None and any(k in teks for k in ["JENIS", "NAMA PERALATAN", "PERALATAN", "NAMA ALAT"]):
+                # Hindari mencocokkan kolom yang hanya berisi "PERALATAN" sebagai bagian dari frasa panjang
+                # tapi pastikan bukan kolom NO (biasanya indeks 0 dan nilai sangat pendek)
+                idx_jenis = i
+            # Deteksi kolom JUMLAH: persis mengandung "JUMLAH"
+            if idx_jumlah is None and "JUMLAH" in teks:
+                idx_jumlah = i
+        # Default jenis ke index 1 kalau tidak ditemukan
+        if idx_jenis is None:
+            idx_jenis = 1
+        return idx_jenis, idx_jumlah
+
+    def _is_header_row(row, idx_jenis):
+        """Cek apakah baris ini adalah baris header (bukan data)."""
+        teks = (row[idx_jenis] or "").upper().replace("\n", " ").strip()
+        return any(k in teks for k in ["JENIS", "NAMA PERALATAN", "PERALATAN", "NAMA ALAT"])
 
     alat_list = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for tbl in tables:
-                    for row in tbl:
-                        if not row or len(row) < 2:
-                            continue
-                        # Kolom 0 = jumlah/no, kolom 1 = jenis alat
-                        jumlah = (row[0] or "").strip()
-                        nama   = (row[1] or "").strip()
-                        if not nama:
-                            continue
-                        # Skip header
-                        nama_up = nama.upper()
-                        if any(h in nama_up for h in ["JENIS", "PERALATAN", "ALAT", "NO", "KAPASITAS"]):
-                            continue
-                        # Skip baris kosong atau nomor urut saja
-                        if re.match(r"^\d+$", nama):
-                            continue
-                        # Gabungkan multiline cell (pisah \n)
-                        for sub_nama in nama.split("\n"):
-                            sub_nama = sub_nama.strip()
-                            if not sub_nama or re.match(r"^\d+$", sub_nama):
-                                continue
-                            if any(h in sub_nama.upper() for h in ["JENIS", "PERALATAN", "ALAT", "NO"]):
-                                continue
-                            # Cari jumlah yang bersesuaian (mungkin juga multiline)
-                            sub_jml = jumlah.split("\n")[len(alat_list) % max(1, len(jumlah.split("\n")))].strip() if "\n" in jumlah else jumlah
-                            if sub_jml and not re.match(r"^[Nn][Oo]\.?$", sub_jml):
-                                alat_list.append(f"{sub_nama} ({sub_jml})")
-                            else:
-                                alat_list.append(sub_nama)
-                        if len(alat_list) >= 5:
-                            break
-                    if len(alat_list) >= 5:
-                        break
                 if alat_list:
                     break
+                tables = page.extract_tables()
+                for tbl in tables:
+                    if not tbl or len(tbl) < 2:
+                        continue
+                    # Cari baris header: baris pertama dengan >= 3 kolom yang mengandung keyword
+                    header_row = tbl[0]
+                    if not header_row or len(header_row) < 3:
+                        continue
+                    header_teks = " ".join((c or "").upper().replace("\n", " ") for c in header_row)
+                    # Tabel valid: header mengandung kata terkait peralatan
+                    if not any(k in header_teks for k in ["JENIS", "PERALATAN", "NAMA ALAT"]):
+                        continue
+
+                    idx_jenis, idx_jumlah = _cari_indeks_header(header_row)
+
+                    # Iterasi baris data (lewati baris header)
+                    for row in tbl[1:]:
+                        if not row or len(row) <= idx_jenis:
+                            continue
+                        jenis_raw = row[idx_jenis] or ""
+                        # Peralatan multiline di sel JENIS → tiap baris = satu alat terpisah
+                        # (berbeda dengan personil yang multiline = 1 orang)
+                        jenis_lines = [s.strip() for s in str(jenis_raw).split("\n") if s.strip()]
+
+                        # Ambil jumlah dari kolom JUMLAH jika tersedia
+                        jumlah_lines = []
+                        if idx_jumlah is not None and len(row) > idx_jumlah:
+                            jml_raw = row[idx_jumlah] or ""
+                            jumlah_lines = [s.strip() for s in str(jml_raw).split("\n") if s.strip()]
+
+                        for li, jenis in enumerate(jenis_lines):
+                            if not jenis:
+                                continue
+                            # Skip baris header yang mungkin muncul ulang di tengah tabel
+                            if _is_header_row([None, jenis], 1):
+                                continue
+                            # Skip kalau isinya cuma angka (nomor urut)
+                            if re.match(r"^\d+\.?$", jenis):
+                                continue
+                            # Ambil jumlah yang bersesuaian (index sama dengan jenis_lines)
+                            jumlah = jumlah_lines[li] if li < len(jumlah_lines) else ""
+                            # Jangan ambil jumlah dari kolom NO (nilai seperti "1." "2.")
+                            if jumlah and re.match(r"^\d+\.?$", jumlah):
+                                jumlah = ""
+                            if jumlah:
+                                alat_list.append(f"{jenis} ({jumlah})")
+                            else:
+                                alat_list.append(jenis)
+                            if len(alat_list) >= 6:
+                                break
+                        if len(alat_list) >= 6:
+                            break
+                    if alat_list:
+                        break
     except Exception:
         pass
-    return alat_list[:5]
+    return alat_list[:6]
 
 
 def parse_personel(pdf_path: str) -> list[str]:
     """
     Parse daftar personel manajerial dari PDF 04D.
-    Return list nama, misal ["NOPIE ARIE YANDI", "RAHMAT KURNIAWAN S"]
+    Return list string, misal ["AULIA RAHMAN, A.Md (Pelaksana Lapangan)", "JUSUF BOBBY MANOREK (Petugas K3)"]
+
+    Header-aware: deteksi index kolom NAMA dan JABATAN dari baris header tabel.
+    Nama multiline (newline dalam satu cell) digabung jadi 1 string — 1 orang, bukan 2 entri.
     """
     import pdfplumber
 
-    nama_list = []
+    def _norm_spasi(teks) -> str:
+        """Gabungkan newline menjadi spasi, bersihkan spasi ganda."""
+        if teks is None:
+            return ""
+        return re.sub(r"\s+", " ", str(teks).replace("\n", " ")).strip()
+
+    def _cari_indeks_personil(header_row):
+        """
+        Dari baris header, cari index kolom NAMA dan JABATAN.
+        Return (idx_nama, idx_jabatan) — idx_jabatan bisa None.
+        """
+        idx_nama = None
+        idx_jabatan = None
+        for i, cell in enumerate(header_row):
+            teks = (cell or "").upper().replace("\n", " ").strip()
+            # NAMA: mengandung "NAMA" tapi BUKAN "NAMA PERALATAN" / "NAMA ALAT"
+            if idx_nama is None and "NAMA" in teks:
+                if not any(k in teks for k in ["PERALATAN", "ALAT"]):
+                    idx_nama = i
+            # JABATAN: mengandung "JABATAN"
+            if idx_jabatan is None and "JABATAN" in teks:
+                idx_jabatan = i
+        # Default NAMA ke index 1
+        if idx_nama is None:
+            idx_nama = 1
+        return idx_nama, idx_jabatan
+
+    personel_list = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
+                if personel_list:
+                    break
                 tables = page.extract_tables()
                 for tbl in tables:
-                    for row in tbl:
-                        if not row or len(row) < 2:
+                    if not tbl or len(tbl) < 2:
+                        continue
+                    header_row = tbl[0]
+                    if not header_row or len(header_row) < 2:
+                        continue
+                    header_teks = " ".join((c or "").upper().replace("\n", " ") for c in header_row)
+                    # Tabel valid: header mengandung "NAMA" (untuk personil)
+                    if "NAMA" not in header_teks:
+                        continue
+                    # Pastikan bukan tabel peralatan yang kebetulan ada kolom bernama "NAMA"
+                    if any(k in header_teks for k in ["PERALATAN", "NAMA ALAT"]):
+                        continue
+
+                    idx_nama, idx_jabatan = _cari_indeks_personil(header_row)
+
+                    # Iterasi baris data (lewati baris header)
+                    for row in tbl[1:]:
+                        if not row or len(row) <= idx_nama:
                             continue
-                        nama_cell = (row[1] or "").strip()
-                        if not nama_cell:
+                        # Nama: GABUNG multiline jadi 1 string (1 baris = 1 orang)
+                        nama = _norm_spasi(row[idx_nama])
+                        if not nama:
                             continue
-                        nama_up = nama_cell.upper()
-                        if any(h in nama_up for h in ["NAMA", "NO", "PERSONEL", "MANAJERIAL"]):
+                        # Skip baris header yang muncul ulang
+                        if any(k in nama.upper() for k in ["NAMA", "PERSONEL", "PERSONIL"]):
                             continue
-                        for sub in nama_cell.split("\n"):
-                            sub = sub.strip()
-                            if not sub:
-                                continue
-                            if any(h in sub.upper() for h in ["NAMA", "NO"]):
-                                continue
-                            if re.match(r"^\d+$", sub):
-                                continue
-                            nama_list.append(sub)
-                            if len(nama_list) >= 4:
-                                break
-                        if len(nama_list) >= 4:
+                        # Skip kalau nama cuma angka (nomor urut)
+                        if re.match(r"^\d+\.?$", nama):
+                            continue
+                        # Ambil jabatan jika ada kolom JABATAN
+                        jabatan = ""
+                        if idx_jabatan is not None and len(row) > idx_jabatan:
+                            jabatan = _norm_spasi(row[idx_jabatan])
+                            # Buang teks yang terlalu panjang / jelas bukan jabatan
+                            if len(jabatan) > 80:
+                                jabatan = jabatan[:80]
+                        if jabatan:
+                            personel_list.append(f"{nama} ({jabatan})")
+                        else:
+                            personel_list.append(nama)
+                        if len(personel_list) >= 4:
                             break
-                    if nama_list:
+                    if personel_list:
                         break
-                if nama_list:
-                    break
     except Exception:
         pass
-    return nama_list[:4]
+    return personel_list[:4]
 
 
 def parse_dan_upsert(
@@ -173,6 +279,9 @@ def parse_dan_upsert(
         "alat_1":     alat_list[0] if len(alat_list) > 0 else "",
         "alat_2":     alat_list[1] if len(alat_list) > 1 else "",
         "alat_3":     alat_list[2] if len(alat_list) > 2 else "",
+        "alat_4":     alat_list[3] if len(alat_list) > 3 else "",
+        "alat_5":     alat_list[4] if len(alat_list) > 4 else "",
+        "alat_6":     alat_list[5] if len(alat_list) > 5 else "",
     }
 
     try:
