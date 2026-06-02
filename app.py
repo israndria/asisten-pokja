@@ -972,7 +972,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                             st.error(f"Gagal: {_hps_r.get('pesan','-')}")
 
             # ── Bulk: Scrape HPS SEMUA Paket PL → Excel ──────────────────────
-            with st.expander("💰 Scrape HPS SEMUA Paket PL → Excel"):
+            # NOTE: pakai container (bukan expander) — di dalamnya ada st.status
+            # yang juga expander, dan expander tidak boleh nested.
+            with st.container(border=True):
+                st.markdown("**💰 Scrape HPS SEMUA Paket PL → Excel**")
                 st.caption("Scrape HPS dari SPSE untuk semua paket PL yang sudah ada folder, tulis ke .xlsm masing-masing.")
                 _pl_rows_hps_bulk = [
                     r for r in _pl_rows
