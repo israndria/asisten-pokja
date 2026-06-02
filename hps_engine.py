@@ -19,34 +19,36 @@ def _parse_rp(s: str) -> float:
 
 def _fetch_data_var(kode_tender: str) -> list:
     """
-    Ambil variabel JS `data` dari halaman HPS — berisi semua item sebagai JSON array.
-    Jauh lebih andal daripada parse DOM tabel yang dibatasi 20 baris.
+    Ambil variabel JS `data` dari halaman HPS via requests + cookie CDP.
+    Data di-embed di HTML — tidak butuh Playwright/CDP browser launch.
     """
+    import requests
+    import json as _json
     import spse_browser
 
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        return []
+
     url = f"{SPSE_BASE_URL}dokumen/{kode_tender}/hps"
-    spse_browser.buka_browser(navigate=False)
+    r = requests.get(url, headers={
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": f"{SPSE_BASE_URL}paket",
+    }, timeout=15)
+    if r.status_code != 200:
+        return []
 
-    # Cari tab yang sudah buka halaman HPS ini
-    page = next((p for p in spse_browser._context.pages if f"/{kode_tender}/hps" in p.url), None)
-    if page is not None:
-        spse_browser._run(page.reload(wait_until="networkidle", timeout=30000))
-    else:
-        # Buka tab baru — jangan pakai pages[0] yang mungkin sedang navigasi (→ frame detach)
-        page = spse_browser._run(spse_browser._context.new_page())
-        try:
-            spse_browser._run(page.goto(url, wait_until="networkidle", timeout=30000))
-        except Exception:
-            # Fallback: domcontentloaded lebih toleran kalau networkidle timeout
-            spse_browser._run(page.goto(url, wait_until="domcontentloaded", timeout=30000))
+    m = re.search(r"var\s+data\s*=\s*(\[.*?\]);\s*(?:var|</script)", r.text, re.DOTALL)
+    if not m:
+        m = re.search(r"data\s*=\s*(\[\{.+?\}\])", r.text, re.DOTALL)
+    if not m:
+        return []
 
-    result = spse_browser._run(page.evaluate("() => typeof data !== 'undefined' ? data : []"))
-    # Tutup tab sementara biar tidak numpuk
     try:
-        spse_browser._run(page.close())
-    except Exception:
-        pass
-    return result
+        return _json.loads(m.group(1))
+    except _json.JSONDecodeError:
+        return []
 
 
 def scrape_hps(kode_tender: str, session=None) -> dict:
