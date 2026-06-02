@@ -354,14 +354,9 @@ def scrape_hps_ke_excel(kode_tender: str, excel_path: str, progress_cb=None) -> 
 
 
 def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -> dict:
-    """PL: scrape HPS non-tender (cari id_nontender dari draft_paket_pl) → tulis sheet '5. HPS'."""
+    """PL: scrape HPS non-tender via kode_paket (resolve DOKID live) → tulis sheet '5. HPS'."""
     try:
-        row = _sb().table("draft_paket_pl").select("id_nontender").eq("kode_paket", kode_paket).maybe_single().execute()
-        id_nt = (row.data or {}).get("id_nontender") if row else None
-        if not id_nt:
-            return {"ok": False, "pesan": "id_nontender tidak ditemukan", "count": 0,
-                    "warning": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
-        hasil = scrape_hps_pl(id_nt)
+        hasil = scrape_hps_pl(kode_paket)
         if not hasil["items"]:
             return {"ok": False, "pesan": "Tidak ada item HPS", "count": 0,
                     "warning": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
@@ -376,12 +371,25 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
 
 # ============================================================
 # PL Mode — HPS Non-Tender
-# Endpoint: /dokumennontender/{id_nontender}/hps
+# Endpoint: /dokumennontender/{DOKID}/hps (DOKID resolve dari kode_paket)
 # Tabel Supabase: hps_items_pl (PK: kode_paket, urutan)
 # ============================================================
 
-def _fetch_data_var_pl(id_nontender: str) -> list:
-    """Ambil var JS `data` dari halaman HPS non-tender via requests + cookie PP."""
+def _resolve_dokid_hps_pl(kode_paket: str, cookie_str: str) -> str:
+    """Resolve DOKID dokumen HPS dari kode_paket via link /surveyhargappk di halaman nontender.
+    Return DOKID string, atau '' jika tidak ketemu."""
+    import requests
+    url = f"{SPSE_BASE_URL}nontender/{kode_paket}"
+    r = requests.get(url, headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"}, timeout=15)
+    if r.status_code != 200:
+        return ""
+    m = re.search(r'dokumennontender/(\d+)/surveyhargappk', r.text)
+    return m.group(1) if m else ""
+
+
+def _fetch_data_var_pl(kode_paket: str) -> list:
+    """Ambil var JS `data` dari halaman HPS non-tender via requests + cookie PP.
+    Resolve DOKID HPS dari kode_paket (link /surveyhargappk), GET /hps dgn Referer wajib."""
     import requests
     import json as _json
     import spse_browser
@@ -390,13 +398,19 @@ def _fetch_data_var_pl(id_nontender: str) -> list:
     if not cookie_str:
         return []
 
-    url = f"{SPSE_BASE_URL}dokumennontender/{id_nontender}/hps"
+    # Resolve DOKID dulu — id_nontender di DB adalah ID peserta, bukan DOKID HPS
+    dokid = _resolve_dokid_hps_pl(kode_paket, cookie_str)
+    if not dokid:
+        return []
+
+    url = f"{SPSE_BASE_URL}dokumennontender/{dokid}/hps"
     r = requests.get(
         url,
         headers={
             "Cookie": cookie_str,
             "User-Agent": "Mozilla/5.0",
-            "Referer": SPSE_BASE_URL + "admin/pegawai",
+            # Referer wajib — tanpa ini server return 500
+            "Referer": f"{SPSE_BASE_URL}nontender/{kode_paket}",
         },
         timeout=15,
     )
@@ -416,9 +430,9 @@ def _fetch_data_var_pl(id_nontender: str) -> list:
         return []
 
 
-def scrape_hps_pl(id_nontender: str) -> dict:
-    """Scrape HPS PL via id_nontender. Struktur sama dengan tender."""
-    raw = _fetch_data_var_pl(id_nontender)
+def scrape_hps_pl(kode_paket: str) -> dict:
+    """Scrape HPS PL via kode_paket (resolve DOKID live). Struktur sama dengan tender."""
+    raw = _fetch_data_var_pl(kode_paket)
     if not raw:
         return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
@@ -508,15 +522,9 @@ def upsert_hps_pl(kode_paket: str, hasil: dict) -> dict:
 
 
 def scrape_dan_upsert_hps_pl(kode_paket: str) -> dict:
-    """Scrape HPS PL → upsert. kode_paket dari draft_paket_pl; cari id_nontender otomatis."""
+    """Scrape HPS PL → upsert. Resolve DOKID langsung dari kode_paket (tanpa lookup DB)."""
     try:
-        row = _sb().table("draft_paket_pl").select("id_nontender").eq("kode_paket", kode_paket).maybe_single().execute()
-        id_nt = (row.data or {}).get("id_nontender") if row else None
-        if not id_nt:
-            return {"count": 0, "warning": [], "total_nilai": 0.0,
-                    "total_nilai_bulat": 0.0, "error": "id_nontender tidak ditemukan"}
-
-        hasil = scrape_hps_pl(id_nt)
+        hasil = scrape_hps_pl(kode_paket)
         if not hasil["items"]:
             return {"count": 0, "warning": [], "total_nilai": 0.0,
                     "total_nilai_bulat": 0.0, "error": "Tidak ada item HPS"}

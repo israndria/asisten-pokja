@@ -69,18 +69,38 @@ JENIS_DISPLAY_PL = {
 # Scrap token dari halaman nontender
 # ─────────────────────────────────────────────────────────────────────
 
-def scrap_ba_context_pl(id_nontender: str) -> dict:
+def scrap_ba_context_pl(
+    id_nontender: str,
+    jenis: str = "UPLOAD_BA_EVALUASI_PENAWARAN",
+    aksi: str = "cetak",
+) -> dict:
     """
-    GET /nontender/{id}, scrap authenticityToken.
-    Token TIDAK ada di formba (partial) — harus dari halaman utama nontender.
+    Scrap authenticityToken + ref dari halaman formba (partial form per-jenis).
+
+    PENTING (hasil inspect CDP 2026-06-02, paket PROD 10860847000):
+      - Token diambil dari GET /beritacaranontender/{id}/formba?jenis=...&aksi=...
+        (BUKAN dari halaman utama /nontender/{id} — itu tidak punya form BA).
+      - Header **Referer wajib** = halaman /nontender/{id}. Tanpa Referer → HTTP 500.
+
+    Return: {token, ref, cookie, form_url}
+      form_url dipakai sebagai Referer saat POST cetak/submit.
     """
-    url = f"{SPSE_BASE_URL}nontender/{id_nontender}"
     cookie_str = spse_browser.get_spse_cookies()
-    resp = requests.get(url, headers={
+    halaman_ref = f"{SPSE_BASE_URL}nontender/{id_nontender}"
+    form_url = (
+        f"{SPSE_BASE_URL}beritacaranontender/{id_nontender}/formba"
+        f"?jenis={jenis}&aksi={aksi}"
+    )
+    resp = requests.get(form_url, headers={
         **HEADERS_BASE, "Cookie": cookie_str,
+        "Referer": halaman_ref,  # WAJIB — tanpa ini server balas 500
+        "X-Requested-With": "XMLHttpRequest",
     }, timeout=20)
     if resp.status_code != 200:
-        raise RuntimeError(f"GET halaman nontender gagal: {resp.status_code}")
+        raise RuntimeError(
+            f"GET formba BA gagal: {resp.status_code} "
+            f"(jenis={jenis}, aksi={aksi})"
+        )
 
     soup = BeautifulSoup(resp.text, "html.parser")
     token = ""
@@ -88,14 +108,18 @@ def scrap_ba_context_pl(id_nontender: str) -> dict:
         token = inp.get("value", "")
         if token:
             break
-
     if not token:
-        raise RuntimeError("authenticityToken tidak ditemukan di halaman nontender.")
+        raise RuntimeError("authenticityToken tidak ditemukan di formba.")
+
+    # ref dari hidden input form (fallback ke halaman nontender)
+    ref_input = soup.find("input", {"name": "ref"})
+    ref_val = (ref_input.get("value", "") if ref_input else "") or halaman_ref
 
     return {
         "token": token,
-        "ref": url,
+        "ref": ref_val,
         "cookie": cookie_str,
+        "form_url": form_url,
     }
 
 
@@ -200,8 +224,9 @@ def upload_ba_pl(
     tempat: wajib diisi untuk jenis "pengumuman" (PENGUMUMAN_PEMENANG_AKHIR)
     tanggal_ba: format "DD-MM-YYYY"
     """
-    # 1. Context (token + ref)
-    ctx = scrap_ba_context_pl(id_nontender)
+    # 1. Context (token + ref) — formba aksi=upload per-jenis (Referer wajib)
+    jenis_val = JENIS_BA_PL.get(jenis_key, jenis_key)
+    ctx = scrap_ba_context_pl(id_nontender, jenis=jenis_val, aksi="upload")
 
     # 2. Upload file
     upload_result = _upload_pdf_pl(id_nontender, file_bytes, file_name)
@@ -213,7 +238,6 @@ def upload_ba_pl(
         }
 
     # 3. Build payload
-    jenis_val = JENIS_BA_PL.get(jenis_key, jenis_key)
     payload = {
         "authenticityToken": ctx["token"],
         "ref": ctx["ref"],
@@ -233,7 +257,7 @@ def upload_ba_pl(
     resp = requests.post(url, data=payload, headers={
         **HEADERS_BASE,
         "Cookie": ctx["cookie"],
-        "Referer": ctx["ref"],
+        "Referer": ctx.get("form_url") or ctx["ref"],
     }, allow_redirects=False, timeout=30)
 
     ok = resp.status_code in (200, 302)
@@ -267,8 +291,9 @@ def cetak_ba_pl(
     Return: {"ok": bool, "pdf_bytes": bytes, "status": int, "error": str}
     """
     try:
-        ctx = scrap_ba_context_pl(id_nontender)
         jenis_val = JENIS_BA_PL.get(jenis_key, jenis_key)
+        # Token + ref dari formba per-jenis (aksi=cetak), Referer wajib di PROD
+        ctx = scrap_ba_context_pl(id_nontender, jenis=jenis_val, aksi="cetak")
 
         payload = {
             "authenticityToken": ctx["token"],
@@ -283,8 +308,8 @@ def cetak_ba_pl(
         resp = requests.post(url, data=payload, headers={
             **HEADERS_BASE,
             "Cookie": ctx["cookie"],
-            "Referer": ctx["ref"],
-        }, allow_redirects=False, timeout=30)
+            "Referer": ctx.get("form_url") or ctx["ref"],
+        }, allow_redirects=False, timeout=40)
 
         if resp.status_code == 200 and "pdf" in resp.headers.get("Content-Type", "").lower():
             return {"ok": True, "pdf_bytes": resp.content, "status": 200, "error": ""}
