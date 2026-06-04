@@ -183,7 +183,8 @@ def cetak_ba(
     paket_id: str,
     jenis_key: str,
     nomor_ba: str,
-    tanggal_ba: str
+    tanggal_ba: str,
+    info: str = "",
 ) -> dict:
     """
     Cetak (Download PDF) BA dari SPSE.
@@ -192,13 +193,14 @@ def cetak_ba(
     try:
         ctx = scrap_ba_context(paket_id)
         jenis_val = JENIS_BA.get(jenis_key, jenis_key)
-        
+
         payload = {
             "authenticityToken": ctx["token"],
             "ref": ctx["ref"],
             "jenis": jenis_val,
             "no": nomor_ba.strip(),
             "tanggal": tanggal_ba.strip(),
+            "info": info.strip() if info else "",
         }
         
         url = f"{SPSE_BASE_URL}berita_acara/{paket_id}/cetak"

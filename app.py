@@ -6233,7 +6233,7 @@ with tab_ba:
                     # Retry hingga 3x jika SPSE 503/timeout
                     for _attempt in range(3):
                         try:
-                            r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
+                            r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, info=info)
                             if r_cetak["ok"]:
                                 fn = f"{_FILE_LABEL_BA.get(jenis_key, jenis_key)}-{p['kode']}.pdf"
                                 with open(_os.path.join(target_dir, fn), "wb") as f:
