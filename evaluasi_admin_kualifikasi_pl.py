@@ -113,6 +113,7 @@ def _scrape_form_evaluasi(id_nontender: str) -> dict:
                     checklistIjin: [], checklistAdmin: [], checklistTeknis: [], kswp: ""
                 },
                 checklist_teknis: [],
+                checklist_harga: [],
                 kswp_result: null
             };
             document.querySelectorAll("form").forEach(function(form) {
@@ -138,6 +139,10 @@ def _scrape_form_evaluasi(id_nontender: str) -> dict:
                 } else if (action.includes("checklist_teknis")) {
                     form.querySelectorAll("input[type='checkbox']").forEach(function(cb) {
                         if (cb.value) result.checklist_teknis.push(cb.value);
+                    });
+                } else if (action.includes("checklist_harga")) {
+                    form.querySelectorAll("input[type='checkbox']").forEach(function(cb) {
+                        if (cb.value) result.checklist_harga.push(cb.value);
                     });
                 }
             });
@@ -185,13 +190,15 @@ def submit_evaluasi_lulus_peserta(
     id_nontender: str,
     admin: bool = True,
     kualifikasi: bool = True,
+    teknis: bool = False,
+    harga: bool = False,
     progress_cb=None,
 ) -> dict:
     """
-    Submit evaluasi LULUS untuk 1 peserta (admin + kualifikasi).
+    Submit evaluasi LULUS untuk 1 peserta (admin, kualifikasi, teknis, harga).
     Semua checkbox di-centang (kirim semua value dari server).
 
-    Return: {"ok": bool, "admin_ok": bool, "kualifikasi_ok": bool, "pesan": str}
+    Return: {"ok": bool, "admin_ok": bool, "kualifikasi_ok": bool, "teknis_ok": bool, "harga_ok": bool, "pesan": str}
     """
     def _log(msg):
         if progress_cb:
@@ -203,15 +210,17 @@ def submit_evaluasi_lulus_peserta(
     _log(f"  Scrape form evaluasi id={id_nontender}...")
     form_data = _scrape_form_evaluasi(id_nontender)
     if "error" in form_data:
-        return {"ok": False, "admin_ok": False, "kualifikasi_ok": False, "pesan": form_data["error"]}
+        return {"ok": False, "admin_ok": False, "kualifikasi_ok": False, "teknis_ok": False, "harga_ok": False, "pesan": form_data["error"]}
 
     token = form_data["token"]
     referer = f"{BASE}/evaluasinontender/{id_nontender}/detail"
     admin_ok = False
     kualifikasi_ok = False
+    teknis_ok = False
+    harga_ok = False
 
     if admin:
-        vals = form_data["checklist_admin"]
+        vals = form_data.get("checklist_admin", [])
         if vals:
             url_admin = f"{BASE}/evaluasinontender/{id_nontender}/checklist_admin"
             fields = {f"checklist[{i}]": v for i, v in enumerate(vals)}
@@ -223,16 +232,16 @@ def submit_evaluasi_lulus_peserta(
             admin_ok = True  # tidak ada syarat admin
 
     if kualifikasi:
-        kq = form_data["checklist_kualifikasi"]
+        kq = form_data.get("checklist_kualifikasi", {})
         url_kual = f"{BASE}/evaluasinontender/{id_nontender}/checklist_kualifikasi"
         fields_kq = {}
-        for i, v in enumerate(kq["checklistIjin"]):
+        for i, v in enumerate(kq.get("checklistIjin", [])):
             fields_kq[f"checklistIjin[{i}]"] = v
-        for i, v in enumerate(kq["checklistAdmin"]):
+        for i, v in enumerate(kq.get("checklistAdmin", [])):
             fields_kq[f"checklistAdmin[{i}]"] = v
-        for i, v in enumerate(kq["checklistTeknis"]):
+        for i, v in enumerate(kq.get("checklistTeknis", [])):
             fields_kq[f"checklistTeknis[{i}]"] = v
-        if kq["kswp"]:
+        if kq.get("kswp"):
             fields_kq["kswp"] = kq["kswp"]
         if fields_kq:
             res = _post_checklist(url_kual, token, fields_kq, referer)
@@ -242,11 +251,42 @@ def submit_evaluasi_lulus_peserta(
             _log("  [skip] checklist_kualifikasi kosong")
             kualifikasi_ok = True
 
-    ok = (not admin or admin_ok) and (not kualifikasi or kualifikasi_ok)
+    if teknis:
+        vals_tek = form_data.get("checklist_teknis", [])
+        if vals_tek:
+            url_tek = f"{BASE}/evaluasinontender/{id_nontender}/checklist_teknis"
+            fields_tek = {f"checklist[{i}]": v for i, v in enumerate(vals_tek)}
+            res_tek = _post_checklist(url_tek, token, fields_tek, referer)
+            teknis_ok = res_tek["ok"]
+            _log(f"  Teknis checklist: {res_tek['pesan']} ({'OK' if teknis_ok else 'GAGAL'})")
+        else:
+            _log("  [skip] checklist_teknis kosong")
+            teknis_ok = True
+
+    if harga:
+        vals_hrg = form_data.get("checklist_harga", [])
+        if vals_hrg:
+            url_hrg = f"{BASE}/evaluasinontender/{id_nontender}/checklist_harga"
+            fields_hrg = {f"checklist[{i}]": v for i, v in enumerate(vals_hrg)}
+            fields_hrg["lulus"] = "true"  # Radio button lulus
+            res_hrg = _post_checklist(url_hrg, token, fields_hrg, referer)
+            harga_ok = res_hrg["ok"]
+            _log(f"  Harga checklist: {res_hrg['pesan']} ({'OK' if harga_ok else 'GAGAL'})")
+        else:
+            _log("  [skip] checklist_harga kosong")
+            harga_ok = True
+
+    ok = (not admin or admin_ok) and \
+         (not kualifikasi or kualifikasi_ok) and \
+         (not teknis or teknis_ok) and \
+         (not harga or harga_ok)
+
     return {
         "ok": ok,
         "admin_ok": admin_ok,
         "kualifikasi_ok": kualifikasi_ok,
+        "teknis_ok": teknis_ok,
+        "harga_ok": harga_ok,
         "pesan": "Lulus" if ok else "Sebagian gagal",
         "token": token,
     }
@@ -256,6 +296,8 @@ def evaluasi_batch_lulus(
     kode_paket: str,
     admin: bool = True,
     kualifikasi: bool = True,
+    teknis: bool = False,
+    harga: bool = False,
     progress_cb=None,
 ) -> dict:
     """
@@ -263,7 +305,7 @@ def evaluasi_batch_lulus(
 
     Return: {
         "ok": bool,
-        "hasil": [{"nama", "id_nontender", "admin_ok", "kualifikasi_ok", "pesan"}],
+        "hasil": [{"nama", "id_nontender", "admin_ok", "kualifikasi_ok", "teknis_ok", "harga_ok", "pesan"}],
         "ringkasan": str,
     }
     """
@@ -287,7 +329,12 @@ def evaluasi_batch_lulus(
     for p in peserta_list:
         _log(f"Peserta: {p['nama']} (id={p['id_nontender']})")
         res = submit_evaluasi_lulus_peserta(
-            p["id_nontender"], admin=admin, kualifikasi=kualifikasi, progress_cb=progress_cb
+            p["id_nontender"],
+            admin=admin,
+            kualifikasi=kualifikasi,
+            teknis=teknis,
+            harga=harga,
+            progress_cb=progress_cb
         )
         if res.get("token"):
             last_token = res["token"]
@@ -296,11 +343,27 @@ def evaluasi_batch_lulus(
             "id_nontender": p["id_nontender"],
             "admin_ok": res.get("admin_ok", False),
             "kualifikasi_ok": res.get("kualifikasi_ok", False),
+            "teknis_ok": res.get("teknis_ok", False),
+            "harga_ok": res.get("harga_ok", False),
             "pesan": res.get("pesan", ""),
         })
 
-    n_ok = sum(1 for h in hasil if h["admin_ok"] and h["kualifikasi_ok"])
-    ringkasan = f"{n_ok}/{len(hasil)} peserta lulus admin+kualifikasi"
+    n_ok = sum(
+        1 for h in hasil
+        if (not admin or h["admin_ok"]) and
+           (not kualifikasi or h["kualifikasi_ok"]) and
+           (not teknis or h["teknis_ok"]) and
+           (not harga or h["harga_ok"])
+    )
+
+    lbls = []
+    if admin: lbls.append("admin")
+    if kualifikasi: lbls.append("kual")
+    if teknis: lbls.append("teknis")
+    if harga: lbls.append("harga")
+    lbl_str = "+".join(lbls)
+
+    ringkasan = f"{n_ok}/{len(hasil)} peserta lulus {lbl_str}"
 
     # ── Auto-konfirmasi verifikasi data SIKaP (tombol Terverifikasi) di halaman list utama ──
     if kualifikasi and any(h["kualifikasi_ok"] for h in hasil):

@@ -3632,7 +3632,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     st.markdown(f"**{_n_paket8} paket** dipilih")
                     st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
 
-                    _do_eval8    = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval")
+                    _do_eval8    = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi + Teknis + Harga LULUS di SPSE", value=True, key="pl8_do_eval")
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
@@ -3689,8 +3689,15 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 # Evaluasi LULUS
                                 if _do_eval8:
                                     _pb8.progress((_i8 + 0.3) / _n_paket8, text=f"{_nama8} — evaluasi LULUS")
-                                    _lcb8("--- Submit evaluasi Admin + Kualifikasi LULUS ---")
-                                    _eval8 = _eval_pl.evaluasi_batch_lulus(_kpl8, progress_cb=_lcb8)
+                                    _lcb8("--- Submit evaluasi Admin + Kualifikasi + Teknis + Harga LULUS ---")
+                                    _eval8 = _eval_pl.evaluasi_batch_lulus(
+                                        _kpl8,
+                                        admin=True,
+                                        kualifikasi=True,
+                                        teknis=True,
+                                        harga=True,
+                                        progress_cb=_lcb8
+                                    )
                                     _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
 
                                 # Download teknis/biaya
