@@ -6098,36 +6098,69 @@ with tab_ba:
         _jenis_konfirm = _JENIS_AUTO if _pending_target == "SEMUA" else [_pending_target]
         _label_target = "Semua BA" if _pending_target == "SEMUA" else ba_config.JENIS_BA[_pending_target]
 
-        _paket_blocks = []
         _total_kosong = []
+        st.markdown(f"### 📋 Konfirmasi Cetak & Upload — {_label_target}")
+        st.caption("Tanggal bisa diedit. Klik ✏️ untuk ubah, lalu **Ya, Cetak & Upload**.")
+
         for _pp in _pending_paket:
             _pid_k = _pp["id_lelang"]
-            _blok_lines = [f"**{_pokja_label(_pp)}**"]
-            for _jk in _jenis_konfirm:
-                _no  = st.session_state.get(f"ba_no_{_jk}_{_pid_k}", "")
-                _tgl = st.session_state.get(f"ba_tgl_{_jk}_{_pid_k}", "")
-                _label = ba_config.JENIS_LABEL[_jk]
-                if _no and _tgl:
-                    _tgl_date = st.session_state.get(f"ba_tgl_date_{_jk}_{_pid_k}")
-                    if isinstance(_tgl_date, date):
-                        _tgl_fmt = f"{_HARI_NAMA[_tgl_date.weekday()]}, {_tgl_date.day} {_BULAN_NAMA[_tgl_date.month-1]} {_tgl_date.year}"
+            with st.expander(f"📁 {_pokja_label(_pp)}", expanded=True):
+                for _jk in _jenis_konfirm:
+                    _no   = st.session_state.get(f"ba_no_{_jk}_{_pid_k}", "")
+                    _label = ba_config.JENIS_LABEL[_jk]
+                    if not _no:
+                        st.caption(f"⚠️ {_label}: nomor BA tidak ada — dilewati")
+                        continue
+                    _tgl_date_cur = st.session_state.get(f"ba_tgl_date_{_jk}_{_pid_k}")
+                    _default_date = _tgl_date_cur if isinstance(_tgl_date_cur, date) else date.today()
+                    _edit_key = f"ba_edit_date_{_jk}_{_pid_k}"
+                    _edit_mode_key = f"ba_edit_mode_{_jk}_{_pid_k}"
+
+                    # Format tanggal Indonesia
+                    def _fmt_tgl_id(d):
+                        return f"{_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year}"
+
+                    _col_label, _col_tgl, _col_btn = st.columns([3, 3, 1])
+                    with _col_label:
+                        st.markdown(f"**{_label}**")
+                        st.caption(f"`{_no}`")
+
+                    if st.session_state.get(_edit_mode_key, False):
+                        # Mode edit: tampilkan date_input
+                        with _col_tgl:
+                            _new_date = st.date_input(
+                                "Tanggal",
+                                value=_default_date,
+                                key=_edit_key,
+                                label_visibility="collapsed",
+                                format="DD/MM/YYYY",
+                            )
+                        with _col_btn:
+                            if st.button("✔", key=f"ba_confirm_date_{_jk}_{_pid_k}", use_container_width=True, help="Simpan"):
+                                if isinstance(_new_date, date):
+                                    st.session_state[f"ba_tgl_date_{_jk}_{_pid_k}"] = _new_date
+                                    st.session_state[f"ba_tgl_{_jk}_{_pid_k}"] = _new_date.strftime("%d-%m-%Y")
+                                st.session_state[_edit_mode_key] = False
+                                st.rerun()
+                        if isinstance(_new_date, date):
+                            st.session_state[f"ba_tgl_date_{_jk}_{_pid_k}"] = _new_date
+                            st.session_state[f"ba_tgl_{_jk}_{_pid_k}"] = _new_date.strftime("%d-%m-%Y")
                     else:
-                        _tgl_fmt = _tgl
-                    _blok_lines.append(f"- {_label}: `{_no}` — 📅 {_tgl_fmt}")
-                else:
-                    _blok_lines.append(f"- {_label}: ⚠️ _(akan dilewati — tanggal tidak ada di GCal)_")
-                    _total_kosong.append(f"{_pokja_label(_pp)} / {_label}")
-            _paket_blocks.append("\n".join(_blok_lines))
+                        # Mode display: tampilkan teks Indonesia
+                        with _col_tgl:
+                            if isinstance(_default_date, date):
+                                st.markdown(f"📅 {_fmt_tgl_id(_default_date)}")
+                            else:
+                                st.caption("⚠️ Tanggal kosong")
+                                _total_kosong.append(f"{_pokja_label(_pp)} / {_label}")
+                        with _col_btn:
+                            if st.button("✏️", key=f"ba_edit_btn_{_jk}_{_pid_k}", use_container_width=True, help="Edit tanggal"):
+                                st.session_state[_edit_mode_key] = True
+                                st.rerun()
 
-        _detail = "\n\n".join(_paket_blocks)
-        _warn_msg = (
-            f"**Konfirmasi Cetak & Upload — {_label_target}**\n\n"
-            f"{_detail}"
-        )
         if _total_kosong:
-            _warn_msg += f"\n\n⚠️ **{len(_total_kosong)} jenis akan dilewati** (tanggal tidak ditemukan di GCal)"
+            st.warning(f"⚠️ {len(_total_kosong)} jenis akan dilewati (tanggal kosong)")
 
-        st.warning(_warn_msg)
         _konfirm_c1, _konfirm_c2 = st.columns(2)
         with _konfirm_c1:
             if st.button("✅ Ya, Cetak & Upload", key="ba_konfirm_ya", type="primary", use_container_width=True):
@@ -6208,6 +6241,7 @@ with tab_ba:
             except Exception:
                 target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
             _os.makedirs(target_dir, exist_ok=True)
+            import time as _time
             for jenis_key in jenis_list:
                 op_idx += 1
                 progress.progress(op_idx / total_ops, text=f"Proses {p['kode']} — {ba_config.JENIS_BA[jenis_key]} ({op_idx}/{total_ops})...")
@@ -6216,21 +6250,37 @@ with tab_ba:
                 info = ba_config.DEFAULT_INFO.get(jenis_key, "")
                 ba_result = {"jenis": ba_config.JENIS_BA[jenis_key], "status": "⏭️ Lewati (nomor/tanggal kosong)"}
                 if nomor and tanggal:
-                    try:
-                        r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
-                        if r_cetak["ok"]:
-                            fn = f"{_FILE_LABEL_BA.get(jenis_key, jenis_key)}-{p['kode']}.pdf"
-                            with open(_os.path.join(target_dir, fn), "wb") as f:
-                                f.write(r_cetak["pdf_bytes"])
-                            r_up = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=r_cetak["pdf_bytes"], file_name=fn, info=info)
-                            if r_up["ok"]:
-                                ba_result["status"] = f"✅ Sukses — `{fn}`"
+                    # Retry hingga 3x jika SPSE 503/timeout
+                    for _attempt in range(3):
+                        try:
+                            r_cetak = ba_engine.cetak_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal)
+                            if r_cetak["ok"]:
+                                fn = f"{_FILE_LABEL_BA.get(jenis_key, jenis_key)}-{p['kode']}.pdf"
+                                with open(_os.path.join(target_dir, fn), "wb") as f:
+                                    f.write(r_cetak["pdf_bytes"])
+                                r_up = ba_engine.upload_ba(paket_id=pid, jenis_key=jenis_key, nomor_ba=nomor, tanggal_ba=tanggal, file_bytes=r_cetak["pdf_bytes"], file_name=fn, info=info)
+                                if r_up["ok"]:
+                                    ba_result["status"] = f"✅ Sukses — `{fn}`"
+                                elif r_up["status"] in (503, 429, 502) and _attempt < 2:
+                                    progress.progress(op_idx / total_ops, text=f"⏳ Server {r_up['status']}, retry {_attempt+2}/3...")
+                                    _time.sleep(3)
+                                    continue
+                                else:
+                                    ba_result["status"] = f"❌ Upload Error {r_up['status']}"
                             else:
-                                ba_result["status"] = f"❌ Upload Error {r_up['status']}"
-                        else:
-                            ba_result["status"] = f"❌ Cetak Error {r_cetak['status']}: {r_cetak.get('error')}"
-                    except Exception as e:
-                        ba_result["status"] = f"❌ {e}"
+                                if r_cetak["status"] in (503, 429, 502) and _attempt < 2:
+                                    progress.progress(op_idx / total_ops, text=f"⏳ Cetak {r_cetak['status']}, retry {_attempt+2}/3...")
+                                    _time.sleep(3)
+                                    continue
+                                ba_result["status"] = f"❌ Cetak Error {r_cetak['status']}: {r_cetak.get('error')}"
+                            break  # sukses atau error non-retryable
+                        except Exception as e:
+                            if _attempt < 2:
+                                _time.sleep(3)
+                                continue
+                            ba_result["status"] = f"❌ {e}"
+                    # Jeda antar BA biar SPSE ga throttle
+                    _time.sleep(2)
                 paket_hasil["ba"].append(ba_result)
             hasil_auto.append(paket_hasil)
         progress.empty()
