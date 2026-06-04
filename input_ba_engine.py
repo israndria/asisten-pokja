@@ -33,8 +33,8 @@ ROW_JML_TDK_KIRIM  = 27
 ROW_JML_TDK_LENGKAP = 28
 ROW_JML_TDK_BUKA   = 29
 
-# SKP & Hasil Pembuktian (per peserta, kolom C/D/E)
-ROW_SKP = 32
+# JP (Pekerjaan Berjalan) & Hasil Pembuktian (per peserta, kolom C/D/E)
+ROW_JP = 32
 ROW_HASIL_PEMBUKTIAN = 33
 
 # Nama bulan English (tanggal ditulis sebagai teks, locale-independent)
@@ -85,7 +85,7 @@ def fill_input_ba(
         tgl_pembukaan : datetime.date atau None
         tgl_pembuktian: datetime.date atau None
         skp_rows      : list dict per peserta (urut sama dgn peserta_rows) atau None.
-                        Key: skp_catatan (str "5 SKP"), skp (int), hasil (str "Memenuhi"/"Tidak Memenuhi")
+                        Key: skp_catatan (int JP — jumlah pekerjaan berjalan), skp (int), hasil (str "Memenuhi"/"Tidak Memenuhi")
         progress_cb   : callback(msg: str) — opsional
 
     Return: {"ok": bool, "pesan": str}
@@ -210,19 +210,21 @@ def fill_input_ba(
             _set(ws, ROW_JML_TDK_LENGKAP, 3, dokpen.get("jml_tidak_lengkap"))
             _set(ws, ROW_JML_TDK_BUKA,   3, dokpen.get("jml_tidak_dapat_dibuka"))
 
-        # ── SKP & Hasil Pembuktian per peserta (kolom C/D/E) ─────────────────
+        # ── JP (Pekerjaan Berjalan) & Hasil Pembuktian per peserta (kolom C/D/E) ──
         if skp_rows:
             for urutan, srow in enumerate(skp_rows[:3], 1):
                 col = _COL_PESERTA[urutan]
-                _catatan = srow.get("skp_catatan") or (f"{srow.get('skp')} SKP" if srow.get("skp") is not None else "")
-                if _catatan:
-                    _set(ws, ROW_SKP, col, _catatan)
+                jp_val = srow.get("skp_catatan")  # sekarang berisi int JP dari parser
+                if jp_val is None and srow.get("skp") is not None:
+                    jp_val = 5 - int(srow.get("skp"))  # fallback kalkulasi JP dari SKP lama
+                if jp_val is not None:
+                    _set(ws, ROW_JP, col, jp_val)
                 _hasil = srow.get("hasil", "")
                 if _hasil:
                     _set(ws, ROW_HASIL_PEMBUKTIAN, col, _hasil)
-            _log(f"  SKP & Hasil Pembuktian: {len(skp_rows[:3])} peserta")
+            _log(f"  JP & Hasil Pembuktian: {len(skp_rows[:3])} peserta")
 
-            # Port dari VBA: sheet 6 W29 = 5 - skp (peserta 1), jumlah paket berjalan.
+            # Port dari VBA: sheet 6 W29 = jp (jumlah pekerjaan berjalan, peserta 1).
             # Jangan pakai formula referensi → circular reference.
             _skp1 = skp_rows[0].get("skp")
             if _skp1 is not None:
@@ -232,8 +234,9 @@ def fill_input_ba(
                         ws6.Unprotect()
                     except Exception:
                         pass
-                    ws6.Range("W29").Value = 5 - int(_skp1)
-                    _log(f"  Sheet 6 W29 = {5 - int(_skp1)} (5 - {_skp1})")
+                    jp1 = 5 - int(_skp1)  # jp = 5 - skp
+                    ws6.Range("W29").Value = jp1
+                    _log(f"  Sheet 6 W29 = {jp1} (pekerjaan berjalan)")
                 except Exception as e_ws6:
                     _log(f"  ⚠️ Sheet '{_SHEET_SKP_KLARIF}' tidak ditemukan/W29 gagal: {e_ws6}")
 

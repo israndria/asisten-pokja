@@ -530,13 +530,13 @@ def get_skp(folder_peserta: str, jp_preview: int) -> dict:
     """
     Hitung SKP dari jp_preview (tabel pekerjaan berjalan di HTML /preview).
     Formulir Isian PDF tidak dipakai karena sering tidak konsisten.
-    Return: {"skp": int, "jp": int, "catatan": str, "berbeda": bool}
+    Return: {"skp": int, "jp": int, "catatan": int (JP pekerjaan berjalan), "berbeda": bool}
     """
     skp = 5 - jp_preview
     return {
         "skp": skp,
         "jp": jp_preview,
-        "catatan": f"{skp} SKP",
+        "catatan": jp_preview,  # jumlah pekerjaan berjalan (P), bukan SKP
         "berbeda": False,
     }
 

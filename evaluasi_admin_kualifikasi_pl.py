@@ -248,6 +248,7 @@ def submit_evaluasi_lulus_peserta(
         "admin_ok": admin_ok,
         "kualifikasi_ok": kualifikasi_ok,
         "pesan": "Lulus" if ok else "Sebagian gagal",
+        "token": token,
     }
 
 
@@ -282,11 +283,14 @@ def evaluasi_batch_lulus(
     _log(f"{len(peserta_list)} peserta ditemukan")
 
     hasil = []
+    last_token = ""
     for p in peserta_list:
         _log(f"Peserta: {p['nama']} (id={p['id_nontender']})")
         res = submit_evaluasi_lulus_peserta(
             p["id_nontender"], admin=admin, kualifikasi=kualifikasi, progress_cb=progress_cb
         )
+        if res.get("token"):
+            last_token = res["token"]
         hasil.append({
             "nama": p["nama"],
             "id_nontender": p["id_nontender"],
@@ -297,6 +301,61 @@ def evaluasi_batch_lulus(
 
     n_ok = sum(1 for h in hasil if h["admin_ok"] and h["kualifikasi_ok"])
     ringkasan = f"{n_ok}/{len(hasil)} peserta lulus admin+kualifikasi"
+
+    # ── Auto-konfirmasi verifikasi data SIKaP (tombol Terverifikasi) di halaman list utama ──
+    if kualifikasi and any(h["kualifikasi_ok"] for h in hasil):
+        _log("Auto-konfirmasi verifikasi data SIKaP...")
+        try:
+            import asyncio
+            url_list = f"{BASE}/evaluasinontender/{kode_paket}"
+
+            async def _process_sikap():
+                page = await spse_browser._connect_cdp_async(url_list, navigate=True)
+                await asyncio.sleep(2)
+                return await page.evaluate("""() => {
+                    var token = "";
+                    var f = document.querySelector("input[name='authenticityToken']");
+                    if (f) token = f.value;
+
+                    var urls = Array.from(document.querySelectorAll('a'))
+                        .filter(el => el.href && el.href.includes('konfirmasi_verifikasi'))
+                        .map(el => el.href);
+
+                    return {token: token, urls: urls};
+                }""")
+
+            sikap_data = spse_browser._run(_process_sikap())
+            token_sikap = sikap_data.get("token") or last_token
+            urls_konfirm = sikap_data.get("urls", [])
+
+            if urls_konfirm and token_sikap:
+                _log(f"  Menemukan {len(urls_konfirm)} tombol konfirmasi SIKaP. Memproses...")
+                for s_url in urls_konfirm:
+                    m_psr = re.search(r"/evaluasinontender/(\d+)/konfirmasi_verifikasi", s_url)
+                    if m_psr:
+                        psr_id = m_psr.group(1)
+                        url_sikap_submit = f"{BASE}/evaluasinontender/{kode_paket}/submit_konfirmasi_verifikasi_sikap"
+                        payload_sikap = {
+                            "authenticityToken": token_sikap,
+                            "psr_id": psr_id,
+                            "simpan": "simpan"
+                        }
+                        res_sikap = requests.post(
+                            url_sikap_submit,
+                            data=payload_sikap,
+                            headers={**_headers(url_list), "Content-Type": "application/x-www-form-urlencoded"},
+                            timeout=15,
+                            allow_redirects=False
+                        )
+                        if res_sikap.status_code in (200, 302):
+                            _log(f"    Penyedia ID {psr_id}: Berhasil verifikasi data SIKaP")
+                        else:
+                            _log(f"    Penyedia ID {psr_id}: Gagal verifikasi (HTTP {res_sikap.status_code})")
+            else:
+                _log("  [skip] Tidak ada tombol konfirmasi SIKaP / token CSRF tidak ditemukan")
+        except Exception as e:
+            _log(f"  Gagal auto-konfirmasi SIKaP: {e}")
+
     return {
         "ok": n_ok == len(hasil),
         "hasil": hasil,

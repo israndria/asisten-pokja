@@ -247,8 +247,10 @@ def fill_kk_evaluasi(
 
             # Syarat 4: SKP
             skp = data.get("skp", 5)
-            skp_catatan = data.get("skp_catatan", f"{skp} SKP")
             jp = data.get("skp_jp", 5 - skp)   # jumlah paket berjalan
+            skp_catatan = data.get("skp_catatan")  # int JP dari parser baru
+            if skp_catatan is None:
+                skp_catatan = jp  # fallback: pakai jp langsung
             _set(_ROW["skp_hasil"], col, "Memenuhi")
             _set(_ROW["skp_jp"],    col, jp if jp > 0 else 0)
             _set(_ROW["skp_nilai"], col, skp_catatan)
