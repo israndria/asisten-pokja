@@ -113,13 +113,9 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Refresh", use_container_width=True):
-                spse_browser._cdp_tabs(force=True)  # invalidate cache
-                page = spse_browser.halaman_aktif()
-                if page:
-                    try:
-                        page.reload()
-                    except Exception:
-                        pass
+                ok = spse_browser.refresh_browser()
+                if not ok:
+                    st.toast("⚠️ Reload gagal — CDP tidak responsif", icon="⚠️")
                 st.rerun()
         with col2:
             if st.button("❌ Tutup", use_container_width=True):

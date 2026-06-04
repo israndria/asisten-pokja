@@ -138,8 +138,70 @@ async def _tutup_async():
 
 
 def tutup_browser():
+    """Tutup Chrome: via Playwright jika connect, fallback CDP Browser.close, lalu diskonek."""
+    global _pw, _context, _page, _cdp_tabs_cache, _cdp_tabs_cache_ts
     if _context:
         _run(_tutup_async())
+    else:
+        # Fallback: kirim CDP command Browser.close langsung via HTTP
+        import requests as _req
+        try:
+            tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
+            if tabs:
+                ws_url = tabs[0].get("webSocketDebuggerUrl", "")
+                # Pakai /json/close/{id} per tab, lalu Browser.close via CDP WebSocket tidak mudah lewat requests
+                # Alternatif: POST ke /json/close semua tab
+                for t in tabs:
+                    try:
+                        _req.get(f"http://localhost:{CDP_PORT}/json/close/{t['id']}", timeout=2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    # Selalu reset state
+    _pw = _context = _page = None
+    _cdp_tabs_cache = []
+    _cdp_tabs_cache_ts = 0.0
+
+
+def refresh_browser():
+    """Reload tab aktif Chrome via CDP HTTP (tidak butuh Playwright _page)."""
+    import requests as _req
+    global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    try:
+        tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
+        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        if not page_tabs:
+            return False
+        # Activate tab pertama + kirim reload via CDP websocket — tidak mudah lewat requests murni
+        # Solusi: gunakan Playwright jika tersedia, fallback navigate ke URL yang sama
+        tab = page_tabs[0]
+        tab_id = tab["id"]
+        current_url = tab.get("url", "")
+        # Activate tab via CDP HTTP
+        _req.get(f"http://localhost:{CDP_PORT}/json/activate/{tab_id}", timeout=2)
+        # Jika Playwright tersedia, pakai reload
+        page = halaman_aktif()
+        if page and not page.is_closed():
+            try:
+                page.reload(timeout=15000)
+                _cdp_tabs_cache = []
+                _cdp_tabs_cache_ts = 0.0
+                return True
+            except Exception:
+                pass
+        # Fallback: navigate ulang ke URL yang sama via Playwright connect
+        if current_url and current_url.startswith("http"):
+            try:
+                buka_browser(current_url, navigate=True)
+                _cdp_tabs_cache = []
+                _cdp_tabs_cache_ts = 0.0
+                return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
 
 
 def diskonek():
@@ -461,7 +523,7 @@ def halaman_aktif() -> Page | None:
 
 _cdp_tabs_cache: list[dict] = []
 _cdp_tabs_cache_ts: float = 0.0
-_CDP_CACHE_TTL = 5.0  # detik — cache tab list selama 5 detik antar rerun
+_CDP_CACHE_TTL = 2.0  # detik — cache tab list 2 detik; lebih pendek supaya status sidebar cepat merah saat CDP tutup
 
 
 def _cdp_tabs(force: bool = False) -> list[dict]:
@@ -480,7 +542,9 @@ def _cdp_tabs(force: bool = False) -> list[dict]:
         _cdp_tabs_cache_ts = now
         return _cdp_tabs_cache
     except Exception:
-        return _cdp_tabs_cache  # kembalikan cache lama jika gagal
+        _cdp_tabs_cache = []
+        _cdp_tabs_cache_ts = 0.0
+        return []
 
 
 def daftar_tab() -> list[dict]:
