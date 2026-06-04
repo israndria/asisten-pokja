@@ -6100,7 +6100,7 @@ with tab_ba:
 
         _total_kosong = []
         st.markdown(f"### 📋 Konfirmasi Cetak & Upload — {_label_target}")
-        st.caption("Tanggal bisa diedit. Klik ✏️ untuk ubah, lalu **Ya, Cetak & Upload**.")
+        st.caption("Tanggal sudah terisi dari GCal. Ubah langsung jika perlu, lalu **Ya, Cetak & Upload**.")
 
         for _pp in _pending_paket:
             _pid_k = _pp["id_lelang"]
@@ -6114,49 +6114,29 @@ with tab_ba:
                     _tgl_date_cur = st.session_state.get(f"ba_tgl_date_{_jk}_{_pid_k}")
                     _default_date = _tgl_date_cur if isinstance(_tgl_date_cur, date) else date.today()
                     _edit_key = f"ba_edit_date_{_jk}_{_pid_k}"
-                    _edit_mode_key = f"ba_edit_mode_{_jk}_{_pid_k}"
 
-                    # Format tanggal Indonesia
-                    def _fmt_tgl_id(d):
-                        return f"{_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year}"
-
-                    _col_label, _col_tgl, _col_btn = st.columns([3, 3, 1])
+                    _col_label, _col_tgl = st.columns([3, 3])
                     with _col_label:
                         st.markdown(f"**{_label}**")
                         st.caption(f"`{_no}`")
-
-                    if st.session_state.get(_edit_mode_key, False):
-                        # Mode edit: tampilkan date_input
-                        with _col_tgl:
-                            _new_date = st.date_input(
-                                "Tanggal",
-                                value=_default_date,
-                                key=_edit_key,
-                                label_visibility="collapsed",
-                                format="DD/MM/YYYY",
-                            )
-                        with _col_btn:
-                            if st.button("✔", key=f"ba_confirm_date_{_jk}_{_pid_k}", use_container_width=True, help="Simpan"):
-                                if isinstance(_new_date, date):
-                                    st.session_state[f"ba_tgl_date_{_jk}_{_pid_k}"] = _new_date
-                                    st.session_state[f"ba_tgl_{_jk}_{_pid_k}"] = _new_date.strftime("%d-%m-%Y")
-                                st.session_state[_edit_mode_key] = False
-                                st.rerun()
-                        if isinstance(_new_date, date):
-                            st.session_state[f"ba_tgl_date_{_jk}_{_pid_k}"] = _new_date
-                            st.session_state[f"ba_tgl_{_jk}_{_pid_k}"] = _new_date.strftime("%d-%m-%Y")
+                    with _col_tgl:
+                        # Label di atas date_input = teks Indonesia (tidak rerun)
+                        if isinstance(_default_date, date):
+                            _tgl_id = f"{_HARI_NAMA[_default_date.weekday()]}, {_default_date.day} {_BULAN_NAMA[_default_date.month-1]} {_default_date.year}"
+                            st.caption(f"📅 {_tgl_id}")
+                        _new_date = st.date_input(
+                            "Ganti tanggal",
+                            value=_default_date,
+                            key=_edit_key,
+                            label_visibility="visible",
+                            format="DD/MM/YYYY",
+                        )
+                    # Update session state setiap render (reactive, no rerun needed)
+                    if isinstance(_new_date, date):
+                        st.session_state[f"ba_tgl_date_{_jk}_{_pid_k}"] = _new_date
+                        st.session_state[f"ba_tgl_{_jk}_{_pid_k}"] = _new_date.strftime("%d-%m-%Y")
                     else:
-                        # Mode display: tampilkan teks Indonesia
-                        with _col_tgl:
-                            if isinstance(_default_date, date):
-                                st.markdown(f"📅 {_fmt_tgl_id(_default_date)}")
-                            else:
-                                st.caption("⚠️ Tanggal kosong")
-                                _total_kosong.append(f"{_pokja_label(_pp)} / {_label}")
-                        with _col_btn:
-                            if st.button("✏️", key=f"ba_edit_btn_{_jk}_{_pid_k}", use_container_width=True, help="Edit tanggal"):
-                                st.session_state[_edit_mode_key] = True
-                                st.rerun()
+                        _total_kosong.append(f"{_pokja_label(_pp)} / {_label}")
 
         if _total_kosong:
             st.warning(f"⚠️ {len(_total_kosong)} jenis akan dilewati (tanggal kosong)")
