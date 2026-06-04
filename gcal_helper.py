@@ -102,6 +102,11 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
     nama_lower = nama_paket.lower()
     paket_events = [e for e in events_found if nama_lower in e.get("summary", "").lower()]
 
+    # Sort berdasarkan waktu update terakhir secara descending,
+    # supaya kalau ada duplikat jadwal (yg lama di-delete/diubah tapi masih nyangkut
+    # karena V19 naruh event baru, maka yang paling fresh update-nya yg di-pick)
+    paket_events.sort(key=lambda x: x.get("updated", ""), reverse=True)
+
     for jenis_key, keyword in _TAHAP_KEYWORD.items():
         kw_lower = keyword.lower()
         matched = [e for e in paket_events if kw_lower in e.get("summary", "").lower()]
@@ -120,10 +125,10 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
             continue
 
         try:
-            # Format bisa "YYYY-MM-DD" atau "YYYY-MM-DDTHH:MM:SS..."
+            # Format bisa "YYYY-MM-DD" (all-day) atau "YYYY-MM-DDTHH:MM:SS..." (dateTime)
             d = datetime.fromisoformat(dt_str[:10]).date()
-            # Untuk evaluasi (end), GCal end date eksklusif → kurangi 1 hari
-            if pakai_end:
+            # Untuk evaluasi (end): jika all-day (length == 10), GCal end date eksklusif → kurangi 1 hari
+            if pakai_end and len(dt_str) == 10:
                 from datetime import timedelta
                 d = d - timedelta(days=1)
             hasil[jenis_key] = d
