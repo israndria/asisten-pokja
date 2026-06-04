@@ -3632,7 +3632,10 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     st.markdown(f"**{_n_paket8} paket** dipilih")
                     st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
 
-                    _do_eval8    = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi + Teknis + Harga LULUS di SPSE", value=True, key="pl8_do_eval")
+                    _do_eval_admin = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval_admin")
+                    _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=False, key="pl8_do_eval_teknis")
+                    _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=False, key="pl8_do_eval_harga")
+
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
@@ -3643,7 +3646,7 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                         value=False, key="pl8_konfirmasi",
                     )
 
-                    _btn8_disabled = _do_eval8 and not _konfirmasi8
+                    _btn8_disabled = (_do_eval_admin or _do_eval_teknis or _do_eval_harga) and not _konfirmasi8
                     if _btn8_disabled:
                         st.info("Centang konfirmasi untuk mengaktifkan tombol.")
 
@@ -3687,15 +3690,15 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                                 _folder_paket8 = _folder8.get("pesan", "") if _folder8.get("ok") else ""
 
                                 # Evaluasi LULUS
-                                if _do_eval8:
-                                    _pb8.progress((_i8 + 0.3) / _n_paket8, text=f"{_nama8} — evaluasi LULUS")
-                                    _lcb8("--- Submit evaluasi Admin + Kualifikasi + Teknis + Harga LULUS ---")
+                                if _do_eval_admin or _do_eval_teknis or _do_eval_harga:
+                                    _pb8.progress((_i8 + 0.3) / _n_paket8, text=f"{_nama8} — submit evaluasi")
+                                    _lcb8(f"--- Submit evaluasi LULUS (Admin:{_do_eval_admin}, Teknis:{_do_eval_teknis}, Harga:{_do_eval_harga}) ---")
                                     _eval8 = _eval_pl.evaluasi_batch_lulus(
                                         _kpl8,
-                                        admin=True,
-                                        kualifikasi=True,
-                                        teknis=True,
-                                        harga=True,
+                                        admin=_do_eval_admin,
+                                        kualifikasi=_do_eval_admin,
+                                        teknis=_do_eval_teknis,
+                                        harga=_do_eval_harga,
                                         progress_cb=_lcb8
                                     )
                                     _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
