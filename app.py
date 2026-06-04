@@ -3633,8 +3633,8 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
                     st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
 
                     _do_eval_admin = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval_admin")
-                    _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=False, key="pl8_do_eval_teknis")
-                    _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=False, key="pl8_do_eval_harga")
+                    _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=True, key="pl8_do_eval_teknis")
+                    _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=True, key="pl8_do_eval_harga")
 
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
