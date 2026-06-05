@@ -9,7 +9,69 @@ Flow:
 """
 
 import re
+from datetime import date, timedelta
 from config import sb as _sb
+
+# ------------------------------------------------------------------
+# Normalisasi nama personil
+# ------------------------------------------------------------------
+
+_RE_GELAR = re.compile(
+    r"\b(Ir|Dr|H|Hj|S\.T|S\.E|S\.H|S\.Kom|A\.Md|M\.T|M\.Si|M\.M|Ph\.D|ST|AMd|SE|SH|MT)\.?\b",
+    re.IGNORECASE,
+)
+_RE_NONALPHA = re.compile(r"[^a-z\s]")
+
+
+def _normalize_nama(raw: str) -> str:
+    """Lowercase + strip gelar Indonesia + hapus tanda baca + normalisasi spasi."""
+    if not raw:
+        return ""
+    s = raw.lower()
+    s = _RE_GELAR.sub("", s)
+    s = _RE_NONALPHA.sub("", s)
+    # Hapus spasi berlebih
+    s = " ".join(s.split())
+    return s
+
+
+# ------------------------------------------------------------------
+# Jadwal pelaksanaan paket
+# ------------------------------------------------------------------
+
+def _parse_hari_jangka(jangka_waktu: str) -> int | None:
+    """Ambil angka pertama dari string jangka_waktu, asumsikan hari."""
+    if not jangka_waktu:
+        return None
+    m = re.search(r"(\d+)", jangka_waktu)
+    return int(m.group(1)) if m else None
+
+
+def _get_jadwal_paket(kode_tender: str) -> tuple:
+    """
+    Return (tgl_mulai, tgl_selesai) sebagai date, atau (None, None).
+    Cek draft_paket_pl dulu (kode_paket = kode_tender), lalu draft_paket.
+    """
+    # Coba PL dulu
+    rows_pl = _sb().table("draft_paket_pl")\
+        .select("tgl_penetapan,jangka_waktu")\
+        .eq("kode_paket", kode_tender)\
+        .limit(1).execute().data or []
+    if rows_pl:
+        r = rows_pl[0]
+        tgl_str = r.get("tgl_penetapan")
+        hari = _parse_hari_jangka(r.get("jangka_waktu", ""))
+        if tgl_str and hari:
+            try:
+                tgl_mulai = date.fromisoformat(tgl_str)
+                tgl_selesai = tgl_mulai + timedelta(days=hari)
+                return (tgl_mulai, tgl_selesai)
+            except ValueError:
+                pass
+        return (None, None)
+
+    # Tender reguler — tidak ada kolom pelaksanaan, return None
+    return (None, None)
 
 
 def _parse_nama(raw: str) -> str:
@@ -128,18 +190,132 @@ def sync_from_pdf(
     return {"personil": len(upsert_p), "alat": len(upsert_a)}
 
 
+def _resolve_folder_paket(kode_pokja: str) -> str | None:
+    """Cari folder paket di POKJA_ROOT yang mengandung 'Pokja {kode_pokja zero-padded}'."""
+    from config import POKJA_ROOT
+    if not kode_pokja:
+        return None
+    import os
+    label = f"Pokja {kode_pokja.zfill(3)}"
+    try:
+        for d in os.listdir(POKJA_ROOT):
+            full = os.path.join(POKJA_ROOT, d)
+            if os.path.isdir(full) and label in d:
+                return full
+    except Exception:
+        pass
+    return None
+
+
+def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
+    """
+    Fallback: peserta yang personel_1 masih kosong di peserta_identitas
+    → cari DoktekFull_*.pdf di folder paket lokal → parse personil+alat
+    → upsert ke paket_personil + paket_alat via sync_from_pdf().
+    """
+    import os
+    import glob
+
+    # Ambil peserta yang personel_1 kosong/null
+    rows = _sb().table("peserta_identitas")\
+        .select("peserta_id,nama_perusahaan,personel_1")\
+        .eq("kode_tender", kode_tender)\
+        .execute().data or []
+
+    kosong = [r for r in rows if not (r.get("personel_1") or "").strip()]
+    if not kosong:
+        log(f"sync_from_doktek_folder {kode_tender}: semua peserta sudah punya personel_1, skip")
+        return {"personil": 0, "alat": 0}
+
+    # Ambil kode_pokja dari draft_paket (satu paket, satu kode_pokja)
+    dp_rows = _sb().table("draft_paket")\
+        .select("kode_pokja")\
+        .eq("kode_tender", kode_tender)\
+        .limit(1).execute().data or []
+    kode_pokja = (dp_rows[0].get("kode_pokja") or "") if dp_rows else ""
+
+    folder_paket = _resolve_folder_paket(kode_pokja)
+    if not folder_paket:
+        log(f"sync_from_doktek_folder {kode_tender}: folder paket Pokja {kode_pokja} tidak ditemukan")
+        return {"personil": 0, "alat": 0}
+
+    total_p = total_a = 0
+    for row in kosong:
+        pid = row["peserta_id"]
+        nama_penyedia = row.get("nama_perusahaan", "")
+
+        # Cari DoktekFull_*.pdf: coba subfolder "1. Dokumen Penawaran\*nama*" dulu, lalu glob recursive
+        pdf_path = None
+        # Subfolder dokumen penawaran — coba match nama perusahaan (substring case-insensitive)
+        dok_dir = os.path.join(folder_paket, "1. Dokumen Penawaran")
+        if os.path.isdir(dok_dir):
+            nama_lower = nama_penyedia.lower()
+            for sub in os.listdir(dok_dir):
+                sub_full = os.path.join(dok_dir, sub)
+                if os.path.isdir(sub_full) and nama_lower[:6] in sub.lower():
+                    # Cari DoktekFull_*.pdf di subfolder ini
+                    hits = glob.glob(os.path.join(sub_full, "*DoktekFull_*.pdf"))
+                    if hits:
+                        pdf_path = hits[0]
+                        break
+
+        # Fallback: glob recursive seluruh folder paket
+        if not pdf_path:
+            hits = glob.glob(os.path.join(folder_paket, "**", "*DoktekFull_*.pdf"), recursive=True)
+            # Jika banyak, coba match nama perusahaan via path
+            if len(hits) > 1:
+                nama_lower = nama_penyedia.lower()
+                matched = [h for h in hits if nama_lower[:6] in h.lower()]
+                hits = matched if matched else hits
+            if hits:
+                pdf_path = hits[0]
+
+        if not pdf_path:
+            log(f"  [{nama_penyedia}] DoktekFull_*.pdf tidak ditemukan, skip")
+            continue
+
+        log(f"  [{nama_penyedia}] parse dari {os.path.basename(pdf_path)}")
+        try:
+            # Lazy import hindari circular
+            from dokumen_teknis_engine import parse_personel, parse_peralatan
+            personel_list  = parse_personel(pdf_path)
+            peralatan_list = parse_peralatan(pdf_path)
+        except Exception as e:
+            log(f"  [{nama_penyedia}] parse error: {e}")
+            continue
+
+        res = sync_from_pdf(kode_tender, pid, nama_penyedia, personel_list, peralatan_list, log=log)
+        total_p += res["personil"]
+        total_a += res["alat"]
+
+    log(f"sync_from_doktek_folder {kode_tender}: {total_p} personil, {total_a} alat (dari {len(kosong)} peserta kosong)")
+    return {"personil": total_p, "alat": total_a}
+
+
 def _get_aktif_kode_tender() -> list[str]:
     """Semua kode_tender di draft_paket = paket aktif."""
     rows = _sb().table("draft_paket").select("kode_tender").execute().data or []
     return [r["kode_tender"] for r in rows if r.get("kode_tender")]
 
 
+def _overlap(mulai_a, selesai_a, mulai_b, selesai_b) -> bool:
+    """True jika dua range tanggal overlap, atau salah satu None (konservatif)."""
+    if mulai_a is None or selesai_a is None or mulai_b is None or selesai_b is None:
+        return True  # data tidak lengkap = asumsi overlap
+    return max(mulai_a, mulai_b) <= min(selesai_a, selesai_b)
+
+
 def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
     """
-    Return list personil yang muncul di >1 paket aktif.
+    Return list personil yang muncul di >1 paket aktif dengan jadwal overlap.
     Jika kode_tender_target diisi, filter hanya konflik yang melibatkan paket itu.
 
-    Return: [{"nama_personil": ..., "paket": [{"kode_tender":..., "nama_penyedia":..., "peserta_id":...}]}]
+    Return: [{
+        "nama_personil": str (normalized),
+        "nama_personil_display": str (nama asli pertama),
+        "paket": [{"kode_tender":..., "nama_penyedia":..., "peserta_id":...,
+                   "tgl_mulai": date|None, "tgl_selesai": date|None}]
+    }]
     """
     aktif = _get_aktif_kode_tender()
     if not aktif:
@@ -149,27 +325,77 @@ def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
         .select("kode_tender,peserta_id,nama_penyedia,nama_personil")\
         .in_("kode_tender", aktif).execute().data or []
 
-    # Group by nama_personil
+    # Cache jadwal per kode_tender (lazy)
+    _jadwal_cache: dict[str, tuple] = {}
+
+    def _jadwal(kt: str) -> tuple:
+        if kt not in _jadwal_cache:
+            _jadwal_cache[kt] = _get_jadwal_paket(kt)
+        return _jadwal_cache[kt]
+
+    # Group by nama_personil NORMALIZED, simpan display name pertama
     from collections import defaultdict
     grouped: dict[str, list] = defaultdict(list)
+    display_map: dict[str, str] = {}  # normalized → nama asli pertama
     for r in rows:
-        grouped[r["nama_personil"]].append(r)
+        nama_raw = r["nama_personil"] or ""
+        norm = _normalize_nama(nama_raw)
+        if not norm:
+            continue
+        if norm not in display_map:
+            display_map[norm] = nama_raw
+        # Tambah info jadwal ke entry
+        mulai, selesai = _jadwal(r["kode_tender"])
+        grouped[norm].append({
+            "kode_tender": r["kode_tender"],
+            "nama_penyedia": r["nama_penyedia"],
+            "peserta_id": r["peserta_id"],
+            "tgl_mulai": mulai,
+            "tgl_selesai": selesai,
+        })
 
     konflik = []
-    for nama, entries in grouped.items():
-        kode_set = {e["kode_tender"] for e in entries}
-        if len(kode_set) <= 1:
+    for norm, entries in grouped.items():
+        # Deduplikasi per kode_tender (ambil entry pertama per kode)
+        seen_kt: dict[str, dict] = {}
+        for e in entries:
+            if e["kode_tender"] not in seen_kt:
+                seen_kt[e["kode_tender"]] = e
+        unique_entries = list(seen_kt.values())
+        if len(unique_entries) <= 1:
             continue
-        if kode_tender_target and kode_tender_target not in kode_set:
+        if kode_tender_target and kode_tender_target not in seen_kt:
             continue
-        konflik.append({"nama_personil": nama, "paket": entries})
+
+        # Cek overlap jadwal antar semua kombinasi paket
+        ada_overlap = False
+        kt_list = unique_entries
+        for i in range(len(kt_list)):
+            for j in range(i + 1, len(kt_list)):
+                ea, eb = kt_list[i], kt_list[j]
+                if _overlap(ea["tgl_mulai"], ea["tgl_selesai"], eb["tgl_mulai"], eb["tgl_selesai"]):
+                    ada_overlap = True
+                    break
+            if ada_overlap:
+                break
+
+        if not ada_overlap:
+            continue
+
+        # Kembalikan SEMUA entries (bisa >1 per paket jika beda posisi)
+        # Tapi attach jadwal ke tiap entry dari grouped (sudah ada)
+        konflik.append({
+            "nama_personil": norm,
+            "nama_personil_display": display_map[norm],
+            "paket": entries,
+        })
 
     return konflik
 
 
 def get_konflik_alat(kode_tender_target: str | None = None) -> list[dict]:
     """
-    Return list alat yang muncul di >1 paket aktif.
+    Return list alat yang muncul di >1 paket aktif dengan jadwal overlap.
     """
     aktif = _get_aktif_kode_tender()
     if not aktif:
@@ -179,18 +405,51 @@ def get_konflik_alat(kode_tender_target: str | None = None) -> list[dict]:
         .select("kode_tender,peserta_id,nama_penyedia,nama_alat")\
         .in_("kode_tender", aktif).execute().data or []
 
+    _jadwal_cache: dict[str, tuple] = {}
+
+    def _jadwal(kt: str) -> tuple:
+        if kt not in _jadwal_cache:
+            _jadwal_cache[kt] = _get_jadwal_paket(kt)
+        return _jadwal_cache[kt]
+
     from collections import defaultdict
     grouped: dict[str, list] = defaultdict(list)
     for r in rows:
-        grouped[r["nama_alat"]].append(r)
+        mulai, selesai = _jadwal(r["kode_tender"])
+        grouped[r["nama_alat"]].append({
+            "kode_tender": r["kode_tender"],
+            "nama_penyedia": r["nama_penyedia"],
+            "peserta_id": r["peserta_id"],
+            "tgl_mulai": mulai,
+            "tgl_selesai": selesai,
+        })
 
     konflik = []
     for nama, entries in grouped.items():
-        kode_set = {e["kode_tender"] for e in entries}
-        if len(kode_set) <= 1:
+        seen_kt: dict[str, dict] = {}
+        for e in entries:
+            if e["kode_tender"] not in seen_kt:
+                seen_kt[e["kode_tender"]] = e
+        unique_entries = list(seen_kt.values())
+        if len(unique_entries) <= 1:
             continue
-        if kode_tender_target and kode_tender_target not in kode_set:
+        if kode_tender_target and kode_tender_target not in seen_kt:
             continue
+
+        # Cek overlap jadwal
+        ada_overlap = False
+        for i in range(len(unique_entries)):
+            for j in range(i + 1, len(unique_entries)):
+                ea, eb = unique_entries[i], unique_entries[j]
+                if _overlap(ea["tgl_mulai"], ea["tgl_selesai"], eb["tgl_mulai"], eb["tgl_selesai"]):
+                    ada_overlap = True
+                    break
+            if ada_overlap:
+                break
+
+        if not ada_overlap:
+            continue
+
         konflik.append({"nama_alat": nama, "paket": entries})
 
     return konflik

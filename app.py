@@ -3751,12 +3751,12 @@ if st.session_state["app_mode"] == "Pengadaan Langsung":
 # ============================================================
 # MODE: TENDER
 # ============================================================
-tab0, tab9, tab8, tab_setup, tab7, tab_ba, tab_kual, tab_apendo = st.tabs([
+tab0, tab9, tab8, tab_setup, tab7, tab_kual, tab_apendo, tab_ba = st.tabs([
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
-    "5️⃣ Upload & Cetak 5 BA", "6️⃣ Download Kualifikasi",
-    "7️⃣ Dokumen Penawaran",
+    "5️⃣ Download Kualifikasi", "6️⃣ Dokumen Penawaran",
+    "7️⃣ Upload & Cetak 5 BA",
 ])
 
 # ============================================================
@@ -6195,8 +6195,8 @@ with tab_ba:
     _FILE_LABEL_BA = {
         "penjelasan":      "2. Berita Acara Pemberian Penjelasan",
         "evaluasi":        "4. Berita Acara Evaluasi Penawaran",
-        "hasil_pemilihan": "8. Berita Acara Hasil Pemilihan",
-        "negosiasi":       "10. Berita Acara Negosiasi",
+        "hasil_pemilihan": "10. Berita Acara Hasil Pemilihan",
+        "negosiasi":       "8. Berita Acara Negosiasi",
     }
     if st.session_state.get("ba_auto_target"):
         import os as _os
@@ -6283,14 +6283,37 @@ with tab_ba:
 # ============================================================
 
 with tab_kual:
-    # ── Auto-fetch paket jika belum ada di session (decouple dari Tab 0) ────────
+    # ── Auto-fetch paket dari Supabase (tanpa CDP/Chrome) ────────────────────
     if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
-        with st.spinner("Memuat daftar paket dari SPSE..."):
-            try:
-                st.session_state["global_paket_draft"] = kirimpesan_engine.fetch_paket_draft()
-                st.session_state["global_paket_aktif"] = kirimpesan_engine.fetch_paket_aktif()
-            except Exception as _kl_fe:
-                st.warning(f"⚠️ Gagal memuat paket otomatis: {_kl_fe}. Coba klik 'Sinkronkan Paket' di Tab 0.")
+        try:
+            from config import sb as _sb_kl
+            _kl_rows = _sb_kl().table("draft_paket").select(
+                "kode_tender,nama_tender,kode_pokja,nomor_urut"
+            ).order("nomor_urut").execute().data or []
+            # Adapter: sesuaikan format dengan yang diharapkan _get_paket_gabungan()
+            # field: kode, nama, id_lelang, pokja, status, tanggal
+            _kl_paket_mapped = [
+                {
+                    "kode": r["kode_tender"],
+                    "nama": r["nama_tender"] or r["kode_tender"],
+                    "id_lelang": r["kode_tender"],
+                    "pokja": r.get("kode_pokja") or "",
+                    "status": "aktif",
+                    "tanggal": "",
+                }
+                for r in _kl_rows
+            ]
+            # Masuk ke global_paket_aktif agar tab lain yang juga pakai session ini tidak terpengaruh
+            st.session_state["global_paket_aktif"] = {
+                "sukses": True,
+                "paket": _kl_paket_mapped,
+                "pesan": f"{len(_kl_paket_mapped)} paket dari Supabase",
+            }
+            # global_paket_draft kosong (draft belum tentu ada di Supabase)
+            if "global_paket_draft" not in st.session_state:
+                st.session_state["global_paket_draft"] = {"sukses": True, "paket": [], "pesan": ""}
+        except Exception as _kl_fe:
+            st.warning(f"⚠️ Gagal memuat paket dari Supabase: {_kl_fe}. Coba klik 'Sinkronkan Paket' di Tab 0.")
 
     # ── Pre-render: fetch semua paket yang dicek tapi belum ada datanya ────────
     if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
@@ -6747,9 +6770,19 @@ with tab_kual:
         st.divider()
         st.markdown("### ⚠️ Konflik Personil & Alat Lintas Paket")
         st.caption("Personil atau alat yang diajukan penyedia di >1 paket aktif (berdasarkan Draft Paket).")
-        if st.button("🔄 Cek Konflik", key="kual_cek_konflik"):
+
+        def _render_konflik_dashboard(trigger_sync_doktek: bool = False):
+            """Query + tampilkan dashboard konflik. Ringan — hanya baca Supabase."""
             try:
                 import conflict_engine as _ce_dash
+                if trigger_sync_doktek:
+                    # Sinkronisasi penuh: Supabase + scan folder doktek
+                    _aktif_kt = _ce_dash._get_aktif_kode_tender()
+                    for _kt_sync in _aktif_kt:
+                        _ce_dash.sync_from_supabase(_kt_sync)
+                    for _kt_sync in _aktif_kt:
+                        _ce_dash.sync_from_doktek_folder(_kt_sync)
+                # Query konflik (selalu dari data yang sudah tersimpan di Supabase)
                 _kf_p_all = _ce_dash.get_konflik_personil()
                 _kf_a_all = _ce_dash.get_konflik_alat()
                 if not _kf_p_all and not _kf_a_all:
@@ -6758,12 +6791,27 @@ with tab_kual:
                     if _kf_p_all:
                         st.markdown(f"**Personil konflik: {len(_kf_p_all)} nama**")
                         _rows_kf = []
+                        _BULAN_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
+                        def _fmt_tgl(d):
+                            if d is None:
+                                return "-"
+                            return f"{d.day:02d} {_BULAN_ID[d.month-1]} {d.year}"
                         for k in _kf_p_all:
+                            # Deduplikasi paket untuk tampilan (1 baris per kode_tender)
+                            _seen = set()
                             for e in k["paket"]:
+                                kt = e["kode_tender"]
+                                if kt in _seen:
+                                    continue
+                                _seen.add(kt)
+                                mulai = e.get("tgl_mulai")
+                                selesai = e.get("tgl_selesai")
+                                periode = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}" if mulai else "-"
                                 _rows_kf.append({
-                                    "Nama Personil": k["nama_personil"],
-                                    "Kode Tender": e["kode_tender"],
+                                    "Nama Personil": k.get("nama_personil_display") or k["nama_personil"],
+                                    "Kode Tender": kt,
                                     "Penyedia": e["nama_penyedia"] or "-",
+                                    "Periode": periode,
                                 })
                         st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
                     if _kf_a_all:
@@ -6779,6 +6827,13 @@ with tab_kual:
                         st.dataframe(_rows_ka, use_container_width=True, hide_index=True)
             except Exception as _e_dash:
                 st.error(f"Error: {_e_dash}")
+
+        # Tombol refresh manual — juga trigger sync dari folder doktek
+        if st.button("🔄 Cek Konflik (+ Sinkronkan Folder Doktek)", key="kual_cek_konflik"):
+            _render_konflik_dashboard(trigger_sync_doktek=True)
+        else:
+            # Auto-tampil dari data Supabase yang sudah ada (tanpa sync folder)
+            _render_konflik_dashboard(trigger_sync_doktek=False)
 
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket

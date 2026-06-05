@@ -12,8 +12,8 @@ JENIS_BA = {
 JENIS_LABEL = {
     "penjelasan":       "2. BA Pemberian Penjelasan",
     "evaluasi":         "4. BA Evaluasi Penawaran",
-    "hasil_pemilihan":  "8. BA Hasil Pemilihan",
-    "negosiasi":        "10. BA Negosiasi",
+    "hasil_pemilihan":  "10. BA Hasil Pemilihan",
+    "negosiasi":        "8. BA Negosiasi",
     "lainnya":          "BA Lainnya",
 }
 
@@ -22,8 +22,8 @@ JENIS_LABEL = {
 NOMOR_URUT = {
     "penjelasan":       "02",
     "evaluasi":         "04",
-    "hasil_pemilihan":  "08",
-    "negosiasi":        "10",
+    "hasil_pemilihan":  "10",
+    "negosiasi":        "08",
     "lainnya":          "99",
 }
 
