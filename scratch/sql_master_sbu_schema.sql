@@ -1,5 +1,5 @@
 -- SQL DDL: tambah kolom subklasifikasi_kode + index
--- Run di Supabase SQL Editor: https://supabase.com/dashboard/project/iubvqphzalodqqhpatcy/sql
+-- Run di Supabase SQL Editor: https://supabase.com/dashboard/project/<YOUR_SUPABASE_PROJECT_ID>/sql
 
 -- Step 1: Tambah kolom subklasifikasi_kode (jika belum ada)
 ALTER TABLE master_sbu ADD COLUMN IF NOT EXISTS subklasifikasi_kode TEXT;

@@ -1,7 +1,7 @@
 -- ============================================================
 -- SBU v2 schema (Option B: 3 tabel — baru, lama, mapping)
 -- Run di Supabase SQL Editor:
--- https://supabase.com/dashboard/project/iubvqphzalodqqhpatcy/sql
+-- https://supabase.com/dashboard/project/<YOUR_SUPABASE_PROJECT_ID>/sql
 -- ============================================================
 
 -- Step 1: Tabel master_sbu_baru (KBLI 2020) — PK = kode (RK003, AR001, dst)

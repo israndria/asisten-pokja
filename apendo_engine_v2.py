@@ -111,7 +111,7 @@ def _cdp_via_playwright(progress_cb=None):
 def ambil_token_dari_browser(progress_cb=None) -> str:
     """
     Ambil token URL lt17 dari tab Chrome yang sedang aktif via Playwright CDP (port 9222).
-    Return URL lengkap mis. 'https://spse.inaproc.id/tapinkab/lt17/eyJ...' atau ''.
+    Return URL lengkap mis. 'https://spse.inaproc.id/tapinkab/lt17/<TOKEN>...' atau ''.
     """
     def _log(msg):
         if progress_cb: progress_cb(msg)

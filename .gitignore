@@ -13,3 +13,11 @@ scratch/_pl_*.html
 scratch/_prod_*.html
 scratch/cdp_check.png
 scratch/_backup_*.csv
+credentials.json
+token.json
+secret_supabase.env
+harness_block_log.md
+*.log
+.paket_cache*.json
+c.txt
+_debug_pilih_penyedia/
