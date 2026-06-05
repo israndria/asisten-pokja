@@ -6776,12 +6776,15 @@ with tab_kual:
             try:
                 import conflict_engine as _ce_dash
                 if trigger_sync_doktek:
-                    # Sinkronisasi penuh: Supabase + scan folder doktek
-                    _aktif_kt = _ce_dash._get_aktif_kode_tender()
-                    for _kt_sync in _aktif_kt:
-                        _ce_dash.sync_from_supabase(_kt_sync)
-                    for _kt_sync in _aktif_kt:
-                        _ce_dash.sync_from_doktek_folder(_kt_sync)
+                    # Hanya sync paket yang belum ada di paket_personil
+                    _ce_dash.sync_new_paket()
+                # Lookup nama paket
+                from config import sb as _sb_kf
+                _nama_map = {
+                    r["kode_tender"]: r.get("nama_tender") or r["kode_tender"]
+                    for r in (_sb_kf().table("draft_paket").select("kode_tender,nama_tender").execute().data or [])
+                }
+
                 # Query konflik (selalu dari data yang sudah tersimpan di Supabase)
                 _kf_p_all = _ce_dash.get_konflik_personil()
                 _kf_a_all = _ce_dash.get_konflik_alat()
@@ -6797,7 +6800,6 @@ with tab_kual:
                                 return "-"
                             return f"{d.day:02d} {_BULAN_ID[d.month-1]} {d.year}"
                         for k in _kf_p_all:
-                            # Deduplikasi paket untuk tampilan (1 baris per kode_tender)
                             _seen = set()
                             for e in k["paket"]:
                                 kt = e["kode_tender"]
@@ -6809,7 +6811,7 @@ with tab_kual:
                                 periode = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}" if mulai else "-"
                                 _rows_kf.append({
                                     "Nama Personil": k.get("nama_personil_display") or k["nama_personil"],
-                                    "Kode Tender": kt,
+                                    "Paket": _nama_map.get(kt, kt),
                                     "Penyedia": e["nama_penyedia"] or "-",
                                     "Periode": periode,
                                 })
@@ -6819,9 +6821,10 @@ with tab_kual:
                         _rows_ka = []
                         for k in _kf_a_all:
                             for e in k["paket"]:
+                                kt = e["kode_tender"]
                                 _rows_ka.append({
                                     "Nama Alat": k["nama_alat"],
-                                    "Kode Tender": e["kode_tender"],
+                                    "Paket": _nama_map.get(kt, kt),
                                     "Penyedia": e["nama_penyedia"] or "-",
                                 })
                         st.dataframe(_rows_ka, use_container_width=True, hide_index=True)

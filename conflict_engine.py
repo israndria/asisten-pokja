@@ -298,6 +298,34 @@ def _get_aktif_kode_tender() -> list[str]:
     return [r["kode_tender"] for r in rows if r.get("kode_tender")]
 
 
+def sync_new_paket(log=print) -> dict:
+    """
+    Hanya sync paket yang belum ada di paket_personil sama sekali.
+    Jauh lebih cepat dari loop semua paket aktif.
+    """
+    aktif = set(_get_aktif_kode_tender())
+    if not aktif:
+        return {"synced": 0}
+
+    # Paket yang sudah punya data di paket_personil
+    tersync = set(
+        r["kode_tender"]
+        for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
+    )
+
+    belum = aktif - tersync
+    if not belum:
+        log("sync_new_paket: semua paket sudah tersync, skip")
+        return {"synced": 0}
+
+    log(f"sync_new_paket: {len(belum)} paket belum tersync → {sorted(belum)}")
+    total = 0
+    for kt in belum:
+        r = sync_from_doktek_folder(kt, log=log)
+        total += r.get("personil", 0)
+    return {"synced": len(belum), "personil": total}
+
+
 def _overlap(mulai_a, selesai_a, mulai_b, selesai_b) -> bool:
     """True jika dua range tanggal overlap, atau salah satu None (konservatif)."""
     if mulai_a is None or selesai_a is None or mulai_b is None or selesai_b is None:
