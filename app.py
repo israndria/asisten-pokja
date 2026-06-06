@@ -628,19 +628,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         _pl_rows = pl_engine.load_draft_pl()
 
+        # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
+        _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
+        if _pl_dup_n:
+            st.caption(f"♻️ {_pl_dup_n} row lama duplikat (paket ulang) disembunyikan otomatis.")
+
         # ── #4: Filter paket selesai (penandatanganan kontrak) ──────────────────
         _pl_show_done = st.checkbox(
             "Tampilkan paket selesai (sudah teken kontrak)",
             value=False,
             key="pl_show_done",
         )
-        def _pl_is_done(r):
-            return "penandatanganan kontrak" in (r.get("status") or "").lower()
-        _pl_done_n = sum(1 for r in _pl_rows if _pl_is_done(r))
+        _pl_done_n = sum(1 for r in _pl_rows if pl_engine.is_paket_selesai(r))
         if not _pl_show_done:
-            _pl_rows = [r for r in _pl_rows if not _pl_is_done(r)]
+            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
             if _pl_done_n:
-                st.caption(f"🔒 {_pl_done_n} paket selesai (teken kontrak) disembunyikan — centang di atas untuk tampilkan.")
+                st.caption(f"🔒 {_pl_done_n} paket selesai (Penandatanganan Kontrak) disembunyikan — centang di atas untuk tampilkan.")
 
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
@@ -917,9 +920,23 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 key="pl_input_nama_folder",
             )
 
+            _pl_paksa_ulang = st.checkbox(
+                "Paksa suffix (PL - Ulang)",
+                value=False,
+                key="pl_cb_paksa_ulang",
+                help="Centang untuk tempel ' (PL - Ulang)' walau folder lama belum ada. "
+                     "Default: auto-suffix hanya jika folder dengan nama sama sudah ada di disk.",
+            )
+
             # Output base dir: JKK → @ Pengadaan Langsung JKK, PK → @ Pengadaan Langsung PK
             _pl_output_base = _PL_DIR_JKK if _pl_jenis_sel == "JKK" else _PL_DIR_PK
             _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
+            if _pl_nama_clean:
+                _pl_nama_clean = pl_engine.nama_folder_dengan_suffix_ulang(
+                    _pl_output_base, _pl_nama_clean, paksa_suffix=_pl_paksa_ulang,
+                )
+                if _pl_nama_clean != re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip():
+                    st.caption(f"♻️ Paket ulang terdeteksi → folder: `{_pl_nama_clean}`")
             _pl_target = _pl_os.path.join(_pl_output_base, _pl_nama_clean) if _pl_nama_clean else ""
             _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
 
@@ -1053,93 +1070,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     except Exception as _pe:
                         st.error(f"Error: {_pe}")
 
-            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
-            st.divider()
-            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
-            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
-            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
-            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
-
-            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
-                # Aksi: Serap penyedia dari Draft_PL PDF
-                if _cb_serap_pyd:
-                    import parse_kak_pl as _pkp
-                    _pb_pyd = st.progress(0.0)
-                    _st_pyd = st.empty()
-                    _logs_pyd = []
-                    def _cb_pyd(p, m):
-                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
-                        _logs_pyd.append(m)
-                        _st_pyd.info(m)
-                    try:
-                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
-                        _c1, _c2, _c3, _c4 = st.columns(4)
-                        _c1.metric("Update", _r_pyd.get("updated", 0))
-                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
-                        _c3.metric("No data", _r_pyd.get("no_data", 0))
-                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
-                        if _r_pyd.get("errors"):
-                            with st.expander("Detail Error Penyedia"):
-                                for _e in _r_pyd["errors"]:
-                                    st.warning(_e)
-                    except Exception as _e:
-                        st.error(f"Gagal serap penyedia: {_e}")
-
-                # Aksi: Download dokumen bulk semua paket berfolder
-                if _cb_dl_dok_bulk:
-                    import kualifikasi_engine_pl as _keng_pl_dl
-                    _pl_rows_dl_bulk = [
-                        r for r in _pl_rows
-                        if r.get("kode_paket") and r.get("folder_dibuat")
-                    ]
-                    if not _pl_rows_dl_bulk:
-                        st.info("Tidak ada paket dengan folder untuk download dokumen.")
-                    else:
-                        _dl_bulk_ok, _dl_bulk_fail = 0, 0
-                        _dl_bulk_status = st.status(
-                            f"📦 Download dokumen {len(_pl_rows_dl_bulk)} paket...", expanded=True
-                        )
-                        _dl_bulk_line = _dl_bulk_status.empty()
-                        _dl_bulk_bp = st.progress(0.0)
-                        for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
-                            _db_kp   = _db_row.get("kode_paket", "")
-                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
-                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
-                            _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
-                            _db_root = ""
-                            try:
-                                _db_fr = _keng_pl_dl.resolve_folder_paket_pl(_db_kp)
-                                _db_root = _db_fr.get("pesan", "") if _db_fr.get("ok") else ""
-                            except Exception:
-                                _db_root = ""
-                            if not _db_root or not _pl_os.path.isdir(_db_root):
-                                _dl_bulk_fail += 1
-                                _dl_bulk_line.write(f"⚠ [{_db_i+1}] {_db_nama} — folder tidak ditemukan")
-                                continue
-                            try:
-                                _db_dl_logs = []
-                                def _db_dl_cb(msg, _log=_db_dl_logs):
-                                    _log.append(msg)
-                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
-                                _dl_bulk_ok += 1
-                                _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
-                                # Parse KAK setelah download
-                                _db_kak_p = parse_kak_pl.cari_kak_di_folder(_db_root)
-                                if _db_kak_p:
-                                    _db_kak_d = parse_kak_pl.parse_kak(_db_kak_p)
-                                    _db_kak_u = {k: v for k, v in _db_kak_d.items() if v}
-                                    if _db_kak_u:
-                                        pl_engine.simpan_paket_pl({"kode_paket": _db_kp, **_db_kak_u})
-                            except Exception as _db_e:
-                                _dl_bulk_fail += 1
-                                _dl_bulk_line.write(f"❌ [{_db_i+1}] {_db_nama} — {_db_e}")
-                        _dl_bulk_bp.progress(1.0)
-                        _dl_bulk_line.empty()
-                        _dl_bulk_status.update(
-                            label=f"📦 Download selesai: ✅ {_dl_bulk_ok} sukses, ❌ {_dl_bulk_fail} gagal",
-                            state="complete", expanded=_dl_bulk_fail > 0,
-                        )
-
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
 
@@ -1157,6 +1087,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
+                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
@@ -1288,6 +1219,93 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
+            st.divider()
+            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
+            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
+            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
+            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+
+            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
+                # Aksi: Serap penyedia dari Draft_PL PDF
+                if _cb_serap_pyd:
+                    import parse_kak_pl as _pkp
+                    _pb_pyd = st.progress(0.0)
+                    _st_pyd = st.empty()
+                    _logs_pyd = []
+                    def _cb_pyd(p, m):
+                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
+                        _logs_pyd.append(m)
+                        _st_pyd.info(m)
+                    try:
+                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
+                        _c1, _c2, _c3, _c4 = st.columns(4)
+                        _c1.metric("Update", _r_pyd.get("updated", 0))
+                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
+                        _c3.metric("No data", _r_pyd.get("no_data", 0))
+                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
+                        if _r_pyd.get("errors"):
+                            with st.expander("Detail Error Penyedia"):
+                                for _e in _r_pyd["errors"]:
+                                    st.warning(_e)
+                    except Exception as _e:
+                        st.error(f"Gagal serap penyedia: {_e}")
+
+                # Aksi: Download dokumen bulk semua paket berfolder
+                if _cb_dl_dok_bulk:
+                    import kualifikasi_engine_pl as _keng_pl_dl
+                    _pl_rows_dl_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    if not _pl_rows_dl_bulk:
+                        st.info("Tidak ada paket dengan folder untuk download dokumen.")
+                    else:
+                        _dl_bulk_ok, _dl_bulk_fail = 0, 0
+                        _dl_bulk_status = st.status(
+                            f"📦 Download dokumen {len(_pl_rows_dl_bulk)} paket...", expanded=True
+                        )
+                        _dl_bulk_line = _dl_bulk_status.empty()
+                        _dl_bulk_bp = st.progress(0.0)
+                        for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
+                            _db_kp   = _db_row.get("kode_paket", "")
+                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
+                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
+                            _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
+                            _db_root = ""
+                            try:
+                                _db_fr = _keng_pl_dl.resolve_folder_paket_pl(_db_kp)
+                                _db_root = _db_fr.get("pesan", "") if _db_fr.get("ok") else ""
+                            except Exception:
+                                _db_root = ""
+                            if not _db_root or not _pl_os.path.isdir(_db_root):
+                                _dl_bulk_fail += 1
+                                _dl_bulk_line.write(f"⚠ [{_db_i+1}] {_db_nama} — folder tidak ditemukan")
+                                continue
+                            try:
+                                _db_dl_logs = []
+                                def _db_dl_cb(msg, _log=_db_dl_logs):
+                                    _log.append(msg)
+                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
+                                _dl_bulk_ok += 1
+                                _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
+                                # Parse KAK setelah download
+                                _db_kak_p = parse_kak_pl.cari_kak_di_folder(_db_root)
+                                if _db_kak_p:
+                                    _db_kak_d = parse_kak_pl.parse_kak(_db_kak_p)
+                                    _db_kak_u = {k: v for k, v in _db_kak_d.items() if v}
+                                    if _db_kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _db_kp, **_db_kak_u})
+                            except Exception as _db_e:
+                                _dl_bulk_fail += 1
+                                _dl_bulk_line.write(f"❌ [{_db_i+1}] {_db_nama} — {_db_e}")
+                        _dl_bulk_bp.progress(1.0)
+                        _dl_bulk_line.empty()
+                        _dl_bulk_status.update(
+                            label=f"📦 Download selesai: ✅ {_dl_bulk_ok} sukses, ❌ {_dl_bulk_fail} gagal",
+                            state="complete", expanded=_dl_bulk_fail > 0,
+                        )
+
 
             # ── #5: Reset Status Folder — multiselect (kosong = semua) ───────
             with st.expander("↩️ Reset Status Folder"):
@@ -4185,19 +4203,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _pl_rows = pl_engine.load_draft_pl()
 
+        # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
+        _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
+        if _pl_dup_n:
+            st.caption(f"♻️ {_pl_dup_n} row lama duplikat (paket ulang) disembunyikan otomatis.")
+
         # ── #4: Filter paket selesai (penandatanganan kontrak) ──────────────────
         _pl_show_done = st.checkbox(
             "Tampilkan paket selesai (sudah teken kontrak)",
             value=False,
             key="pl_show_done",
         )
-        def _pl_is_done(r):
-            return "penandatanganan kontrak" in (r.get("status") or "").lower()
-        _pl_done_n = sum(1 for r in _pl_rows if _pl_is_done(r))
+        _pl_done_n = sum(1 for r in _pl_rows if pl_engine.is_paket_selesai(r))
         if not _pl_show_done:
-            _pl_rows = [r for r in _pl_rows if not _pl_is_done(r)]
+            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
             if _pl_done_n:
-                st.caption(f"🔒 {_pl_done_n} paket selesai (teken kontrak) disembunyikan — centang di atas untuk tampilkan.")
+                st.caption(f"🔒 {_pl_done_n} paket selesai (Penandatanganan Kontrak) disembunyikan — centang di atas untuk tampilkan.")
 
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
@@ -4474,9 +4495,23 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 key="pl_input_nama_folder",
             )
 
+            _pl_paksa_ulang = st.checkbox(
+                "Paksa suffix (PL - Ulang)",
+                value=False,
+                key="pl_cb_paksa_ulang",
+                help="Centang untuk tempel ' (PL - Ulang)' walau folder lama belum ada. "
+                     "Default: auto-suffix hanya jika folder dengan nama sama sudah ada di disk.",
+            )
+
             # Output base dir: JKK → @ Pengadaan Langsung JKK, PK → @ Pengadaan Langsung PK
             _pl_output_base = _PL_DIR_JKK if _pl_jenis_sel == "JKK" else _PL_DIR_PK
             _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
+            if _pl_nama_clean:
+                _pl_nama_clean = pl_engine.nama_folder_dengan_suffix_ulang(
+                    _pl_output_base, _pl_nama_clean, paksa_suffix=_pl_paksa_ulang,
+                )
+                if _pl_nama_clean != re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip():
+                    st.caption(f"♻️ Paket ulang terdeteksi → folder: `{_pl_nama_clean}`")
             _pl_target = _pl_os.path.join(_pl_output_base, _pl_nama_clean) if _pl_nama_clean else ""
             _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
 
@@ -4610,93 +4645,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     except Exception as _pe:
                         st.error(f"Error: {_pe}")
 
-            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
-            st.divider()
-            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
-            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
-            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
-            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
-
-            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
-                # Aksi: Serap penyedia dari Draft_PL PDF
-                if _cb_serap_pyd:
-                    import parse_kak_pl as _pkp
-                    _pb_pyd = st.progress(0.0)
-                    _st_pyd = st.empty()
-                    _logs_pyd = []
-                    def _cb_pyd(p, m):
-                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
-                        _logs_pyd.append(m)
-                        _st_pyd.info(m)
-                    try:
-                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
-                        _c1, _c2, _c3, _c4 = st.columns(4)
-                        _c1.metric("Update", _r_pyd.get("updated", 0))
-                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
-                        _c3.metric("No data", _r_pyd.get("no_data", 0))
-                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
-                        if _r_pyd.get("errors"):
-                            with st.expander("Detail Error Penyedia"):
-                                for _e in _r_pyd["errors"]:
-                                    st.warning(_e)
-                    except Exception as _e:
-                        st.error(f"Gagal serap penyedia: {_e}")
-
-                # Aksi: Download dokumen bulk semua paket berfolder
-                if _cb_dl_dok_bulk:
-                    import kualifikasi_engine_plpk as _keng_pl_dl
-                    _pl_rows_dl_bulk = [
-                        r for r in _pl_rows
-                        if r.get("kode_paket") and r.get("folder_dibuat")
-                    ]
-                    if not _pl_rows_dl_bulk:
-                        st.info("Tidak ada paket dengan folder untuk download dokumen.")
-                    else:
-                        _dl_bulk_ok, _dl_bulk_fail = 0, 0
-                        _dl_bulk_status = st.status(
-                            f"📦 Download dokumen {len(_pl_rows_dl_bulk)} paket...", expanded=True
-                        )
-                        _dl_bulk_line = _dl_bulk_status.empty()
-                        _dl_bulk_bp = st.progress(0.0)
-                        for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
-                            _db_kp   = _db_row.get("kode_paket", "")
-                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
-                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
-                            _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
-                            _db_root = ""
-                            try:
-                                _db_fr = _keng_pl_dl.resolve_folder_paket_pl(_db_kp)
-                                _db_root = _db_fr.get("pesan", "") if _db_fr.get("ok") else ""
-                            except Exception:
-                                _db_root = ""
-                            if not _db_root or not _pl_os.path.isdir(_db_root):
-                                _dl_bulk_fail += 1
-                                _dl_bulk_line.write(f"⚠ [{_db_i+1}] {_db_nama} — folder tidak ditemukan")
-                                continue
-                            try:
-                                _db_dl_logs = []
-                                def _db_dl_cb(msg, _log=_db_dl_logs):
-                                    _log.append(msg)
-                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
-                                _dl_bulk_ok += 1
-                                _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
-                                # Parse KAK setelah download
-                                _db_kak_p = parse_kak_pl.cari_kak_di_folder(_db_root)
-                                if _db_kak_p:
-                                    _db_kak_d = parse_kak_pl.parse_kak(_db_kak_p)
-                                    _db_kak_u = {k: v for k, v in _db_kak_d.items() if v}
-                                    if _db_kak_u:
-                                        pl_engine.simpan_paket_pl({"kode_paket": _db_kp, **_db_kak_u})
-                            except Exception as _db_e:
-                                _dl_bulk_fail += 1
-                                _dl_bulk_line.write(f"❌ [{_db_i+1}] {_db_nama} — {_db_e}")
-                        _dl_bulk_bp.progress(1.0)
-                        _dl_bulk_line.empty()
-                        _dl_bulk_status.update(
-                            label=f"📦 Download selesai: ✅ {_dl_bulk_ok} sukses, ❌ {_dl_bulk_fail} gagal",
-                            state="complete", expanded=_dl_bulk_fail > 0,
-                        )
-
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
 
@@ -4714,6 +4662,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
+                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
@@ -4845,6 +4794,93 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
+            st.divider()
+            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
+            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
+            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
+            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+
+            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
+                # Aksi: Serap penyedia dari Draft_PL PDF
+                if _cb_serap_pyd:
+                    import parse_kak_pl as _pkp
+                    _pb_pyd = st.progress(0.0)
+                    _st_pyd = st.empty()
+                    _logs_pyd = []
+                    def _cb_pyd(p, m):
+                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
+                        _logs_pyd.append(m)
+                        _st_pyd.info(m)
+                    try:
+                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
+                        _c1, _c2, _c3, _c4 = st.columns(4)
+                        _c1.metric("Update", _r_pyd.get("updated", 0))
+                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
+                        _c3.metric("No data", _r_pyd.get("no_data", 0))
+                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
+                        if _r_pyd.get("errors"):
+                            with st.expander("Detail Error Penyedia"):
+                                for _e in _r_pyd["errors"]:
+                                    st.warning(_e)
+                    except Exception as _e:
+                        st.error(f"Gagal serap penyedia: {_e}")
+
+                # Aksi: Download dokumen bulk semua paket berfolder
+                if _cb_dl_dok_bulk:
+                    import kualifikasi_engine_plpk as _keng_pl_dl
+                    _pl_rows_dl_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    if not _pl_rows_dl_bulk:
+                        st.info("Tidak ada paket dengan folder untuk download dokumen.")
+                    else:
+                        _dl_bulk_ok, _dl_bulk_fail = 0, 0
+                        _dl_bulk_status = st.status(
+                            f"📦 Download dokumen {len(_pl_rows_dl_bulk)} paket...", expanded=True
+                        )
+                        _dl_bulk_line = _dl_bulk_status.empty()
+                        _dl_bulk_bp = st.progress(0.0)
+                        for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
+                            _db_kp   = _db_row.get("kode_paket", "")
+                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
+                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
+                            _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
+                            _db_root = ""
+                            try:
+                                _db_fr = _keng_pl_dl.resolve_folder_paket_pl(_db_kp)
+                                _db_root = _db_fr.get("pesan", "") if _db_fr.get("ok") else ""
+                            except Exception:
+                                _db_root = ""
+                            if not _db_root or not _pl_os.path.isdir(_db_root):
+                                _dl_bulk_fail += 1
+                                _dl_bulk_line.write(f"⚠ [{_db_i+1}] {_db_nama} — folder tidak ditemukan")
+                                continue
+                            try:
+                                _db_dl_logs = []
+                                def _db_dl_cb(msg, _log=_db_dl_logs):
+                                    _log.append(msg)
+                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
+                                _dl_bulk_ok += 1
+                                _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
+                                # Parse KAK setelah download
+                                _db_kak_p = parse_kak_pl.cari_kak_di_folder(_db_root)
+                                if _db_kak_p:
+                                    _db_kak_d = parse_kak_pl.parse_kak(_db_kak_p)
+                                    _db_kak_u = {k: v for k, v in _db_kak_d.items() if v}
+                                    if _db_kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _db_kp, **_db_kak_u})
+                            except Exception as _db_e:
+                                _dl_bulk_fail += 1
+                                _dl_bulk_line.write(f"❌ [{_db_i+1}] {_db_nama} — {_db_e}")
+                        _dl_bulk_bp.progress(1.0)
+                        _dl_bulk_line.empty()
+                        _dl_bulk_status.update(
+                            label=f"📦 Download selesai: ✅ {_dl_bulk_ok} sukses, ❌ {_dl_bulk_fail} gagal",
+                            state="complete", expanded=_dl_bulk_fail > 0,
+                        )
+
 
             # ── #5: Reset Status Folder — multiselect (kosong = semua) ───────
             with st.expander("↩️ Reset Status Folder"):

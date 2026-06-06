@@ -31,6 +31,78 @@ def load_draft_pl() -> list[dict]:
         return []
 
 
+def is_paket_selesai(r: dict) -> bool:
+    """
+    True jika paket sudah 'Penandatanganan Kontrak' (selesai dari sisi PP).
+    Sumber: kolom tahap_spse (dt/pengadaan-pp). Fallback ke status lama.
+    """
+    tahap = (r.get("tahap_spse") or "").lower()
+    if tahap:
+        return "penandatanganan kontrak" in tahap
+    # Fallback paket lama yg belum re-serap (tahap_spse NULL)
+    return "penandatanganan kontrak" in (r.get("status") or "").lower()
+
+
+def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
+    """
+    Jika ada >1 row dgn nama_paket sama (paket di-ulang → kode baru, row lama nyangkut),
+    simpan hanya row kode_paket TERBARU (string terbesar; kode ulang 1089xxx > lama 1086xxx).
+    Return: (rows_terfilter, jumlah_dibuang).
+    """
+    by_nama: dict[str, dict] = {}
+    for r in rows:
+        nama = (r.get("nama_paket") or "").strip()
+        if not nama:
+            # tanpa nama → loloskan apa adanya (pakai kode sebagai key unik)
+            by_nama[r.get("kode_paket") or id(r)] = r
+            continue
+        prev = by_nama.get(nama)
+        if prev is None or str(r.get("kode_paket") or "") > str(prev.get("kode_paket") or ""):
+            by_nama[nama] = r
+    hasil = list(by_nama.values())
+    return hasil, len(rows) - len(hasil)
+
+
+_SUFFIX_ULANG = " (PL - Ulang)"
+
+
+def nama_folder_dengan_suffix_ulang(
+    output_base: str,
+    nama_folder: str,
+    paksa_suffix: bool = False,
+) -> str:
+    """
+    Generate nama folder final, auto-tambah ' (PL - Ulang)' bila folder dgn
+    nama sama SUDAH ADA di disk (paket di-ulang → simpan folder lama).
+
+    - paksa_suffix=True → selalu tempel suffix (override manual user).
+    - Idempoten: kalau nama sudah berakhiran suffix, tidak ditumpuk.
+    - Bila folder bersuffix juga sudah ada → tambah angka: ' (PL - Ulang 2)', dst.
+
+    Return: nama folder (bukan path penuh).
+    """
+    import os as _os
+    nama = (nama_folder or "").strip()
+    if not nama:
+        return nama
+
+    sudah_bersuffix = nama.endswith(_SUFFIX_ULANG.strip()) or _SUFFIX_ULANG.strip() in nama
+    target_polos = _os.path.join(output_base, nama)
+    perlu_suffix = paksa_suffix or _os.path.exists(target_polos)
+
+    if not perlu_suffix or sudah_bersuffix:
+        return nama
+
+    kandidat = f"{nama}{_SUFFIX_ULANG}"
+    if not _os.path.exists(_os.path.join(output_base, kandidat)):
+        return kandidat
+    # Folder ulang juga sudah ada → cari angka kosong
+    n = 2
+    while _os.path.exists(_os.path.join(output_base, f"{nama}{_SUFFIX_ULANG.rstrip(')')}{n})")):
+        n += 1
+    return f"{nama}{_SUFFIX_ULANG.rstrip(')')}{n})"
+
+
 def simpan_paket_pl(data: dict) -> dict:
     """
     Upsert satu paket PL ke draft_paket_pl.
@@ -129,6 +201,65 @@ def _derive_jenis_pl_dari_metode(metode: str, nama_paket: str) -> str:
     return "PK"
 
 
+def _fetch_tahap_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
+    """
+    Fetch status TAHAPAN paket dari dashboard /home → dt/pengadaan-pp?status=1.
+    Berbeda dgn dt/paketpp (status PP basi: Draft/Berjalan), endpoint ini
+    nunjukin tahapan REAL: "Penandatanganan Kontrak" = selesai dari sisi PP.
+
+    Wajib POST + authenticityToken (CSRF dari HTML /home) + X-Requested-With.
+    Paket draft/ulang yang belum sampai tahapan TIDAK muncul → tidak ada di map.
+
+    Return: {kode_paket: tahap_str, ...}  (kosong kalau gagal — non-fatal)
+    """
+    import requests
+    import re as _re
+
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    base = base_url.rstrip("/")
+    headers = {"Cookie": cookie_str, "User-Agent": "Mozilla/5.0", "Referer": base + "/home"}
+
+    # 1. Ambil authenticityToken dari HTML /home
+    try:
+        r_home = requests.get(f"{base}/home", headers=headers, timeout=15)
+        m = _re.search(r"authenticityToken\s*=\s*'([0-9a-f]+)'", r_home.text)
+        token = m.group(1) if m else ""
+    except Exception as e:
+        log(f"  [tahap] gagal fetch /home: {e}")
+        return {}
+
+    if not token:
+        log("  [tahap] authenticityToken tidak ditemukan — lewati status tahapan")
+        return {}
+
+    # 2. POST dt/pengadaan-pp?status=1
+    hdr = dict(headers)
+    hdr["X-Requested-With"] = "XMLHttpRequest"
+    hdr["Content-Type"] = "application/x-www-form-urlencoded"
+    payload = {
+        "draw": "1", "start": "0", "length": "200",
+        "authenticityToken": token,
+        "search[value]": "", "search[regex]": "false",
+    }
+    tahap_map = {}
+    try:
+        r = requests.post(f"{base}/dt/pengadaan-pp?status=1", headers=hdr, data=payload, timeout=20)
+        data = r.json().get("data", [])
+        for row in data:
+            kode  = str(row[0])   # col[0] = kode_paket
+            tahap = str(row[2]) if len(row) > 2 else ""   # col[2] = tahap/status
+            if kode and tahap:
+                tahap_map[kode] = tahap
+        log(f"  [tahap] {len(tahap_map)} paket punya status tahapan (dt/pengadaan-pp)")
+    except Exception as e:
+        log(f"  [tahap] gagal POST dt/pengadaan-pp: {e}")
+
+    return tahap_map
+
+
 def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     """
     Scrape daftar paket non-tender dari SPSE /dt/paketpp,
@@ -156,6 +287,10 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         return {"ok": False, "scraped": 0, "errors": [f"Gagal fetch dt/paketpp: {e}"]}
 
     log(f"Ditemukan {len(rows)} paket di SPSE")
+
+    # 1b. Fetch status TAHAPAN (Penandatanganan Kontrak dll) dari dt/pengadaan-pp
+    tahap_map = _fetch_tahap_spse(cookie_str, base_url, log_fn)
+
     errors = []
     scraped = 0
 
@@ -214,6 +349,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
             "status":            status_spse.lower() if status_spse else "draft",
+            "tahap_spse":        tahap_map.get(kode_paket),  # None jika belum ada tahapan
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
 
