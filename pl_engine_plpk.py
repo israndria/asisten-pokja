@@ -1,0 +1,611 @@
+"""
+Mode Pengadaan Langsung — Tab 0: Draft Paket PL
+Input manual paket PL (JKK atau PK), simpan ke Supabase tabel draft_paket_pl.
+Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
+"""
+
+import os
+import re
+from datetime import datetime, timezone
+from config import sb as _sb
+
+BASE_URL = "https://spse.inaproc.id/tapinkab"
+
+SATKER_LIST = [
+    "Dinas Perdagangan",
+    "Dinas Pekerjaan Umum Dan Penataan Ruang (Bina Marga)",
+    "Dinas Pekerjaan Umum Dan Penataan Ruang (PUPR)",
+    "Kecamatan CLU",
+    "Dinas Perizinan Terpadu Satu Pintu",
+    "Lainnya",
+]
+
+STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
+
+
+def load_draft_pl() -> list[dict]:
+    """Ambil semua baris draft_paket_pl, urut terbaru dulu."""
+    try:
+        return _sb().table("draft_paket_pl").select("*").order("diambil_pada", desc=True).execute().data or []
+    except Exception as e:
+        return []
+
+
+def simpan_paket_pl(data: dict) -> dict:
+    """
+    Upsert satu paket PL ke draft_paket_pl.
+    data harus memiliki key 'kode_paket'.
+    Return: {"ok": True} atau {"ok": False, "error": str}
+    """
+    if not data.get("kode_paket"):
+        return {"ok": False, "error": "kode_paket wajib diisi"}
+    data.setdefault("diambil_pada", datetime.now(timezone.utc).isoformat())
+    try:
+        _sb().table("draft_paket_pl").upsert(data).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def hapus_paket_pl(kode_paket: str) -> dict:
+    """Hapus satu baris dari draft_paket_pl berdasarkan kode_paket."""
+    try:
+        _sb().table("draft_paket_pl").delete().eq("kode_paket", kode_paket).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def update_status(kode_paket: str, status: str) -> dict:
+    """Update kolom status paket PL."""
+    try:
+        _sb().table("draft_paket_pl").update({"status": status}).eq("kode_paket", kode_paket).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def tandai_folder_dibuat(kode_paket: str) -> dict:
+    """Set folder_dibuat=True dan folder_dibuat_pada=now."""
+    try:
+        _sb().table("draft_paket_pl").update({
+            "folder_dibuat": True,
+            "folder_dibuat_pada": datetime.now(timezone.utc).isoformat(),
+        }).eq("kode_paket", kode_paket).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ============================================================
+# Scrape otomatis dari SPSE
+# ============================================================
+
+def _parse_hps_dari_edit(html: str) -> str:
+    """Ekstrak nilai HPS dari halaman nontender/{kode}/edit."""
+    import re
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    teks = soup.get_text(" ", strip=True)
+    m = re.search(r"Nilai HPS\s*Rp\.\s*([\d.,]+)", teks)
+    return f"Rp. {m.group(1)}" if m else ""
+
+
+def _parse_jenis_kontrak_dari_edit(html: str) -> str:
+    """Ekstrak Jenis Kontrak dari halaman nontender/{kode}/edit."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    teks = soup.get_text(" ", strip=True)
+    m = re.search(r"Jenis Kontrak\s+([\w\s]+?)(?:Dokumen|Jadwal|Survey|\Z)", teks)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _parse_metode_pengadaan_dari_edit(html: str) -> str:
+    """Ekstrak Metode Pengadaan dari halaman nontender/{kode}/edit."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    teks = soup.get_text(" ", strip=True)
+    m = re.search(r"Metode Pengadaan\s+(.+?)(?:Kualifikasi Usaha|Jenis Kontrak|Dokumen|Jadwal|\Z)", teks)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _derive_jenis_pl_dari_metode(metode: str, nama_paket: str) -> str:
+    """Derive jenis_pl dari metode_pengadaan (lebih akurat dari nama saja)."""
+    if metode:
+        m_lower = metode.lower()
+        if "barang" in m_lower:
+            return "PK"
+        # "Non Konstruksi" maupun "Konstruksi" → JKK (LDK/checklist identik)
+        if "konsultan" in m_lower:
+            return "JKK"
+    # Fallback ke keyword nama
+    nama_lower = nama_paket.lower()
+    if any(k in nama_lower for k in ["konsultan", "perencanaan", "pengawasan", "supervisi", "manajemen konstruksi"]):
+        return "JKK"
+    return "PK"
+
+
+def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
+    """
+    Scrape daftar paket non-tender dari SPSE /dt/paketpp,
+    fetch detail tiap paket dari /nontender/{kode}/edit,
+    upsert ke Supabase draft_paket_pl.
+
+    cookie_str : hasil get_spse_cookies()
+    base_url   : SPSE_BASE_URL (diakhiri /)
+    log_fn     : callable(str) untuk log progres, opsional
+    Returns    : {"ok": True, "scraped": N, "errors": [...]}
+    """
+    import requests
+
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    headers = {"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"}
+
+    # 1. Fetch daftar paket
+    try:
+        resp = requests.get(f"{base_url}dt/paketpp", headers=headers, timeout=15)
+        rows = resp.json().get("data", [])
+    except Exception as e:
+        return {"ok": False, "scraped": 0, "errors": [f"Gagal fetch dt/paketpp: {e}"]}
+
+    log(f"Ditemukan {len(rows)} paket di SPSE")
+    errors = []
+    scraped = 0
+
+    for row in rows:
+        id_paket_internal = str(row[0])  # ID paket-level (kolom 0), bukan untuk kirim verifikasi
+        nama_paket   = row[1]
+        status_spse  = row[2]
+        satker       = row[4]
+        kode_paket   = str(row[5])   # kode resmi non-tender
+
+        log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
+
+        # Ambil ID peserta dari halaman evaluasi (untuk kirimundanganverifikasi)
+        id_nontender = id_paket_internal  # fallback jika belum ada peserta
+        try:
+            import re as _re
+            r_eval = requests.get(
+                f"{base_url}evaluasinontender/{kode_paket}",
+                headers=headers, timeout=15
+            )
+            ids_peserta = _re.findall(
+                r'/evaluasinontender/(\d+)/kirimundanganverifikasi', r_eval.text
+            )
+            if ids_peserta:
+                id_nontender = ids_peserta[0]
+        except Exception:
+            pass
+
+        # 2. Fetch detail dari halaman edit
+        jenis_kontrak = ""
+        hps_str = ""
+        metode_pengadaan = ""
+        edit_html = ""
+        try:
+            r_edit = requests.get(
+                f"{base_url}nontender/{kode_paket}/edit",
+                headers=headers, timeout=15
+            )
+            edit_html = r_edit.text
+            hps_str = _parse_hps_dari_edit(edit_html)
+            jenis_kontrak = _parse_jenis_kontrak_dari_edit(edit_html)
+            metode_pengadaan = _parse_metode_pengadaan_dari_edit(edit_html)
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal fetch edit — {e}")
+
+        # 3. Deteksi jenis PL (dari metode, fallback nama)
+        jenis_pl = _derive_jenis_pl_dari_metode(metode_pengadaan, nama_paket)
+
+        data = {
+            "kode_paket":        kode_paket,
+            "id_nontender":      id_nontender,
+            "nama_paket":        nama_paket,
+            "satker":            satker,
+            "nilai_hps":         hps_str,
+            "jenis_pl":          jenis_pl,
+            "jenis_kontrak":     jenis_kontrak,
+            "metode_pengadaan":  metode_pengadaan,
+            "status":            status_spse.lower() if status_spse else "draft",
+            "diambil_pada":      datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()
+            scraped += 1
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal upsert — {e}")
+
+    log(f"Selesai: {scraped} paket disimpan, {len(errors)} error")
+
+    # 4. Auto set Usaha Kecil (kualifikasiId=21) untuk semua paket
+    log("Auto set Usaha Kecil untuk semua paket...")
+    kode_list = [str(row[5]) for row in rows]
+    for kode in kode_list:
+        ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
+        log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
+
+    return {"ok": True, "scraped": scraped, "errors": errors}
+
+
+def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str) -> bool:
+    """
+    Set kualifikasi usaha ke Kecil (kualifikasiId=21) via POST /nontender/{kode}/simpan.
+    headers: dict Cookie+User-Agent (sudah siap dari serap).
+    Return True jika 302 redirect (sukses), False jika gagal.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    try:
+        # Ambil authenticityToken dari halaman edit
+        r_edit = requests.get(
+            f"{base_url}nontender/{kode_paket}/edit",
+            headers=headers, timeout=15,
+        )
+        soup = BeautifulSoup(r_edit.text, "html.parser")
+        token_input = soup.find("input", {"name": "authenticityToken"})
+        if not token_input:
+            return False
+        token = token_input.get("value", "")
+
+        # POST simpan
+        post_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+        payload = {
+            "authenticityToken": token,
+            "kualifikasiId": "21",   # 21 = Kecil
+            "pl.oap": "1",
+        }
+        r_post = requests.post(
+            f"{base_url}nontender/{kode_paket}/simpan",
+            headers=post_headers,
+            data=payload,
+            timeout=15,
+            allow_redirects=False,
+        )
+        return r_post.status_code in (301, 302)
+    except Exception:
+        return False
+
+
+# Mapping metode pengadaan → (kategoriId, pilih)
+METODE_PL_MAP = {
+    "Pengadaan Barang — PL":              (0, 0),
+    "Pekerjaan Konstruksi — PL":          (2, 3),
+    "JKK Non-Konstruksi — PL":           (1, 9),
+    "JKK Konstruksi — PL":               (5, 17),
+    "JKK Perorangan Non-Konstruksi — PL": (4, 13),
+    "JKK Perorangan Konstruksi — PL":    (6, 21),
+    "Jasa Lainnya — PL":                 (3, 6),
+    "PK Terintegrasi — PL":              (7, 25),
+}
+
+
+def ubah_metode_pl(
+    kode_paket: str,
+    kategori_id: int,
+    pilih: int,
+    cookie_str: str,
+    base_url: str,
+    debug: bool = False,
+) -> bool:
+    """
+    Ubah metode pengadaan via POST /nontender/{kode}/metodesubmit.
+    Return True jika 302/200, False jika gagal.
+    debug=True: print status + body + semua form fields untuk investigasi.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+    headers = {"Cookie": cookie_str, "User-Agent": _UA}
+    try:
+        r_form = requests.get(
+            f"{base_url}nontender/{kode_paket}/metode",
+            headers=headers, timeout=15,
+        )
+        soup = BeautifulSoup(r_form.text, "html.parser")
+
+        if debug:
+            # Dump semua input fields dari form /metode
+            print(f"\n=== DEBUG ubah_metode_pl({kode_paket}) ===")
+            print(f"GET /metode status: {r_form.status_code}")
+            for inp in soup.find_all(["input", "select", "textarea"]):
+                print(f"  field: name={inp.get('name')} type={inp.get('type')} value={inp.get('value','')}")
+            # Dump radio/option pilih
+            for opt in soup.find_all("option"):
+                print(f"  option: value={opt.get('value')} text={opt.get_text(strip=True)}")
+            # Dump form action
+            for frm in soup.find_all("form"):
+                print(f"  form: action={frm.get('action')} method={frm.get('method')}")
+            # Dump title + tombol submit (cek onsubmit/onclick)
+            title = soup.find("title")
+            print(f"  page title: {title.get_text() if title else '(none)'}")
+            for btn in soup.find_all(["button", "input"], type=lambda t: t in (None, "submit")):
+                print(f"  btn: name={btn.get('name')} onclick={btn.get('onclick','')[:100]} onsubmit={btn.get('onsubmit','')}")
+            for frm2 in soup.find_all("form"):
+                print(f"  form onsubmit: {frm2.get('onsubmit','')[:100]}")
+            # Dump raw HTML di sekitar select kategoriId (800 char)
+            import re as _re
+            m_sel = _re.search(r'(?s)(kategoriId.{0,800})', r_form.text)
+            if m_sel:
+                print(f"  HTML snippet kategoriId:\n{m_sel.group(1)[:800]}")
+            # Dump POST response body (ikuti redirect)
+            print(f"  === IKUTI REDIRECT ===")
+            r_follow = requests.get(
+                f"{base_url}nontender/{kode_paket}/edit",
+                headers=headers, timeout=15,
+            )
+            soup2 = BeautifulSoup(r_follow.text, "html.parser")
+            m2 = _re.search(r"Metode Pengadaan\s+(.+?)(?:Kualifikasi|$)", soup2.get_text(" ", strip=True))
+            print(f"  Metode setelah POST: {m2.group(1)[:80] if m2 else '(tidak ketemu)'}")
+
+        token_input = soup.find("input", {"name": "authenticityToken"})
+        if not token_input:
+            if debug:
+                print("  ERROR: authenticityToken tidak ditemukan!")
+                print(r_form.text[:500])
+            return False
+        token = token_input.get("value", "")
+
+        post_headers = {
+            **headers,
+            "Referer": f"{base_url}nontender/{kode_paket}/edit",
+            "Origin": "https://spse.inaproc.id",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "cache-control": "max-age=0",
+            "priority": "u=0, i",
+        }
+        # Wajib multipart/form-data + field simpan=simpan (browser behavior)
+        payload = {
+            "authenticityToken": token,
+            "kategoriId": str(kategori_id),
+            "pilih": str(pilih),
+            "simpan": "simpan",
+        }
+
+        if debug:
+            print(f"  POST payload (multipart): {payload}")
+
+        r_post = requests.post(
+            f"{base_url}nontender/{kode_paket}/metodesubmit",
+            headers=post_headers,
+            files={k: (None, v) for k, v in payload.items()},  # multipart/form-data
+            timeout=15,
+            allow_redirects=False,
+        )
+
+        if debug:
+            print(f"  POST status: {r_post.status_code}")
+            print(f"  POST Location: {r_post.headers.get('Location','')}")
+            print(f"  POST body (500 char): {r_post.text[:500]}")
+
+        return r_post.status_code in (200, 301, 302)
+    except Exception as e:
+        if debug:
+            print(f"  EXCEPTION: {e}")
+        return False
+
+
+def ubah_metode_pl_playwright(
+    kode_paket: str,
+    kategori_id: int,
+    pilih: int,
+    base_url: str,
+) -> bool:
+    """Ubah metode via Playwright CDP (handle JS confirm). Preferred over requests."""
+    import spse_browser
+    hasil = spse_browser.ubah_metode_via_playwright(kode_paket, kategori_id, pilih, base_url)
+    return hasil == "OK"
+
+
+def debug_ubah_metode_pl(kode_paket: str, cookie_str: str, base_url: str) -> str:
+    """
+    Helper debug: jalankan ubah_metode JKK Konstruksi dengan debug=True.
+    Return string log untuk ditampilkan di UI.
+    """
+    import io, sys
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    ubah_metode_pl(kode_paket, 5, 9, cookie_str, base_url, debug=True)
+    sys.stdout = old_stdout
+    return buf.getvalue()
+
+
+def ubah_ke_jkk_konstruksi_pl(kode_paket: str, cookie_str: str, base_url: str) -> bool:
+    """Shortcut: ubah metode ke JKK Konstruksi PL (kategoriId=5, pilih=17) via CDP Playwright."""
+    return ubah_metode_pl_playwright(kode_paket, 5, 17, base_url)
+
+
+# ============================================================
+# Download Dokumen Paket PL dari SPSE
+# ============================================================
+
+def download_dokumen_paket_pl(
+    kode_paket: str,
+    folder_tujuan: str,
+    progress_cb=None,
+    cookie_str: str = "",
+    skip_merge: bool = False,
+) -> dict:
+    """
+    Download dokumen dari endpoint non-tender PP ke folder_tujuan:
+      - /dokumennontender/{kode}/spek  → KAK, Daftar Personil, RAB
+      - /dokumennontender/{kode}/docsskk → Rancangan SPK/SPMK/SSUK/SSKK
+
+    Pakai cookie PP via spse_browser.get_spse_cookies() — bisa juga di-pass
+    eksplisit lewat parameter cookie_str (untuk paralel: hindari race init Playwright).
+
+    skip_merge=True: lewati gabung PDF (Excel COM tidak thread-safe untuk paralel).
+                     Merge dilakukan sequential setelah pool selesai via gabung_draft_pl().
+
+    Return: {"ok": [...], "error": [...]}
+    """
+    import requests
+    import urllib.parse
+    from bs4 import BeautifulSoup
+    import spse_browser
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    os.makedirs(folder_tujuan, exist_ok=True)
+    hasil = {"ok": [], "error": []}
+
+    if not cookie_str:
+        cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        hasil["error"].append("Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
+        return hasil
+
+    hdrs = {
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0",
+        "Referer": f"{BASE_URL}/admin/pegawai",
+    }
+
+    def _unique_dst(folder, fname):
+        dst = os.path.join(folder, fname)
+        if not os.path.exists(dst):
+            return dst
+        base, ext = os.path.splitext(fname)
+        n = 2
+        while True:
+            candidate = os.path.join(folder, f"{base}_{n}{ext}")
+            if not os.path.exists(candidate):
+                return candidate
+            n += 1
+
+    def _download_links_dari_endpoint(endpoint_url, label):
+        """Scrape link /dl/ dari endpoint, download semua file."""
+        try:
+            r = requests.get(endpoint_url, headers=hdrs, timeout=15)
+            if r.status_code == 403:
+                log(f"  ⏭ {label}: 403 Forbidden")
+                return
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/dl/" not in href:
+                    continue
+                fname_raw = a.get_text(strip=True)
+                fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "", fname_raw, re.IGNORECASE).strip()
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "dokumen"
+                url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+                links.append((url_dl, fname))
+
+            log(f"  📂 {label}: {len(links)} file")
+            for url_dl, fname in links:
+                try:
+                    r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
+                    r_dl.raise_for_status()
+                    cd = r_dl.headers.get("Content-Disposition", "")
+                    m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                    if m_cd:
+                        clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
+                        if clean:
+                            fname = clean
+                    dst = _unique_dst(folder_tujuan, fname)
+                    with open(dst, "wb") as f:
+                        for chunk in r_dl.iter_content(65536):
+                            f.write(chunk)
+                    hasil["ok"].append(dst)
+                    log(f"    ✅ {os.path.basename(dst)}")
+                except Exception as e:
+                    hasil["error"].append(f"{fname}: {e}")
+                    log(f"    ❌ {fname}: {e}")
+        except Exception as e:
+            hasil["error"].append(f"{label}: {e}")
+            log(f"  ❌ {label}: {e}")
+
+    ENDPOINTS = [
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",      "KAK & Personil"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/docsskk",   "Rancangan Kontrak"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/docuraian", "Uraian Singkat Pekerjaan"),
+        (f"{BASE_URL}/dokumennontender/{kode_paket}/lainnya",   "Informasi Lainnya"),
+        (f"{BASE_URL}/nontender/{kode_paket}/edit",             "Nota Dinas PPK"),
+    ]
+
+    for url_ep, label_ep in ENDPOINTS:
+        _download_links_dari_endpoint(url_ep, label_ep)
+
+    log(f"🏁 Download selesai: {len(hasil['ok'])} file OK, {len(hasil['error'])} error")
+
+    # ── Catat basename PDF uraian singkat ke Supabase
+    try:
+        for fpath in hasil["ok"]:
+            bn = os.path.basename(fpath).lower()
+            if "uraian" in bn and bn.endswith(".pdf"):
+                _sb().table("draft_paket_pl").update(
+                    {"nama_file_uraian": os.path.basename(fpath)}
+                ).eq("kode_paket", kode_paket).execute()
+                log(f"  📝 nama_file_uraian: {os.path.basename(fpath)}")
+                break
+    except Exception as e:
+        log(f"  ⚠ gagal simpan nama_file_uraian: {e}")
+
+    # ── Gabung semua PDF jadi 1 draft (tiru flow tender)
+    if not skip_merge:
+        try:
+            merged = gabung_draft_pl(kode_paket, folder_tujuan, hasil["ok"], progress_cb)
+            if merged:
+                hasil["draft_pdf"] = merged
+                log(f"📎 Draft PDF gabungan: {os.path.basename(merged)}")
+        except Exception as e:
+            import traceback as _tb
+            log(f"❌ Gagal gabung PDF: {e}")
+            log(f"   {_tb.format_exc()[-300:]}")
+            hasil["error"].append(f"Gabung PDF: {e}")
+
+    return hasil
+
+
+def gabung_draft_pl(kode_paket: str, folder_tujuan: str, files_ok: list, progress_cb=None) -> str:
+    """Standalone gabung PDF — dipanggil sequential setelah bulk parallel download.
+
+    Excel/Word COM tidak thread-safe → harus serial.
+    Return: path Draft_PL_*.pdf atau "" jika gagal.
+    """
+    from inbox_engine import _gabung_pdf_draft
+
+    def log(msg):
+        if progress_cb:
+            progress_cb(msg)
+
+    nama_paket_row = _sb().table("draft_paket_pl").select("nama_paket").eq(
+        "kode_paket", kode_paket
+    ).maybe_single().execute()
+    nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
+    nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
+    draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
+    ordered = sorted(files_ok, key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
+    return _gabung_pdf_draft(draft_path, ordered, progress_cb)
+
+
+def _pl_pdf_sort_key(fname: str) -> tuple:
+    """Urutan gabung draft PL: KAK → RAB/Personil → Rancangan → Uraian → Lainnya → Nota."""
+    f = fname.lower()
+    if "kak" in f: return (0, f)
+    if "rab" in f: return (1, f)
+    if "personil" in f or "personel" in f: return (2, f)
+    if "rincian" in f or "prn" in f: return (3, f)
+    if "rancangan" in f or "sskk" in f or "ssuk" in f or "spk" in f or "spmk" in f: return (4, f)
+    if "uraian" in f: return (5, f)
+    if "rekomendasi" in f or "lainnya" in f: return (6, f)
+    if "permohonan" in f or "nota" in f: return (7, f)
+    return (9, f)
