@@ -260,6 +260,88 @@ def _fetch_tahap_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     return tahap_map
 
 
+# Kolom yang disalin dari paket lama ke paket ulang
+_KOLOM_FALLBACK = [
+    "mak", "kode_rup", "nilai_pagu", "sub_kegiatan",
+    "sumber_anggaran", "dpa_nomor", "lokasi", "sbu_baru", "sbu_lama",
+]
+
+
+def _copy_data_dari_paket_lama(
+    kode_paket_baru: str,
+    nama_paket: str,
+    semua_rows: list[dict],
+    log_fn=None,
+) -> bool:
+    """
+    Salin field bolong dari paket lama (nama_paket sama, kode_paket lebih kecil).
+
+    Dipanggil setelah upsert selesai pada serap_paket_pl_dari_spse.
+    Tidak akan memanggil load_draft_pl() lagi (menerima semua_rows dari luar)
+    sehingga tidak ada loop tak terhingga.
+
+    Return: True jika ada data yang disalin, False jika tidak perlu.
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    if not nama_paket or not kode_paket_baru:
+        return False
+
+    nama_bersih = nama_paket.strip()
+
+    # Cari baris paket baru dari semua_rows (sudah di-load setelah upsert)
+    row_baru = next(
+        (r for r in semua_rows if str(r.get("kode_paket") or "") == kode_paket_baru),
+        None,
+    )
+    if row_baru is None:
+        # Fallback: ambil langsung dari DB (paket baru mungkin tidak ada di semua_rows lama)
+        try:
+            res = _sb().table("draft_paket_pl").select("*").eq("kode_paket", kode_paket_baru).maybe_single().execute()
+            row_baru = (res.data or {}) if res else {}
+        except Exception:
+            return False
+
+    # Cek apakah ada field yang masih kosong
+    field_kosong = [k for k in _KOLOM_FALLBACK if not (row_baru or {}).get(k)]
+    if not field_kosong:
+        return False  # semua sudah terisi, tidak perlu copy
+
+    # Cari kandidat paket lama: nama sama, kode lebih kecil
+    kandidat_lama = [
+        r for r in semua_rows
+        if (r.get("nama_paket") or "").strip() == nama_bersih
+        and str(r.get("kode_paket") or "") < kode_paket_baru
+        and str(r.get("kode_paket") or "") != kode_paket_baru
+    ]
+    if not kandidat_lama:
+        return False
+
+    # Paket lama terbaru (kode terbesar di antara kandidat)
+    paket_lama = max(kandidat_lama, key=lambda r: str(r.get("kode_paket") or ""))
+    kode_lama = paket_lama.get("kode_paket")
+
+    # Ambil nilai dari paket lama hanya untuk field yang masih kosong di paket baru
+    update_data = {}
+    for k in field_kosong:
+        nilai_lama = paket_lama.get(k)
+        if nilai_lama:
+            update_data[k] = nilai_lama
+
+    if not update_data:
+        return False
+
+    log(f"  [ulang] salin dari {kode_lama} → {kode_paket_baru}: {list(update_data.keys())}")
+    try:
+        _sb().table("draft_paket_pl").update(update_data).eq("kode_paket", kode_paket_baru).execute()
+        return True
+    except Exception as e:
+        log(f"  [ulang] GAGAL update {kode_paket_baru}: {e}")
+        return False
+
+
 def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     """
     Scrape daftar paket non-tender dari SPSE /dt/paketpp,
@@ -367,7 +449,17 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
     log(f"Selesai: {scraped} paket disimpan, {len(errors)} error")
 
-    # 4. Auto set Usaha Kecil (kualifikasiId=21) untuk semua paket
+    # 4. Fallback data dari paket lama (untuk paket ulang yang belum dapat delegasi PPK)
+    log("Cek paket ulang — copy data dari paket lama jika ada field kosong...")
+    semua_paket = load_draft_pl()  # ambil setelah upsert di atas selesai
+    for row in rows:
+        kode = str(row[5])
+        nama = row[1]
+        hasil_copy = _copy_data_dari_paket_lama(kode, nama, semua_paket, log_fn)
+        if hasil_copy:
+            log(f"  [ulang] {kode} — {nama[:40]}: data disalin dari paket lama")
+
+    # 5. Auto set Usaha Kecil (kualifikasiId=21) untuk semua paket
     log("Auto set Usaha Kecil untuk semua paket...")
     kode_list = [str(row[5]) for row in rows]
     for kode in kode_list:
