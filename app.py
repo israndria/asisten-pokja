@@ -916,6 +916,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
+            _pl_rt_refresh = st.checkbox(
+                "🔄 Refresh Template ke folder PL existing setelah buat folder",
+                value=False,
+                key="pl_cb_rt_refresh",
+            )
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -943,10 +948,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 })
 
             st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
-            if _pl_bulk_plan:
-                with st.expander(f"📋 Preview {len(_pl_bulk_plan)} folder yang akan dibuat"):
-                    for _bp0 in _pl_bulk_plan:
-                        st.caption(_bp0["nama_folder"])
 
             # ── #2: Checklist pilih paket untuk buat folder ──────────────────
             if _pl_rows_belum:
@@ -1046,6 +1047,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
                                     except Exception as _pl_hps_e:
                                         _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
+                                # Refresh Template (jika dicentang)
+                                if _pl_rt_refresh:
+                                    try:
+                                        from refresh_template import refresh_template_paket as _rt_fn
+                                        from pathlib import Path as _rt_P
+                                        _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
+                                        _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
+                                        _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
+                                        _pl_paket_log.append("🔄 Refresh Template: selesai")
+                                    except Exception as _rt_e:
+                                        _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
@@ -1266,6 +1278,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
                                 except Exception as _pl_hps_e:
                                     _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
+                            # Refresh Template (jika dicentang)
+                            if _pl_rt_refresh:
+                                try:
+                                    from refresh_template import refresh_template_paket as _rt_fn
+                                    from pathlib import Path as _rt_P
+                                    _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
+                                    _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
+                                    _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
+                                    _pl_paket_log.append("🔄 Refresh Template: selesai")
+                                except Exception as _rt_e:
+                                    _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
                         else:
                             _pl_fail += 1
                             _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
@@ -1369,76 +1392,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             else:
                                 st.error("Folder tidak ada di disk.")
 
-            # ── Refresh Template ke Folder PL Existing ────────────────────────
-            st.divider()
-            with st.expander("🔄 Refresh Template ke Folder PL Existing"):
-                st.caption("Copy file template terbaru ke folder paket yang sudah dibuat (tanpa download ulang SPSE).")
-                from refresh_template import refresh_template_paket as _rt_refresh
-                from pathlib import Path as _rt_Path
-
-                # Scan folder fisik (folder_dibuat di Supabase = True boolean, bukan nama folder)
-                _rt_scan_jkk = [
-                    ("JKK", p) for p in _rt_Path(_PL_DIR_JKK).iterdir()
-                    if p.is_dir()
-                ] if _rt_Path(_PL_DIR_JKK).exists() else []
-                _rt_scan_pk = [
-                    ("PK", p) for p in _rt_Path(_PL_DIR_PK).iterdir()
-                    if p.is_dir()
-                ] if _rt_Path(_PL_DIR_PK).exists() else []
-                _rt_semua_folder = _rt_scan_jkk + _rt_scan_pk
-
-                if not _rt_semua_folder:
-                    st.info("Belum ada folder paket PL di output directory.")
-                else:
-                    _rt_opsi_pl = {
-                        f"{p.name} ({jenis})": (jenis, p)
-                        for jenis, p in _rt_semua_folder
-                    }
-                    _rt_all_pl = st.checkbox("Pilih Semua", key="rt_all_pl")
-                    _rt_pilih_pl = st.multiselect(
-                        "Pilih paket PL:",
-                        list(_rt_opsi_pl.keys()),
-                        default=list(_rt_opsi_pl.keys()) if _rt_all_pl else [],
-                        key="rt_ms_pl",
-                    )
-                    _rt_dry_pl = st.checkbox("Dry-run (preview saja, tidak ada perubahan)", value=True, key="rt_dry_pl")
-                    _rt_relink_pl = True  # Selalu relink Word → Excel setelah copy template
-
-                    if _rt_pilih_pl and st.button(
-                        f"🔄 Refresh Template PL ke {len(_rt_pilih_pl)} Paket",
-                        type="primary",
-                        key="rt_btn_pl",
-                    ):
-                        _rt_folder_pl = []
-                        for _rt_k in _rt_pilih_pl:
-                            _rt_jenis, _rt_full = _rt_opsi_pl[_rt_k]
-                            _rt_folder_pl.append((_rt_jenis, _rt_full))
-
-                        _rt_ok_pl, _rt_fail_pl = 0, 0
-                        _rt_log_container = st.container(border=True)
-                        for _rt_jenis_f, _rt_fld in _rt_folder_pl:
-                            _rt_mode = "pl_jkk" if _rt_jenis_f == "JKK" else "pl_pk"
-                            _rt_src   = _rt_Path(_TEMPLATE_DIR_PL if _rt_jenis_f == "JKK" else _TEMPLATE_DIR_PL_PK)
-                            _rt_res   = _rt_refresh(
-                                [_rt_fld], _rt_src, _rt_mode,
-                                auto_relink=_rt_relink_pl, dry_run=_rt_dry_pl,
-                            )
-                            for _rt_fk, _rt_logs in _rt_res.items():
-                                _ok_f = all("❌" not in l for l in _rt_logs)
-                                if _ok_f:
-                                    _rt_ok_pl += 1
-                                else:
-                                    _rt_fail_pl += 1
-                                _rt_log_container.markdown(f"**{_rt_Path(_rt_fk).name[:60]}**")
-                                for _l in _rt_logs:
-                                    _rt_log_container.caption(_l)
-                        _rt_label = f"✅ {_rt_ok_pl} OK, ❌ {_rt_fail_pl} gagal"
-                        if _rt_dry_pl:
-                            _rt_label = "[DRY-RUN] " + _rt_label
-                        if _rt_fail_pl == 0:
-                            st.success(_rt_label)
-                        else:
-                            st.warning(_rt_label)
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     with _pl_tab2:
@@ -4397,6 +4350,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
+            _pl_rt_refresh = st.checkbox(
+                "🔄 Refresh Template ke folder PL existing setelah buat folder",
+                value=False,
+                key="pl_cb_rt_refresh",
+            )
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -4424,10 +4382,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 })
 
             st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
-            if _pl_bulk_plan:
-                with st.expander(f"📋 Preview {len(_pl_bulk_plan)} folder yang akan dibuat"):
-                    for _bp0 in _pl_bulk_plan:
-                        st.caption(_bp0["nama_folder"])
 
             # ── #2: Checklist pilih paket untuk buat folder ──────────────────
             if _pl_rows_belum:
@@ -4527,6 +4481,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
                                     except Exception as _pl_hps_e:
                                         _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
+                                # Refresh Template (jika dicentang)
+                                if _pl_rt_refresh:
+                                    try:
+                                        from refresh_template import refresh_template_paket as _rt_fn
+                                        from pathlib import Path as _rt_P
+                                        _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
+                                        _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
+                                        _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
+                                        _pl_paket_log.append("🔄 Refresh Template: selesai")
+                                    except Exception as _rt_e:
+                                        _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
@@ -4747,6 +4712,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
                                 except Exception as _pl_hps_e:
                                     _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
+                            # Refresh Template (jika dicentang)
+                            if _pl_rt_refresh:
+                                try:
+                                    from refresh_template import refresh_template_paket as _rt_fn
+                                    from pathlib import Path as _rt_P
+                                    _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
+                                    _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
+                                    _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
+                                    _pl_paket_log.append("🔄 Refresh Template: selesai")
+                                except Exception as _rt_e:
+                                    _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
                         else:
                             _pl_fail += 1
                             _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
@@ -4850,76 +4826,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             else:
                                 st.error("Folder tidak ada di disk.")
 
-            # ── Refresh Template ke Folder PL Existing ────────────────────────
-            st.divider()
-            with st.expander("🔄 Refresh Template ke Folder PL Existing"):
-                st.caption("Copy file template terbaru ke folder paket yang sudah dibuat (tanpa download ulang SPSE).")
-                from refresh_template import refresh_template_paket as _rt_refresh
-                from pathlib import Path as _rt_Path
-
-                # Scan folder fisik (folder_dibuat di Supabase = True boolean, bukan nama folder)
-                _rt_scan_jkk = [
-                    ("JKK", p) for p in _rt_Path(_PL_DIR_JKK).iterdir()
-                    if p.is_dir()
-                ] if _rt_Path(_PL_DIR_JKK).exists() else []
-                _rt_scan_pk = [
-                    ("PK", p) for p in _rt_Path(_PL_DIR_PK).iterdir()
-                    if p.is_dir()
-                ] if _rt_Path(_PL_DIR_PK).exists() else []
-                _rt_semua_folder = _rt_scan_jkk + _rt_scan_pk
-
-                if not _rt_semua_folder:
-                    st.info("Belum ada folder paket PL di output directory.")
-                else:
-                    _rt_opsi_pl = {
-                        f"{p.name} ({jenis})": (jenis, p)
-                        for jenis, p in _rt_semua_folder
-                    }
-                    _rt_all_pl = st.checkbox("Pilih Semua", key="rt_all_pl")
-                    _rt_pilih_pl = st.multiselect(
-                        "Pilih paket PL:",
-                        list(_rt_opsi_pl.keys()),
-                        default=list(_rt_opsi_pl.keys()) if _rt_all_pl else [],
-                        key="rt_ms_pl",
-                    )
-                    _rt_dry_pl = st.checkbox("Dry-run (preview saja, tidak ada perubahan)", value=True, key="rt_dry_pl")
-                    _rt_relink_pl = True  # Selalu relink Word → Excel setelah copy template
-
-                    if _rt_pilih_pl and st.button(
-                        f"🔄 Refresh Template PL ke {len(_rt_pilih_pl)} Paket",
-                        type="primary",
-                        key="rt_btn_pl",
-                    ):
-                        _rt_folder_pl = []
-                        for _rt_k in _rt_pilih_pl:
-                            _rt_jenis, _rt_full = _rt_opsi_pl[_rt_k]
-                            _rt_folder_pl.append((_rt_jenis, _rt_full))
-
-                        _rt_ok_pl, _rt_fail_pl = 0, 0
-                        _rt_log_container = st.container(border=True)
-                        for _rt_jenis_f, _rt_fld in _rt_folder_pl:
-                            _rt_mode = "pl_jkk" if _rt_jenis_f == "JKK" else "pl_pk"
-                            _rt_src   = _rt_Path(_TEMPLATE_DIR_PL if _rt_jenis_f == "JKK" else _TEMPLATE_DIR_PL_PK)
-                            _rt_res   = _rt_refresh(
-                                [_rt_fld], _rt_src, _rt_mode,
-                                auto_relink=_rt_relink_pl, dry_run=_rt_dry_pl,
-                            )
-                            for _rt_fk, _rt_logs in _rt_res.items():
-                                _ok_f = all("❌" not in l for l in _rt_logs)
-                                if _ok_f:
-                                    _rt_ok_pl += 1
-                                else:
-                                    _rt_fail_pl += 1
-                                _rt_log_container.markdown(f"**{_rt_Path(_rt_fk).name[:60]}**")
-                                for _l in _rt_logs:
-                                    _rt_log_container.caption(_l)
-                        _rt_label = f"✅ {_rt_ok_pl} OK, ❌ {_rt_fail_pl} gagal"
-                        if _rt_dry_pl:
-                            _rt_label = "[DRY-RUN] " + _rt_label
-                        if _rt_fail_pl == 0:
-                            st.success(_rt_label)
-                        else:
-                            st.warning(_rt_label)
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     with _pl_tab2:
