@@ -301,6 +301,12 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         satker       = row[4]
         kode_paket   = str(row[5])   # kode resmi non-tender
 
+        # Skip paket selesai (Penandatanganan Kontrak) — data DB sudah cukup
+        _tahap_skrg = (tahap_map.get(kode_paket) or "").lower()
+        if "penandatanganan kontrak" in _tahap_skrg:
+            log(f"  Skip {kode_paket} — sudah Penandatanganan Kontrak")
+            continue
+
         log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
 
         # Ambil ID peserta dari halaman evaluasi (untuk kirimundanganverifikasi)

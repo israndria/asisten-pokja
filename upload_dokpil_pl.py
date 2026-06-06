@@ -42,15 +42,27 @@ def _extract_digit_paket(nama_paket: str) -> str:
     return "01"
 
 
+def _sisip_plu(nomor: str) -> str:
+    """Sisip '/PLU' tepat setelah prefix '000.3.3' (paket ulang). Idempoten.
+    000.3.3/01/PL/... -> 000.3.3/PLU/01/PL/..."""
+    if not nomor or "/PLU/" in nomor:
+        return nomor
+    if nomor.startswith("000.3.3"):
+        return "000.3.3/PLU" + nomor[7:]
+    return nomor
+
+
 def generate_nomor_dokpil(
     nama_paket: str,
     kode_unik: str,
     skpd_singkat: str,
     tahun: str | int | None = None,
+    paket_ulang: bool = False,
 ) -> str:
     """
     Pattern: 000.3.3/01/PL/PP-{NN}/{KodeUnik}/{SkpdSingkat}/{Tahun}
     Contoh:  000.3.3/01/PL/PP-01/KPP1/DPUPR/2026
+    paket_ulang=True → sisip /PLU/ setelah 000.3.3.
     """
     pp_nn = _extract_digit_paket(nama_paket)
     if not kode_unik:
@@ -59,7 +71,8 @@ def generate_nomor_dokpil(
         skpd_singkat = "DPUPR"
     if not tahun:
         tahun = datetime.now().year
-    return f"000.3.3/01/PL/PP-{pp_nn}/{kode_unik}/{skpd_singkat}/{tahun}"
+    nomor = f"000.3.3/01/PL/PP-{pp_nn}/{kode_unik}/{skpd_singkat}/{tahun}"
+    return _sisip_plu(nomor) if paket_ulang else nomor
 
 
 # ─────────────────────────────────────────────────────────────────────────────

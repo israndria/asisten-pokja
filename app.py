@@ -68,6 +68,32 @@ import pl_engine
 import parse_kak_pl
 import pl_kirimpesan_engine
 
+
+def _pl_paket_ulang(row: dict) -> bool:
+    """True jika ADA folder paket PL bersuffix '(PL - Ulang)' untuk paket ini.
+    Scan root langsung (bukan _resolve_folder_pl) agar tak salah resolve ke folder lama
+    saat folder lama + ulang dua-duanya ada di disk → nomor dokumen pakai /PLU/.
+    """
+    try:
+        from config import OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK, sanitasi_nama_folder
+        jenis = (row.get("jenis_pl") or "JKK").upper()
+        root = OUTPUT_DIR_PL_JKK if jenis == "JKK" else OUTPUT_DIR_PL_PK
+        if not os.path.isdir(root):
+            return False
+        words = set(sanitasi_nama_folder(row.get("nama_paket") or "").lower().split())
+        if not words:
+            return False
+        for f in os.listdir(root):
+            if not os.path.isdir(os.path.join(root, f)):
+                continue
+            fl = f.lower()
+            if "(pl - ulang)" in fl and words <= set(fl.split()):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -687,7 +713,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = pl_engine.load_draft_pl()
                         if not _pl_show_done:
-                            _pl_rows = [r for r in _pl_rows if not _pl_is_done(r)]
+                            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
 
                 # Aksi 2: Serap MAK dari Inbox
                 if _cb_serap_mak:
@@ -2119,6 +2145,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 kode_unik=_ku_prev,
                                 skpd_singkat=_sk_prev,
                                 tahun=_tgl_prev.year,
+                                paket_ulang=_pl_paket_ulang(_rr),
                             )
                             st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
@@ -2183,6 +2210,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 kode_unik=_ku_up,
                                 skpd_singkat=_sk_up,
                                 tahun=_tgl_up.year,
+                                paket_ulang=_pl_paket_ulang(_rr_up),
                             )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
@@ -2553,6 +2581,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
                                         tahun=_plsp_tgl_dokpil.year,
+                                        paket_ulang=_pl_paket_ulang(_p),
                                     )
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
@@ -3075,6 +3104,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     nama_paket=_row.get("nama_paket", ""),
                     kode_unik=_row.get("kode_unik") or "",
                     skpd_singkat=_skpd_pl8(_row.get("satker", "")),
+                    paket_ulang=_pl_paket_ulang(_row),
                 )
             except Exception:
                 return ""
@@ -4262,7 +4292,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = pl_engine.load_draft_pl()
                         if not _pl_show_done:
-                            _pl_rows = [r for r in _pl_rows if not _pl_is_done(r)]
+                            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
 
                 # Aksi 2: Serap MAK dari Inbox
                 if _cb_serap_mak:
@@ -5694,6 +5724,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 kode_unik=_ku_prev,
                                 skpd_singkat=_sk_prev,
                                 tahun=_tgl_prev.year,
+                                paket_ulang=_pl_paket_ulang(_rr),
                             )
                             st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
@@ -5758,6 +5789,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 kode_unik=_ku_up,
                                 skpd_singkat=_sk_up,
                                 tahun=_tgl_up.year,
+                                paket_ulang=_pl_paket_ulang(_rr_up),
                             )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
@@ -6128,6 +6160,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
                                         tahun=_plsp_tgl_dokpil.year,
+                                        paket_ulang=_pl_paket_ulang(_p),
                                     )
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
@@ -6650,6 +6683,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     nama_paket=_row.get("nama_paket", ""),
                     kode_unik=_row.get("kode_unik") or "",
                     skpd_singkat=_skpd_pl8(_row.get("satker", "")),
+                    paket_ulang=_pl_paket_ulang(_row),
                 )
             except Exception:
                 return ""

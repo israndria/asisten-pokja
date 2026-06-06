@@ -56,6 +56,48 @@ def hapus_paket_pl(kode_paket: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
+    """Simpan hanya row kode_paket terbaru per nama_paket (paket ulang → kode baru)."""
+    by_nama: dict[str, dict] = {}
+    for r in rows:
+        nama = (r.get("nama_paket") or "").strip()
+        if not nama:
+            by_nama[r.get("kode_paket") or id(r)] = r
+            continue
+        prev = by_nama.get(nama)
+        if prev is None or str(r.get("kode_paket") or "") > str(prev.get("kode_paket") or ""):
+            by_nama[nama] = r
+    hasil = list(by_nama.values())
+    return hasil, len(rows) - len(hasil)
+
+
+_SUFFIX_ULANG = " (PL - Ulang)"
+
+
+def nama_folder_dengan_suffix_ulang(
+    output_base: str,
+    nama_folder: str,
+    paksa_suffix: bool = False,
+) -> str:
+    """Auto-tambah ' (PL - Ulang)' bila folder sama sudah ada di disk."""
+    import os as _os
+    nama = (nama_folder or "").strip()
+    if not nama:
+        return nama
+    sudah_bersuffix = nama.endswith(_SUFFIX_ULANG.strip()) or _SUFFIX_ULANG.strip() in nama
+    target_polos = _os.path.join(output_base, nama)
+    perlu_suffix = paksa_suffix or _os.path.exists(target_polos)
+    if not perlu_suffix or sudah_bersuffix:
+        return nama
+    kandidat = f"{nama}{_SUFFIX_ULANG}"
+    if not _os.path.exists(_os.path.join(output_base, kandidat)):
+        return kandidat
+    n = 2
+    while _os.path.exists(_os.path.join(output_base, f"{nama}{_SUFFIX_ULANG.rstrip(')')}{n})")):
+        n += 1
+    return f"{nama}{_SUFFIX_ULANG.rstrip(')')}{n})"
+
+
 def update_status(kode_paket: str, status: str) -> dict:
     """Update kolom status paket PL."""
     try:
