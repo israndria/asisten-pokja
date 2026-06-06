@@ -915,186 +915,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 m = _re.search(r"Paket\s+(\d+)", nama, _re.IGNORECASE)
                 return int(m.group(1)) if m else fallback
 
-            _pl_opsi_map = {"(pilih paket)": None}
-            for _i, _r in enumerate(_pl_rows, 1):
-                if not _r.get("nama_paket"):
-                    continue
-                _nm = _r.get("nama_paket", "")
-                _no = _pl_no_dari_nama(_nm, _i)
-                _jenis = (_r.get("jenis_pl") or "").upper()
-                _sudah = " ✅" if _r.get("folder_dibuat") else ""
-                _lbl = f"{_no}. {_nm} - {_jenis}{_sudah}"
-                _pl_opsi_map[_lbl] = _r
-
-            _pl_pilihan = st.selectbox("Pilih paket:", list(_pl_opsi_map.keys()), key="sel_pl_folder")
-            _pl_row_sel = _pl_opsi_map.get(_pl_pilihan)
-
-            # Auto-generate nama folder
-            _pl_default_folder = ""
-            _pl_jenis_sel = "JKK"
-            if _pl_row_sel:
-                _pl_nm      = _pl_row_sel.get("nama_paket", "")
-                _pl_jenis_sel = (_pl_row_sel.get("jenis_pl") or "JKK").upper()
-                _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis_sel, f"PL{_pl_jenis_sel}")
-                _pl_no_urut = _pl_no_dari_nama(_pl_nm, len(_pl_rows))
-                _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
-
-            _pl_nama_folder = st.text_input(
-                "Nama folder:",
-                value=_pl_default_folder,
-                placeholder="1. PLJKK - Perencanaan Pembangunan Jalan ...",
-                key="pl_input_nama_folder",
-            )
-
-            _pl_paksa_ulang = st.checkbox(
-                "Paksa suffix (PL - Ulang)",
-                value=False,
-                key="pl_cb_paksa_ulang",
-                help="Centang untuk tempel ' (PL - Ulang)' walau folder lama belum ada. "
-                     "Default: auto-suffix hanya jika folder dengan nama sama sudah ada di disk.",
-            )
-
-            # Output base dir: JKK → @ Pengadaan Langsung JKK, PK → @ Pengadaan Langsung PK
-            _pl_output_base = _PL_DIR_JKK if _pl_jenis_sel == "JKK" else _PL_DIR_PK
-            _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
-            if _pl_nama_clean:
-                _pl_nama_clean = pl_engine.nama_folder_dengan_suffix_ulang(
-                    _pl_output_base, _pl_nama_clean, paksa_suffix=_pl_paksa_ulang,
-                )
-                if _pl_nama_clean != re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip():
-                    st.caption(f"♻️ Paket ulang terdeteksi → folder: `{_pl_nama_clean}`")
-            _pl_target = _pl_os.path.join(_pl_output_base, _pl_nama_clean) if _pl_nama_clean else ""
-            _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
-
-            st.caption(f"📂 Output: `{_pl_output_base}`")
-
-            if _pl_folder_ada:
-                st.warning(f"Folder sudah ada: `{_pl_target}`")
-
-            _pl_cb1, _pl_cb2 = st.columns(2)
-            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl")
-
-            _pl_buat_btn = _pl_cb1.button(
-                "📁 Buat Folder",
-                type="primary",
-                disabled=not bool(_pl_nama_folder),
-                use_container_width=True,
-                key="pl_btn_buat_folder",
-            )
-            if _pl_folder_ada:
-                if _pl_cb2.button("📂 Buka Explorer", use_container_width=True, key="pl_btn_explorer"):
-                    _pl_sp.Popen(f'explorer "{_pl_target.replace("/", chr(92))}"')
-
-            # Tombol download mandiri (jika folder sudah ada)
-            if _pl_folder_ada and _pl_row_sel:
-                _pl_kode_dl = _pl_row_sel.get("kode_paket", "")
-                if _pl_kode_dl and st.button("📦 Download Dokumen SPSE", use_container_width=True, key="pl_btn_dl_saja"):
-                    _pl_dl_logs = []
-                    _pl_dl_status = st.status("🔽 Mengunduh dokumen...", expanded=True)
-                    _pl_dl_area = _pl_dl_status.empty()
-                    def _pl_dl_cb(msg):
-                        _pl_dl_logs.append(msg)
-                        _pl_dl_area.code("\n".join(_pl_dl_logs[-20:]))
-                        _pl_dl_status.update(label=f"🔽 {msg[:60]}")
-                    _pl_dl_res = pl_engine.download_dokumen_paket_pl(_pl_kode_dl, _pl_target, _pl_dl_cb)
-                    _pl_dl_status.update(
-                        label=f"✅ {len(_pl_dl_res['ok'])} file, ❌ {len(_pl_dl_res['error'])} error",
-                        state="complete", expanded=False,
-                    )
-                    # Parse KAK PDF → upsert Supabase
-                    _kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target)
-                    if _kak_p:
-                        _kak_d = parse_kak_pl.parse_kak(_kak_p)
-                        _kak_u = {k: v for k, v in _kak_d.items() if v}
-                        if _kak_u:
-                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kode_dl, **_kak_u})
-                            st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
-                    # Scrape HPS PL otomatis → tulis langsung ke Excel (tanpa DB)
-                    try:
-                        import hps_engine as _hps_pl
-                        _xl_pl = _cari_xlsm_pl(_pl_target)
-                        if _xl_pl:
-                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_dl, _xl_pl)
-                            if _hps_r.get("ok"):
-                                st.success(f"💰 {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                            else:
-                                st.warning(f"⚠ HPS: {_hps_r.get('pesan','-')}")
-                        else:
-                            st.caption("💰 HPS dilewati — tidak ada .xlsm di folder.")
-                    except Exception as _he:
-                        st.warning(f"⚠ HPS error: {_he}")
-
-            # Tombol scrape HPS mandiri (kalau download sebelumnya tidak include)
-            if _pl_folder_ada and _pl_row_sel:
-                _pl_kode_hps = _pl_row_sel.get("kode_paket", "")
-                if _pl_kode_hps and st.button("💰 Scrape HPS PL → Excel", use_container_width=True, key="pl_btn_hps_saja"):
-                    import hps_engine as _hps_pl
-                    _xl_pl2 = _cari_xlsm_pl(_pl_target)
-                    if not _xl_pl2:
-                        st.error("Tidak ada file .xlsm di folder paket untuk diisi HPS.")
-                    else:
-                        with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
-                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_hps, _xl_pl2)
-                        if _hps_r.get("ok"):
-                            st.success(f"✅ {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                            if _hps_r.get("warning"):
-                                st.warning(f"⚠ {len(_hps_r['warning'])} item selisih (highlight kuning di Excel)")
-                        else:
-                            st.error(f"Gagal: {_hps_r.get('pesan','-')}")
-
-            if _pl_buat_btn and _pl_nama_folder:
-                with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
-                    try:
-                        _pl_res = _pl_sp.run(
-                            [_PL_PY, _PL_SCRIPT, "--mode", "pl",
-                             "--output-dir", _pl_output_base, _pl_nama_clean],
-                            capture_output=True, text=True, timeout=60,
-                            creationflags=_PL_NO_WIN,
-                        )
-                        if _pl_res.returncode == 0:
-                            if _pl_row_sel:
-                                pl_engine.tandai_folder_dibuat(_pl_row_sel["kode_paket"])
-                            # Download dokumen jika dicentang
-                            if _pl_dl_dokumen and _pl_row_sel:
-                                _pl_kp = _pl_row_sel.get("kode_paket", "")
-                                if _pl_kp:
-                                    _pl_dl_msgs = []
-                                    _pl_dl_st2 = st.status("📦 Download dokumen...", expanded=True)
-                                    _pl_dl_area2 = _pl_dl_st2.empty()
-                                    def _pl_dl_cb2(msg):
-                                        _pl_dl_msgs.append(msg)
-                                        _pl_dl_area2.code("\n".join(_pl_dl_msgs[-20:]))
-                                    _pl_dl_r2 = pl_engine.download_dokumen_paket_pl(
-                                        _pl_kp, _pl_target, _pl_dl_cb2
-                                    )
-                                    _pl_dl_st2.update(
-                                        label=f"✅ {len(_pl_dl_r2['ok'])} file, ❌ {len(_pl_dl_r2['error'])} error",
-                                        state="complete", expanded=False,
-                                    )
-                                    # Parse KAK PDF → upsert ke Supabase
-                                    _pl_kak_path = parse_kak_pl.cari_kak_di_folder(_pl_target)
-                                    if _pl_kak_path:
-                                        _pl_kak_data = parse_kak_pl.parse_kak(_pl_kak_path)
-                                        _pl_kak_update = {k: v for k, v in _pl_kak_data.items() if v}
-                                        if _pl_kak_update:
-                                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kp, **_pl_kak_update})
-                                            st.info(f"📋 KAK ter-parse: {', '.join(_pl_kak_update.keys())}")
-                                    # Scrape HPS PL → tulis langsung ke Excel
-                                    try:
-                                        import hps_engine as _hps_pl
-                                        _xl_pl3 = _cari_xlsm_pl(_pl_target)
-                                        if _xl_pl3:
-                                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kp, _xl_pl3)
-                                            if _hps_r.get("ok"):
-                                                st.success(f"💰 {_hps_r['pesan']} — Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                                    except Exception:
-                                        pass
-                            st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
-                            st.rerun()
-                        else:
-                            st.error(f"Gagal buat folder:\n{_pl_res.stderr[:300]}")
-                    except Exception as _pe:
-                        st.error(f"Error: {_pe}")
+            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -1466,6 +1287,87 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.markdown(f"**{_pl_nf[:70]}**")
                         st.code("\n".join(_pl_logs))
                 st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+
+            # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
+            _pl_rows_sudah = [
+                r for r in _pl_rows
+                if r.get("nama_paket") and r.get("folder_dibuat")
+            ]
+            if _pl_rows_sudah:
+                st.markdown("#### 🔧 Aksi Mandiri per Paket (Folder sudah ada)")
+                for _br_s in _pl_rows_sudah:
+                    _bkp_s = _br_s.get("kode_paket", "")
+                    _bnm_s = _br_s.get("nama_paket", "")
+                    _bj_s = (_br_s.get("jenis_pl") or "JKK").upper()
+
+                    import kualifikasi_engine_pl as _keng_pl
+                    _fr_res = _keng_pl.resolve_folder_paket_pl(_bkp_s)
+                    _folder_path = _fr_res.get("pesan", "") if _fr_res.get("ok") else ""
+
+                    _lbl_exp = f"📂 {_bnm_s[:60]} — {_bj_s}"
+                    with st.expander(_lbl_exp):
+                        if _folder_path:
+                            st.caption(f"📁 Path: `{_folder_path}`")
+                        _col1, _col2, _col3 = st.columns(3)
+
+                        # 1. Download Dokumen Mandiri
+                        if _col1.button("📦 Download Dok", key=f"btn_dl_saja_{_bkp_s}", use_container_width=True):
+                            if not _folder_path:
+                                st.error("Folder paket tidak terdeteksi.")
+                            else:
+                                _logs = []
+                                _st_bar = st.status("🔽 Mengunduh dokumen...", expanded=True)
+                                _st_area = _st_bar.empty()
+                                def _cb(msg):
+                                    _logs.append(msg)
+                                    _st_area.code("\n".join(_logs[-20:]))
+                                    _st_bar.update(label=f"🔽 {msg[:60]}")
+                                _res = pl_engine.download_dokumen_paket_pl(_bkp_s, _folder_path, _cb)
+                                _st_bar.update(
+                                    label=f"✅ {len(_res['ok'])} file, ❌ {len(_res['error'])} error",
+                                    state="complete", expanded=False,
+                                )
+                                # Parse KAK PDF → upsert Supabase
+                                _kak_p = parse_kak_pl.cari_kak_di_folder(_folder_path)
+                                if _kak_p:
+                                    _kak_d = parse_kak_pl.parse_kak(_kak_p)
+                                    _kak_u = {k: v for k, v in _kak_d.items() if v}
+                                    if _kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _bkp_s, **_kak_u})
+                                        st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
+                                # Scrape HPS
+                                try:
+                                    import hps_engine as _hps
+                                    _xl = _cari_xlsm_pl(_folder_path)
+                                    if _xl:
+                                        _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
+                                except Exception:
+                                    pass
+                                st.rerun()
+
+                        # 2. Scrape HPS Mandiri
+                        if _col2.button("💰 Scrape HPS", key=f"btn_hps_saja_{_bkp_s}", use_container_width=True):
+                            if not _folder_path:
+                                st.error("Folder paket tidak terdeteksi.")
+                            else:
+                                _xl = _cari_xlsm_pl(_folder_path)
+                                if not _xl:
+                                    st.error("Tidak ada file .xlsm di folder paket.")
+                                else:
+                                    with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
+                                        import hps_engine as _hps
+                                        _hps_r = _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
+                                    if _hps_r.get("ok"):
+                                        st.success(f"✅ {_hps_r['pesan']}")
+                                    else:
+                                        st.error(f"Gagal: {_hps_r.get('pesan','-')}")
+
+                        # 3. Buka Explorer
+                        if _col3.button("📂 Explorer", key=f"btn_exp_{_bkp_s}", use_container_width=True):
+                            if _folder_path and os.path.exists(_folder_path):
+                                _pl_sp.Popen(f'explorer "{_folder_path.replace("/", chr(92))}"')
+                            else:
+                                st.error("Folder tidak ada di disk.")
 
             # ── Refresh Template ke Folder PL Existing ────────────────────────
             st.divider()
@@ -4494,186 +4396,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 m = _re.search(r"Paket\s+(\d+)", nama, _re.IGNORECASE)
                 return int(m.group(1)) if m else fallback
 
-            _pl_opsi_map = {"(pilih paket)": None}
-            for _i, _r in enumerate(_pl_rows, 1):
-                if not _r.get("nama_paket"):
-                    continue
-                _nm = _r.get("nama_paket", "")
-                _no = _pl_no_dari_nama(_nm, _i)
-                _jenis = (_r.get("jenis_pl") or "").upper()
-                _sudah = " ✅" if _r.get("folder_dibuat") else ""
-                _lbl = f"{_no}. {_nm} - {_jenis}{_sudah}"
-                _pl_opsi_map[_lbl] = _r
-
-            _pl_pilihan = st.selectbox("Pilih paket:", list(_pl_opsi_map.keys()), key="sel_pl_folder")
-            _pl_row_sel = _pl_opsi_map.get(_pl_pilihan)
-
-            # Auto-generate nama folder
-            _pl_default_folder = ""
-            _pl_jenis_sel = "PK"
-            if _pl_row_sel:
-                _pl_nm      = _pl_row_sel.get("nama_paket", "")
-                _pl_jenis_sel = (_pl_row_sel.get("jenis_pl") or "PK").upper()
-                _pl_prefix  = {"JKK": "PLJKK", "PK": "PLPK"}.get(_pl_jenis_sel, f"PL{_pl_jenis_sel}")
-                _pl_no_urut = _pl_no_dari_nama(_pl_nm, len(_pl_rows))
-                _pl_default_folder = f"{_pl_no_urut}. {_pl_prefix} - {_pl_nm}"
-
-            _pl_nama_folder = st.text_input(
-                "Nama folder:",
-                value=_pl_default_folder,
-                placeholder="1. PLJKK - Perencanaan Pembangunan Jalan ...",
-                key="pl_input_nama_folder",
-            )
-
-            _pl_paksa_ulang = st.checkbox(
-                "Paksa suffix (PL - Ulang)",
-                value=False,
-                key="pl_cb_paksa_ulang",
-                help="Centang untuk tempel ' (PL - Ulang)' walau folder lama belum ada. "
-                     "Default: auto-suffix hanya jika folder dengan nama sama sudah ada di disk.",
-            )
-
-            # Output base dir: JKK → @ Pengadaan Langsung JKK, PK → @ Pengadaan Langsung PK
-            _pl_output_base = _PL_DIR_JKK if _pl_jenis_sel == "JKK" else _PL_DIR_PK
-            _pl_nama_clean = re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip() if _pl_nama_folder else ""
-            if _pl_nama_clean:
-                _pl_nama_clean = pl_engine.nama_folder_dengan_suffix_ulang(
-                    _pl_output_base, _pl_nama_clean, paksa_suffix=_pl_paksa_ulang,
-                )
-                if _pl_nama_clean != re.sub(r'[/<>:"\|?*]', "-", _pl_nama_folder).strip():
-                    st.caption(f"♻️ Paket ulang terdeteksi → folder: `{_pl_nama_clean}`")
-            _pl_target = _pl_os.path.join(_pl_output_base, _pl_nama_clean) if _pl_nama_clean else ""
-            _pl_folder_ada = bool(_pl_target and _pl_os.path.exists(_pl_target))
-
-            st.caption(f"📂 Output: `{_pl_output_base}`")
-
-            if _pl_folder_ada:
-                st.warning(f"Folder sudah ada: `{_pl_target}`")
-
-            _pl_cb1, _pl_cb2 = st.columns(2)
-            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl")
-
-            _pl_buat_btn = _pl_cb1.button(
-                "📁 Buat Folder",
-                type="primary",
-                disabled=not bool(_pl_nama_folder),
-                use_container_width=True,
-                key="pl_btn_buat_folder",
-            )
-            if _pl_folder_ada:
-                if _pl_cb2.button("📂 Buka Explorer", use_container_width=True, key="pl_btn_explorer"):
-                    _pl_sp.Popen(f'explorer "{_pl_target.replace("/", chr(92))}"')
-
-            # Tombol download mandiri (jika folder sudah ada)
-            if _pl_folder_ada and _pl_row_sel:
-                _pl_kode_dl = _pl_row_sel.get("kode_paket", "")
-                if _pl_kode_dl and st.button("📦 Download Dokumen SPSE", use_container_width=True, key="pl_btn_dl_saja"):
-                    _pl_dl_logs = []
-                    _pl_dl_status = st.status("🔽 Mengunduh dokumen...", expanded=True)
-                    _pl_dl_area = _pl_dl_status.empty()
-                    def _pl_dl_cb(msg):
-                        _pl_dl_logs.append(msg)
-                        _pl_dl_area.code("\n".join(_pl_dl_logs[-20:]))
-                        _pl_dl_status.update(label=f"🔽 {msg[:60]}")
-                    _pl_dl_res = pl_engine.download_dokumen_paket_pl(_pl_kode_dl, _pl_target, _pl_dl_cb)
-                    _pl_dl_status.update(
-                        label=f"✅ {len(_pl_dl_res['ok'])} file, ❌ {len(_pl_dl_res['error'])} error",
-                        state="complete", expanded=False,
-                    )
-                    # Parse KAK PDF → upsert Supabase
-                    _kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target)
-                    if _kak_p:
-                        _kak_d = parse_kak_pl.parse_kak(_kak_p)
-                        _kak_u = {k: v for k, v in _kak_d.items() if v}
-                        if _kak_u:
-                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kode_dl, **_kak_u})
-                            st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
-                    # Scrape HPS PL otomatis → tulis langsung ke Excel (tanpa DB)
-                    try:
-                        import hps_engine as _hps_pl
-                        _xl_pl = _cari_xlsm_pl(_pl_target)
-                        if _xl_pl:
-                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_dl, _xl_pl)
-                            if _hps_r.get("ok"):
-                                st.success(f"💰 {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                            else:
-                                st.warning(f"⚠ HPS: {_hps_r.get('pesan','-')}")
-                        else:
-                            st.caption("💰 HPS dilewati — tidak ada .xlsm di folder.")
-                    except Exception as _he:
-                        st.warning(f"⚠ HPS error: {_he}")
-
-            # Tombol scrape HPS mandiri (kalau download sebelumnya tidak include)
-            if _pl_folder_ada and _pl_row_sel:
-                _pl_kode_hps = _pl_row_sel.get("kode_paket", "")
-                if _pl_kode_hps and st.button("💰 Scrape HPS PL → Excel", use_container_width=True, key="pl_btn_hps_saja"):
-                    import hps_engine as _hps_pl
-                    _xl_pl2 = _cari_xlsm_pl(_pl_target)
-                    if not _xl_pl2:
-                        st.error("Tidak ada file .xlsm di folder paket untuk diisi HPS.")
-                    else:
-                        with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
-                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kode_hps, _xl_pl2)
-                        if _hps_r.get("ok"):
-                            st.success(f"✅ {_hps_r['pesan']} — Total Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                            if _hps_r.get("warning"):
-                                st.warning(f"⚠ {len(_hps_r['warning'])} item selisih (highlight kuning di Excel)")
-                        else:
-                            st.error(f"Gagal: {_hps_r.get('pesan','-')}")
-
-            if _pl_buat_btn and _pl_nama_folder:
-                with st.spinner(f"Membuat '{_pl_nama_folder}'..."):
-                    try:
-                        _pl_res = _pl_sp.run(
-                            [_PL_PY, _PL_SCRIPT, "--mode", "pl",
-                             "--output-dir", _pl_output_base, _pl_nama_clean],
-                            capture_output=True, text=True, timeout=60,
-                            creationflags=_PL_NO_WIN,
-                        )
-                        if _pl_res.returncode == 0:
-                            if _pl_row_sel:
-                                pl_engine.tandai_folder_dibuat(_pl_row_sel["kode_paket"])
-                            # Download dokumen jika dicentang
-                            if _pl_dl_dokumen and _pl_row_sel:
-                                _pl_kp = _pl_row_sel.get("kode_paket", "")
-                                if _pl_kp:
-                                    _pl_dl_msgs = []
-                                    _pl_dl_st2 = st.status("📦 Download dokumen...", expanded=True)
-                                    _pl_dl_area2 = _pl_dl_st2.empty()
-                                    def _pl_dl_cb2(msg):
-                                        _pl_dl_msgs.append(msg)
-                                        _pl_dl_area2.code("\n".join(_pl_dl_msgs[-20:]))
-                                    _pl_dl_r2 = pl_engine.download_dokumen_paket_pl(
-                                        _pl_kp, _pl_target, _pl_dl_cb2
-                                    )
-                                    _pl_dl_st2.update(
-                                        label=f"✅ {len(_pl_dl_r2['ok'])} file, ❌ {len(_pl_dl_r2['error'])} error",
-                                        state="complete", expanded=False,
-                                    )
-                                    # Parse KAK PDF → upsert ke Supabase
-                                    _pl_kak_path = parse_kak_pl.cari_kak_di_folder(_pl_target)
-                                    if _pl_kak_path:
-                                        _pl_kak_data = parse_kak_pl.parse_kak(_pl_kak_path)
-                                        _pl_kak_update = {k: v for k, v in _pl_kak_data.items() if v}
-                                        if _pl_kak_update:
-                                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kp, **_pl_kak_update})
-                                            st.info(f"📋 KAK ter-parse: {', '.join(_pl_kak_update.keys())}")
-                                    # Scrape HPS PL → tulis langsung ke Excel
-                                    try:
-                                        import hps_engine as _hps_pl
-                                        _xl_pl3 = _cari_xlsm_pl(_pl_target)
-                                        if _xl_pl3:
-                                            _hps_r = _hps_pl.scrape_hps_pl_ke_excel(_pl_kp, _xl_pl3)
-                                            if _hps_r.get("ok"):
-                                                st.success(f"💰 {_hps_r['pesan']} — Rp {_hps_r.get('total_nilai_bulat',0):,.0f}")
-                                    except Exception:
-                                        pass
-                            st.session_state["pl_folder_just_created"] = f"Folder '{_pl_nama_clean}' berhasil dibuat."
-                            st.rerun()
-                        else:
-                            st.error(f"Gagal buat folder:\n{_pl_res.stderr[:300]}")
-                    except Exception as _pe:
-                        st.error(f"Error: {_pe}")
+            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -5045,6 +4768,87 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.markdown(f"**{_pl_nf[:70]}**")
                         st.code("\n".join(_pl_logs))
                 st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+
+            # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
+            _pl_rows_sudah = [
+                r for r in _pl_rows
+                if r.get("nama_paket") and r.get("folder_dibuat")
+            ]
+            if _pl_rows_sudah:
+                st.markdown("#### 🔧 Aksi Mandiri per Paket (Folder sudah ada)")
+                for _br_s in _pl_rows_sudah:
+                    _bkp_s = _br_s.get("kode_paket", "")
+                    _bnm_s = _br_s.get("nama_paket", "")
+                    _bj_s = (_br_s.get("jenis_pl") or "JKK").upper()
+
+                    import kualifikasi_engine_pl as _keng_pl
+                    _fr_res = _keng_pl.resolve_folder_paket_pl(_bkp_s)
+                    _folder_path = _fr_res.get("pesan", "") if _fr_res.get("ok") else ""
+
+                    _lbl_exp = f"📂 {_bnm_s[:60]} — {_bj_s}"
+                    with st.expander(_lbl_exp):
+                        if _folder_path:
+                            st.caption(f"📁 Path: `{_folder_path}`")
+                        _col1, _col2, _col3 = st.columns(3)
+
+                        # 1. Download Dokumen Mandiri
+                        if _col1.button("📦 Download Dok", key=f"btn_dl_saja_{_bkp_s}", use_container_width=True):
+                            if not _folder_path:
+                                st.error("Folder paket tidak terdeteksi.")
+                            else:
+                                _logs = []
+                                _st_bar = st.status("🔽 Mengunduh dokumen...", expanded=True)
+                                _st_area = _st_bar.empty()
+                                def _cb(msg):
+                                    _logs.append(msg)
+                                    _st_area.code("\n".join(_logs[-20:]))
+                                    _st_bar.update(label=f"🔽 {msg[:60]}")
+                                _res = pl_engine.download_dokumen_paket_pl(_bkp_s, _folder_path, _cb)
+                                _st_bar.update(
+                                    label=f"✅ {len(_res['ok'])} file, ❌ {len(_res['error'])} error",
+                                    state="complete", expanded=False,
+                                )
+                                # Parse KAK PDF → upsert Supabase
+                                _kak_p = parse_kak_pl.cari_kak_di_folder(_folder_path)
+                                if _kak_p:
+                                    _kak_d = parse_kak_pl.parse_kak(_kak_p)
+                                    _kak_u = {k: v for k, v in _kak_d.items() if v}
+                                    if _kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _bkp_s, **_kak_u})
+                                        st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
+                                # Scrape HPS
+                                try:
+                                    import hps_engine as _hps
+                                    _xl = _cari_xlsm_pl(_folder_path)
+                                    if _xl:
+                                        _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
+                                except Exception:
+                                    pass
+                                st.rerun()
+
+                        # 2. Scrape HPS Mandiri
+                        if _col2.button("💰 Scrape HPS", key=f"btn_hps_saja_{_bkp_s}", use_container_width=True):
+                            if not _folder_path:
+                                st.error("Folder paket tidak terdeteksi.")
+                            else:
+                                _xl = _cari_xlsm_pl(_folder_path)
+                                if not _xl:
+                                    st.error("Tidak ada file .xlsm di folder paket.")
+                                else:
+                                    with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
+                                        import hps_engine as _hps
+                                        _hps_r = _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
+                                    if _hps_r.get("ok"):
+                                        st.success(f"✅ {_hps_r['pesan']}")
+                                    else:
+                                        st.error(f"Gagal: {_hps_r.get('pesan','-')}")
+
+                        # 3. Buka Explorer
+                        if _col3.button("📂 Explorer", key=f"btn_exp_{_bkp_s}", use_container_width=True):
+                            if _folder_path and os.path.exists(_folder_path):
+                                _pl_sp.Popen(f'explorer "{_folder_path.replace("/", chr(92))}"')
+                            else:
+                                st.error("Folder tidak ada di disk.")
 
             # ── Refresh Template ke Folder PL Existing ────────────────────────
             st.divider()
