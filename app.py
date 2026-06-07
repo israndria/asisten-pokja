@@ -1470,7 +1470,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.rerun()
 
         with _kd_col_detail:
-            st.markdown("### Preview")
+            if False:  # Hide preview sesuai permintaan
+                st.markdown("### Preview")
             if _kd_selected:
                 if False:
                     st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
@@ -4783,7 +4784,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.rerun()
 
         with _kd_col_detail:
-            st.markdown("### Preview")
+            if False:  # Hide preview sesuai permintaan
+                st.markdown("### Preview")
             if _kd_selected:
                 if False:
                     st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
