@@ -78,6 +78,27 @@ import hasil_evaluasi_plpk_engine as _he_pl_pk
 import sbu_picker as _sp_global
 
 
+@st.cache_data(ttl=300)
+def _fetch_peserta_pl_cached(kode_nontender: str) -> int:
+    """Fetch jumlah peserta paket PL (non-tender). Cache 5 menit."""
+    try:
+        import peserta_monitor_pl as _pm_pl_fn
+        hasil = _pm_pl_fn.fetch_jumlah_peserta_pl(kode_nontender)
+        return hasil.get("jumlah", 0)
+    except Exception:
+        return -1
+
+
+@st.cache_data(ttl=300)
+def _fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
+    """Fetch status peserta semua paket sekaligus. Cache 5 menit."""
+    try:
+        import peserta_monitor_pl as _pm_c
+        return _pm_c.fetch_status_semua_paket(list(kode_tuple))
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=3600)
 def _lookup_singkatan_dinas(satker: str) -> str:
     if not satker:
@@ -565,117 +586,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         elif _dpa_search_q and len(_dpa_search_q.strip()) < 3:
             st.caption("Ketik minimal 3 karakter.")
 
-        # ── Tools: Gabung Semua BA PL JKK (Bulk Print) ────────────────────────
-        st.divider()
-        st.markdown("### 🖨️ Gabung Semua BA PL JKK")
-        st.caption(
-            "Scan semua folder paket di **@ Pengadaan Langsung JKK** → ambil file `BA_PLJKK_*.pdf` "
-            "tiap folder → gabung jadi satu file untuk print sekali."
-        )
-
-        import os as _ba_os
-        import re as _ba_re
-
-        # Root folder PL JKK (parent dari semua folder paket)
-        _ba_root = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK"
-        _ba_root_in = st.text_input(
-            "Folder root PL JKK:",
-            value=_ba_root,
-            key="ba_bulk_root",
-        )
-
-        def _ba_nomor_folder(nama):
-            """Ambil nomor urut dari nama folder (mis. '10. PLJKK...' → 10). Tanpa nomor → 9999."""
-            m = _ba_re.match(r"\s*(\d+)", nama)
-            return int(m.group(1)) if m else 9999
-
-        _ba_found = []  # (nomor, nama_folder, path_pdf)
-        if _ba_os.path.isdir(_ba_root_in):
-            for _entry in _ba_os.listdir(_ba_root_in):
-                _sub = _ba_os.path.join(_ba_root_in, _entry)
-                if not _ba_os.path.isdir(_sub):
-                    continue
-                # Match BA_PLJKK_*.pdf (bukan BA_REVIU_* / BA lain)
-                _matches = [
-                    f for f in _ba_os.listdir(_sub)
-                    if _ba_re.match(r"(?i)^BA_PLJKK_.*\.pdf$", f)
-                ]
-                for _mf in _matches:
-                    _ba_found.append((
-                        _ba_nomor_folder(_entry), _entry,
-                        _ba_os.path.join(_sub, _mf),
-                    ))
-            _ba_found.sort(key=lambda x: (x[0], x[1]))
-        else:
-            st.error(f"Folder tidak ditemukan: {_ba_root_in}")
-
-        if _ba_found:
-            st.success(f"✅ Ditemukan {len(_ba_found)} file BA_PLJKK (urut nomor paket):")
-            _ba_prev = [
-                {"No": n, "Folder": fol, "File": _ba_os.path.basename(p)}
-                for n, fol, p in _ba_found
-            ]
-            st.dataframe(_ba_prev, use_container_width=True, hide_index=True)
-
-            _ba_out_nama = st.text_input(
-                "Nama file gabungan:",
-                value="_KUMPULAN_BA_PL_JKK.pdf",
-                key="ba_bulk_out_nama",
-            )
-
-            if st.button("🖨️ Gabung Semua BA", type="primary", key="ba_bulk_run"):
-                from pypdf import PdfReader as _BaReader, PdfWriter as _BaWriter
-
-                _writer = _BaWriter()
-                _ok, _err = 0, []
-                with st.status("Menggabungkan BA...", expanded=True) as _ba_status:
-                    for _n, _fol, _path in _ba_found:
-                        try:
-                            _rdr = _BaReader(_path)
-                            for _pg in _rdr.pages:
-                                _writer.add_page(_pg)
-                            st.write(f"✅ Paket {_n} — {len(_rdr.pages)} hlm")
-                            _ok += 1
-                        except Exception as _ex:
-                            st.write(f"❌ Paket {_n} ({_fol}): {_ex}")
-                            _err.append(_fol)
-
-                    if len(_writer.pages) == 0:
-                        _ba_status.update(label="❌ Tidak ada halaman tergabung.", state="error")
-                    else:
-                        # Tulis ke root folder; fallback suffix jika file terkunci (Nitro/dll)
-                        _out_nama = _ba_out_nama.strip() or "_KUMPULAN_BA_PL_JKK.pdf"
-                        if not _out_nama.lower().endswith(".pdf"):
-                            _out_nama += ".pdf"
-                        _base, _ext = _ba_os.path.splitext(_out_nama)
-                        _target = _ba_os.path.join(_ba_root_in, _out_nama)
-                        _written = None
-                        for _attempt in range(6):
-                            _try_path = _target if _attempt == 0 else \
-                                _ba_os.path.join(_ba_root_in, f"{_base}_v{_attempt + 1}{_ext}")
-                            try:
-                                with open(_try_path, "wb") as _fh:
-                                    _writer.write(_fh)
-                                _written = _try_path
-                                break
-                            except PermissionError:
-                                continue
-                        if _written:
-                            _ba_status.update(
-                                label=f"✅ {_ok} BA digabung → {len(_writer.pages)} halaman.",
-                                state="complete",
-                            )
-                            st.success(f"📁 Tersimpan: `{_written}`")
-                            if _err:
-                                st.warning(f"⚠️ Gagal: {', '.join(_err)}")
-                        else:
-                            _ba_status.update(
-                                label="❌ Gagal tulis (file terkunci). Tutup PDF viewer dulu.",
-                                state="error",
-                            )
-        elif _ba_os.path.isdir(_ba_root_in):
-            st.info("Tidak ada file `BA_PLJKK_*.pdf` ditemukan di folder paket manapun.")
-
     # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
@@ -892,11 +802,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        # Badge peserta pendaftaran
+                        _pr_id_nt = _pr.get("id_nontender", "")
+                        if _pr_id_nt:
+                            _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
+                            if _pr_jml_peserta > 0:
+                                st.success(f"✅ {_pr_jml_peserta} peserta sudah mendaftar")
+                            elif _pr_jml_peserta == 0:
+                                st.warning("⚠️ Belum ada peserta mendaftar")
                         if "non konstruksi" in _pr_metode_low:
                             st.warning("⚠️ Metode: Non Konstruksi — minta PPK ubah ke Konstruksi di SPSE.")
-                        elif _pr_metode_raw:
-                            st.caption(f"Metode: {_pr_metode_raw}")
-                        st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
                         # Ubah Metode Pengadaan inline per paket
                         with st.container(border=True):
@@ -2515,8 +2430,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
-        st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
-        st.caption("Kirim undangan pembuktian kualifikasi ke penyedia via SPSE non-tender.")
 
         # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
         _verif_rows = []
@@ -2527,183 +2440,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
 
-        # ── Monitoring Pendaftaran Peserta (semua paket) ──────────────────────
-        with st.expander("📊 Monitoring Pendaftaran Peserta — Semua Paket", expanded=False):
-            import peserta_monitor_pl as _pm_pl
-            _mon_col1, _mon_col2 = st.columns([6, 1])
-            _mon_col1.caption("Jumlah peserta yang sudah mendaftar per paket (data publik SPSE).")
-            if _mon_col2.button("🔄 Refresh", key="btn_refresh_peserta_pl"):
-                st.cache_data.clear()
-            if _verif_rows:
-                _mon_kodes = [r["kode_paket"] for r in _verif_rows if r.get("kode_paket")]
-                with st.spinner("Mengambil data pendaftaran..."):
-                    _mon_hasil = _pm_pl.fetch_status_semua_paket(_mon_kodes)
-                # Hitung summary
-                _mon_belum = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) == 0]
-                _mon_sudah = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) > 0]
-                _mc1, _mc2 = st.columns(2)
-                _mc1.metric("✅ Sudah Ada Peserta", len(_mon_sudah))
-                _mc2.metric("⚠️ Belum Ada Peserta", len(_mon_belum))
-                if _mon_belum:
-                    st.warning("⚠️ Paket berikut belum ada peserta mendaftar — pertimbangkan perpanjangan jadwal:")
-                    for _br in _mon_belum:
-                        st.write(f"- **{_br.get('kode_unik') or _br['kode_paket']}** — {_br['nama_paket']}")
-                # Tabel lengkap
-                _mon_data = []
-                for r in _verif_rows:
-                    _kp = r["kode_paket"]
-                    _info = _mon_hasil.get(_kp, {})
-                    _jml = _info.get("jumlah", 0)
-                    _mon_data.append({
-                        "Paket": r.get("kode_unik") or _kp,
-                        "Nama Paket": r["nama_paket"][:45],
-                        "Peserta Daftar": _jml,
-                        "Status": "✅ Ada" if _jml > 0 else "⚠️ Belum",
-                    })
-                st.dataframe(_mon_data, use_container_width=True, hide_index=True)
-            else:
-                st.info("Belum ada paket PL di database.")
-
-        if not _verif_rows:
-            st.info("Belum ada paket PL di database.")
-        else:
-            _verif_opts = {
-                f"{r['kode_unik'] or r['kode_paket']} — {r['nama_paket'][:50]}": r
-                for r in _verif_rows if r.get("id_nontender")
-            }
-            _verif_sel_label = st.selectbox(
-                "Pilih Paket PL",
-                options=list(_verif_opts.keys()),
-                key="verif_paket_sel",
-            )
-            _verif_paket = _verif_opts.get(_verif_sel_label)
-
-            if _verif_paket:
-                _verif_id_nt = _verif_paket.get("id_nontender", "")
-                _verif_kode = _verif_paket.get("kode_paket", "")
-
-                # Info penyedia
-                st.markdown("#### 🏢 Info Penyedia")
-                _vc1, _vc2 = st.columns(2)
-                _vc1.markdown(f"**Nama:** {_verif_paket.get('nama_penyedia') or '—'}")
-                _vc2.markdown(f"**NPWP:** {_verif_paket.get('npwp_penyedia') or '—'}")
-
-                # Debug GCal — expander tersembunyi
-                with st.expander("🔍 Debug GCal Search", expanded=False):
-                    try:
-                        from gcal_helper import _build_service as _gcal_svc
-                        from datetime import datetime as _dt_gcal, timedelta as _td_gcal, date as _d_gcal
-                        _svc = _gcal_svc()
-                        _now = _d_gcal.today()
-                        _tmin = (_now - _td_gcal(days=60)).isoformat() + "T00:00:00Z"
-                        _tmax = (_now + _td_gcal(days=120)).isoformat() + "T23:59:59Z"
-                        _gevents = _svc.events().list(
-                            calendarId="primary",
-                            timeMin=_tmin, timeMax=_tmax,
-                            maxResults=100, singleEvents=True,
-                            q="Klarifikasi",
-                        ).execute().get("items", [])
-                        st.write(f"**Mencari kode_nontender:** `{_verif_kode}`")
-                        st.write(f"**Event GCal mengandung 'Klarifikasi' ({len(_gevents)} event):**")
-                        for _ge in _gevents:
-                            _gs = _ge.get("start", {}).get("date") or _ge.get("start", {}).get("dateTime", "")[:10]
-                            _gdesc = (_ge.get("description") or "").replace("\n", " ")[:100]
-                            _match = "✅ MATCH" if _verif_kode in (_ge.get("description") or "") else ""
-                            st.write(f"- `{_gs}` **{_ge.get('summary','')}** | desc: {_gdesc} {_match}")
-                        if not _gevents:
-                            st.warning("Tidak ada event GCal mengandung 'Klarifikasi' di rentang ±60-120 hari")
-                    except Exception as _dbg_err:
-                        st.error(f"Debug GCal error: {_dbg_err}")
-
-                # Hitung waktu verifikasi dari GCal
-                st.markdown("#### 🕐 Waktu Verifikasi")
-                _tgl_nego_raw = _verif_paket.get("tgl_negosiasi")
-                _fallback_tgl = None
-                if _tgl_nego_raw:
-                    try:
-                        from datetime import date as _date_cls
-                        _fallback_tgl = _date_cls.fromisoformat(str(_tgl_nego_raw)[:10])
-                    except Exception:
-                        pass
-
-                _verif_start_default = ""
-                _verif_end_default = ""
-                _verif_warning = None
-                try:
-                    _verif_start_default, _verif_end_default, _verif_warning = (
-                        _verif_pl.hitung_waktu_verifikasi(_verif_kode, fallback_tgl=_fallback_tgl)
-                    )
-                except Exception as _wt_err:
-                    _verif_warning = f"Error hitung waktu: {_wt_err}"
-
-                if _verif_warning:
-                    st.warning(_verif_warning)
-                    if "invalid_grant" in str(_verif_warning) or "expired" in str(_verif_warning).lower() or "tidak ditemukan" in str(_verif_warning):
-                        if st.button("🔑 Login Google Calendar", key="btn_reset_gcal_token"):
-                            try:
-                                import gcal_helper as _gcalh
-                                _gcalh.generate_token()
-                                st.success("✅ Token GCal berhasil dibuat. Refresh halaman.")
-                                st.rerun()
-                            except Exception as _ge:
-                                st.error(f"Gagal generate token: {_ge}")
-
-                _vt1, _vt2 = st.columns(2)
-                _verif_start = _vt1.text_input(
-                    "Mulai (DD-MM-YYYY HH:MM)",
-                    value=_verif_start_default or "",
-                    key="verif_waktu_start",
-                    placeholder="02-06-2026 09:00",
-                )
-                _verif_end = _vt2.text_input(
-                    "Selesai (DD-MM-YYYY HH:MM)",
-                    value=_verif_end_default or "",
-                    key="verif_waktu_end",
-                    placeholder="02-06-2026 15:00",
-                )
-
-                # Form fields
-                st.markdown("#### 📋 Detail Undangan")
-                _verif_tempat = st.text_area(
-                    "Tempat",
-                    value=_verif_pl.TEMPAT_DEFAULT,
-                    height=80,
-                    key="verif_tempat",
-                )
-                # Tombol kirim
-                if st.button("📨 Kirim Verifikasi ke Penyedia", key="btn_kirim_verifikasi"):
-                    if not _verif_id_nt:
-                        st.error("id_nontender kosong — sinkron paket PL dari SPSE dulu.")
-                    elif not _verif_start or not _verif_end:
-                        st.error("Waktu mulai dan selesai wajib diisi.")
-                    else:
-                        with st.spinner("Mengirim undangan verifikasi ke SPSE..."):
-                            _verif_result = _verif_pl.kirim_verifikasi(
-                                id_nontender=_verif_id_nt,
-                                waktu_start=_verif_start,
-                                waktu_end=_verif_end,
-                                tempat=_verif_tempat,
-                                yang_harus_hadir=_verif_pl.YANG_HARUS_HADIR_DEFAULT,
-                                yang_harus_dibawa=_verif_pl.YANG_HARUS_DIBAWA_DEFAULT,
-                            )
-                        if _verif_result["ok"]:
-                            st.success(f"✅ {_verif_result['msg']}")
-                        else:
-                            st.error(f"❌ Gagal: {_verif_result['msg']}")
-
-        # ── Kirim Batch ke Semua Paket ───────────────────────────────────────
-        st.divider()
-        st.markdown("### 📨 Kirim Undangan Verifikasi — Batch (Semua Paket)")
-        st.caption("Centang paket yang ingin dikirim sekaligus. Hanya paket dengan peserta terdaftar yang tampil.")
+        st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
+        st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
         if _batch_rows:
             # Fetch jumlah peserta semua paket
-            import peserta_monitor_pl as _pm_batch
-            _batch_kodes = [r["kode_paket"] for r in _batch_rows if r.get("kode_paket")]
-            with st.spinner("Mengecek peserta terdaftar..."):
-                _batch_mon = _pm_batch.fetch_status_semua_paket(_batch_kodes)
+            _batch_kodes = tuple(r["kode_paket"] for r in _batch_rows if r.get("kode_paket"))
+            _batch_mon = _fetch_status_semua_paket_cached(_batch_kodes)
 
             # Filter hanya paket yang ada peserta
             _batch_eligible = [
@@ -2717,29 +2462,29 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             else:
                 st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
 
-                # Waktu — dropdown dari GCal + fallback input manual
-                import datetime as _dt_bv
-                _today_bv = _dt_bv.date.today()
-
+                # Waktu — date_input + time_input (pola Tab 3)
+                import datetime as _dtlb
                 _bwc1, _bwc2 = st.columns(2)
                 with _bwc1:
                     st.caption("**Waktu Mulai**")
-                    _bv_start_d = st.date_input("Tanggal Mulai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_start_d")
-                    _bv_start_t = st.time_input("Jam Mulai", value=_dt_bv.time(9, 0), step=300, key="batch_verif_start_t")
+                    _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
+                    _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
+                    st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
                 with _bwc2:
                     st.caption("**Waktu Selesai**")
-                    _bv_end_d = st.date_input("Tanggal Selesai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_end_d")
-                    _bv_end_t = st.time_input("Jam Selesai", value=_dt_bv.time(15, 0), step=300, key="batch_verif_end_t")
-
-                _batch_start = f"{_bv_start_d.strftime('%d-%m-%Y')} {_bv_start_t.strftime('%H:%M')}"
-                _batch_end   = f"{_bv_end_d.strftime('%d-%m-%Y')} {_bv_end_t.strftime('%H:%M')}"
+                    _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
+                    _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
+                _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
+                _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
 
                 # Checkbox list paket
-                st.markdown("**Pilih paket yang akan dikirim:**")
                 _sudah_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") == "terkirim"]
                 _belum_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") != "terkirim"]
+                _ca, _cb = st.columns([4, 1])
+                _ca.markdown("**Pilih paket yang akan dikirim:**")
                 if _sudah_kirim:
-                    st.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                    _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
                 _batch_selected = []
                 _bc1, _bc2 = st.columns(2)
                 for _bi, _br in enumerate(_batch_eligible):
@@ -2747,7 +2492,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                     _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
                     if _sudah and _tgl_kirim:
-                        import datetime as _dtlb
                         try:
                             _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                         except Exception:
@@ -2756,34 +2500,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     else:
                         _label = f"{_ku} — {_br['nama_paket'][:40]}"
                     _col = _bc1 if _bi % 2 == 0 else _bc2
-                    _default_chk = not _sudah  # belum terkirim → default centang; sudah → default uncheck
+                    _default_chk = _centang_semua or (not _sudah)
                     if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
                         _batch_selected.append(_br)
 
                 st.markdown(f"**{len(_batch_selected)} paket dipilih**")
 
-                # Tombol Preview dulu
-                if st.button("👁 Preview Sebelum Kirim", key="btn_batch_preview"):
+                if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
                     if not _batch_start or not _batch_end:
                         st.error("Waktu mulai dan selesai wajib diisi.")
-                    elif not _batch_selected:
-                        st.warning("Tidak ada paket yang dipilih.")
                     else:
-                        st.session_state["batch_verif_preview"] = True
-
-                if st.session_state.get("batch_verif_preview"):
-                    st.markdown("#### 📋 Preview Pengiriman")
-                    st.write(f"- **Waktu:** {_batch_start} s/d {_batch_end}")
-                    st.write(f"- **Jumlah paket:** {len(_batch_selected)}")
-                    for _bp in _batch_selected:
-                        _jp = _batch_mon.get(_bp["kode_paket"], {}).get("jumlah", 0)
-                        st.write(f"  ✅ {_bp.get('kode_unik') or _bp['kode_paket']} — {_bp['nama_paket']} ({_jp} peserta)")
-                    st.write(f"- **Penyedia (referensi Supabase):** nama_penyedia per paket")
-
-                    if st.button("📨 Konfirmasi & Kirim Semua", key="btn_batch_kirim_konfirm", type="primary"):
-                        if not _batch_start or not _batch_end:
-                            st.error("Waktu wajib diisi.")
-                        else:
                             import verifikasi_penyedia_pl as _vpl_batch
                             _hasil_batch = []
                             _prog = st.progress(0, text="Mengirim...")
@@ -2801,7 +2527,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     "msg": _res["msg"],
                                 })
                             _prog.empty()
-                            st.session_state["batch_verif_preview"] = False
 
                             # Tampilkan hasil
                             _ok_list = [h for h in _hasil_batch if h["ok"]]
@@ -2825,13 +2550,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         st.markdown("## Berita Acara — Pengadaan Langsung")
 
-        # Load paket PL sekali
+        # Load paket PL — filter paket selesai
         _pl8_rows = []
         try:
-            _pl8_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, nama_paket, nomor_urut, kode_unik, id_nontender, "
-                "nomor_dokpil, tgl_evaluasi, satker, folder_dibuat"
-            ).order("nomor_urut").execute().data or []
+            _raw8 = pl_engine.load_draft_pl()
+            _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
+            _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
         except Exception as _e8:
             st.error(f"Gagal load paket PL: {_e8}")
 
@@ -3002,7 +2726,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.divider()
 
             # Header tabel per paket
-            _pl8_valid_auto = []  # untuk batch
+            # Daftar paket
             for _p8 in _pl8_rows:
                 _k8    = _p8.get("kode_paket", "")
                 _id8   = _k8  # BA nontender pakai kode_paket
@@ -3023,211 +2747,243 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     else:
                         st.caption("⚠️ Tanggal Evaluasi belum ada — isi jadwal dulu atau pakai mode manual.")
 
-                    # Nomor per jenis BA: default OTOMATIS dari Nomor Dokpil (bisa diedit)
-                    _auto_ev = _auto_nomor_pl8(_p8, "evaluasi")
-                    _auto_hs = _auto_nomor_pl8(_p8, "hasil")
-                    _c8ev, _c8hs = st.columns(2)
-                    with _c8ev:
-                        st.markdown(f"**{_ba_cfg_pl.JENIS_LABEL_PL['evaluasi']}**")
-                        _no8ev = st.text_input(
-                            "Nomor", value=_auto_ev, placeholder="000.3.3/05/PL/...",
-                            key=f"pl8_no_evaluasi_{_k8}", label_visibility="collapsed",
-                        )
-                    with _c8hs:
-                        st.markdown(f"**{_ba_cfg_pl.JENIS_LABEL_PL['hasil']}**")
-                        _no8hs = st.text_input(
-                            "Nomor", value=_auto_hs, placeholder="000.3.3/07/PL/...",
-                            key=f"pl8_no_hasil_{_k8}", label_visibility="collapsed",
-                        )
+                    # Nomor hardcode (tidak ditampilkan)
+                    _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
+                    _no8hs = _auto_nomor_pl8(_p8, "hasil")
 
-                    # Tombol per paket
-                    _btn8c1, _btn8c2, _btn8c3 = st.columns([2, 2, 1])
-                    with _btn8c1:
-                        if st.button(
-                            "🖨️ Cetak+Upload Evaluasi",
-                            key=f"pl8_ev_{_k8}",
-                            disabled=not _no8ev,
-                            use_container_width=True,
-                        ):
-                            with st.spinner(f"Proses BA Evaluasi {_k8}..."):
-                                _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                                _rc8 = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key="evaluasi",
-                                    nomor_ba=_no8ev, tanggal_ba=_tgl8s,
+                    # 1 tombol — cetak + upload evaluasi & hasil sekaligus
+                    if st.button(
+                        "🖨️ Cetak + Upload",
+                        key=f"pl8_ev_hs_{_k8}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
+                        for _jk8, _no8, _lbl8 in [
+                            ("evaluasi", _no8ev, "BA Evaluasi"),
+                            ("hasil",    _no8hs, "BA Hasil"),
+                        ]:
+                            with st.spinner(f"Proses {_lbl8} {_k8}..."):
+                                _rc8x = _ba_pl_engine5.cetak_ba_pl(
+                                    id_nontender=_id8, jenis_key=_jk8,
+                                    nomor_ba=_no8, tanggal_ba=_tgl8s,
                                 )
-                                if _rc8["ok"]:
-                                    _backup_pdf_pl8(_p8, "evaluasi", _rc8["pdf_bytes"])
-                                    _fn8 = f"{_ba_cfg_pl.FILE_LABEL_PL['evaluasi']}-{_k8}.pdf"
-                                    _ru8 = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key="evaluasi",
-                                        nomor_ba=_no8ev, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8["pdf_bytes"], file_name=_fn8,
+                                if _rc8x["ok"]:
+                                    _backup_pdf_pl8(_p8, _jk8, _rc8x["pdf_bytes"])
+                                    _fn8x = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_k8}.pdf"
+                                    _ru8x = _ba_pl_engine5.upload_ba_pl(
+                                        id_nontender=_id8, jenis_key=_jk8,
+                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
+                                        file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x,
                                     )
-                                    if _ru8.get("ok"):
-                                        st.success(f"✅ BA Evaluasi {_k8} berhasil")
+                                    if _ru8x.get("ok"):
+                                        st.success(f"✅ {_lbl8} {_k8} berhasil")
                                     else:
-                                        st.error(f"❌ Upload gagal: status {_ru8.get('status')}")
+                                        st.error(f"❌ {_lbl8} upload gagal: status {_ru8x.get('status')}")
                                 else:
-                                    st.error(f"❌ Cetak gagal: {_rc8.get('error')} (status {_rc8.get('status')})")
-                    with _btn8c2:
-                        if st.button(
-                            "🖨️ Cetak+Upload Hasil",
-                            key=f"pl8_hs_{_k8}",
-                            disabled=not _no8hs,
-                            use_container_width=True,
-                        ):
-                            with st.spinner(f"Proses BA Hasil {_k8}..."):
-                                _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                                _rc8h = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key="hasil",
-                                    nomor_ba=_no8hs, tanggal_ba=_tgl8s,
-                                )
-                                if _rc8h["ok"]:
-                                    _backup_pdf_pl8(_p8, "hasil", _rc8h["pdf_bytes"])
-                                    _fn8h = f"{_ba_cfg_pl.FILE_LABEL_PL['hasil']}-{_k8}.pdf"
-                                    _ru8h = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key="hasil",
-                                        nomor_ba=_no8hs, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8h["pdf_bytes"], file_name=_fn8h,
-                                    )
-                                    if _ru8h.get("ok"):
-                                        st.success(f"✅ BA Hasil {_k8} berhasil")
-                                    else:
-                                        st.error(f"❌ Upload gagal: status {_ru8h.get('status')}")
-                                else:
-                                    st.error(f"❌ Cetak gagal: {_rc8h.get('error')} (status {_rc8h.get('status')})")
-                    with _btn8c3:
-                        _chk8 = st.checkbox("Batch", key=f"pl8ba_chk_{_k8}", value=False)
-
-                    if _chk8 and _no8ev and _no8hs:
-                        _pl8_valid_auto.append({
-                            **_p8,
-                            "_id8": _id8, "_tgl8": _tgl8,
-                            "_no8ev": _no8ev, "_no8hs": _no8hs,
-                        })
+                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')} (status {_rc8x.get('status')})")
 
             # Tombol batch semua
-            if _pl8_valid_auto:
-                if st.button(
-                    f"🚀 Cetak+Upload Semua BA ({len(_pl8_valid_auto)} paket × 2 BA)",
-                    type="primary", key="pl8_batch_all", use_container_width=True,
-                ):
-                    with st.status(f"Proses {len(_pl8_valid_auto)} paket...", expanded=True) as _st8:
-                        for _pb8 in _pl8_valid_auto:
-                            _tgl8s = _pb8["_tgl8"].strftime("%d-%m-%Y") if _pb8["_tgl8"] else ""
-                            for _jk8, _no8, _lbl8 in [
-                                ("evaluasi", _pb8["_no8ev"], "Evaluasi"),
-                                ("hasil",    _pb8["_no8hs"], "Hasil"),
-                            ]:
-                                _st8.write(f"⏳ {_pb8['kode_paket']} — BA {_lbl8}...")
-                                try:
-                                    _rc = _ba_pl_engine5.cetak_ba_pl(
-                                        id_nontender=_pb8["_id8"], jenis_key=_jk8,
-                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                    )
-                                    if _rc["ok"]:
-                                        _backup_pdf_pl8(_pb8, _jk8, _rc["pdf_bytes"])
-                                        _fn = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_pb8['kode_paket']}.pdf"
-                                        _ru = _ba_pl_engine5.upload_ba_pl(
-                                            id_nontender=_pb8["_id8"], jenis_key=_jk8,
-                                            nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                            file_bytes=_rc["pdf_bytes"], file_name=_fn,
-                                        )
-                                        if _ru.get("ok"):
-                                            _st8.write(f"  ✅ BA {_lbl8} OK")
-                                        else:
-                                            _st8.write(f"  ❌ Upload BA {_lbl8} — status {_ru.get('status')}")
-                                    else:
-                                        _st8.write(f"  ❌ Cetak BA {_lbl8} — {_rc.get('error')}")
-                                except Exception as _e8b:
-                                    _st8.write(f"  ❌ Error: {_e8b}")
 
-        # ── SECTION 2: BA LAINNYA (upload-only) ──────────────────────────────
-        st.divider()
-        st.markdown("### 2. BA Lainnya (Upload Manual)")
-        st.caption("BA Penjelasan, Pengumuman Pemenang, dll — upload file PDF langsung ke SPSE.")
+        # ── SECTION 2: BA LAINNYA (upload-only) — HIDDEN ─────────────────────
+        if False:
+            st.divider()
+            st.markdown("### 2. BA Lainnya (Upload Manual)")
+            st.caption("BA Penjelasan, Pengumuman Pemenang, dll — upload file PDF langsung ke SPSE.")
 
-        if _pl8_rows:
-            _JENIS_LAINNYA = {
-                "penjelasan":   "BA Penjelasan",
-                "pengumuman":   "Pengumuman Pemenang Akhir",
-            }
-            _pl8_lc1, _pl8_lc2 = st.columns([1, 2])
-            with _pl8_lc1:
-                _jenis_lain8 = st.selectbox(
-                    "Jenis BA",
-                    options=list(_JENIS_LAINNYA.keys()),
-                    format_func=lambda k: _JENIS_LAINNYA[k],
-                    key="pl8_jenis_lain",
-                )
-            with _pl8_lc2:
-                _nomor_lain8  = st.text_input(
-                    "Nomor BA",
-                    placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
-                    key="pl8_nomor_lain",
-                )
-            _tgl_lain8 = st.date_input(
-                "Tanggal BA", value=datetime.now().date(), format="DD/MM/YYYY",
-                key="pl8_tgl_lain",
-            )
-            st.caption(f"{_HARI_NAMA[_tgl_lain8.weekday()]}, {_tgl_lain8.day} "
-                       f"{_BULAN_NAMA[_tgl_lain8.month-1]} {_tgl_lain8.year}")
-            _tempat_lain8 = ""
-            if _jenis_lain8 == "pengumuman":
-                _tempat_lain8 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl8_tempat_lain")
-            _info_lain8 = st.text_area("Keterangan Tambahan", value="", key="pl8_info_lain", height=68)
-
-            st.markdown("**Pilih Paket + Upload File:**")
-            _pl8_lain_valid = []
-            for _p8l in _pl8_rows:
-                _k8l  = _p8l.get("kode_paket", "")
-                _id8l = _k8l  # BA nontender pakai kode_paket
-                _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
-                with _lc1:
-                    st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
-                with _lc2:
-                    _fl8 = st.file_uploader(
-                        "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
-                        label_visibility="collapsed",
+            if _pl8_rows:
+                _JENIS_LAINNYA = {
+                    "penjelasan":   "BA Penjelasan",
+                    "pengumuman":   "Pengumuman Pemenang Akhir",
+                }
+                _pl8_lc1, _pl8_lc2 = st.columns([1, 2])
+                with _pl8_lc1:
+                    _jenis_lain8 = st.selectbox(
+                        "Jenis BA",
+                        options=list(_JENIS_LAINNYA.keys()),
+                        format_func=lambda k: _JENIS_LAINNYA[k],
+                        key="pl8_jenis_lain",
                     )
-                with _lc3:
-                    if _fl8 and st.button("📤", key=f"pl8_lain_up_{_k8l}", use_container_width=True):
-                        with st.spinner(f"Upload {_k8l}..."):
-                            _rl8 = _ba_pl_engine5.upload_ba_pl(
-                                id_nontender=_id8l, jenis_key=_jenis_lain8,
-                                nomor_ba=_nomor_lain8,
-                                tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
-                                info=_info_lain8,
-                                file_bytes=_fl8.read(), file_name=_fl8.name,
-                                tempat=_tempat_lain8,
-                            )
-                        if _rl8.get("ok"):
-                            st.success(f"✅ {_k8l} — berhasil")
-                        else:
-                            st.error(f"❌ {_k8l} — status {_rl8.get('status')}")
-                if _fl8:
-                    _pl8_lain_valid.append({**_p8l, "_id8l": _id8l, "_fl8": _fl8})
+                with _pl8_lc2:
+                    _nomor_lain8  = st.text_input(
+                        "Nomor BA",
+                        placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
+                        key="pl8_nomor_lain",
+                    )
+                _tgl_lain8 = st.date_input(
+                    "Tanggal BA", value=datetime.now().date(), format="DD/MM/YYYY",
+                    key="pl8_tgl_lain",
+                )
+                st.caption(f"{_HARI_NAMA[_tgl_lain8.weekday()]}, {_tgl_lain8.day} "
+                           f"{_BULAN_NAMA[_tgl_lain8.month-1]} {_tgl_lain8.year}")
+                _tempat_lain8 = ""
+                if _jenis_lain8 == "pengumuman":
+                    _tempat_lain8 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl8_tempat_lain")
+                _info_lain8 = st.text_area("Keterangan Tambahan", value="", key="pl8_info_lain", height=68)
 
-            if _pl8_lain_valid:
-                if st.button(
-                    f"📤 Upload Semua ({len(_pl8_lain_valid)} paket)",
-                    key="pl8_lain_all", use_container_width=True,
-                ):
-                    with st.status(f"Upload {len(_pl8_lain_valid)} paket...", expanded=True) as _st8l:
-                        for _pbl in _pl8_lain_valid:
-                            _st8l.write(f"⏳ {_pbl['kode_paket']}...")
-                            _rbl = _ba_pl_engine5.upload_ba_pl(
-                                id_nontender=_pbl["_id8l"], jenis_key=_jenis_lain8,
-                                nomor_ba=_nomor_lain8,
-                                tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
-                                info=_info_lain8,
-                                file_bytes=_pbl["_fl8"].read(), file_name=_pbl["_fl8"].name,
-                                tempat=_tempat_lain8,
-                            )
-                            if _rbl.get("ok"):
-                                _st8l.write(f"  ✅ {_pbl['kode_paket']} — berhasil")
+                st.markdown("**Pilih Paket + Upload File:**")
+                _pl8_lain_valid = []
+                for _p8l in _pl8_rows:
+                    _k8l  = _p8l.get("kode_paket", "")
+                    _id8l = _k8l  # BA nontender pakai kode_paket
+                    _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
+                    with _lc1:
+                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
+                    with _lc2:
+                        _fl8 = st.file_uploader(
+                            "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
+                            label_visibility="collapsed",
+                        )
+                    with _lc3:
+                        if _fl8 and st.button("📤", key=f"pl8_lain_up_{_k8l}", use_container_width=True):
+                            with st.spinner(f"Upload {_k8l}..."):
+                                _rl8 = _ba_pl_engine5.upload_ba_pl(
+                                    id_nontender=_id8l, jenis_key=_jenis_lain8,
+                                    nomor_ba=_nomor_lain8,
+                                    tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
+                                    info=_info_lain8,
+                                    file_bytes=_fl8.read(), file_name=_fl8.name,
+                                    tempat=_tempat_lain8,
+                                )
+                            if _rl8.get("ok"):
+                                st.success(f"✅ {_k8l} — berhasil")
                             else:
-                                _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
+                                st.error(f"❌ {_k8l} — status {_rl8.get('status')}")
+                    if _fl8:
+                        _pl8_lain_valid.append({**_p8l, "_id8l": _id8l, "_fl8": _fl8})
+
+                if _pl8_lain_valid:
+                    if st.button(
+                        f"📤 Upload Semua ({len(_pl8_lain_valid)} paket)",
+                        key="pl8_lain_all", use_container_width=True,
+                    ):
+                        with st.status(f"Upload {len(_pl8_lain_valid)} paket...", expanded=True) as _st8l:
+                            for _pbl in _pl8_lain_valid:
+                                _st8l.write(f"⏳ {_pbl['kode_paket']}...")
+                                _rbl = _ba_pl_engine5.upload_ba_pl(
+                                    id_nontender=_pbl["_id8l"], jenis_key=_jenis_lain8,
+                                    nomor_ba=_nomor_lain8,
+                                    tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
+                                    info=_info_lain8,
+                                    file_bytes=_pbl["_fl8"].read(), file_name=_pbl["_fl8"].name,
+                                    tempat=_tempat_lain8,
+                                )
+                                if _rbl.get("ok"):
+                                    _st8l.write(f"  ✅ {_pbl['kode_paket']} — berhasil")
+                                else:
+                                    _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
+
+
+        # ── Tools: Gabung Semua BA PL JKK (Bulk Print) ────────────────────────
+        st.divider()
+        st.markdown("### 🖨️ Gabung Semua BA PL JKK")
+        st.caption(
+            "Scan semua folder paket di **@ Pengadaan Langsung JKK** → ambil file `BA_PLJKK_*.pdf` "
+            "tiap folder → gabung jadi satu file untuk print sekali."
+        )
+
+        import os as _ba_os
+        import re as _ba_re
+
+        # Root folder PL JKK (parent dari semua folder paket)
+        _ba_root = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK"
+        _ba_root_in = st.text_input(
+            "Folder root PL JKK:",
+            value=_ba_root,
+            key="ba_bulk_root",
+        )
+
+        def _ba_nomor_folder(nama):
+            """Ambil nomor urut dari nama folder (mis. '10. PLJKK...' → 10). Tanpa nomor → 9999."""
+            m = _ba_re.match(r"\s*(\d+)", nama)
+            return int(m.group(1)) if m else 9999
+
+        _ba_found = []  # (nomor, nama_folder, path_pdf)
+        if _ba_os.path.isdir(_ba_root_in):
+            for _entry in _ba_os.listdir(_ba_root_in):
+                _sub = _ba_os.path.join(_ba_root_in, _entry)
+                if not _ba_os.path.isdir(_sub):
+                    continue
+                # Match BA_PLJKK_*.pdf (bukan BA_REVIU_* / BA lain)
+                _matches = [
+                    f for f in _ba_os.listdir(_sub)
+                    if _ba_re.match(r"(?i)^BA_PLJKK_.*\.pdf$", f)
+                ]
+                for _mf in _matches:
+                    _ba_found.append((
+                        _ba_nomor_folder(_entry), _entry,
+                        _ba_os.path.join(_sub, _mf),
+                    ))
+            _ba_found.sort(key=lambda x: (x[0], x[1]))
+        else:
+            st.error(f"Folder tidak ditemukan: {_ba_root_in}")
+
+        if _ba_found:
+            st.success(f"✅ Ditemukan {len(_ba_found)} file BA_PLJKK (urut nomor paket):")
+            _ba_prev = [
+                {"No": n, "Folder": fol, "File": _ba_os.path.basename(p)}
+                for n, fol, p in _ba_found
+            ]
+            st.dataframe(_ba_prev, use_container_width=True, hide_index=True)
+
+            _ba_out_nama = st.text_input(
+                "Nama file gabungan:",
+                value="_KUMPULAN_BA_PL_JKK.pdf",
+                key="ba_bulk_out_nama",
+            )
+
+            if st.button("🖨️ Gabung Semua BA", type="primary", key="ba_bulk_run"):
+                from pypdf import PdfReader as _BaReader, PdfWriter as _BaWriter
+
+                _writer = _BaWriter()
+                _ok, _err = 0, []
+                with st.status("Menggabungkan BA...", expanded=True) as _ba_status:
+                    for _n, _fol, _path in _ba_found:
+                        try:
+                            _rdr = _BaReader(_path)
+                            for _pg in _rdr.pages:
+                                _writer.add_page(_pg)
+                            st.write(f"✅ Paket {_n} — {len(_rdr.pages)} hlm")
+                            _ok += 1
+                        except Exception as _ex:
+                            st.write(f"❌ Paket {_n} ({_fol}): {_ex}")
+                            _err.append(_fol)
+
+                    if len(_writer.pages) == 0:
+                        _ba_status.update(label="❌ Tidak ada halaman tergabung.", state="error")
+                    else:
+                        # Tulis ke root folder; fallback suffix jika file terkunci (Nitro/dll)
+                        _out_nama = _ba_out_nama.strip() or "_KUMPULAN_BA_PL_JKK.pdf"
+                        if not _out_nama.lower().endswith(".pdf"):
+                            _out_nama += ".pdf"
+                        _base, _ext = _ba_os.path.splitext(_out_nama)
+                        _target = _ba_os.path.join(_ba_root_in, _out_nama)
+                        _written = None
+                        for _attempt in range(6):
+                            _try_path = _target if _attempt == 0 else \
+                                _ba_os.path.join(_ba_root_in, f"{_base}_v{_attempt + 1}{_ext}")
+                            try:
+                                with open(_try_path, "wb") as _fh:
+                                    _writer.write(_fh)
+                                _written = _try_path
+                                break
+                            except PermissionError:
+                                continue
+                        if _written:
+                            _ba_status.update(
+                                label=f"✅ {_ok} BA digabung → {len(_writer.pages)} halaman.",
+                                state="complete",
+                            )
+                            st.success(f"📁 Tersimpan: `{_written}`")
+                            if _err:
+                                st.warning(f"⚠️ Gagal: {', '.join(_err)}")
+                        else:
+                            _ba_status.update(
+                                label="❌ Gagal tulis (file terkunci). Tutup PDF viewer dulu.",
+                                state="error",
+                            )
+        elif _ba_os.path.isdir(_ba_root_in):
+            st.info("Tidak ada file `BA_PLJKK_*.pdf` ditemukan di folder paket manapun.")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
     with _pl_tab5:
@@ -4180,11 +3936,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        # Badge peserta pendaftaran
+                        _pr_id_nt = _pr.get("id_nontender", "")
+                        if _pr_id_nt:
+                            _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
+                            if _pr_jml_peserta > 0:
+                                st.success(f"✅ {_pr_jml_peserta} peserta sudah mendaftar")
+                            elif _pr_jml_peserta == 0:
+                                st.warning("⚠️ Belum ada peserta mendaftar")
                         if "non konstruksi" in _pr_metode_low:
                             st.warning("⚠️ Metode: Non Konstruksi — minta PPK ubah ke Konstruksi di SPSE.")
-                        elif _pr_metode_raw:
-                            st.caption(f"Metode: {_pr_metode_raw}")
-                        st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
                         # Ubah Metode Pengadaan inline per paket
                         with st.container(border=True):
@@ -5803,8 +5564,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
-        st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
-        st.caption("Kirim undangan pembuktian kualifikasi ke penyedia via SPSE non-tender.")
 
         # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
         _verif_rows = []
@@ -5815,183 +5574,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
 
-        # ── Monitoring Pendaftaran Peserta (semua paket) ──────────────────────
-        with st.expander("📊 Monitoring Pendaftaran Peserta — Semua Paket", expanded=False):
-            import peserta_monitor_pl as _pm_pl
-            _mon_col1, _mon_col2 = st.columns([6, 1])
-            _mon_col1.caption("Jumlah peserta yang sudah mendaftar per paket (data publik SPSE).")
-            if _mon_col2.button("🔄 Refresh", key="btn_refresh_peserta_pl"):
-                st.cache_data.clear()
-            if _verif_rows:
-                _mon_kodes = [r["kode_paket"] for r in _verif_rows if r.get("kode_paket")]
-                with st.spinner("Mengambil data pendaftaran..."):
-                    _mon_hasil = _pm_pl.fetch_status_semua_paket(_mon_kodes)
-                # Hitung summary
-                _mon_belum = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) == 0]
-                _mon_sudah = [r for r in _verif_rows if _mon_hasil.get(r["kode_paket"], {}).get("jumlah", 0) > 0]
-                _mc1, _mc2 = st.columns(2)
-                _mc1.metric("✅ Sudah Ada Peserta", len(_mon_sudah))
-                _mc2.metric("⚠️ Belum Ada Peserta", len(_mon_belum))
-                if _mon_belum:
-                    st.warning("⚠️ Paket berikut belum ada peserta mendaftar — pertimbangkan perpanjangan jadwal:")
-                    for _br in _mon_belum:
-                        st.write(f"- **{_br.get('kode_unik') or _br['kode_paket']}** — {_br['nama_paket']}")
-                # Tabel lengkap
-                _mon_data = []
-                for r in _verif_rows:
-                    _kp = r["kode_paket"]
-                    _info = _mon_hasil.get(_kp, {})
-                    _jml = _info.get("jumlah", 0)
-                    _mon_data.append({
-                        "Paket": r.get("kode_unik") or _kp,
-                        "Nama Paket": r["nama_paket"][:45],
-                        "Peserta Daftar": _jml,
-                        "Status": "✅ Ada" if _jml > 0 else "⚠️ Belum",
-                    })
-                st.dataframe(_mon_data, use_container_width=True, hide_index=True)
-            else:
-                st.info("Belum ada paket PL di database.")
-
-        if not _verif_rows:
-            st.info("Belum ada paket PL di database.")
-        else:
-            _verif_opts = {
-                f"{r['kode_unik'] or r['kode_paket']} — {r['nama_paket'][:50]}": r
-                for r in _verif_rows if r.get("id_nontender")
-            }
-            _verif_sel_label = st.selectbox(
-                "Pilih Paket PL",
-                options=list(_verif_opts.keys()),
-                key="verif_paket_sel",
-            )
-            _verif_paket = _verif_opts.get(_verif_sel_label)
-
-            if _verif_paket:
-                _verif_id_nt = _verif_paket.get("id_nontender", "")
-                _verif_kode = _verif_paket.get("kode_paket", "")
-
-                # Info penyedia
-                st.markdown("#### 🏢 Info Penyedia")
-                _vc1, _vc2 = st.columns(2)
-                _vc1.markdown(f"**Nama:** {_verif_paket.get('nama_penyedia') or '—'}")
-                _vc2.markdown(f"**NPWP:** {_verif_paket.get('npwp_penyedia') or '—'}")
-
-                # Debug GCal — expander tersembunyi
-                with st.expander("🔍 Debug GCal Search", expanded=False):
-                    try:
-                        from gcal_helper import _build_service as _gcal_svc
-                        from datetime import datetime as _dt_gcal, timedelta as _td_gcal, date as _d_gcal
-                        _svc = _gcal_svc()
-                        _now = _d_gcal.today()
-                        _tmin = (_now - _td_gcal(days=60)).isoformat() + "T00:00:00Z"
-                        _tmax = (_now + _td_gcal(days=120)).isoformat() + "T23:59:59Z"
-                        _gevents = _svc.events().list(
-                            calendarId="primary",
-                            timeMin=_tmin, timeMax=_tmax,
-                            maxResults=100, singleEvents=True,
-                            q="Klarifikasi",
-                        ).execute().get("items", [])
-                        st.write(f"**Mencari kode_nontender:** `{_verif_kode}`")
-                        st.write(f"**Event GCal mengandung 'Klarifikasi' ({len(_gevents)} event):**")
-                        for _ge in _gevents:
-                            _gs = _ge.get("start", {}).get("date") or _ge.get("start", {}).get("dateTime", "")[:10]
-                            _gdesc = (_ge.get("description") or "").replace("\n", " ")[:100]
-                            _match = "✅ MATCH" if _verif_kode in (_ge.get("description") or "") else ""
-                            st.write(f"- `{_gs}` **{_ge.get('summary','')}** | desc: {_gdesc} {_match}")
-                        if not _gevents:
-                            st.warning("Tidak ada event GCal mengandung 'Klarifikasi' di rentang ±60-120 hari")
-                    except Exception as _dbg_err:
-                        st.error(f"Debug GCal error: {_dbg_err}")
-
-                # Hitung waktu verifikasi dari GCal
-                st.markdown("#### 🕐 Waktu Verifikasi")
-                _tgl_nego_raw = _verif_paket.get("tgl_negosiasi")
-                _fallback_tgl = None
-                if _tgl_nego_raw:
-                    try:
-                        from datetime import date as _date_cls
-                        _fallback_tgl = _date_cls.fromisoformat(str(_tgl_nego_raw)[:10])
-                    except Exception:
-                        pass
-
-                _verif_start_default = ""
-                _verif_end_default = ""
-                _verif_warning = None
-                try:
-                    _verif_start_default, _verif_end_default, _verif_warning = (
-                        _verif_pl.hitung_waktu_verifikasi(_verif_kode, fallback_tgl=_fallback_tgl)
-                    )
-                except Exception as _wt_err:
-                    _verif_warning = f"Error hitung waktu: {_wt_err}"
-
-                if _verif_warning:
-                    st.warning(_verif_warning)
-                    if "invalid_grant" in str(_verif_warning) or "expired" in str(_verif_warning).lower() or "tidak ditemukan" in str(_verif_warning):
-                        if st.button("🔑 Login Google Calendar", key="btn_reset_gcal_token"):
-                            try:
-                                import gcal_helper as _gcalh
-                                _gcalh.generate_token()
-                                st.success("✅ Token GCal berhasil dibuat. Refresh halaman.")
-                                st.rerun()
-                            except Exception as _ge:
-                                st.error(f"Gagal generate token: {_ge}")
-
-                _vt1, _vt2 = st.columns(2)
-                _verif_start = _vt1.text_input(
-                    "Mulai (DD-MM-YYYY HH:MM)",
-                    value=_verif_start_default or "",
-                    key="verif_waktu_start",
-                    placeholder="02-06-2026 09:00",
-                )
-                _verif_end = _vt2.text_input(
-                    "Selesai (DD-MM-YYYY HH:MM)",
-                    value=_verif_end_default or "",
-                    key="verif_waktu_end",
-                    placeholder="02-06-2026 15:00",
-                )
-
-                # Form fields
-                st.markdown("#### 📋 Detail Undangan")
-                _verif_tempat = st.text_area(
-                    "Tempat",
-                    value=_verif_pl.TEMPAT_DEFAULT,
-                    height=80,
-                    key="verif_tempat",
-                )
-                # Tombol kirim
-                if st.button("📨 Kirim Verifikasi ke Penyedia", key="btn_kirim_verifikasi"):
-                    if not _verif_id_nt:
-                        st.error("id_nontender kosong — sinkron paket PL dari SPSE dulu.")
-                    elif not _verif_start or not _verif_end:
-                        st.error("Waktu mulai dan selesai wajib diisi.")
-                    else:
-                        with st.spinner("Mengirim undangan verifikasi ke SPSE..."):
-                            _verif_result = _verif_pl.kirim_verifikasi(
-                                id_nontender=_verif_id_nt,
-                                waktu_start=_verif_start,
-                                waktu_end=_verif_end,
-                                tempat=_verif_tempat,
-                                yang_harus_hadir=_verif_pl.YANG_HARUS_HADIR_DEFAULT,
-                                yang_harus_dibawa=_verif_pl.YANG_HARUS_DIBAWA_DEFAULT,
-                            )
-                        if _verif_result["ok"]:
-                            st.success(f"✅ {_verif_result['msg']}")
-                        else:
-                            st.error(f"❌ Gagal: {_verif_result['msg']}")
-
-        # ── Kirim Batch ke Semua Paket ───────────────────────────────────────
-        st.divider()
-        st.markdown("### 📨 Kirim Undangan Verifikasi — Batch (Semua Paket)")
-        st.caption("Centang paket yang ingin dikirim sekaligus. Hanya paket dengan peserta terdaftar yang tampil.")
+        st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
+        st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
         if _batch_rows:
             # Fetch jumlah peserta semua paket
-            import peserta_monitor_pl as _pm_batch
-            _batch_kodes = [r["kode_paket"] for r in _batch_rows if r.get("kode_paket")]
-            with st.spinner("Mengecek peserta terdaftar..."):
-                _batch_mon = _pm_batch.fetch_status_semua_paket(_batch_kodes)
+            _batch_kodes = tuple(r["kode_paket"] for r in _batch_rows if r.get("kode_paket"))
+            _batch_mon = _fetch_status_semua_paket_cached(_batch_kodes)
 
             # Filter hanya paket yang ada peserta
             _batch_eligible = [
@@ -6005,29 +5596,29 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             else:
                 st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
 
-                # Waktu — dropdown dari GCal + fallback input manual
-                import datetime as _dt_bv
-                _today_bv = _dt_bv.date.today()
-
+                # Waktu — date_input + time_input (pola Tab 3)
+                import datetime as _dtlb
                 _bwc1, _bwc2 = st.columns(2)
                 with _bwc1:
                     st.caption("**Waktu Mulai**")
-                    _bv_start_d = st.date_input("Tanggal Mulai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_start_d")
-                    _bv_start_t = st.time_input("Jam Mulai", value=_dt_bv.time(9, 0), step=300, key="batch_verif_start_t")
+                    _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
+                    _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
+                    st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
                 with _bwc2:
                     st.caption("**Waktu Selesai**")
-                    _bv_end_d = st.date_input("Tanggal Selesai", value=_today_bv, format="DD-MM-YYYY", key="batch_verif_end_d")
-                    _bv_end_t = st.time_input("Jam Selesai", value=_dt_bv.time(15, 0), step=300, key="batch_verif_end_t")
-
-                _batch_start = f"{_bv_start_d.strftime('%d-%m-%Y')} {_bv_start_t.strftime('%H:%M')}"
-                _batch_end   = f"{_bv_end_d.strftime('%d-%m-%Y')} {_bv_end_t.strftime('%H:%M')}"
+                    _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
+                    _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
+                _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
+                _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
 
                 # Checkbox list paket
-                st.markdown("**Pilih paket yang akan dikirim:**")
                 _sudah_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") == "terkirim"]
                 _belum_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") != "terkirim"]
+                _ca, _cb = st.columns([4, 1])
+                _ca.markdown("**Pilih paket yang akan dikirim:**")
                 if _sudah_kirim:
-                    st.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                    _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
                 _batch_selected = []
                 _bc1, _bc2 = st.columns(2)
                 for _bi, _br in enumerate(_batch_eligible):
@@ -6035,7 +5626,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                     _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
                     if _sudah and _tgl_kirim:
-                        import datetime as _dtlb
                         try:
                             _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                         except Exception:
@@ -6044,34 +5634,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     else:
                         _label = f"{_ku} — {_br['nama_paket'][:40]}"
                     _col = _bc1 if _bi % 2 == 0 else _bc2
-                    _default_chk = not _sudah  # belum terkirim → default centang; sudah → default uncheck
+                    _default_chk = _centang_semua or (not _sudah)
                     if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
                         _batch_selected.append(_br)
 
                 st.markdown(f"**{len(_batch_selected)} paket dipilih**")
 
-                # Tombol Preview dulu
-                if st.button("👁 Preview Sebelum Kirim", key="btn_batch_preview"):
+                if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
                     if not _batch_start or not _batch_end:
                         st.error("Waktu mulai dan selesai wajib diisi.")
-                    elif not _batch_selected:
-                        st.warning("Tidak ada paket yang dipilih.")
                     else:
-                        st.session_state["batch_verif_preview"] = True
-
-                if st.session_state.get("batch_verif_preview"):
-                    st.markdown("#### 📋 Preview Pengiriman")
-                    st.write(f"- **Waktu:** {_batch_start} s/d {_batch_end}")
-                    st.write(f"- **Jumlah paket:** {len(_batch_selected)}")
-                    for _bp in _batch_selected:
-                        _jp = _batch_mon.get(_bp["kode_paket"], {}).get("jumlah", 0)
-                        st.write(f"  ✅ {_bp.get('kode_unik') or _bp['kode_paket']} — {_bp['nama_paket']} ({_jp} peserta)")
-                    st.write(f"- **Penyedia (referensi Supabase):** nama_penyedia per paket")
-
-                    if st.button("📨 Konfirmasi & Kirim Semua", key="btn_batch_kirim_konfirm", type="primary"):
-                        if not _batch_start or not _batch_end:
-                            st.error("Waktu wajib diisi.")
-                        else:
                             import verifikasi_penyedia_pl as _vpl_batch
                             _hasil_batch = []
                             _prog = st.progress(0, text="Mengirim...")
@@ -6089,7 +5661,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     "msg": _res["msg"],
                                 })
                             _prog.empty()
-                            st.session_state["batch_verif_preview"] = False
 
                             # Tampilkan hasil
                             _ok_list = [h for h in _hasil_batch if h["ok"]]
@@ -6113,13 +5684,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         st.markdown("## Berita Acara — Pengadaan Langsung")
 
-        # Load paket PL sekali
+        # Load paket PL — filter paket selesai
         _pl8_rows = []
         try:
-            _pl8_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, nama_paket, nomor_urut, kode_unik, id_nontender, "
-                "nomor_dokpil, tgl_evaluasi, satker, folder_dibuat"
-            ).order("nomor_urut").execute().data or []
+            _raw8 = pl_engine.load_draft_pl()
+            _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
+            _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
         except Exception as _e8:
             st.error(f"Gagal load paket PL: {_e8}")
 
@@ -6290,7 +5860,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.divider()
 
             # Header tabel per paket
-            _pl8_valid_auto = []  # untuk batch
+            # Daftar paket
             for _p8 in _pl8_rows:
                 _k8    = _p8.get("kode_paket", "")
                 _id8   = _k8  # BA nontender pakai kode_paket
@@ -6311,211 +5881,131 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     else:
                         st.caption("⚠️ Tanggal Evaluasi belum ada — isi jadwal dulu atau pakai mode manual.")
 
-                    # Nomor per jenis BA: default OTOMATIS dari Nomor Dokpil (bisa diedit)
-                    _auto_ev = _auto_nomor_pl8(_p8, "evaluasi")
-                    _auto_hs = _auto_nomor_pl8(_p8, "hasil")
-                    _c8ev, _c8hs = st.columns(2)
-                    with _c8ev:
-                        st.markdown(f"**{_ba_cfg_pl.JENIS_LABEL_PL['evaluasi']}**")
-                        _no8ev = st.text_input(
-                            "Nomor", value=_auto_ev, placeholder="000.3.3/05/PL/...",
-                            key=f"pl8_no_evaluasi_{_k8}", label_visibility="collapsed",
-                        )
-                    with _c8hs:
-                        st.markdown(f"**{_ba_cfg_pl.JENIS_LABEL_PL['hasil']}**")
-                        _no8hs = st.text_input(
-                            "Nomor", value=_auto_hs, placeholder="000.3.3/07/PL/...",
-                            key=f"pl8_no_hasil_{_k8}", label_visibility="collapsed",
-                        )
+                    # Nomor hardcode (tidak ditampilkan)
+                    _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
+                    _no8hs = _auto_nomor_pl8(_p8, "hasil")
 
-                    # Tombol per paket
-                    _btn8c1, _btn8c2, _btn8c3 = st.columns([2, 2, 1])
-                    with _btn8c1:
-                        if st.button(
-                            "🖨️ Cetak+Upload Evaluasi",
-                            key=f"pl8_ev_{_k8}",
-                            disabled=not _no8ev,
-                            use_container_width=True,
-                        ):
-                            with st.spinner(f"Proses BA Evaluasi {_k8}..."):
-                                _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                                _rc8 = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key="evaluasi",
-                                    nomor_ba=_no8ev, tanggal_ba=_tgl8s,
+                    # 1 tombol — cetak + upload evaluasi & hasil sekaligus
+                    if st.button(
+                        "🖨️ Cetak + Upload",
+                        key=f"pl8_ev_hs_{_k8}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
+                        for _jk8, _no8, _lbl8 in [
+                            ("evaluasi", _no8ev, "BA Evaluasi"),
+                            ("hasil",    _no8hs, "BA Hasil"),
+                        ]:
+                            with st.spinner(f"Proses {_lbl8} {_k8}..."):
+                                _rc8x = _ba_pl_engine5.cetak_ba_pl(
+                                    id_nontender=_id8, jenis_key=_jk8,
+                                    nomor_ba=_no8, tanggal_ba=_tgl8s,
                                 )
-                                if _rc8["ok"]:
-                                    _backup_pdf_pl8(_p8, "evaluasi", _rc8["pdf_bytes"])
-                                    _fn8 = f"{_ba_cfg_pl.FILE_LABEL_PL['evaluasi']}-{_k8}.pdf"
-                                    _ru8 = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key="evaluasi",
-                                        nomor_ba=_no8ev, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8["pdf_bytes"], file_name=_fn8,
+                                if _rc8x["ok"]:
+                                    _backup_pdf_pl8(_p8, _jk8, _rc8x["pdf_bytes"])
+                                    _fn8x = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_k8}.pdf"
+                                    _ru8x = _ba_pl_engine5.upload_ba_pl(
+                                        id_nontender=_id8, jenis_key=_jk8,
+                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
+                                        file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x,
                                     )
-                                    if _ru8.get("ok"):
-                                        st.success(f"✅ BA Evaluasi {_k8} berhasil")
+                                    if _ru8x.get("ok"):
+                                        st.success(f"✅ {_lbl8} {_k8} berhasil")
                                     else:
-                                        st.error(f"❌ Upload gagal: status {_ru8.get('status')}")
+                                        st.error(f"❌ {_lbl8} upload gagal: status {_ru8x.get('status')}")
                                 else:
-                                    st.error(f"❌ Cetak gagal: {_rc8.get('error')} (status {_rc8.get('status')})")
-                    with _btn8c2:
-                        if st.button(
-                            "🖨️ Cetak+Upload Hasil",
-                            key=f"pl8_hs_{_k8}",
-                            disabled=not _no8hs,
-                            use_container_width=True,
-                        ):
-                            with st.spinner(f"Proses BA Hasil {_k8}..."):
-                                _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                                _rc8h = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key="hasil",
-                                    nomor_ba=_no8hs, tanggal_ba=_tgl8s,
-                                )
-                                if _rc8h["ok"]:
-                                    _backup_pdf_pl8(_p8, "hasil", _rc8h["pdf_bytes"])
-                                    _fn8h = f"{_ba_cfg_pl.FILE_LABEL_PL['hasil']}-{_k8}.pdf"
-                                    _ru8h = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key="hasil",
-                                        nomor_ba=_no8hs, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8h["pdf_bytes"], file_name=_fn8h,
-                                    )
-                                    if _ru8h.get("ok"):
-                                        st.success(f"✅ BA Hasil {_k8} berhasil")
-                                    else:
-                                        st.error(f"❌ Upload gagal: status {_ru8h.get('status')}")
-                                else:
-                                    st.error(f"❌ Cetak gagal: {_rc8h.get('error')} (status {_rc8h.get('status')})")
-                    with _btn8c3:
-                        _chk8 = st.checkbox("Batch", key=f"pl8ba_chk_{_k8}", value=False)
-
-                    if _chk8 and _no8ev and _no8hs:
-                        _pl8_valid_auto.append({
-                            **_p8,
-                            "_id8": _id8, "_tgl8": _tgl8,
-                            "_no8ev": _no8ev, "_no8hs": _no8hs,
-                        })
+                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')} (status {_rc8x.get('status')})")
 
             # Tombol batch semua
-            if _pl8_valid_auto:
-                if st.button(
-                    f"🚀 Cetak+Upload Semua BA ({len(_pl8_valid_auto)} paket × 2 BA)",
-                    type="primary", key="pl8_batch_all", use_container_width=True,
-                ):
-                    with st.status(f"Proses {len(_pl8_valid_auto)} paket...", expanded=True) as _st8:
-                        for _pb8 in _pl8_valid_auto:
-                            _tgl8s = _pb8["_tgl8"].strftime("%d-%m-%Y") if _pb8["_tgl8"] else ""
-                            for _jk8, _no8, _lbl8 in [
-                                ("evaluasi", _pb8["_no8ev"], "Evaluasi"),
-                                ("hasil",    _pb8["_no8hs"], "Hasil"),
-                            ]:
-                                _st8.write(f"⏳ {_pb8['kode_paket']} — BA {_lbl8}...")
-                                try:
-                                    _rc = _ba_pl_engine5.cetak_ba_pl(
-                                        id_nontender=_pb8["_id8"], jenis_key=_jk8,
-                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                    )
-                                    if _rc["ok"]:
-                                        _backup_pdf_pl8(_pb8, _jk8, _rc["pdf_bytes"])
-                                        _fn = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_pb8['kode_paket']}.pdf"
-                                        _ru = _ba_pl_engine5.upload_ba_pl(
-                                            id_nontender=_pb8["_id8"], jenis_key=_jk8,
-                                            nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                            file_bytes=_rc["pdf_bytes"], file_name=_fn,
-                                        )
-                                        if _ru.get("ok"):
-                                            _st8.write(f"  ✅ BA {_lbl8} OK")
-                                        else:
-                                            _st8.write(f"  ❌ Upload BA {_lbl8} — status {_ru.get('status')}")
-                                    else:
-                                        _st8.write(f"  ❌ Cetak BA {_lbl8} — {_rc.get('error')}")
-                                except Exception as _e8b:
-                                    _st8.write(f"  ❌ Error: {_e8b}")
 
-        # ── SECTION 2: BA LAINNYA (upload-only) ──────────────────────────────
-        st.divider()
-        st.markdown("### 2. BA Lainnya (Upload Manual)")
-        st.caption("BA Penjelasan, Pengumuman Pemenang, dll — upload file PDF langsung ke SPSE.")
+        # ── SECTION 2: BA LAINNYA (upload-only) — HIDDEN ─────────────────────
+        if False:
+            st.divider()
+            st.markdown("### 2. BA Lainnya (Upload Manual)")
+            st.caption("BA Penjelasan, Pengumuman Pemenang, dll — upload file PDF langsung ke SPSE.")
 
-        if _pl8_rows:
-            _JENIS_LAINNYA = {
-                "penjelasan":   "BA Penjelasan",
-                "pengumuman":   "Pengumuman Pemenang Akhir",
-            }
-            _pl8_lc1, _pl8_lc2 = st.columns([1, 2])
-            with _pl8_lc1:
-                _jenis_lain8 = st.selectbox(
-                    "Jenis BA",
-                    options=list(_JENIS_LAINNYA.keys()),
-                    format_func=lambda k: _JENIS_LAINNYA[k],
-                    key="pl8_jenis_lain",
-                )
-            with _pl8_lc2:
-                _nomor_lain8  = st.text_input(
-                    "Nomor BA",
-                    placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
-                    key="pl8_nomor_lain",
-                )
-            _tgl_lain8 = st.date_input(
-                "Tanggal BA", value=datetime.now().date(), format="DD/MM/YYYY",
-                key="pl8_tgl_lain",
-            )
-            st.caption(f"{_HARI_NAMA[_tgl_lain8.weekday()]}, {_tgl_lain8.day} "
-                       f"{_BULAN_NAMA[_tgl_lain8.month-1]} {_tgl_lain8.year}")
-            _tempat_lain8 = ""
-            if _jenis_lain8 == "pengumuman":
-                _tempat_lain8 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl8_tempat_lain")
-            _info_lain8 = st.text_area("Keterangan Tambahan", value="", key="pl8_info_lain", height=68)
-
-            st.markdown("**Pilih Paket + Upload File:**")
-            _pl8_lain_valid = []
-            for _p8l in _pl8_rows:
-                _k8l  = _p8l.get("kode_paket", "")
-                _id8l = _k8l  # BA nontender pakai kode_paket
-                _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
-                with _lc1:
-                    st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
-                with _lc2:
-                    _fl8 = st.file_uploader(
-                        "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
-                        label_visibility="collapsed",
+            if _pl8_rows:
+                _JENIS_LAINNYA = {
+                    "penjelasan":   "BA Penjelasan",
+                    "pengumuman":   "Pengumuman Pemenang Akhir",
+                }
+                _pl8_lc1, _pl8_lc2 = st.columns([1, 2])
+                with _pl8_lc1:
+                    _jenis_lain8 = st.selectbox(
+                        "Jenis BA",
+                        options=list(_JENIS_LAINNYA.keys()),
+                        format_func=lambda k: _JENIS_LAINNYA[k],
+                        key="pl8_jenis_lain",
                     )
-                with _lc3:
-                    if _fl8 and st.button("📤", key=f"pl8_lain_up_{_k8l}", use_container_width=True):
-                        with st.spinner(f"Upload {_k8l}..."):
-                            _rl8 = _ba_pl_engine5.upload_ba_pl(
-                                id_nontender=_id8l, jenis_key=_jenis_lain8,
-                                nomor_ba=_nomor_lain8,
-                                tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
-                                info=_info_lain8,
-                                file_bytes=_fl8.read(), file_name=_fl8.name,
-                                tempat=_tempat_lain8,
-                            )
-                        if _rl8.get("ok"):
-                            st.success(f"✅ {_k8l} — berhasil")
-                        else:
-                            st.error(f"❌ {_k8l} — status {_rl8.get('status')}")
-                if _fl8:
-                    _pl8_lain_valid.append({**_p8l, "_id8l": _id8l, "_fl8": _fl8})
+                with _pl8_lc2:
+                    _nomor_lain8  = st.text_input(
+                        "Nomor BA",
+                        placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
+                        key="pl8_nomor_lain",
+                    )
+                _tgl_lain8 = st.date_input(
+                    "Tanggal BA", value=datetime.now().date(), format="DD/MM/YYYY",
+                    key="pl8_tgl_lain",
+                )
+                st.caption(f"{_HARI_NAMA[_tgl_lain8.weekday()]}, {_tgl_lain8.day} "
+                           f"{_BULAN_NAMA[_tgl_lain8.month-1]} {_tgl_lain8.year}")
+                _tempat_lain8 = ""
+                if _jenis_lain8 == "pengumuman":
+                    _tempat_lain8 = st.text_input("Tempat", placeholder="Contoh: Kantor RSUD", key="pl8_tempat_lain")
+                _info_lain8 = st.text_area("Keterangan Tambahan", value="", key="pl8_info_lain", height=68)
 
-            if _pl8_lain_valid:
-                if st.button(
-                    f"📤 Upload Semua ({len(_pl8_lain_valid)} paket)",
-                    key="pl8_lain_all", use_container_width=True,
-                ):
-                    with st.status(f"Upload {len(_pl8_lain_valid)} paket...", expanded=True) as _st8l:
-                        for _pbl in _pl8_lain_valid:
-                            _st8l.write(f"⏳ {_pbl['kode_paket']}...")
-                            _rbl = _ba_pl_engine5.upload_ba_pl(
-                                id_nontender=_pbl["_id8l"], jenis_key=_jenis_lain8,
-                                nomor_ba=_nomor_lain8,
-                                tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
-                                info=_info_lain8,
-                                file_bytes=_pbl["_fl8"].read(), file_name=_pbl["_fl8"].name,
-                                tempat=_tempat_lain8,
-                            )
-                            if _rbl.get("ok"):
-                                _st8l.write(f"  ✅ {_pbl['kode_paket']} — berhasil")
+                st.markdown("**Pilih Paket + Upload File:**")
+                _pl8_lain_valid = []
+                for _p8l in _pl8_rows:
+                    _k8l  = _p8l.get("kode_paket", "")
+                    _id8l = _k8l  # BA nontender pakai kode_paket
+                    _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
+                    with _lc1:
+                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
+                    with _lc2:
+                        _fl8 = st.file_uploader(
+                            "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
+                            label_visibility="collapsed",
+                        )
+                    with _lc3:
+                        if _fl8 and st.button("📤", key=f"pl8_lain_up_{_k8l}", use_container_width=True):
+                            with st.spinner(f"Upload {_k8l}..."):
+                                _rl8 = _ba_pl_engine5.upload_ba_pl(
+                                    id_nontender=_id8l, jenis_key=_jenis_lain8,
+                                    nomor_ba=_nomor_lain8,
+                                    tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
+                                    info=_info_lain8,
+                                    file_bytes=_fl8.read(), file_name=_fl8.name,
+                                    tempat=_tempat_lain8,
+                                )
+                            if _rl8.get("ok"):
+                                st.success(f"✅ {_k8l} — berhasil")
                             else:
-                                _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
+                                st.error(f"❌ {_k8l} — status {_rl8.get('status')}")
+                    if _fl8:
+                        _pl8_lain_valid.append({**_p8l, "_id8l": _id8l, "_fl8": _fl8})
+
+                if _pl8_lain_valid:
+                    if st.button(
+                        f"📤 Upload Semua ({len(_pl8_lain_valid)} paket)",
+                        key="pl8_lain_all", use_container_width=True,
+                    ):
+                        with st.status(f"Upload {len(_pl8_lain_valid)} paket...", expanded=True) as _st8l:
+                            for _pbl in _pl8_lain_valid:
+                                _st8l.write(f"⏳ {_pbl['kode_paket']}...")
+                                _rbl = _ba_pl_engine5.upload_ba_pl(
+                                    id_nontender=_pbl["_id8l"], jenis_key=_jenis_lain8,
+                                    nomor_ba=_nomor_lain8,
+                                    tanggal_ba=_tgl_lain8.strftime("%d-%m-%Y"),
+                                    info=_info_lain8,
+                                    file_bytes=_pbl["_fl8"].read(), file_name=_pbl["_fl8"].name,
+                                    tempat=_tempat_lain8,
+                                )
+                                if _rbl.get("ok"):
+                                    _st8l.write(f"  ✅ {_pbl['kode_paket']} — berhasil")
+                                else:
+                                    _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
     with _pl_tab5:
