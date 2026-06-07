@@ -393,6 +393,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
         # Ambil ID peserta dari halaman evaluasi (untuk kirimundanganverifikasi)
         id_nontender = id_paket_internal  # fallback jika belum ada peserta
+        is_ulang = False  # badge "Paket Ulang" / "Pengadaan Langsung Ulang" di halaman SPSE
         try:
             import re as _re
             r_eval = requests.get(
@@ -404,6 +405,8 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             )
             if ids_peserta:
                 id_nontender = ids_peserta[0]
+            # Deteksi paket ulang dari badge (reuse response, tanpa request tambahan)
+            is_ulang = ("Paket Ulang" in r_eval.text) or ("Pengadaan Langsung Ulang" in r_eval.text)
         except Exception:
             pass
 
@@ -437,6 +440,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
             "status":            status_spse.lower() if status_spse else "draft",
+            "is_ulang":          is_ulang,
             "tahap_spse":        tahap_map.get(kode_paket),  # None jika belum ada tahapan
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
@@ -667,6 +671,15 @@ def ubah_ke_jkk_konstruksi_pl(kode_paket: str, cookie_str: str, base_url: str) -
 # Download Dokumen Paket PL dari SPSE
 # ============================================================
 
+# Map label endpoint → subfolder rapi (dibuat on-demand saat ada file)
+SUBFOLDER_DOK_PPK = {
+    "KAK & Personil":            "1. KAK & Spesifikasi Teknis",
+    "Rancangan Kontrak":         "2. Rancangan Kontrak",
+    "Uraian Singkat Pekerjaan":  "3. Uraian Singkat Pekerjaan",
+    "Informasi Lainnya":         "4. Informasi Lainnya",
+    "Nota Dinas PPK":            "4. Informasi Lainnya",
+}
+
 def download_dokumen_paket_pl(
     kode_paket: str,
     folder_tujuan: str,
@@ -724,7 +737,7 @@ def download_dokumen_paket_pl(
             n += 1
 
     def _download_links_dari_endpoint(endpoint_url, label):
-        """Scrape link /dl/ dari endpoint, download semua file."""
+        """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
         try:
             r = requests.get(endpoint_url, headers=hdrs, timeout=15)
             if r.status_code == 403:
@@ -743,6 +756,12 @@ def download_dokumen_paket_pl(
                 url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
                 links.append((url_dl, fname))
 
+            # Subfolder tujuan (on-demand: dibuat hanya jika ada file)
+            sub = SUBFOLDER_DOK_PPK.get(label, "4. Informasi Lainnya")
+            folder_dl = os.path.join(folder_tujuan, sub)
+            if links:
+                os.makedirs(folder_dl, exist_ok=True)
+
             log(f"  📂 {label}: {len(links)} file")
             for url_dl, fname in links:
                 try:
@@ -754,7 +773,7 @@ def download_dokumen_paket_pl(
                         clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
                         if clean:
                             fname = clean
-                    dst = _unique_dst(folder_tujuan, fname)
+                    dst = _unique_dst(folder_dl, fname)
                     with open(dst, "wb") as f:
                         for chunk in r_dl.iter_content(65536):
                             f.write(chunk)

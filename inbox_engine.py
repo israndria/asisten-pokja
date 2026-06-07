@@ -882,6 +882,11 @@ def download_dokumen_paket(
                 total_lamp = len(lamp_links)
                 log(f"  {total_lamp} lampiran ditemukan")
 
+                # Semua lampiran inbox → subfolder "4. Informasi Lainnya" (on-demand)
+                folder_inbox = os.path.join(folder_tujuan, "4. Informasi Lainnya")
+                if total_lamp > 0:
+                    os.makedirs(folder_inbox, exist_ok=True)
+
                 # Kumpulkan semua (href, fname) dulu — async, lalu download parallel via requests
                 lamp_items = []
                 for link in lamp_links:
@@ -890,7 +895,7 @@ def download_dokumen_paket(
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
                     href = await link.get_attribute("href") or ""
                     url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
-                    dst = _unique_dst(folder_tujuan, fname)
+                    dst = _unique_dst(folder_inbox, fname)
                     lamp_items.append((url_dl, fname, dst))
 
                 import concurrent.futures as _cf_dl
@@ -959,9 +964,18 @@ def download_dokumen_paket(
                 total_bagisan = len(targets)
                 log(f"  Ditemukan {total_bagisan} bagian dokumen")
 
+                def _map_sub(label_txt):
+                    """Klasifikasi label section dok SPSE → subfolder rapi."""
+                    t = (label_txt or "").lower()
+                    if "uraian" in t: return "3. Uraian Singkat Pekerjaan"
+                    if "rancangan" in t: return "2. Rancangan Kontrak"
+                    if "spek" in t or "kak" in t or "spesifikasi" in t: return "1. KAK & Spesifikasi Teknis"
+                    return "4. Informasi Lainnya"
+
                 for idx, target in enumerate(targets, 1):
                     url_sec = f"https://spse.inaproc.id{target['href']}" if target['href'].startswith("/") else target['href']
                     log(f"[{idx}/{total_bagisan}] 📂 Membuka {target['label']}...")
+                    folder_sec = os.path.join(folder_tujuan, _map_sub(target['label']))
                     try:
                         r = requests.get(url_sec, headers=hdrs, timeout=15)
                         if r.status_code == 403: continue
@@ -973,6 +987,8 @@ def download_dokumen_paket(
                             "table#files a[href*='/dl/'], table.table a[href*='/dl/']"
                         )
                         num_f = len(pw_links)
+                        if num_f > 0:
+                            os.makedirs(folder_sec, exist_ok=True)
                         # Kumpulkan href+fname async, lalu download parallel via requests
                         spse_items = []
                         for fi, link in enumerate(pw_links, 1):
@@ -981,10 +997,10 @@ def download_dokumen_paket(
                             fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_{fi}"
                             href_spse = await link.get_attribute("href") or ""
                             url_spse = f"https://spse.inaproc.id{href_spse}" if href_spse.startswith("/") else href_spse
-                            dst = _unique_dst(folder_tujuan, fname)
+                            dst = _unique_dst(folder_sec, fname)
                             spse_items.append((url_spse, fname, dst))
 
-                        def _dl_one_spse(args):
+                        def _dl_one_spse(args, _folder_sec=folder_sec):
                             url_spse, fname, dst = args
                             try:
                                 r_spse = requests.get(url_spse, headers=hdrs, timeout=30, stream=True)
@@ -994,7 +1010,7 @@ def download_dokumen_paket(
                                 if m_cd2:
                                     clean_cd2 = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd2.group(1).strip())).strip()
                                     if clean_cd2:
-                                        dst = _unique_dst(folder_tujuan, clean_cd2)
+                                        dst = _unique_dst(_folder_sec, clean_cd2)
                                 with open(dst, "wb") as f_out2:
                                     for chunk in r_spse.iter_content(65536):
                                         f_out2.write(chunk)
@@ -1052,7 +1068,7 @@ def download_dokumen_paket(
     if not files_didownload:
         log("⚠ CDP tidak aktif / download skip — fallback scan folder...")
         all_pdf = sorted([
-            f for f in _glob2.glob(os.path.join(folder_tujuan, "*.pdf"))
+            f for f in _glob2.glob(os.path.join(folder_tujuan, "**", "*.pdf"), recursive=True)
             if not os.path.basename(f).startswith("Draft_")
         ])
         # Lampiran inbox (nama mengandung kode_pokja + PP) duluan

@@ -1,4 +1,4 @@
-"""Asisten Pokja — SPSE Automation (Streamlit)."""
+﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -92,6 +92,16 @@ def _pl_paket_ulang(row: dict) -> bool:
         return False
     except Exception:
         return False
+
+
+def _pl_hint_ulang(row: dict) -> str:
+    """Return ' (PL - Ulang)' bila paket ini paket ulang, else ''.
+    Sumber utama: kolom is_ulang (badge SPSE, di-scrape). Fallback: scan folder disk
+    (untuk row lama yg belum re-serap is_ulang).
+    """
+    if row.get("is_ulang"):
+        return " (PL - Ulang)"
+    return " (PL - Ulang)" if _pl_paket_ulang(row) else ""
 
 
 st.set_page_config(
@@ -979,7 +989,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _br_chk in _pl_rows_belum:
                     _bkp_chk = _br_chk.get("kode_paket", "")
                     st.checkbox(
-                        f"{_br_chk.get('nama_paket','')[:60]} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         value=st.session_state.get(f"plf_chk_{_bkp_chk}", True),
                         key=f"plf_chk_{_bkp_chk}",
                     )
@@ -1274,6 +1284,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.markdown("### 1. Pilih Paket")
 
             _pl_rows_kd = pl_engine.load_draft_pl()
+            _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
+            _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
@@ -1296,7 +1308,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _col_chk, _col_tgl = st.columns([3, 2])
                     with _col_chk:
                         _kd_chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}",
+                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
                             value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
@@ -1482,6 +1494,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             import upload_ba_reviu_pl as _ubrpl
             _pl_rows_ba = pl_engine.load_draft_pl()
+            _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
+            _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_ba:
                 st.info("⚠️ Belum ada paket PL.")
             else:
@@ -1583,6 +1597,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _libur_map_pl = _LIBUR_MAP
 
         _pljd_rows = pl_engine.load_draft_pl()
+        _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
+        _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -1606,7 +1622,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _rr in _pljd_rows:
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                        f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                         value=st.session_state.get(_key, False),
                         key=_key,
                     )
@@ -1813,6 +1829,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             return ""
 
         _plsp_rows = pl_engine.load_draft_pl()
+        _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
+        _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -1843,7 +1861,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
                         _chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             value=st.session_state.get(_plsp_chk_key, False),
                             key=_plsp_chk_key,
                         )
@@ -2369,6 +2387,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         )
 
         _pp_rows = pl_engine.load_draft_pl()
+        _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
+        _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -2394,7 +2414,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
                     _nama_disp = _rr.get("nama_penyedia") or "—"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:45]}",
+                        f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
                         value=st.session_state.get(f"pp_chk_{_kp}", False),
                         key=f"pp_chk_{_kp}",
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
@@ -4286,7 +4306,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _br_chk in _pl_rows_belum:
                     _bkp_chk = _br_chk.get("kode_paket", "")
                     st.checkbox(
-                        f"{_br_chk.get('nama_paket','')[:60]} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         value=st.session_state.get(f"plf_chk_{_bkp_chk}", True),
                         key=f"plf_chk_{_bkp_chk}",
                     )
@@ -4581,6 +4601,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.markdown("### 1. Pilih Paket")
 
             _pl_rows_kd = pl_engine.load_draft_pl()
+            _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
+            _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
@@ -4603,7 +4625,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _col_chk, _col_tgl = st.columns([3, 2])
                     with _col_chk:
                         _kd_chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}",
+                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
                             value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
@@ -4789,6 +4811,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             import upload_ba_reviu_pl as _ubrpl
             _pl_rows_ba = pl_engine.load_draft_pl()
+            _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
+            _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_ba:
                 st.info("⚠️ Belum ada paket PL.")
             else:
@@ -4890,6 +4914,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _libur_map_pl = _LIBUR_MAP
 
         _pljd_rows = pl_engine.load_draft_pl()
+        _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
+        _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -4913,7 +4939,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _rr in _pljd_rows:
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                        f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                         value=st.session_state.get(_key, False),
                         key=_key,
                     )
@@ -5120,6 +5146,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             return ""
 
         _plsp_rows = pl_engine.load_draft_pl()
+        _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
+        _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -5150,7 +5178,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
                         _chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]} ({_rr.get('jenis_pl','?')})",
+                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             value=st.session_state.get(_plsp_chk_key, False),
                             key=_plsp_chk_key,
                         )
@@ -5676,6 +5704,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         )
 
         _pp_rows = pl_engine.load_draft_pl()
+        _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
+        _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -5701,7 +5731,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
                     _nama_disp = _rr.get("nama_penyedia") or "—"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:45]}",
+                        f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
                         value=st.session_state.get(f"pp_chk_{_kp}", False),
                         key=f"pp_chk_{_kp}",
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
