@@ -480,9 +480,10 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None
     return best
 
 
-def serap_penyedia_pl(progress_cb=None) -> dict:
+def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
     """Bulk: loop semua paket PL di Supabase, cari Draft_PL.pdf di folder,
     parse nama_penyedia + npwp_penyedia, upsert ke draft_paket_pl.
+    Jika kode_paket_filter diisi, hanya proses paket dengan kode tersebut.
     """
     from config import sb as _sb
 
@@ -492,6 +493,8 @@ def serap_penyedia_pl(progress_cb=None) -> dict:
 
     log(0.05, "Fetch daftar paket PL dari Supabase...")
     rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3").execute().data or []
+    if kode_paket_filter:
+        rows = [r for r in rows if r["kode_paket"] == kode_paket_filter]
     log(0.10, f"Total {len(rows)} paket")
 
     updated = 0

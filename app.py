@@ -851,56 +851,70 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.caption(f"Metode: {_pr_metode_raw}")
                         st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
+                        # Ubah Metode Pengadaan inline per paket
+                        with st.container(border=True):
+                            st.markdown("**🔧 Ubah Metode Pengadaan**")
+                            _pr_metode_pilihan = st.selectbox(
+                                "Target metode:",
+                                list(pl_engine.METODE_PL_MAP.keys()),
+                                index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                                key=f"pl_ubah_metode_target_{_pr_kode}",
+                            )
+                            _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
+                            if st.button(
+                                "🔄 Ubah Metode via CDP",
+                                use_container_width=True,
+                                key=f"pl_btn_ubah_metode_{_pr_kode}",
+                            ):
+                                _pl_base_ubah = pl_engine.BASE_URL + "/"
+                                if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
+                                    st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
+                                else:
+                                    st.error("❌ Gagal ubah metode.")
+
                         _pr_c1, _pr_c2 = st.columns([3, 1])
                         if _pr_c2.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
 
-        # ── Ubah Metode Pengadaan via CDP ────────────────────────
-        if _pl_rows:
-            _pl_non_kon = [r for r in _pl_rows if "non konstruksi" in (r.get("metode_pengadaan") or "").lower()]
-            _ekspander_label = f"🔧 Ubah Metode Pengadaan" + (f"  ⚠️ {len(_pl_non_kon)} Non-Konstruksi" if _pl_non_kon else "")
-            with st.expander(_ekspander_label):
-                st.info("Pastikan CDP browser sudah terbuka dan login sebagai PP.")
-                _pl_opsi_ubah = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_rows}
-                _pl_default_sel = [r.get("nama_paket", r.get("kode_paket")) for r in _pl_non_kon]
-                _pl_sel_ubah = st.multiselect(
-                    "Pilih paket yang diubah:",
-                    list(_pl_opsi_ubah.keys()),
-                    default=_pl_default_sel,
-                    key="pl_ubah_metode_sel",
-                )
-                _pl_metode_pilihan = st.selectbox(
-                    "Target metode:",
-                    list(pl_engine.METODE_PL_MAP.keys()),
-                    index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
-                    key="pl_ubah_metode_target",
-                )
-                _pl_kat_id, _pl_pilih_val = pl_engine.METODE_PL_MAP[_pl_metode_pilihan]
-
-                if st.button(
-                    f"🔄 Ubah Metode ({len(_pl_sel_ubah)} paket) via CDP",
-                    disabled=not _pl_sel_ubah,
-                    use_container_width=True,
-                    key="pl_btn_ubah_metode",
-                ):
-                    _pl_base_ubah = pl_engine.BASE_URL + "/"
-                    _pl_ok_ubah = _pl_fail_ubah = 0
-                    for _nm_ubah in _pl_sel_ubah:
-                        _kd_ubah = _pl_opsi_ubah[_nm_ubah]
-                        if pl_engine.ubah_metode_pl_playwright(_kd_ubah, _pl_kat_id, _pl_pilih_val, _pl_base_ubah):
-                            _pl_ok_ubah += 1
-                            st.write(f"✅ {_nm_ubah[:45]}")
-                        else:
-                            _pl_fail_ubah += 1
-                            st.write(f"❌ {_nm_ubah[:45]}")
-                    st.success(f"Selesai: {_pl_ok_ubah} OK, {_pl_fail_ubah} GAGAL. Serap ulang untuk refresh.")
-
         # ══════════════════════════════════════════════════════
         # KOLOM KANAN — Buat Folder + Download Dokumen
         # ══════════════════════════════════════════════════════
+
+            # ── Ubah Metode Bulk (semua paket di daftar) ──────────────
+            if _pl_rows:
+                st.divider()
+                with st.container(border=True):
+                    st.markdown("**🔧 Ubah Metode Pengadaan — Semua Paket**")
+                    _pl_opsi_ubah_bulk = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_filtered}
+                    _pl_sel_ubah_bulk = list(_pl_opsi_ubah_bulk.keys())
+                    _pl_metode_bulk = st.selectbox(
+                        "Target metode:",
+                        list(pl_engine.METODE_PL_MAP.keys()),
+                        index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                        key="pl_ubah_metode_bulk_target",
+                    )
+                    _pl_kat_id_bulk, _pl_pilih_val_bulk = pl_engine.METODE_PL_MAP[_pl_metode_bulk]
+                    if st.button(
+                        f"🔄 Ubah Metode ({len(_pl_sel_ubah_bulk)} paket) via CDP",
+                        disabled=not _pl_sel_ubah_bulk,
+                        use_container_width=True,
+                        key="pl_btn_ubah_metode_bulk",
+                    ):
+                        _pl_base_ubah_b = pl_engine.BASE_URL + "/"
+                        _pl_ok_b = _pl_fail_b = 0
+                        for _nm_b in _pl_sel_ubah_bulk:
+                            _kd_b = _pl_opsi_ubah_bulk[_nm_b]
+                            if pl_engine.ubah_metode_pl_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b):
+                                _pl_ok_b += 1
+                                st.write(f"✅ {_nm_b[:45]}")
+                            else:
+                                _pl_fail_b += 1
+                                st.write(f"❌ {_nm_b[:45]}")
+                        st.success(f"Selesai: {_pl_ok_b} OK, {_pl_fail_b} GAGAL.")
+
         with _pl_col_kanan:
-            st.markdown("#### 4. Buat Folder Paket")
+            st.markdown("#### 3. Buat Folder Paket")
 
             if "pl_folder_just_created" in st.session_state:
                 _msg = st.session_state.pop("pl_folder_just_created")
@@ -1033,6 +1047,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                                 _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
                                     except Exception as _pl_kak_e:
                                         _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
+                                    # Serap Penyedia otomatis setelah download
+                                    try:
+                                        import parse_kak_pl as _pkpl_sp
+                                        _sp_res = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
+                                        if _sp_res.get("updated", 0) > 0:
+                                            _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                        else:
+                                            _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
+                                    except Exception as _sp_e:
+                                        _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
                                 if _pl_kp_b:
                                     try:
                                         import hps_engine as _pl_hps_eng
@@ -1078,38 +1102,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
-            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
+            # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
-            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
-            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
-            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+            st.markdown("#### 4. Update Data Folder")
+            st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
+            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+            _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder")
 
-            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
-                # Aksi: Serap penyedia dari Draft_PL PDF
-                if _cb_serap_pyd:
-                    import parse_kak_pl as _pkp
-                    _pb_pyd = st.progress(0.0)
-                    _st_pyd = st.empty()
-                    _logs_pyd = []
-                    def _cb_pyd(p, m):
-                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
-                        _logs_pyd.append(m)
-                        _st_pyd.info(m)
-                    try:
-                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
-                        _c1, _c2, _c3, _c4 = st.columns(4)
-                        _c1.metric("Update", _r_pyd.get("updated", 0))
-                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
-                        _c3.metric("No data", _r_pyd.get("no_data", 0))
-                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
-                        if _r_pyd.get("errors"):
-                            with st.expander("Detail Error Penyedia"):
-                                for _e in _r_pyd["errors"]:
-                                    st.warning(_e)
-                    except Exception as _e:
-                        st.error(f"Gagal serap penyedia: {_e}")
-
+            if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_pl as _keng_pl_dl
@@ -1165,151 +1165,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             state="complete", expanded=_dl_bulk_fail > 0,
                         )
 
-
-            # ── #5: Reset Status Folder — multiselect (kosong = semua) ───────
-            with st.expander("↩️ Reset Status Folder"):
-                st.caption("Kosongkan `folder_dibuat` agar paket muncul kembali di Buat Folder (folder fisik tidak dihapus).")
-                _opsi_reset_pl = {
-                    f"{r.get('nama_paket','')[:60]} — {r.get('jenis_pl','')}": r.get("kode_paket")
-                    for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")
-                }
-                if _opsi_reset_pl:
-                    from config import sb as _sb_reset
-                    _pilih_reset_pl = st.multiselect(
-                        "Pilih paket reset (kosong = semua):",
-                        list(_opsi_reset_pl.keys()),
-                        key="pl_ms_reset",
-                    )
-                    if st.button("↩️ Reset Status Folder", type="secondary", key="pl_btn_reset_folder"):
-                        # Jika kosong → reset semua; jika ada pilihan → reset pilihan saja
-                        _target_reset = _pilih_reset_pl if _pilih_reset_pl else list(_opsi_reset_pl.keys())
+                # Aksi: Reset status folder
+                if _cb_reset_folder:
+                    _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+                    if _opsi_reset_pl:
+                        from config import sb as _sb_reset
                         _reset_ok_pl = 0
-                        for _kr in [_opsi_reset_pl[k] for k in _target_reset]:
+                        for _kr in _opsi_reset_pl.keys():
                             try:
-                                _sb_reset().table("draft_paket_pl").update(
-                                    {"folder_dibuat": None}
-                                ).eq("kode_paket", _kr).execute()
+                                _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
                                 _reset_ok_pl += 1
                             except Exception as _er_pl:
                                 st.error(f"{_kr}: {_er_pl}")
                         if _reset_ok_pl:
                             st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
                         st.rerun()
-                else:
-                    st.info("Tidak ada paket dengan status folder yang bisa direset.")
+                    else:
+                        st.info("Tidak ada paket dengan status folder untuk direset.")
 
-            # ── Replicate pattern tender (sequential + per-paket log dict) ──
-            if st.button(
-                f"📁 Buat Semua Folder ({len(_pl_rows_belum)} paket)",
-                disabled=len(_pl_rows_belum) == 0,
-                use_container_width=True,
-                key="pl_btn_buat_semua",
-                type="secondary",
-            ):
-                from streamlit.runtime.scriptrunner import get_script_run_ctx as _pl_grc
-                _pl_ctx_bulk = _pl_grc()
-                _pl_bp = st.progress(0.0)
-                _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_bulk_plan)} paket...", expanded=True)
-                _pl_bulk_status_line = _pl_bulk_status.empty()
-                _pl_ok, _pl_fail = 0, 0
-                _pl_bulk_semua_log = {}  # {nama_folder: [log lines]}
-                for _pl_i, _pl_bp_item in enumerate(_pl_bulk_plan):
-                    _pl_bp.progress((_pl_i + 1) / len(_pl_bulk_plan))
-                    _pl_nf = _pl_bp_item["nama_folder"]
-                    _pl_kp_b = _pl_bp_item["kode_paket"]
-                    _pl_out_b = _pl_bp_item["out_base"]
-                    _pl_target_b = _pl_os.path.join(_pl_out_b, _pl_nf)
-                    _pl_bulk_status.update(label=f"[{_pl_i+1}/{len(_pl_bulk_plan)}] {_pl_nf[:60]}")
-                    _pl_paket_log = []
-                    try:
-                        _pl_r2 = _pl_sp.run(
-                            [_PL_PY, _PL_SCRIPT, "--mode", "pl", "--output-dir", _pl_out_b, _pl_nf],
-                            capture_output=True, text=True, timeout=120,
-                            creationflags=_PL_NO_WIN,
-                        )
-                        if _pl_r2.returncode == 0:
-                            _pl_ok += 1
-                            _pl_paket_log.append("✅ Folder dibuat")
-                            try:
-                                pl_engine.tandai_folder_dibuat(_pl_kp_b)
-                            except Exception as _pl_e_upd:
-                                _pl_paket_log.append(f"⚠ tandai_folder_dibuat: {_pl_e_upd}")
-                            # Download dokumen + parse KAK + scrape HPS
-                            if _pl_dl_dokumen and _pl_kp_b:
-                                def _pl_bulk_cb(msg, _log=_pl_paket_log):
-                                    _log.append(msg)
-                                    _pl_bulk_status_line.code("\n".join(_log[-10:]))
-                                try:
-                                    _pl_dl_hasil = pl_engine.download_dokumen_paket_pl(
-                                        _pl_kp_b, _pl_target_b,
-                                        progress_cb=_pl_bulk_cb,
-                                    )
-                                    _pl_paket_log.append(
-                                        f"📎 Download: ✅{len(_pl_dl_hasil['ok'])} file"
-                                        + (f" | Draft: {_pl_os.path.basename(_pl_dl_hasil['draft_pdf'])}" if _pl_dl_hasil.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
-                                    )
-                                    for _pl_e in _pl_dl_hasil.get("error", []):
-                                        _pl_paket_log.append(f"  ❌ {_pl_e}")
-                                except Exception as _pl_dl_e:
-                                    _pl_paket_log.append(f"❌ Download error: {_pl_dl_e}")
-                                # Parse KAK
-                                try:
-                                    _pl_kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target_b)
-                                    if _pl_kak_p:
-                                        _pl_kak_d = parse_kak_pl.parse_kak(_pl_kak_p)
-                                        _pl_kak_u = {k: v for k, v in _pl_kak_d.items() if v}
-                                        if _pl_kak_u:
-                                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kp_b, **_pl_kak_u})
-                                            _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
-                                except Exception as _pl_kak_e:
-                                    _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
-                            # Scrape HPS → tulis langsung ke Excel
-                            if _pl_kp_b:
-                                try:
-                                    import hps_engine as _pl_hps_eng
-                                    _xl_plb = _cari_xlsm_pl(_pl_target_b)
-                                    if _xl_plb:
-                                        _pl_hps_res = _pl_hps_eng.scrape_hps_pl_ke_excel(_pl_kp_b, _xl_plb)
-                                        if _pl_hps_res.get("ok"):
-                                            _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} baris → Excel")
-                                        else:
-                                            _pl_paket_log.append(f"⚠ HPS: {_pl_hps_res.get('pesan','-')}")
-                                    else:
-                                        _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
-                                except Exception as _pl_hps_e:
-                                    _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
-                            # Refresh Template (jika dicentang)
-                            if _pl_rt_refresh:
-                                try:
-                                    from refresh_template import refresh_template_paket as _rt_fn
-                                    from pathlib import Path as _rt_P
-                                    _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
-                                    _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
-                                    _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
-                                    _pl_paket_log.append("🔄 Refresh Template: selesai")
-                                except Exception as _rt_e:
-                                    _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
-                        else:
-                            _pl_fail += 1
-                            _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
-                    except _pl_sp.TimeoutExpired:
-                        _pl_fail += 1
-                        _pl_paket_log.append("❌ Timeout buat folder")
-                    except Exception as _pl_e_x:
-                        _pl_fail += 1
-                        import traceback as _pl_tb
-                        _pl_paket_log.append(f"❌ EXC {type(_pl_e_x).__name__}: {_pl_e_x}")
-                        _pl_paket_log.append(_pl_tb.format_exc()[-300:])
-                    _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
-
-                _pl_bulk_status_line.empty()
-                _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
-                _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
-                with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
-                    for _pl_nf, _pl_logs in _pl_bulk_semua_log.items():
-                        st.markdown(f"**{_pl_nf[:70]}**")
-                        st.code("\n".join(_pl_logs))
-                st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
 
             # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
             _pl_rows_sudah = [
@@ -4285,56 +4158,70 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.caption(f"Metode: {_pr_metode_raw}")
                         st.caption(f"Satker: {_pr.get('satker','-')} | PPK: {_pr.get('nama_ppk','-')}")
 
+                        # Ubah Metode Pengadaan inline per paket
+                        with st.container(border=True):
+                            st.markdown("**🔧 Ubah Metode Pengadaan**")
+                            _pr_metode_pilihan = st.selectbox(
+                                "Target metode:",
+                                list(pl_engine.METODE_PL_MAP.keys()),
+                                index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                                key=f"pl_ubah_metode_target_{_pr_kode}",
+                            )
+                            _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
+                            if st.button(
+                                "🔄 Ubah Metode via CDP",
+                                use_container_width=True,
+                                key=f"pl_btn_ubah_metode_{_pr_kode}",
+                            ):
+                                _pl_base_ubah = pl_engine.BASE_URL + "/"
+                                if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
+                                    st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
+                                else:
+                                    st.error("❌ Gagal ubah metode.")
+
                         _pr_c1, _pr_c2 = st.columns([3, 1])
                         if _pr_c2.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
 
-        # ── Ubah Metode Pengadaan via CDP ────────────────────────
-        if _pl_rows:
-            _pl_non_kon = [r for r in _pl_rows if "non konstruksi" in (r.get("metode_pengadaan") or "").lower()]
-            _ekspander_label = f"🔧 Ubah Metode Pengadaan" + (f"  ⚠️ {len(_pl_non_kon)} Non-Konstruksi" if _pl_non_kon else "")
-            with st.expander(_ekspander_label):
-                st.info("Pastikan CDP browser sudah terbuka dan login sebagai PP.")
-                _pl_opsi_ubah = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_rows}
-                _pl_default_sel = [r.get("nama_paket", r.get("kode_paket")) for r in _pl_non_kon]
-                _pl_sel_ubah = st.multiselect(
-                    "Pilih paket yang diubah:",
-                    list(_pl_opsi_ubah.keys()),
-                    default=_pl_default_sel,
-                    key="pl_ubah_metode_sel",
-                )
-                _pl_metode_pilihan = st.selectbox(
-                    "Target metode:",
-                    list(pl_engine.METODE_PL_MAP.keys()),
-                    index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
-                    key="pl_ubah_metode_target",
-                )
-                _pl_kat_id, _pl_pilih_val = pl_engine.METODE_PL_MAP[_pl_metode_pilihan]
-
-                if st.button(
-                    f"🔄 Ubah Metode ({len(_pl_sel_ubah)} paket) via CDP",
-                    disabled=not _pl_sel_ubah,
-                    use_container_width=True,
-                    key="pl_btn_ubah_metode",
-                ):
-                    _pl_base_ubah = pl_engine.BASE_URL + "/"
-                    _pl_ok_ubah = _pl_fail_ubah = 0
-                    for _nm_ubah in _pl_sel_ubah:
-                        _kd_ubah = _pl_opsi_ubah[_nm_ubah]
-                        if pl_engine.ubah_metode_pl_playwright(_kd_ubah, _pl_kat_id, _pl_pilih_val, _pl_base_ubah):
-                            _pl_ok_ubah += 1
-                            st.write(f"✅ {_nm_ubah[:45]}")
-                        else:
-                            _pl_fail_ubah += 1
-                            st.write(f"❌ {_nm_ubah[:45]}")
-                    st.success(f"Selesai: {_pl_ok_ubah} OK, {_pl_fail_ubah} GAGAL. Serap ulang untuk refresh.")
-
         # ══════════════════════════════════════════════════════
         # KOLOM KANAN — Buat Folder + Download Dokumen
         # ══════════════════════════════════════════════════════
+
+            # ── Ubah Metode Bulk (semua paket di daftar) ──────────────
+            if _pl_rows:
+                st.divider()
+                with st.container(border=True):
+                    st.markdown("**🔧 Ubah Metode Pengadaan — Semua Paket**")
+                    _pl_opsi_ubah_bulk = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_filtered}
+                    _pl_sel_ubah_bulk = list(_pl_opsi_ubah_bulk.keys())
+                    _pl_metode_bulk = st.selectbox(
+                        "Target metode:",
+                        list(pl_engine.METODE_PL_MAP.keys()),
+                        index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                        key="pk_ubah_metode_bulk_target",
+                    )
+                    _pl_kat_id_bulk, _pl_pilih_val_bulk = pl_engine.METODE_PL_MAP[_pl_metode_bulk]
+                    if st.button(
+                        f"🔄 Ubah Metode ({len(_pl_sel_ubah_bulk)} paket) via CDP",
+                        disabled=not _pl_sel_ubah_bulk,
+                        use_container_width=True,
+                        key="pk_btn_ubah_metode_bulk",
+                    ):
+                        _pl_base_ubah_b = pl_engine.BASE_URL + "/"
+                        _pl_ok_b = _pl_fail_b = 0
+                        for _nm_b in _pl_sel_ubah_bulk:
+                            _kd_b = _pl_opsi_ubah_bulk[_nm_b]
+                            if pl_engine.ubah_metode_pl_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b):
+                                _pl_ok_b += 1
+                                st.write(f"✅ {_nm_b[:45]}")
+                            else:
+                                _pl_fail_b += 1
+                                st.write(f"❌ {_nm_b[:45]}")
+                        st.success(f"Selesai: {_pl_ok_b} OK, {_pl_fail_b} GAGAL.")
+
         with _pl_col_kanan:
-            st.markdown("#### 4. Buat Folder Paket")
+            st.markdown("#### 3. Buat Folder Paket")
 
             if "pl_folder_just_created" in st.session_state:
                 _msg = st.session_state.pop("pl_folder_just_created")
@@ -4467,6 +4354,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                                 _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
                                     except Exception as _pl_kak_e:
                                         _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
+                                    # Serap Penyedia otomatis setelah download
+                                    try:
+                                        import parse_kak_pl as _pkpl_sp
+                                        _sp_res = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
+                                        if _sp_res.get("updated", 0) > 0:
+                                            _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                        else:
+                                            _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
+                                    except Exception as _sp_e:
+                                        _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
                                 if _pl_kp_b:
                                     try:
                                         import hps_engine as _pl_hps_eng
@@ -4512,38 +4409,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
-            # ── #3: Serap Penyedia + Download Dokumen Bulk ───────────────────────
+            # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 3. Serap Penyedia + Download Dokumen SPSE")
-            st.caption("Pilih aksi lalu klik tombol — berjalan untuk semua paket berfolder.")
-            _cb_serap_pyd  = st.checkbox("Serap Penyedia dari Draft_PL (nama, NPWP)", value=True, key="pl_cb_serap_pyd")
-            _cb_dl_dok_bulk = st.checkbox("Download Dokumen SPSE bulk (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+            st.markdown("#### 4. Update Data Folder")
+            st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
+            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk_pk")
+            _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder_pk")
 
-            if st.button("📦 Serap Penyedia + Dokumen SPSE", use_container_width=True, key="btn_pyd_dl_gabung"):
-                # Aksi: Serap penyedia dari Draft_PL PDF
-                if _cb_serap_pyd:
-                    import parse_kak_pl as _pkp
-                    _pb_pyd = st.progress(0.0)
-                    _st_pyd = st.empty()
-                    _logs_pyd = []
-                    def _cb_pyd(p, m):
-                        _pb_pyd.progress(min(max(p, 0.0), 1.0))
-                        _logs_pyd.append(m)
-                        _st_pyd.info(m)
-                    try:
-                        _r_pyd = _pkp.serap_penyedia_pl(progress_cb=_cb_pyd)
-                        _c1, _c2, _c3, _c4 = st.columns(4)
-                        _c1.metric("Update", _r_pyd.get("updated", 0))
-                        _c2.metric("Folder NF", _r_pyd.get("not_found", 0))
-                        _c3.metric("No data", _r_pyd.get("no_data", 0))
-                        _c4.metric("Error", len(_r_pyd.get("errors", [])))
-                        if _r_pyd.get("errors"):
-                            with st.expander("Detail Error Penyedia"):
-                                for _e in _r_pyd["errors"]:
-                                    st.warning(_e)
-                    except Exception as _e:
-                        st.error(f"Gagal serap penyedia: {_e}")
-
+            if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_plpk as _keng_pl_dl
@@ -4599,151 +4472,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             state="complete", expanded=_dl_bulk_fail > 0,
                         )
 
-
-            # ── #5: Reset Status Folder — multiselect (kosong = semua) ───────
-            with st.expander("↩️ Reset Status Folder"):
-                st.caption("Kosongkan `folder_dibuat` agar paket muncul kembali di Buat Folder (folder fisik tidak dihapus).")
-                _opsi_reset_pl = {
-                    f"{r.get('nama_paket','')[:60]} — {r.get('jenis_pl','')}": r.get("kode_paket")
-                    for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")
-                }
-                if _opsi_reset_pl:
-                    from config import sb as _sb_reset
-                    _pilih_reset_pl = st.multiselect(
-                        "Pilih paket reset (kosong = semua):",
-                        list(_opsi_reset_pl.keys()),
-                        key="pl_ms_reset",
-                    )
-                    if st.button("↩️ Reset Status Folder", type="secondary", key="pl_btn_reset_folder"):
-                        # Jika kosong → reset semua; jika ada pilihan → reset pilihan saja
-                        _target_reset = _pilih_reset_pl if _pilih_reset_pl else list(_opsi_reset_pl.keys())
+                # Aksi: Reset status folder
+                if _cb_reset_folder:
+                    _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+                    if _opsi_reset_pl:
+                        from config import sb as _sb_reset
                         _reset_ok_pl = 0
-                        for _kr in [_opsi_reset_pl[k] for k in _target_reset]:
+                        for _kr in _opsi_reset_pl.keys():
                             try:
-                                _sb_reset().table("draft_paket_pl").update(
-                                    {"folder_dibuat": None}
-                                ).eq("kode_paket", _kr).execute()
+                                _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
                                 _reset_ok_pl += 1
                             except Exception as _er_pl:
                                 st.error(f"{_kr}: {_er_pl}")
                         if _reset_ok_pl:
                             st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
                         st.rerun()
-                else:
-                    st.info("Tidak ada paket dengan status folder yang bisa direset.")
+                    else:
+                        st.info("Tidak ada paket dengan status folder untuk direset.")
 
-            # ── Replicate pattern tender (sequential + per-paket log dict) ──
-            if st.button(
-                f"📁 Buat Semua Folder ({len(_pl_rows_belum)} paket)",
-                disabled=len(_pl_rows_belum) == 0,
-                use_container_width=True,
-                key="pl_btn_buat_semua",
-                type="secondary",
-            ):
-                from streamlit.runtime.scriptrunner import get_script_run_ctx as _pl_grc
-                _pl_ctx_bulk = _pl_grc()
-                _pl_bp = st.progress(0.0)
-                _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_bulk_plan)} paket...", expanded=True)
-                _pl_bulk_status_line = _pl_bulk_status.empty()
-                _pl_ok, _pl_fail = 0, 0
-                _pl_bulk_semua_log = {}  # {nama_folder: [log lines]}
-                for _pl_i, _pl_bp_item in enumerate(_pl_bulk_plan):
-                    _pl_bp.progress((_pl_i + 1) / len(_pl_bulk_plan))
-                    _pl_nf = _pl_bp_item["nama_folder"]
-                    _pl_kp_b = _pl_bp_item["kode_paket"]
-                    _pl_out_b = _pl_bp_item["out_base"]
-                    _pl_target_b = _pl_os.path.join(_pl_out_b, _pl_nf)
-                    _pl_bulk_status.update(label=f"[{_pl_i+1}/{len(_pl_bulk_plan)}] {_pl_nf[:60]}")
-                    _pl_paket_log = []
-                    try:
-                        _pl_r2 = _pl_sp.run(
-                            [_PL_PY, _PL_SCRIPT, "--mode", "pl", "--output-dir", _pl_out_b, _pl_nf],
-                            capture_output=True, text=True, timeout=120,
-                            creationflags=_PL_NO_WIN,
-                        )
-                        if _pl_r2.returncode == 0:
-                            _pl_ok += 1
-                            _pl_paket_log.append("✅ Folder dibuat")
-                            try:
-                                pl_engine.tandai_folder_dibuat(_pl_kp_b)
-                            except Exception as _pl_e_upd:
-                                _pl_paket_log.append(f"⚠ tandai_folder_dibuat: {_pl_e_upd}")
-                            # Download dokumen + parse KAK + scrape HPS
-                            if _pl_dl_dokumen and _pl_kp_b:
-                                def _pl_bulk_cb(msg, _log=_pl_paket_log):
-                                    _log.append(msg)
-                                    _pl_bulk_status_line.code("\n".join(_log[-10:]))
-                                try:
-                                    _pl_dl_hasil = pl_engine.download_dokumen_paket_pl(
-                                        _pl_kp_b, _pl_target_b,
-                                        progress_cb=_pl_bulk_cb,
-                                    )
-                                    _pl_paket_log.append(
-                                        f"📎 Download: ✅{len(_pl_dl_hasil['ok'])} file"
-                                        + (f" | Draft: {_pl_os.path.basename(_pl_dl_hasil['draft_pdf'])}" if _pl_dl_hasil.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
-                                    )
-                                    for _pl_e in _pl_dl_hasil.get("error", []):
-                                        _pl_paket_log.append(f"  ❌ {_pl_e}")
-                                except Exception as _pl_dl_e:
-                                    _pl_paket_log.append(f"❌ Download error: {_pl_dl_e}")
-                                # Parse KAK
-                                try:
-                                    _pl_kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target_b)
-                                    if _pl_kak_p:
-                                        _pl_kak_d = parse_kak_pl.parse_kak(_pl_kak_p)
-                                        _pl_kak_u = {k: v for k, v in _pl_kak_d.items() if v}
-                                        if _pl_kak_u:
-                                            pl_engine.simpan_paket_pl({"kode_paket": _pl_kp_b, **_pl_kak_u})
-                                            _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
-                                except Exception as _pl_kak_e:
-                                    _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
-                            # Scrape HPS → tulis langsung ke Excel
-                            if _pl_kp_b:
-                                try:
-                                    import hps_engine as _pl_hps_eng
-                                    _xl_plb = _cari_xlsm_pl(_pl_target_b)
-                                    if _xl_plb:
-                                        _pl_hps_res = _pl_hps_eng.scrape_hps_pl_ke_excel(_pl_kp_b, _xl_plb)
-                                        if _pl_hps_res.get("ok"):
-                                            _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} baris → Excel")
-                                        else:
-                                            _pl_paket_log.append(f"⚠ HPS: {_pl_hps_res.get('pesan','-')}")
-                                    else:
-                                        _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
-                                except Exception as _pl_hps_e:
-                                    _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
-                            # Refresh Template (jika dicentang)
-                            if _pl_rt_refresh:
-                                try:
-                                    from refresh_template import refresh_template_paket as _rt_fn
-                                    from pathlib import Path as _rt_P
-                                    _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
-                                    _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
-                                    _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
-                                    _pl_paket_log.append("🔄 Refresh Template: selesai")
-                                except Exception as _rt_e:
-                                    _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
-                        else:
-                            _pl_fail += 1
-                            _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
-                    except _pl_sp.TimeoutExpired:
-                        _pl_fail += 1
-                        _pl_paket_log.append("❌ Timeout buat folder")
-                    except Exception as _pl_e_x:
-                        _pl_fail += 1
-                        import traceback as _pl_tb
-                        _pl_paket_log.append(f"❌ EXC {type(_pl_e_x).__name__}: {_pl_e_x}")
-                        _pl_paket_log.append(_pl_tb.format_exc()[-300:])
-                    _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
-
-                _pl_bulk_status_line.empty()
-                _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
-                _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
-                with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
-                    for _pl_nf, _pl_logs in _pl_bulk_semua_log.items():
-                        st.markdown(f"**{_pl_nf[:70]}**")
-                        st.code("\n".join(_pl_logs))
-                st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
 
             # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
             _pl_rows_sudah = [
