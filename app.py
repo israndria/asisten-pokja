@@ -67,6 +67,43 @@ import kk_evaluasi_engine
 import pl_engine
 import parse_kak_pl
 import pl_kirimpesan_engine
+import dokpil_engine_pl as _depl_jkk
+import dokpil_engine_plpk as _depl_pk
+import upload_dokpil_pl as _udpl
+import kualifikasi_engine_pl as _ke_pl_jkk
+import kualifikasi_engine_plpk as _ke_pl_pk
+import kualifikasi_parser_pl as _kp_pl
+import hasil_evaluasi_pl_engine as _he_pl_jkk
+import hasil_evaluasi_plpk_engine as _he_pl_pk
+import sbu_picker as _sp_global
+
+
+@st.cache_data(ttl=3600)
+def _lookup_singkatan_dinas(satker: str) -> str:
+    if not satker:
+        return "DPUPR"
+    try:
+        from config import sb as _sb_f
+        r = _sb_f().table("master_dinas").select("singkatan").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
+        if r.data:
+            return r.data[0].get("singkatan") or "DPUPR"
+    except Exception:
+        pass
+    return "DPUPR"
+
+
+@st.cache_data(ttl=3600)
+def _lookup_telepon_pp(satker: str) -> str:
+    if not satker:
+        return ""
+    try:
+        from config import sb as _sb_f
+        r = _sb_f().table("master_dinas").select("telepon_pp").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
+        if r.data:
+            return r.data[0].get("telepon_pp") or ""
+    except Exception:
+        pass
+    return ""
 
 
 def _pl_paket_ulang(row: dict) -> bool:
@@ -1797,33 +1834,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             "KAK / Rancangan Kontrak / Uraian Singkat / Informasi Lainnya tugas PPK (bukan PP)."
         )
 
-        import dokpil_engine_pl as _depl
-        import upload_dokpil_pl as _udpl
-
-        @st.cache_data(ttl=3600)
-        def _lookup_singkatan_dinas(satker: str) -> str:
-            if not satker:
-                return "DPUPR"
-            try:
-                from config import sb as _sb_f
-                r = _sb_f().table("master_dinas").select("singkatan").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
-                if r.data:
-                    return r.data[0].get("singkatan") or "DPUPR"
-            except Exception:
-                pass
-            return "DPUPR"
-
-        def _lookup_telepon_pp(satker: str) -> str:
-            if not satker:
-                return ""
-            try:
-                from config import sb as _sb_f
-                r = _sb_f().table("master_dinas").select("telepon_pp").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
-                if r.data:
-                    return r.data[0].get("telepon_pp") or ""
-            except Exception:
-                pass
-            return ""
+        _depl = _depl_jkk  # alias — sudah di-import top-level
 
         _plsp_rows = pl_engine.load_draft_pl()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
@@ -1847,7 +1858,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.session_state[f"plsp_chk_{_rr['kode_paket']}"] = False
                         st.rerun()
 
-                import sbu_picker as _sp
+                _sp = _sp_global  # alias — sudah di-import top-level
 
                 _plsp_selected = []
                 for _rr in _plsp_rows:
@@ -3220,9 +3231,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
     with _pl_tab5:
-        import kualifikasi_engine_pl as _ke_pl
-        import kualifikasi_parser_pl as _kp_pl
-        import hasil_evaluasi_pl_engine as _he_pl
+        _ke_pl = _ke_pl_jkk  # alias — sudah di-import top-level
+        _he_pl = _he_pl_jkk
 
         st.markdown("## Download Dokumen Kualifikasi — Pengadaan Langsung")
         st.caption("Download dok kualifikasi peserta dari SPSE + populate sheet Hasil Evaluasi di BAPLJKK.")
@@ -5112,33 +5122,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             "KAK / Rancangan Kontrak / Uraian Singkat / Informasi Lainnya tugas PPK (bukan PP)."
         )
 
-        import dokpil_engine_plpk as _depl
-        import upload_dokpil_pl as _udpl
-
-        @st.cache_data(ttl=3600)
-        def _lookup_singkatan_dinas(satker: str) -> str:
-            if not satker:
-                return "DPUPR"
-            try:
-                from config import sb as _sb_f
-                r = _sb_f().table("master_dinas").select("singkatan").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
-                if r.data:
-                    return r.data[0].get("singkatan") or "DPUPR"
-            except Exception:
-                pass
-            return "DPUPR"
-
-        def _lookup_telepon_pp(satker: str) -> str:
-            if not satker:
-                return ""
-            try:
-                from config import sb as _sb_f
-                r = _sb_f().table("master_dinas").select("telepon_pp").ilike("nama_dinas", f"%{satker[:30]}%").limit(1).execute()
-                if r.data:
-                    return r.data[0].get("telepon_pp") or ""
-            except Exception:
-                pass
-            return ""
+        _depl = _depl_pk  # alias — sudah di-import top-level
 
         _plsp_rows = pl_engine.load_draft_pl()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
@@ -5162,7 +5146,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.session_state[f"plsp_chk_{_rr['kode_paket']}"] = False
                         st.rerun()
 
-                import sbu_picker as _sp
+                _sp = _sp_global  # alias — sudah di-import top-level
 
                 _plsp_selected = []
                 for _rr in _plsp_rows:
@@ -6535,9 +6519,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
     with _pl_tab5:
-        import kualifikasi_engine_plpk as _ke_pl
-        import kualifikasi_parser_pl as _kp_pl
-        import hasil_evaluasi_plpk_engine as _he_pl
+        _ke_pl = _ke_pl_pk   # alias — sudah di-import top-level
+        _he_pl = _he_pl_pk
 
         st.markdown("## Download Dokumen Kualifikasi — Pengadaan Langsung")
         st.caption("Download dok kualifikasi peserta dari SPSE + populate sheet Hasil Evaluasi di BAPLJKK.")
