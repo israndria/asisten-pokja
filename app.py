@@ -3230,9 +3230,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
-                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
-                ).order("nomor_urut").execute().data or []
+                _raw7 = pl_engine.load_draft_pl()
+                _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
+                _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
+                st.session_state["pl7_rows"] = _raw7
             except Exception as _e7:
                 st.session_state["pl7_rows"] = []
                 st.error(f"Gagal load paket PL: {_e7}")
@@ -6544,9 +6545,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
-                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
-                ).order("nomor_urut").execute().data or []
+                _raw7 = pl_engine.load_draft_pl()
+                _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
+                _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
+                st.session_state["pl7_rows"] = _raw7
             except Exception as _e7:
                 st.session_state["pl7_rows"] = []
                 st.error(f"Gagal load paket PL: {_e7}")
