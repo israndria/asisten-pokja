@@ -1472,14 +1472,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         with _kd_col_detail:
             st.markdown("### Preview")
             if _kd_selected:
-                st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
-                for _p in _kd_selected:
-                    _tgl_a = _p["_tgl_acara"]
-                    st.markdown(
-                        f"- **{_p['nama_paket'][:55]}**  \n"
-                        f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
-                        f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
-                    )
+                if False:
+                    st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
+                    for _p in _kd_selected:
+                        _tgl_a = _p["_tgl_acara"]
+                        st.markdown(
+                            f"- **{_p['nama_paket'][:55]}**  \n"
+                            f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
+                            f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
+                        )
             else:
                 st.info("Pilih paket di sebelah kiri.")
 
@@ -4784,14 +4785,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         with _kd_col_detail:
             st.markdown("### Preview")
             if _kd_selected:
-                st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
-                for _p in _kd_selected:
-                    _tgl_a = _p["_tgl_acara"]
-                    st.markdown(
-                        f"- **{_p['nama_paket'][:55]}**  \n"
-                        f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
-                        f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
-                    )
+                if False:
+                    st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
+                    for _p in _kd_selected:
+                        _tgl_a = _p["_tgl_acara"]
+                        st.markdown(
+                            f"- **{_p['nama_paket'][:55]}**  \n"
+                            f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
+                            f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
+                        )
             else:
                 st.info("Pilih paket di sebelah kiri.")
 
