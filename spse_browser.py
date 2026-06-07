@@ -356,7 +356,7 @@ async def _pilih_penyedia_async(kode_paket: str, npwp: str, base_url: str, nama_
         chk_idx = 0  # index checkbox yang cocok
 
         # Strategi 1: URL dengan query string NPWP → SPSE langsung trigger search
-        url_npwp = f"{base_url}pilihpenyedia/{kode_paket}?search=true&nama=&npwp={npwp_fmt}"
+        url_npwp = f"{base_url}nontender/{kode_paket}/pilihpenyedia?search=true&nama=&npwp={npwp_fmt}"
         await page.goto(url_npwp, wait_until="domcontentloaded", timeout=25000)
         await page.wait_for_timeout(2000)
 
@@ -379,7 +379,7 @@ async def _pilih_penyedia_async(kode_paket: str, npwp: str, base_url: str, nama_
                     if w not in ("CV.", "PT.", "CV", "PT", "UD.", "UD", "TB.", "TB",
                                  "FIRMA", "FA.", "FA", "KOPERASI")]
             if kata:
-                url_base = f"{base_url}pilihpenyedia/{kode_paket}"
+                url_base = f"{base_url}nontender/{kode_paket}/pilihpenyedia"
                 await page.goto(url_base, wait_until="domcontentloaded", timeout=25000)
                 await page.wait_for_timeout(1500)
                 await page.locator("input[name='nama']").fill(kata[0])
@@ -509,6 +509,151 @@ def pilih_penyedia_via_playwright(kode_paket: str, npwp: str, base_url: str, nam
     Lebih reliable dari requests karena data penyedia di-render via JS.
     """
     return _run(_pilih_penyedia_async(kode_paket, npwp, base_url, nama_penyedia=nama_penyedia), timeout=180)
+
+
+def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penyedia: str = "", cookie_str: str = "") -> dict:
+    """
+    Pilih penyedia PL ke SPSE via direct HTTP API (tanpa Playwright).
+
+    Flow:
+      1. GET /pilihpenyedia/{kode} — ambil CSRF
+      2. GET /pilihpenyedia/{kode}?search=true&nama={kata_kunci}&npwp= — cari rekanan
+      3. POST /action/nonlelang.pengadaanlctr/simpanpilihpenyedia?lelangId={kode} — submit
+
+    Strategi pencarian:
+      - Prioritas 1: search by NPWP (format 15-digit)
+      - Prioritas 2: search by nama (kata signifikan pertama)
+      - Match: rkn_npwp_16 == npwp16 (16-digit) ATAU nama exact, atau satu-satunya hasil
+
+    Return: {"ok": bool, "nama": str, "mode": str, "pesan": str}
+    """
+    import re as _re
+    import requests as _req
+    from bs4 import BeautifulSoup as _BS
+
+    import urllib.parse as _up
+
+    _base = (base_url or "").rstrip("/")
+    cookie = cookie_str or get_spse_cookies()
+    if not cookie:
+        return {"ok": False, "pesan": "Cookie SPSE kosong"}
+
+    url_form = f"{_base}/pilihpenyedia/{kode_paket}"
+    url_edit = f"{_base}/nontender/{kode_paket}/edit"
+    sess = _req.Session()
+    sess.headers.update({
+        "Cookie": cookie,
+        "User-Agent": "Mozilla/5.0",
+        "Referer": url_edit,
+    })
+
+    # Helper: parse semua rekanan dari soup
+    def _parse_rekanan(soup) -> dict:
+        result = {}
+        for inp in soup.find_all("input"):
+            name = inp.get("name", "")
+            val = inp.get("value", "") or ""
+            m = _re.match(r"rekananList\[(\d+)\]\.(\w+)", name)
+            if m:
+                idx, field = int(m.group(1)), m.group(2)
+                result.setdefault(idx, {})[field] = val
+        return result
+
+    def _get_csrf(soup) -> str:
+        inp = soup.find("input", {"name": "authenticityToken"})
+        return inp["value"] if inp else ""
+
+    # Siapkan NPWP dalam 2 format
+    npwp_fmt = _format_npwp_15(npwp)
+    npwp_digits = "".join(c for c in npwp if c.isdigit())
+    # NPWP 16-digit: pad kiri jika kurang, ambil 16 digit TERAKHIR jika lebih
+    # (NPWP baru Indonesia selalu 16 digit, digit ke-1 adalah prefix tambahan)
+    npwp16 = npwp_digits.zfill(16) if len(npwp_digits) <= 16 else npwp_digits[-16:]
+
+    rekanan_data = {}
+    target_idx = None
+    search_mode = ""
+    csrf = ""
+
+    # Step 0: Cek halaman edit — apakah penyedia sudah terpilih (NPWP16 match)
+    r_edit = sess.get(url_edit, timeout=45)
+    if r_edit.status_code == 200:
+        soup_edit = _BS(r_edit.text, "html.parser")
+        # Tabel rekanan terpilih berisi NPWP16 sebagai teks di kolom NPWP
+        edit_txt = soup_edit.get_text(separator=" ")
+        if npwp16 in edit_txt or npwp16.lstrip("0") in edit_txt:
+            # NPWP16 sudah ada di tabel rekanan terpilih
+            # Cari nama penyedia dari teks tabel
+            nama_hasil = nama_penyedia
+            for tbl in soup_edit.find_all("table"):
+                ttxt = tbl.get_text(separator=" ", strip=True)
+                if npwp16 in ttxt or npwp16.lstrip("0") in ttxt:
+                    # Ambil nama dari baris tabel: biasanya "1 {nama} {npwp16} ..."
+                    rows = tbl.find_all("tr")
+                    for row in rows:
+                        cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                        if any(npwp16 in c or npwp16.lstrip("0") in c for c in cells):
+                            # Nama biasanya cell ke-1 (setelah No)
+                            if len(cells) >= 2:
+                                nama_hasil = cells[1]
+                    break
+            return {"ok": True, "nama": nama_hasil, "mode": "sudah_terpilih", "pesan": "Penyedia sudah terpilih sebelumnya"}
+
+    # Step 1+2a gabung: Search by NPWP16 (format 16-digit leading-zero) + ambil CSRF
+    # SPSE hanya match NPWP jika format 16-digit dengan leading zero persis
+    sess.headers.update({"Referer": url_form})
+    url_search_npwp = f"{url_form}?search=true&nama=&npwp={_up.quote(npwp16)}&jenisIjin="
+    r1 = sess.get(url_search_npwp, timeout=45)
+    if r1.status_code == 200:
+        soup1 = _BS(r1.text, "html.parser")
+        csrf = _get_csrf(soup1)
+        rekanan_data = _parse_rekanan(soup1)
+        for idx, d in rekanan_data.items():
+            np16 = d.get("rkn_npwp_16", "").strip()
+            if npwp16 and (np16 == npwp16 or np16.lstrip("0") == npwp16.lstrip("0")):
+                target_idx = idx
+                search_mode = "npwp_exact"
+                break
+        if target_idx is None and len(rekanan_data) == 1:
+            target_idx = list(rekanan_data.keys())[0]
+            search_mode = "npwp_single"
+
+    # Fallback: GET form saja untuk CSRF jika search NPWP tidak menghasilkan rekanan
+    if not csrf:
+        r0 = sess.get(url_form, timeout=45)
+        if r0.status_code == 200:
+            csrf = _get_csrf(_BS(r0.text, "html.parser"))
+    if not csrf:
+        return {"ok": False, "pesan": "CSRF tidak ditemukan di form pilih penyedia"}
+
+    if target_idx is None:
+        return {"ok": False, "pesan": f"Penyedia tidak ditemukan di DB rekanan SPSE (NPWP: {npwp_fmt}). Pastikan penyedia sudah terdaftar di SPSE sebelum dipilih."}
+
+    d = rekanan_data[target_idx]
+    nama_hasil = d.get("rkn_nama", nama_penyedia)
+
+    # Step 3: Submit
+    url_submit = f"{_base}/action/nonlelang.pengadaanlctr/simpanpilihpenyedia?lelangId={kode_paket}"
+    payload = {
+        "authenticityToken": csrf,
+        "rekananList[0].rkn_id": d.get("rkn_id", ""),
+        "rekananList[0].rkn_nama": d.get("rkn_nama", ""),
+        "rekananList[0].rkn_npwp": d.get("rkn_npwp", ""),
+        "rekananList[0].rkn_npwp_16": d.get("rkn_npwp_16", ""),
+        "rekananList[0].rkn_email": d.get("rkn_email", ""),
+        "rekananList[0].rkn_telepon": d.get("rkn_telepon", ""),
+        "rekananList[0].rkn_alamat": d.get("rkn_alamat", ""),
+    }
+    sess.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
+    rp = sess.post(url_submit, data=payload, allow_redirects=False, timeout=45)
+    ok = rp.status_code in (200, 302)
+    return {
+        "ok": ok,
+        "nama": nama_hasil,
+        "mode": search_mode,
+        "status": rp.status_code,
+        "pesan": rp.headers.get("Location", "") if ok else f"HTTP {rp.status_code}: {rp.text[:200]}",
+    }
 
 
 def halaman_aktif() -> Page | None:
