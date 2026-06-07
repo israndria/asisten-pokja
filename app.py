@@ -233,10 +233,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
-        "2️⃣ Kirim Undangan DPP",
         "3️⃣ Buat Jadwal",
         "4️⃣ Setup Paket",
         "5️⃣ Download Kualifikasi",
@@ -1272,7 +1271,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    with _pl_tab2:
+    if False:  # with _pl_tab2 (Kirim Undangan DPP) di-hide:
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
 
         with _kd_col_list:
@@ -3545,10 +3544,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ============================================================
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
+    _pl_tab0, _pl_tab1, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
         "0️⃣ Import DPA",
         "1️⃣ Draft Paket PL",
-        "2️⃣ Kirim Undangan DPP",
         "3️⃣ Buat Jadwal",
         "4️⃣ Setup Paket",
         "5️⃣ Download Kualifikasi",
@@ -4584,7 +4582,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    with _pl_tab2:
+    if False:  # with _pl_tab2 (Kirim Undangan DPP) di-hide:
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
 
         with _kd_col_list:
