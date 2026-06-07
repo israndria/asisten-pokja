@@ -1486,7 +1486,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.info("Pilih paket di sebelah kiri.")
 
             st.divider()
-            st.markdown("### Upload BA Reviu DPP")
+            st.markdown("### 3. Upload BA Reviu DPP")
             st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
 
             import upload_ba_reviu_pl as _ubrpl
@@ -4800,7 +4800,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.info("Pilih paket di sebelah kiri.")
 
             st.divider()
-            st.markdown("### Upload BA Reviu DPP")
+            st.markdown("### 3. Upload BA Reviu DPP")
             st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
 
             import upload_ba_reviu_pl as _ubrpl
