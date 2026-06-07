@@ -275,10 +275,22 @@ def build_sbu_klasifikasi(sbu_2020: str, sbu_2015: str) -> str:
 
 
 # ── Kinerja Penyedia (opsional tapi direkomendasikan) ────────────────────────
-KINERJA_PENYEDIA_DEFAULT = (
-    "Memiliki kinerja penyedia dengan nilai baik dan/atau sangat baik dalam kurun waktu 4 (empat) tahun terakhir "
-    "untuk pekerjaan konstruksi yang penilaian kinerja Penyedia Barang/Jasa telah tercantum dalam Sistem Informasi "
-    "Kinerja Penyedia (SIKaP) dan/atau dalam hal penilaian kinerja terhadap Penyedia Barang/Jasa yang bersangkutan "
-    "pada SIKaP belum tersedia atau belum dilakukan penilaian kinerja oleh PPK maka penilaian kinerja dapat dilakukan "
-    "secara manual sesuai dengan Peraturan LKPP Nomor 4 Tahun 2021 tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah"
+KINERJA_PENYEDIA_JKK = (
+    "Memiliki kinerja penyedia dengan nilai Baik dan/atau Sangat Baik dalam kurun waktu 4 (empat) tahun terakhir "
+    "untuk pekerjaan jasa konsultansi konstruksi sebagaimana tercantum dalam Sistem Informasi Kinerja Penyedia (SIKaP), "
+    "kecuali bagi pelaku usaha yang baru berdiri kurang dari 3 (tiga) tahun dan belum memiliki pengalaman, "
+    "atau apabila penilaian kinerja pada SIKaP belum tersedia atau belum dilakukan oleh PPK, "
+    "maka penilaian kinerja dapat dilakukan secara manual sesuai Peraturan LKPP Nomor 4 Tahun 2021 "
+    "tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah."
 )
+
+KINERJA_PENYEDIA_PK = (
+    "Memiliki kinerja penyedia dengan nilai Baik dan/atau Sangat Baik dalam kurun waktu 4 (empat) tahun terakhir "
+    "untuk pekerjaan konstruksi sebagaimana tercantum dalam Sistem Informasi Kinerja Penyedia (SIKaP), "
+    "kecuali bagi pelaku usaha yang baru berdiri kurang dari 3 (tiga) tahun dan belum memiliki pengalaman, "
+    "atau apabila penilaian kinerja pada SIKaP belum tersedia atau belum dilakukan oleh PPK, "
+    "maka penilaian kinerja dapat dilakukan secara manual sesuai Peraturan LKPP Nomor 4 Tahun 2021 "
+    "tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah."
+)
+
+KINERJA_PENYEDIA_DEFAULT = KINERJA_PENYEDIA_PK

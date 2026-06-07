@@ -12,6 +12,7 @@ Upload Dokpil PDF: lihat upload_dokpil_pl.py.
 Upload BA Reviu DPP: lihat upload_ba_reviu_pl.py.
 KAK/Kontrak/Uraian/Lainnya: tugas PPK (bukan PP), tidak di-handle di sini.
 """
+import re as _re
 import requests
 from bs4 import BeautifulSoup
 
@@ -123,24 +124,38 @@ def scrap_checklist_context(kode_paket: str) -> dict:
     csrf_inp = form.find("input", {"name": "authenticityToken"})
     csrf = csrf_inp["value"] if csrf_inp else None
 
-    # Kumpulkan ckm_id per kategori (admin, syarat=teknis, harga)
-    cats = {"admin": [], "syarat": [], "harga": []}
-    for cb in form.find_all("input", {"type": "checkbox"}):
-        name = cb.get("name", "")
-        val = cb.get("value", "")
-        if name.startswith("syaratAdmin[") and name.endswith(".ckm_id"):
-            cats["admin"].append(val)
-        elif name.startswith("syarat[") and name.endswith(".ckm_id"):
-            cats["syarat"].append(val)
-        elif name.startswith("syaratHarga[") and name.endswith(".ckm_id"):
-            cats["harga"].append(val)
+    # Parse pasangan chk_id + ckm_id per index per kategori
+    admin_map  = {}
+    syarat_map = {}
+    harga_map  = {}
+
+    for inp in form.find_all("input"):
+        name = inp.get("name", "")
+        val  = inp.get("value", "") or ""
+        m = _re.match(r"^(syaratAdmin|syarat|syaratHarga)\[(\d+)\]\.(chk_id|ckm_id)$", name)
+        if not m:
+            continue
+        prefix, idx, field = m.group(1), int(m.group(2)), m.group(3)
+        bucket = {"syaratAdmin": admin_map, "syarat": syarat_map, "syaratHarga": harga_map}[prefix]
+        bucket.setdefault(idx, {"chk_id": "", "ckm_id": ""})[field] = val
+
+    def _ol(d):
+        return [d[k] for k in sorted(d)]
+
+    admin_items  = _ol(admin_map)
+    syarat_items = _ol(syarat_map)
+    harga_items  = _ol(harga_map)
 
     return {
-        "csrf":       csrf,
-        "cookie":     cookie,
-        "admin_ids":  cats["admin"],
-        "syarat_ids": cats["syarat"],
-        "harga_ids":  cats["harga"],
+        "csrf":         csrf,
+        "cookie":       cookie,
+        "admin_items":  admin_items,
+        "syarat_items": syarat_items,
+        "harga_items":  harga_items,
+        # Backward compat:
+        "admin_ids":    [d["ckm_id"] for d in admin_items],
+        "syarat_ids":   [d["ckm_id"] for d in syarat_items],
+        "harga_ids":    [d["ckm_id"] for d in harga_items],
         "url_submit": f"{BASE}/dokumennontender/{kode_paket}/checklistsubmit",
         "url_form":   url,
     }
@@ -194,8 +209,8 @@ def submit_ldk_pl(
     kode_paket: str,
     sbu_baru: str = "",
     sbu_lama: str = "",
-    centang_admin_indices: list[int] | None = None,
-    teknis_centang_indices: list[int] | None = None,
+    centang_admin_ckm_ids: list[str] | None = None,
+    teknis_centang_ckm_ids: list[str] | None = None,
     izin_extra: list[dict] | None = None,
     kinerja_text: str = "",
     base_url: str = "",
@@ -242,33 +257,45 @@ def submit_ldk_pl(
         payload[f"ijin[{i}].chk_klasifikasi"] = ij["klasifikasi"]
 
     # ── SYARAT ADMINISTRASI ───────────────────────────────────────
-    # Default: centang hanya idx 0-3 (413/414/415/416), SKIP idx 4-5 (422/423).
-    if centang_admin_indices is None:
-        centang_admin_indices = [0, 1, 2, 3]
+    # Default: centang 413/414/415/416
+    if centang_admin_ckm_ids is None:
+        centang_admin_ckm_ids = ["413", "414", "415", "416"]
 
     for i, item in enumerate(ctx["admin_list"]):
         chk_id = item.get("chk_id", "")
-        ckm_id = item.get("ckm_id", "")
+        ckm_id = str(item.get("ckm_id", ""))
         payload[f"syaratAdmin[{i}].chk_id"] = chk_id
-        if i in centang_admin_indices:
+        if ckm_id in centang_admin_ckm_ids:
             payload[f"syaratAdmin[{i}].ckm_id"] = ckm_id
             payload[f"checklist_kualifikasi_administrasi_ckm_id[{i}]"] = ckm_id
 
     # ── SYARAT TEKNIS ─────────────────────────────────────────────
-    # Default centang idx 0 (433) + idx 1 (434).
-    if teknis_centang_indices is None:
-        teknis_centang_indices = [0, 1]
+    # Default centang 433 (Pengalaman) + 434 (Pekerjaan Sejenis).
+    if teknis_centang_ckm_ids is None:
+        teknis_centang_ckm_ids = ["433", "434"]
+
+    # Logika Kinerja (996): Cek apakah sudah ada di teknis_list
+    kinerja_exists = False
+    if kinerja_text:
+        for item in ctx["teknis_list"]:
+            if str(item.get("ckm_id", "")) == "996":
+                kinerja_exists = True
+                if "996" not in teknis_centang_ckm_ids:
+                    teknis_centang_ckm_ids.append("996")
+                break
 
     for i, item in enumerate(ctx["teknis_list"]):
         chk_id = item.get("chk_id", "")
-        ckm_id = item.get("ckm_id", "")
+        ckm_id = str(item.get("ckm_id", ""))
         payload[f"syaratTeknis[{i}].chk_id"] = chk_id
-        if i in teknis_centang_indices:
+        if ckm_id in teknis_centang_ckm_ids:
             payload[f"syaratTeknis[{i}].ckm_id"] = ckm_id
             payload[f"checklist_kualifikasi_teknis_ckm_id[{i}]"] = ckm_id
+            if ckm_id == "996" and kinerja_text:
+                payload[f"syaratTeknis[{i}].chk_nama"] = kinerja_text
 
     # ── KINERJA PENYEDIA (custom row baru) ────────────────────────
-    if kinerja_text:
+    if kinerja_text and not kinerja_exists:
         n = len(ctx["teknis_list"])  # index lanjut setelah bawaan
         payload[f"syaratTeknis[{n}].chk_id"] = ""
         payload[f"syaratTeknis[{n}].ckm_id"] = "996"
@@ -377,18 +404,18 @@ def submit_checklist_pl(
     ctx = scrap_checklist_context(kode_paket)
     payload = {"authenticityToken": ctx["csrf"]}
 
-    if centang_admin_all:
-        for i, cid in enumerate(ctx["admin_ids"]):
-            payload[f"syaratAdmin[{i}].chk_id"] = ""
-            payload[f"syaratAdmin[{i}].ckm_id"] = cid
-    if centang_syarat_all:
-        for i, cid in enumerate(ctx["syarat_ids"]):
-            payload[f"syarat[{i}].chk_id"] = ""
-            payload[f"syarat[{i}].ckm_id"] = cid
-    if centang_harga_all:
-        for i, cid in enumerate(ctx["harga_ids"]):
-            payload[f"syaratHarga[{i}].chk_id"] = ""
-            payload[f"syaratHarga[{i}].ckm_id"] = cid
+    for i, item in enumerate(ctx["admin_items"]):
+        payload[f"syaratAdmin[{i}].chk_id"] = item["chk_id"]
+        if centang_admin_all:
+            payload[f"syaratAdmin[{i}].ckm_id"] = item["ckm_id"]
+    for i, item in enumerate(ctx["syarat_items"]):
+        payload[f"syarat[{i}].chk_id"] = item["chk_id"]
+        if centang_syarat_all:
+            payload[f"syarat[{i}].ckm_id"] = item["ckm_id"]
+    for i, item in enumerate(ctx["harga_items"]):
+        payload[f"syaratHarga[{i}].chk_id"] = item["chk_id"]
+        if centang_harga_all:
+            payload[f"syaratHarga[{i}].ckm_id"] = item["ckm_id"]
 
     rp = requests.post(
         ctx["url_submit"],

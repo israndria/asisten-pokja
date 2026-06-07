@@ -940,11 +940,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
-            _pl_rt_refresh = st.checkbox(
-                "🔄 Refresh Template ke folder PL existing setelah buat folder",
-                value=False,
-                key="pl_cb_rt_refresh",
-            )
+            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -971,8 +967,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     "jenis_pl": _bj0,
                 })
 
-            st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
-
+            
             # ── #2: Checklist pilih paket untuk buat folder ──────────────────
             if _pl_rows_belum:
                 st.markdown("**Pilih paket yang akan dibuat foldernya:**")
@@ -2138,35 +2133,35 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     st.markdown("**Syarat Administrasi** *(default: centang idx 0-3, skip 422/423)*")
                     _ADMIN_LABEL = {
-                        0: "413 — KSWP (Wajib Pajak)",
-                        1: "414 — Kapasitas Hukum (Akta Pendirian)",
-                        2: "415 — Pakta Integritas",
-                        3: "416 — Surat Pernyataan Peserta",
-                        4: "422 — (skip default)",
-                        5: "423 — (skip default)",
+                        "413": "413 — KSWP (Wajib Pajak)",
+                        "414": "414 — Kapasitas Hukum (Akta Pendirian)",
+                        "415": "415 — Pakta Integritas",
+                        "416": "416 — Surat Pernyataan Peserta",
+                        "422": "422 — (skip default)",
+                        "423": "423 — (skip default)",
                     }
-                    _ldk_centang_admin_indices = []
+                    _ldk_centang_admin_ckm_ids = []
                     _cols_adm = st.columns(2)
-                    for _i, _lbl in _ADMIN_LABEL.items():
-                        with _cols_adm[_i % 2]:
-                            _default_adm = _i in (0, 1, 2, 3)
-                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_idx_{_i}"):
-                                _ldk_centang_admin_indices.append(_i)
+                    for _idx_iter, (_cid, _lbl) in enumerate(_ADMIN_LABEL.items()):
+                        with _cols_adm[_idx_iter % 2]:
+                            _default_adm = _cid in ("413", "414", "415", "416")
+                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_cid_{_cid}"):
+                                _ldk_centang_admin_ckm_ids.append(_cid)
 
                     st.markdown("**Syarat Teknis JKK Konstruksi** *(default: centang 0+1)*")
                     _TEKNIS_LABEL = {
-                        0: "433 — Pengalaman ≥1 JKK 4thn terakhir",
-                        1: "434 — Pengalaman pekerjaan sejenis",
-                        2: "435 — Pengalaman sejenis 10thn terakhir",
-                        3: "436 — Dispensasi penyedia kecil baru <3thn",
+                        "433": "433 — Pengalaman ≥1 JKK 4thn terakhir",
+                        "434": "434 — Pengalaman pekerjaan sejenis",
+                        "435": "435 — Pengalaman sejenis 10thn terakhir",
+                        "436": "436 — Dispensasi penyedia kecil baru <3thn",
                     }
-                    _ldk_teknis_indices = []
+                    _ldk_teknis_ckm_ids = []
                     _cols_tk = st.columns(2)
-                    for _i, _lbl in _TEKNIS_LABEL.items():
-                        with _cols_tk[_i % 2]:
-                            _default = _i in (0, 1)
-                            if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_idx_{_i}"):
-                                _ldk_teknis_indices.append(_i)
+                    for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
+                        with _cols_tk[_idx_iter % 2]:
+                            _default = _cid in ("433", "434")
+                            if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
+                                _ldk_teknis_ckm_ids.append(_cid)
 
                     import ldk_config as _ldk_cfg_pl
                     _ldk_tambah_kinerja = st.checkbox(
@@ -2202,8 +2197,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _p["kode_paket"],
                                 sbu_baru=_sbu_baru_global,
                                 sbu_lama=_sbu_lama_global,
-                                centang_admin_indices=_ldk_centang_admin_indices,
-                                teknis_centang_indices=_ldk_teknis_indices,
+                                centang_admin_ckm_ids=_ldk_centang_admin_ckm_ids,
+                                teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                 kinerja_text=_ldk_kinerja_text,
                             )
                             st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_ldk['status']}")
@@ -2278,8 +2273,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _kp,
                                     sbu_baru=_sbu_baru_global,
                                     sbu_lama=_sbu_lama_global,
-                                    centang_admin_indices=_ldk_centang_admin_indices,
-                                    teknis_centang_indices=_ldk_teknis_indices,
+                                    centang_admin_ckm_ids=_ldk_centang_admin_ckm_ids,
+                                    teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
                                 _ijin_note = f" | ijin CDP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
@@ -4257,11 +4252,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
-            _pl_rt_refresh = st.checkbox(
-                "🔄 Refresh Template ke folder PL existing setelah buat folder",
-                value=False,
-                key="pl_cb_rt_refresh",
-            )
+            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -4288,8 +4279,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     "jenis_pl": _bj0,
                 })
 
-            st.caption(f"{len(_pl_rows_belum)} paket belum ada folder")
-
+            
             # ── #2: Checklist pilih paket untuk buat folder ──────────────────
             if _pl_rows_belum:
                 st.markdown("**Pilih paket yang akan dibuat foldernya:**")
@@ -5455,35 +5445,35 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     st.markdown("**Syarat Administrasi** *(default: centang idx 0-3, skip 422/423)*")
                     _ADMIN_LABEL = {
-                        0: "413 — KSWP (Wajib Pajak)",
-                        1: "414 — Kapasitas Hukum (Akta Pendirian)",
-                        2: "415 — Pakta Integritas",
-                        3: "416 — Surat Pernyataan Peserta",
-                        4: "422 — (skip default)",
-                        5: "423 — (skip default)",
+                        "413": "413 — KSWP (Wajib Pajak)",
+                        "414": "414 — Kapasitas Hukum (Akta Pendirian)",
+                        "415": "415 — Pakta Integritas",
+                        "416": "416 — Surat Pernyataan Peserta",
+                        "422": "422 — (skip default)",
+                        "423": "423 — (skip default)",
                     }
-                    _ldk_centang_admin_indices = []
+                    _ldk_centang_admin_ckm_ids = []
                     _cols_adm = st.columns(2)
-                    for _i, _lbl in _ADMIN_LABEL.items():
-                        with _cols_adm[_i % 2]:
-                            _default_adm = _i in (0, 1, 2, 3)
-                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_idx_{_i}"):
-                                _ldk_centang_admin_indices.append(_i)
+                    for _idx_iter, (_cid, _lbl) in enumerate(_ADMIN_LABEL.items()):
+                        with _cols_adm[_idx_iter % 2]:
+                            _default_adm = _cid in ("413", "414", "415", "416")
+                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_cid_{_cid}"):
+                                _ldk_centang_admin_ckm_ids.append(_cid)
 
                     st.markdown("**Syarat Teknis JKK Konstruksi** *(default: centang 0+1)*")
                     _TEKNIS_LABEL = {
-                        0: "433 — Pengalaman ≥1 JKK 4thn terakhir",
-                        1: "434 — Pengalaman pekerjaan sejenis",
-                        2: "435 — Pengalaman sejenis 10thn terakhir",
-                        3: "436 — Dispensasi penyedia kecil baru <3thn",
+                        "433": "433 — Pengalaman ≥1 JKK 4thn terakhir",
+                        "434": "434 — Pengalaman pekerjaan sejenis",
+                        "435": "435 — Pengalaman sejenis 10thn terakhir",
+                        "436": "436 — Dispensasi penyedia kecil baru <3thn",
                     }
-                    _ldk_teknis_indices = []
+                    _ldk_teknis_ckm_ids = []
                     _cols_tk = st.columns(2)
-                    for _i, _lbl in _TEKNIS_LABEL.items():
-                        with _cols_tk[_i % 2]:
-                            _default = _i in (0, 1)
-                            if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_idx_{_i}"):
-                                _ldk_teknis_indices.append(_i)
+                    for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
+                        with _cols_tk[_idx_iter % 2]:
+                            _default = _cid in ("433", "434")
+                            if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
+                                _ldk_teknis_ckm_ids.append(_cid)
 
                     import ldk_config as _ldk_cfg_pl
                     _ldk_tambah_kinerja = st.checkbox(
@@ -5519,8 +5509,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _p["kode_paket"],
                                 sbu_baru=_sbu_baru_global,
                                 sbu_lama=_sbu_lama_global,
-                                centang_admin_indices=_ldk_centang_admin_indices,
-                                teknis_centang_indices=_ldk_teknis_indices,
+                                centang_admin_ckm_ids=_ldk_centang_admin_ckm_ids,
+                                teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                 kinerja_text=_ldk_kinerja_text,
                             )
                             st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_ldk['status']}")
@@ -5595,8 +5585,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _kp,
                                     sbu_baru=_sbu_baru_global,
                                     sbu_lama=_sbu_lama_global,
-                                    centang_admin_indices=_ldk_centang_admin_indices,
-                                    teknis_centang_indices=_ldk_teknis_indices,
+                                    centang_admin_ckm_ids=_ldk_centang_admin_ckm_ids,
+                                    teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
                                 _ijin_note = f" | ijin CDP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
