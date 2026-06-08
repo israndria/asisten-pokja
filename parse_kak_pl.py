@@ -440,7 +440,7 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
     return result
 
 
-def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None:
+def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: bool = False) -> str | None:
     """Cari folder paket PL di OUTPUT_DIR_PL_{JKK|PK}.
 
     Pola: '{nomor}. PL{jenis} - {nama_clean}'.
@@ -454,12 +454,20 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None
         return None
 
     nama_clean = sanitasi_nama_folder(nama_paket or "")
-    nama_lower = nama_clean.lower()
     nomor = nomor_urut or ""
+
+    if is_ulang:
+        folder_ulang_name = f"{nomor}. PL{jenis} - {nama_clean} (PL - Ulang)"
+        folder_ulang = os.path.join(root, folder_ulang_name)
+        if os.path.isdir(folder_ulang):
+            return folder_ulang
+
+    nama_lower = nama_clean.lower()
     folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
-        return candidate
+        if not is_ulang:
+            return candidate
     best = None
     best_score = 0
     for f in os.listdir(root):
@@ -467,8 +475,13 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str) -> str | None
         if not os.path.isdir(full):
             continue
         fl = f.lower()
+        ulang_in_f = "(pl - ulang)" in fl or "(pl-ulang)" in fl
+        if is_ulang and not ulang_in_f:
+            continue
+        if not is_ulang and ulang_in_f:
+            continue
         # Prioritas 1: exact suffix (case-insensitive)
-        if fl.endswith(nama_lower):
+        if fl.endswith(nama_lower) or fl.rstrip().endswith(nama_lower + " (pl - ulang)"):
             return full
         # Prioritas 2: semua kata nama ada di nama folder (word-set match)
         words = set(nama_lower.split())
@@ -492,7 +505,7 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             progress_cb(p, m)
 
     log(0.05, "Fetch daftar paket PL dari Supabase...")
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3").execute().data or []
+    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3,is_ulang").execute().data or []
     if kode_paket_filter:
         rows = [r for r in rows if r["kode_paket"] == kode_paket_filter]
     log(0.10, f"Total {len(rows)} paket")
@@ -507,7 +520,7 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
         kode = p["kode_paket"]
         nama = p["nama_paket"] or ""
         try:
-            folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK")
+            folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK", is_ulang=p.get("is_ulang", False))
             if not folder:
                 not_found += 1
                 log(prog, f"  - {kode}: folder paket tidak ditemukan")

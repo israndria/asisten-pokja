@@ -150,7 +150,7 @@ def resolve_folder_paket_pl(kode_paket: str) -> dict:
     try:
         from config import sb
         r = sb().table("draft_paket_pl").select(
-            "kode_paket,nama_paket,jenis_pl,nomor_urut"
+            "kode_paket,nama_paket,jenis_pl,nomor_urut,is_ulang"
         ).eq("kode_paket", kode_paket).maybe_single().execute()
         if not r.data:
             return {"ok": False, "path": "", "pesan": "Paket tidak ditemukan di database"}
@@ -158,7 +158,8 @@ def resolve_folder_paket_pl(kode_paket: str) -> dict:
         row = r.data
         import parse_kak_pl as _pkl
         folder_paket = _pkl._resolve_folder_pl(
-            row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "JKK")
+            row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "JKK"),
+            is_ulang=row.get("is_ulang", False)
         )
         if not folder_paket:
             return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 4)"}

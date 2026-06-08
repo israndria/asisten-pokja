@@ -79,7 +79,7 @@ def _find_xlsm(kode_paket: str) -> str:
     try:
         from config import sb
         r = sb().table("draft_paket_pl").select(
-            "kode_paket,nama_paket,jenis_pl,nomor_urut"
+            "kode_paket,nama_paket,jenis_pl,nomor_urut,is_ulang"
         ).eq("kode_paket", kode_paket).maybe_single().execute()
         if not r.data:
             return ""
@@ -87,7 +87,8 @@ def _find_xlsm(kode_paket: str) -> str:
         import parse_kak_pl as _pkl
         row = r.data
         folder_paket = _pkl._resolve_folder_pl(
-            row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "JKK")
+            row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "JKK"),
+            is_ulang=row.get("is_ulang", False)
         )
         if not folder_paket or not os.path.isdir(folder_paket):
             return ""

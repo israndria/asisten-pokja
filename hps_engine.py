@@ -365,10 +365,99 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
         r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
         r["total_nilai"] = hasil["total_nilai"]
         r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+
+        # Auto-generate markdown sebagai sumber data AI
+        try:
+            md_path = _tulis_hps_ke_md(kode_paket, excel_path, hasil)
+            r["md_path"] = md_path
+        except Exception as e:
+            print(f"Warning: Gagal tulis MD HPS: {e}")
+
         return r
     except Exception as e:
         return {"ok": False, "pesan": str(e), "count": 0, "warning": [],
                 "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+
+
+def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
+    """Auto-generate file markdown sebagai sumber data HPS untuk AI pra-reviu."""
+    folder = os.path.dirname(os.path.abspath(excel_path))
+    md_path = os.path.join(folder, f"_HPS_{kode_paket}.md")
+
+    items = hasil.get("items", [])
+    total_nilai = hasil.get("total_nilai", 0)
+    total_bulat = hasil.get("total_nilai_bulat", 0)
+
+    # Helper format Rp ribuan titik
+    def _rp(n): return f"Rp {int(round(n)):,}".replace(",", ".")
+
+    non_divisi = [it for it in items if not it["is_divisi"]]
+    divisi = [it for it in items if it["is_divisi"]]
+
+    # Ambil nama paket dari nama folder (parent langsung dari excel_path)
+    nama_folder = os.path.basename(folder)
+    # Deteksi paket ulang dari suffix "(PL - Ulang)" di nama folder
+    is_ulang = "(PL - Ulang)" in nama_folder or "(PL-Ulang)" in nama_folder
+    # Bersihkan nama paket: buang prefix "N. PLJKK - " dan suffix "(PL - Ulang)"
+    import re as _re
+    nama_paket = _re.sub(r'^\d+\.\s*(PLJKK|PLPK)\s*-\s*', '', nama_folder).strip()
+    nama_paket = _re.sub(r'\s*\(PL\s*-?\s*Ulang\)\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
+    status_paket = " **(PAKET ULANG)**" if is_ulang else ""
+
+    lines = [
+        f"# DATA HPS — {nama_paket}{status_paket}",
+        f"Kode Paket: `{kode_paket}`  |  Auto-generated dari SPSE saat Serap HPS",
+        "",
+        "## RINGKASAN",
+        f"- **Jumlah Item (total rows)**: {len(items)} ({len(non_divisi)} item + {len(divisi)} divisi)",
+        f"- **Total Nilai**: {_rp(total_nilai)}",
+        f"- **Total Nilai Bulat**: {_rp(total_bulat)}",
+        f"- **Status Paket**: {'🔁 Ulang' if is_ulang else '🆕 Baru'}",
+        "",
+        "## ⚠️ ANOMALI TERDETEKSI",
+    ]
+
+    anomali = []
+    for it in items:
+        u, bj = it["urutan"], it["jenis_bj"]
+        if not it["selisih_ok"]:
+            anomali.append(f"- Item {u} '{bj}': total_spse={it['total_spse']} vs total_hitung={it['total_hitung']}, selisih={it['selisih']}")
+        if not it["is_divisi"] and (it["harga"] == 0 or it["vol"] == 0):
+            anomali.append(f"- Item {u} '{bj}': harga/vol nol (cek)")
+
+    if anomali:
+        lines.extend(anomali)
+    else:
+        lines.append("_Tidak ada anomali aritmatika terdeteksi._")
+
+    lines.extend([
+        "",
+        "## TABEL BoQ LENGKAP",
+        "No | Jenis B/J | Satuan | Vol | Harga | Pajak% | Total SPSE | Total Hitung | Selisih OK",
+        "---|---|---|---|---|---|---|---|---"
+    ])
+
+    for it in items:
+        u = it["urutan"]
+        bj = it["jenis_bj"]
+        ok = "✅" if it["selisih_ok"] else "❌"
+
+        if it["is_divisi"]:
+            lines.append(f"{u} | **{bj}** | - | - | - | - | - | - | -")
+        else:
+            v = it["vol"]
+            # Vol: tampilkan tanpa .0 jika bulat
+            v_str = f"{v:,.0f}".replace(",", ".") if float(v).is_integer() else f"{v:,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+            p = it["pajak_pct"]
+            lines.append(
+                f"{u} | {bj} | {it['satuan']} | {v_str} | {_rp(it['harga'])} | "
+                f"{p:g}% | {_rp(it['total_spse'])} | {_rp(it['total_hitung'])} | {ok}"
+            )
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return md_path
 
 
 # ============================================================

@@ -639,7 +639,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.caption("Pilih aksi lalu klik tombol — aksi berjalan berurutan sesuai centang.")
             _cb_serap_spse = st.checkbox("Serap dari SPSE (daftar paket + status)", value=True, key="pl_cb_serap_spse")
             _cb_serap_mak  = st.checkbox("Serap MAK dari Inbox PL",               value=True, key="pl_cb_serap_mak")
-            _cb_hps_all    = st.checkbox("Scrape HPS semua paket berfolder → Excel", value=True, key="pl_cb_hps_all")
 
             if st.button("🚀 Serap Data Paket PL", type="primary", use_container_width=True, key="btn_serap_pl_gabung"):
                 # Aksi 1: Serap dari SPSE
@@ -694,66 +693,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.warning(_e)
                     except Exception as _e:
                         st.error(f"Gagal serap MAK: {_e}")
-
-                # Aksi 3: HPS bulk semua paket berfolder
-                if _cb_hps_all:
-                    import hps_engine as _hps_pl_bulk
-                    import kualifikasi_engine_pl as _keng_pl_hb
-                    _pl_rows_hps_bulk = [
-                        r for r in _pl_rows
-                        if r.get("kode_paket") and r.get("folder_dibuat")
-                    ]
-                    if not _pl_rows_hps_bulk:
-                        st.info("Tidak ada paket dengan folder untuk scrape HPS.")
-                    else:
-                        _hps_bulk_ok, _hps_bulk_fail = 0, 0
-                        _hps_bulk_gagal = []
-                        _hps_bulk_status = st.status(
-                            f"💰 Scrape HPS {len(_pl_rows_hps_bulk)} paket...", expanded=True
-                        )
-                        _hps_bulk_line = _hps_bulk_status.empty()
-                        _hps_bulk_bp = st.progress(0.0)
-                        for _hb_i, _hb_row in enumerate(_pl_rows_hps_bulk):
-                            _hb_kp   = _hb_row.get("kode_paket", "")
-                            _hb_nama = _hb_row.get("nama_paket", _hb_kp)[:50]
-                            _hps_bulk_status.update(label=f"[{_hb_i+1}/{len(_pl_rows_hps_bulk)}] {_hb_nama}")
-                            _hps_bulk_bp.progress((_hb_i + 1) / len(_pl_rows_hps_bulk))
-                            _hb_xlsm = None
-                            try:
-                                _hb_fr = _keng_pl_hb.resolve_folder_paket_pl(_hb_kp)
-                                _hb_root = _hb_fr.get("pesan", "") if _hb_fr.get("ok") else ""
-                                if _hb_root and _pl_os.path.isdir(_hb_root):
-                                    _hb_xlsm = _cari_xlsm_pl(_hb_root)
-                            except Exception:
-                                _hb_xlsm = None
-                            if not _hb_xlsm:
-                                _hps_bulk_fail += 1
-                                _hb_alasan = "folder/xlsm paket tidak ditemukan"
-                                _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_alasan}")
-                                _hps_bulk_line.write(f"⚠ [{_hb_i+1}] {_hb_nama} — {_hb_alasan}")
-                                continue
-                            try:
-                                _hb_r = _hps_pl_bulk.scrape_hps_pl_ke_excel(_hb_kp, _hb_xlsm)
-                                if _hb_r.get("ok"):
-                                    _hps_bulk_ok += 1
-                                    _hps_bulk_line.write(f"✅ [{_hb_i+1}] {_hb_nama} — {_hb_r['count']} item, Rp {_hb_r.get('total_nilai_bulat',0):,.0f}")
-                                else:
-                                    _hps_bulk_fail += 1
-                                    _hb_alasan = _hb_r.get("pesan", "-")
-                                    _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_alasan}")
-                                    _hps_bulk_line.write(f"❌ [{_hb_i+1}] {_hb_nama} — {_hb_alasan}")
-                            except Exception as _hb_e:
-                                _hps_bulk_fail += 1
-                                _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_e}")
-                                _hps_bulk_line.write(f"❌ [{_hb_i+1}] {_hb_nama} — {_hb_e}")
-                        _hps_bulk_bp.progress(1.0)
-                        _hps_bulk_line.empty()
-                        _hps_bulk_status.update(
-                            label=f"💰 HPS Bulk selesai: ✅ {_hps_bulk_ok} sukses, ❌ {_hps_bulk_fail} gagal",
-                            state="complete", expanded=_hps_bulk_fail > 0,
-                        )
-                        if _hps_bulk_gagal:
-                            st.warning("Paket gagal:\n" + "\n".join(_hps_bulk_gagal))
 
             st.divider()
             st.markdown("#### 2. Daftar Paket PL")
@@ -834,8 +773,52 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 else:
                                     st.error("❌ Gagal ubah metode.")
 
-                        _pr_c1, _pr_c2 = st.columns([3, 1])
-                        if _pr_c2.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
+                        _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
+                            import kualifikasi_engine_pl as _keng_pr_dl
+                            _pr_dl_fr = _keng_pr_dl.resolve_folder_paket_pl(_pr_kode)
+                            _pr_dl_root = _pr_dl_fr.get("pesan", "") if _pr_dl_fr.get("ok") else ""
+                            if not _pr_dl_root:
+                                st.error("Folder tidak ditemukan.")
+                            else:
+                                _pr_dl_logs = []
+                                _pr_dl_bar = st.status("🔽 Mengunduh...", expanded=True)
+                                _pr_dl_area = _pr_dl_bar.empty()
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_bar):
+                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.update(label=f"🔽 {msg[:50]}")
+                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb)
+                                _pr_dl_bar.update(label=f"✅ {len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error", state="complete", expanded=False)
+                                _pr_kak_p = parse_kak_pl.cari_kak_di_folder(_pr_dl_root)
+                                if _pr_kak_p:
+                                    _pr_kak_d = parse_kak_pl.parse_kak(_pr_kak_p)
+                                    _pr_kak_u = {k: v for k, v in _pr_kak_d.items() if v}
+                                    if _pr_kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
+                                        st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
+                                try:
+                                    import hps_engine as _hps_pr_dl
+                                    _pr_xl_dl = _cari_xlsm_pl(_pr_dl_root)
+                                    if _pr_xl_dl:
+                                        _hps_pr_dl.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl_dl)
+                                except Exception:
+                                    pass
+                                st.rerun()
+                        if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
+                            import hps_engine as _hps_pr
+                            import kualifikasi_engine_pl as _keng_pr
+                            _pr_fr = _keng_pr.resolve_folder_paket_pl(_pr_kode)
+                            _pr_root = _pr_fr.get("pesan", "") if _pr_fr.get("ok") else ""
+                            _pr_xl = _cari_xlsm_pl(_pr_root) if _pr_root else None
+                            if _pr_xl:
+                                with st.spinner("Scrape HPS..."):
+                                    _pr_hr = _hps_pr.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl)
+                                if _pr_hr.get("ok"):
+                                    st.success(f"✅ {_pr_hr['count']} item HPS")
+                                else:
+                                    st.error(_pr_hr.get("pesan", "-"))
+                            else:
+                                st.error("Folder/xlsm tidak ditemukan.")
+                        if _pr_c4.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
 
@@ -935,10 +918,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.rerun()
                 for _br_chk in _pl_rows_belum:
                     _bkp_chk = _br_chk.get("kode_paket", "")
+                    _plf_chk_key = f"plf_chk_{_bkp_chk}"
+                    if _plf_chk_key not in st.session_state:
+                        st.session_state[_plf_chk_key] = True
                     st.checkbox(
                         f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
-                        value=st.session_state.get(f"plf_chk_{_bkp_chk}", True),
-                        key=f"plf_chk_{_bkp_chk}",
+                        key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
                 _pl_terpilih_plan = [
@@ -1063,8 +1048,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.divider()
             st.markdown("#### 4. Update Data Folder")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
-            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk")
+            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
             _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder")
+            _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
 
             if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Download dokumen bulk semua paket berfolder
@@ -1140,87 +1126,55 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     else:
                         st.info("Tidak ada paket dengan status folder untuk direset.")
 
-
-            # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
-            _pl_rows_sudah = [
-                r for r in _pl_rows
-                if r.get("nama_paket") and r.get("folder_dibuat")
-            ]
-            if _pl_rows_sudah:
-                st.markdown("#### 🔧 Aksi Mandiri per Paket (Folder sudah ada)")
-                for _br_s in _pl_rows_sudah:
-                    _bkp_s = _br_s.get("kode_paket", "")
-                    _bnm_s = _br_s.get("nama_paket", "")
-                    _bj_s = (_br_s.get("jenis_pl") or "JKK").upper()
-
-                    import kualifikasi_engine_pl as _keng_pl
-                    _fr_res = _keng_pl.resolve_folder_paket_pl(_bkp_s)
-                    _folder_path = _fr_res.get("pesan", "") if _fr_res.get("ok") else ""
-
-                    _lbl_exp = f"📂 {_bnm_s[:60]} — {_bj_s}"
-                    with st.expander(_lbl_exp):
-                        if _folder_path:
-                            st.caption(f"📁 Path: `{_folder_path}`")
-                        _col1, _col2, _col3 = st.columns(3)
-
-                        # 1. Download Dokumen Mandiri
-                        if _col1.button("📦 Download Dok", key=f"btn_dl_saja_{_bkp_s}", use_container_width=True):
-                            if not _folder_path:
-                                st.error("Folder paket tidak terdeteksi.")
-                            else:
-                                _logs = []
-                                _st_bar = st.status("🔽 Mengunduh dokumen...", expanded=True)
-                                _st_area = _st_bar.empty()
-                                def _cb(msg):
-                                    _logs.append(msg)
-                                    _st_area.code("\n".join(_logs[-20:]))
-                                    _st_bar.update(label=f"🔽 {msg[:60]}")
-                                _res = pl_engine.download_dokumen_paket_pl(_bkp_s, _folder_path, _cb)
-                                _st_bar.update(
-                                    label=f"✅ {len(_res['ok'])} file, ❌ {len(_res['error'])} error",
-                                    state="complete", expanded=False,
-                                )
-                                # Parse KAK PDF → upsert Supabase
-                                _kak_p = parse_kak_pl.cari_kak_di_folder(_folder_path)
-                                if _kak_p:
-                                    _kak_d = parse_kak_pl.parse_kak(_kak_p)
-                                    _kak_u = {k: v for k, v in _kak_d.items() if v}
-                                    if _kak_u:
-                                        pl_engine.simpan_paket_pl({"kode_paket": _bkp_s, **_kak_u})
-                                        st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
-                                # Scrape HPS
-                                try:
-                                    import hps_engine as _hps
-                                    _xl = _cari_xlsm_pl(_folder_path)
-                                    if _xl:
-                                        _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
-                                except Exception:
-                                    pass
-                                st.rerun()
-
-                        # 2. Scrape HPS Mandiri
-                        if _col2.button("💰 Scrape HPS", key=f"btn_hps_saja_{_bkp_s}", use_container_width=True):
-                            if not _folder_path:
-                                st.error("Folder paket tidak terdeteksi.")
-                            else:
-                                _xl = _cari_xlsm_pl(_folder_path)
-                                if not _xl:
-                                    st.error("Tidak ada file .xlsm di folder paket.")
+                # Aksi: Update HPS bulk
+                if _cb_hps_update:
+                    import hps_engine as _hps_upd
+                    import kualifikasi_engine_plpk as _keng_hps_upd
+                    _pl_rows_hps_upd = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    if not _pl_rows_hps_upd:
+                        st.info("Tidak ada paket dengan folder untuk update HPS.")
+                    else:
+                        _hps_upd_ok, _hps_upd_fail = 0, 0
+                        _hps_upd_gagal = []
+                        _hps_upd_status = st.status(
+                            f"💰 Update HPS {len(_pl_rows_hps_upd)} paket...", expanded=True
+                        )
+                        _hps_upd_line = _hps_upd_status.empty()
+                        _hps_upd_bp = st.progress(0.0)
+                        for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
+                            _hu_kp   = _hu_row.get("kode_paket", "")
+                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)[:50]
+                            _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
+                            _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
+                            try:
+                                _hu_fr = _keng_hps_upd.resolve_folder_paket_pl(_hu_kp)
+                                _hu_root = _hu_fr.get("pesan", "") if _hu_fr.get("ok") else ""
+                                _hu_xl = _cari_xlsm_pl(_hu_root) if _hu_root and _pl_os.path.isdir(_hu_root) else None
+                                if not _hu_xl:
+                                    raise ValueError("folder/xlsm tidak ditemukan")
+                                _hu_r = _hps_upd.scrape_hps_pl_ke_excel(_hu_kp, _hu_xl)
+                                if _hu_r.get("ok"):
+                                    _hps_upd_ok += 1
+                                    _hps_upd_line.write(f"✅ [{_hu_i+1}] {_hu_nama} — {_hu_r['count']} item")
                                 else:
-                                    with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
-                                        import hps_engine as _hps
-                                        _hps_r = _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
-                                    if _hps_r.get("ok"):
-                                        st.success(f"✅ {_hps_r['pesan']}")
-                                    else:
-                                        st.error(f"Gagal: {_hps_r.get('pesan','-')}")
+                                    raise ValueError(_hu_r.get("pesan", "-"))
+                            except Exception as _hu_e:
+                                _hps_upd_fail += 1
+                                _hps_upd_gagal.append(f"{_hu_nama}: {_hu_e}")
+                                _hps_upd_line.write(f"❌ [{_hu_i+1}] {_hu_nama} — {_hu_e}")
+                        _hps_upd_bp.progress(1.0)
+                        _hps_upd_line.empty()
+                        _hps_upd_status.update(
+                            label=f"💰 HPS selesai: ✅ {_hps_upd_ok} sukses, ❌ {_hps_upd_fail} gagal",
+                            state="complete", expanded=_hps_upd_fail > 0,
+                        )
+                        if _hps_upd_gagal:
+                            st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
 
-                        # 3. Buka Explorer
-                        if _col3.button("📂 Explorer", key=f"btn_exp_{_bkp_s}", use_container_width=True):
-                            if _folder_path and os.path.exists(_folder_path):
-                                _pl_sp.Popen(f'explorer "{_folder_path.replace("/", chr(92))}"')
-                            else:
-                                st.error("Folder tidak ada di disk.")
+
 
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
@@ -1783,9 +1737,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
+                        if _plsp_chk_key not in st.session_state:
+                            st.session_state[_plsp_chk_key] = False
                         _chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
-                            value=st.session_state.get(_plsp_chk_key, False),
                             key=_plsp_chk_key,
                         )
                     with _col_file:
@@ -2336,10 +2291,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
                     _nama_disp = _rr.get("nama_penyedia") or "—"
+                    _pp_chk_key = f"pp_chk_{_kp}"
+                    if _pp_chk_key not in st.session_state:
+                        st.session_state[_pp_chk_key] = False
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
-                        value=st.session_state.get(f"pp_chk_{_kp}", False),
-                        key=f"pp_chk_{_kp}",
+                        key=_pp_chk_key,
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
                     )
                     if _chk:
@@ -3768,7 +3725,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.caption("Pilih aksi lalu klik tombol — aksi berjalan berurutan sesuai centang.")
             _cb_serap_spse = st.checkbox("Serap dari SPSE (daftar paket + status)", value=True, key="pl_cb_serap_spse")
             _cb_serap_mak  = st.checkbox("Serap MAK dari Inbox PL",               value=True, key="pl_cb_serap_mak")
-            _cb_hps_all    = st.checkbox("Scrape HPS semua paket berfolder → Excel", value=True, key="pl_cb_hps_all")
 
             if st.button("🚀 Serap Data Paket PL", type="primary", use_container_width=True, key="btn_serap_pl_gabung"):
                 # Aksi 1: Serap dari SPSE
@@ -3823,66 +3779,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.warning(_e)
                     except Exception as _e:
                         st.error(f"Gagal serap MAK: {_e}")
-
-                # Aksi 3: HPS bulk semua paket berfolder
-                if _cb_hps_all:
-                    import hps_engine as _hps_pl_bulk
-                    import kualifikasi_engine_plpk as _keng_pl_hb
-                    _pl_rows_hps_bulk = [
-                        r for r in _pl_rows
-                        if r.get("kode_paket") and r.get("folder_dibuat")
-                    ]
-                    if not _pl_rows_hps_bulk:
-                        st.info("Tidak ada paket dengan folder untuk scrape HPS.")
-                    else:
-                        _hps_bulk_ok, _hps_bulk_fail = 0, 0
-                        _hps_bulk_gagal = []
-                        _hps_bulk_status = st.status(
-                            f"💰 Scrape HPS {len(_pl_rows_hps_bulk)} paket...", expanded=True
-                        )
-                        _hps_bulk_line = _hps_bulk_status.empty()
-                        _hps_bulk_bp = st.progress(0.0)
-                        for _hb_i, _hb_row in enumerate(_pl_rows_hps_bulk):
-                            _hb_kp   = _hb_row.get("kode_paket", "")
-                            _hb_nama = _hb_row.get("nama_paket", _hb_kp)[:50]
-                            _hps_bulk_status.update(label=f"[{_hb_i+1}/{len(_pl_rows_hps_bulk)}] {_hb_nama}")
-                            _hps_bulk_bp.progress((_hb_i + 1) / len(_pl_rows_hps_bulk))
-                            _hb_xlsm = None
-                            try:
-                                _hb_fr = _keng_pl_hb.resolve_folder_paket_pl(_hb_kp)
-                                _hb_root = _hb_fr.get("pesan", "") if _hb_fr.get("ok") else ""
-                                if _hb_root and _pl_os.path.isdir(_hb_root):
-                                    _hb_xlsm = _cari_xlsm_pl(_hb_root)
-                            except Exception:
-                                _hb_xlsm = None
-                            if not _hb_xlsm:
-                                _hps_bulk_fail += 1
-                                _hb_alasan = "folder/xlsm paket tidak ditemukan"
-                                _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_alasan}")
-                                _hps_bulk_line.write(f"⚠ [{_hb_i+1}] {_hb_nama} — {_hb_alasan}")
-                                continue
-                            try:
-                                _hb_r = _hps_pl_bulk.scrape_hps_pl_ke_excel(_hb_kp, _hb_xlsm)
-                                if _hb_r.get("ok"):
-                                    _hps_bulk_ok += 1
-                                    _hps_bulk_line.write(f"✅ [{_hb_i+1}] {_hb_nama} — {_hb_r['count']} item, Rp {_hb_r.get('total_nilai_bulat',0):,.0f}")
-                                else:
-                                    _hps_bulk_fail += 1
-                                    _hb_alasan = _hb_r.get("pesan", "-")
-                                    _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_alasan}")
-                                    _hps_bulk_line.write(f"❌ [{_hb_i+1}] {_hb_nama} — {_hb_alasan}")
-                            except Exception as _hb_e:
-                                _hps_bulk_fail += 1
-                                _hps_bulk_gagal.append(f"{_hb_nama}: {_hb_e}")
-                                _hps_bulk_line.write(f"❌ [{_hb_i+1}] {_hb_nama} — {_hb_e}")
-                        _hps_bulk_bp.progress(1.0)
-                        _hps_bulk_line.empty()
-                        _hps_bulk_status.update(
-                            label=f"💰 HPS Bulk selesai: ✅ {_hps_bulk_ok} sukses, ❌ {_hps_bulk_fail} gagal",
-                            state="complete", expanded=_hps_bulk_fail > 0,
-                        )
-                        if _hps_bulk_gagal:
-                            st.warning("Paket gagal:\n" + "\n".join(_hps_bulk_gagal))
 
             st.divider()
             st.markdown("#### 2. Daftar Paket PL")
@@ -3963,8 +3859,52 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 else:
                                     st.error("❌ Gagal ubah metode.")
 
-                        _pr_c1, _pr_c2 = st.columns([3, 1])
-                        if _pr_c2.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
+                        _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
+                            import kualifikasi_engine_pl as _keng_pr_dl
+                            _pr_dl_fr = _keng_pr_dl.resolve_folder_paket_pl(_pr_kode)
+                            _pr_dl_root = _pr_dl_fr.get("pesan", "") if _pr_dl_fr.get("ok") else ""
+                            if not _pr_dl_root:
+                                st.error("Folder tidak ditemukan.")
+                            else:
+                                _pr_dl_logs = []
+                                _pr_dl_bar = st.status("🔽 Mengunduh...", expanded=True)
+                                _pr_dl_area = _pr_dl_bar.empty()
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_bar):
+                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.update(label=f"🔽 {msg[:50]}")
+                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb)
+                                _pr_dl_bar.update(label=f"✅ {len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error", state="complete", expanded=False)
+                                _pr_kak_p = parse_kak_pl.cari_kak_di_folder(_pr_dl_root)
+                                if _pr_kak_p:
+                                    _pr_kak_d = parse_kak_pl.parse_kak(_pr_kak_p)
+                                    _pr_kak_u = {k: v for k, v in _pr_kak_d.items() if v}
+                                    if _pr_kak_u:
+                                        pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
+                                        st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
+                                try:
+                                    import hps_engine as _hps_pr_dl
+                                    _pr_xl_dl = _cari_xlsm_pl(_pr_dl_root)
+                                    if _pr_xl_dl:
+                                        _hps_pr_dl.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl_dl)
+                                except Exception:
+                                    pass
+                                st.rerun()
+                        if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
+                            import hps_engine as _hps_pr
+                            import kualifikasi_engine_pl as _keng_pr
+                            _pr_fr = _keng_pr.resolve_folder_paket_pl(_pr_kode)
+                            _pr_root = _pr_fr.get("pesan", "") if _pr_fr.get("ok") else ""
+                            _pr_xl = _cari_xlsm_pl(_pr_root) if _pr_root else None
+                            if _pr_xl:
+                                with st.spinner("Scrape HPS..."):
+                                    _pr_hr = _hps_pr.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl)
+                                if _pr_hr.get("ok"):
+                                    st.success(f"✅ {_pr_hr['count']} item HPS")
+                                else:
+                                    st.error(_pr_hr.get("pesan", "-"))
+                            else:
+                                st.error("Folder/xlsm tidak ditemukan.")
+                        if _pr_c4.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
                             pl_engine.hapus_paket_pl(_pr_kode)
                             st.rerun()
 
@@ -4064,10 +4004,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.rerun()
                 for _br_chk in _pl_rows_belum:
                     _bkp_chk = _br_chk.get("kode_paket", "")
+                    _plf_chk_key = f"plf_chk_{_bkp_chk}"
+                    if _plf_chk_key not in st.session_state:
+                        st.session_state[_plf_chk_key] = True
                     st.checkbox(
                         f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
-                        value=st.session_state.get(f"plf_chk_{_bkp_chk}", True),
-                        key=f"plf_chk_{_bkp_chk}",
+                        key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
                 _pl_terpilih_plan = [
@@ -4192,8 +4134,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.divider()
             st.markdown("#### 4. Update Data Folder")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
-            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=True, key="pl_cb_dl_dok_bulk_pk")
+            _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk_pk")
             _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder_pk")
+            _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update_pk")
 
             if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
@@ -4269,87 +4212,55 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     else:
                         st.info("Tidak ada paket dengan status folder untuk direset.")
 
-
-            # ── Aksi Mandiri per Paket (Folder sudah ada) ─────────────────────
-            _pl_rows_sudah = [
-                r for r in _pl_rows
-                if r.get("nama_paket") and r.get("folder_dibuat")
-            ]
-            if _pl_rows_sudah:
-                st.markdown("#### 🔧 Aksi Mandiri per Paket (Folder sudah ada)")
-                for _br_s in _pl_rows_sudah:
-                    _bkp_s = _br_s.get("kode_paket", "")
-                    _bnm_s = _br_s.get("nama_paket", "")
-                    _bj_s = (_br_s.get("jenis_pl") or "JKK").upper()
-
-                    import kualifikasi_engine_pl as _keng_pl
-                    _fr_res = _keng_pl.resolve_folder_paket_pl(_bkp_s)
-                    _folder_path = _fr_res.get("pesan", "") if _fr_res.get("ok") else ""
-
-                    _lbl_exp = f"📂 {_bnm_s[:60]} — {_bj_s}"
-                    with st.expander(_lbl_exp):
-                        if _folder_path:
-                            st.caption(f"📁 Path: `{_folder_path}`")
-                        _col1, _col2, _col3 = st.columns(3)
-
-                        # 1. Download Dokumen Mandiri
-                        if _col1.button("📦 Download Dok", key=f"btn_dl_saja_{_bkp_s}", use_container_width=True):
-                            if not _folder_path:
-                                st.error("Folder paket tidak terdeteksi.")
-                            else:
-                                _logs = []
-                                _st_bar = st.status("🔽 Mengunduh dokumen...", expanded=True)
-                                _st_area = _st_bar.empty()
-                                def _cb(msg):
-                                    _logs.append(msg)
-                                    _st_area.code("\n".join(_logs[-20:]))
-                                    _st_bar.update(label=f"🔽 {msg[:60]}")
-                                _res = pl_engine.download_dokumen_paket_pl(_bkp_s, _folder_path, _cb)
-                                _st_bar.update(
-                                    label=f"✅ {len(_res['ok'])} file, ❌ {len(_res['error'])} error",
-                                    state="complete", expanded=False,
-                                )
-                                # Parse KAK PDF → upsert Supabase
-                                _kak_p = parse_kak_pl.cari_kak_di_folder(_folder_path)
-                                if _kak_p:
-                                    _kak_d = parse_kak_pl.parse_kak(_kak_p)
-                                    _kak_u = {k: v for k, v in _kak_d.items() if v}
-                                    if _kak_u:
-                                        pl_engine.simpan_paket_pl({"kode_paket": _bkp_s, **_kak_u})
-                                        st.info(f"📋 KAK ter-parse: {', '.join(_kak_u.keys())}")
-                                # Scrape HPS
-                                try:
-                                    import hps_engine as _hps
-                                    _xl = _cari_xlsm_pl(_folder_path)
-                                    if _xl:
-                                        _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
-                                except Exception:
-                                    pass
-                                st.rerun()
-
-                        # 2. Scrape HPS Mandiri
-                        if _col2.button("💰 Scrape HPS", key=f"btn_hps_saja_{_bkp_s}", use_container_width=True):
-                            if not _folder_path:
-                                st.error("Folder paket tidak terdeteksi.")
-                            else:
-                                _xl = _cari_xlsm_pl(_folder_path)
-                                if not _xl:
-                                    st.error("Tidak ada file .xlsm di folder paket.")
+                # Aksi: Update HPS bulk
+                if _cb_hps_update:
+                    import hps_engine as _hps_upd
+                    import kualifikasi_engine_plpk as _keng_hps_upd
+                    _pl_rows_hps_upd = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    if not _pl_rows_hps_upd:
+                        st.info("Tidak ada paket dengan folder untuk update HPS.")
+                    else:
+                        _hps_upd_ok, _hps_upd_fail = 0, 0
+                        _hps_upd_gagal = []
+                        _hps_upd_status = st.status(
+                            f"💰 Update HPS {len(_pl_rows_hps_upd)} paket...", expanded=True
+                        )
+                        _hps_upd_line = _hps_upd_status.empty()
+                        _hps_upd_bp = st.progress(0.0)
+                        for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
+                            _hu_kp   = _hu_row.get("kode_paket", "")
+                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)[:50]
+                            _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
+                            _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
+                            try:
+                                _hu_fr = _keng_hps_upd.resolve_folder_paket_pl(_hu_kp)
+                                _hu_root = _hu_fr.get("pesan", "") if _hu_fr.get("ok") else ""
+                                _hu_xl = _cari_xlsm_pl(_hu_root) if _hu_root and _pl_os.path.isdir(_hu_root) else None
+                                if not _hu_xl:
+                                    raise ValueError("folder/xlsm tidak ditemukan")
+                                _hu_r = _hps_upd.scrape_hps_pl_ke_excel(_hu_kp, _hu_xl)
+                                if _hu_r.get("ok"):
+                                    _hps_upd_ok += 1
+                                    _hps_upd_line.write(f"✅ [{_hu_i+1}] {_hu_nama} — {_hu_r['count']} item")
                                 else:
-                                    with st.spinner("Scrape HPS dari SPSE → tulis Excel..."):
-                                        import hps_engine as _hps
-                                        _hps_r = _hps.scrape_hps_pl_ke_excel(_bkp_s, _xl)
-                                    if _hps_r.get("ok"):
-                                        st.success(f"✅ {_hps_r['pesan']}")
-                                    else:
-                                        st.error(f"Gagal: {_hps_r.get('pesan','-')}")
+                                    raise ValueError(_hu_r.get("pesan", "-"))
+                            except Exception as _hu_e:
+                                _hps_upd_fail += 1
+                                _hps_upd_gagal.append(f"{_hu_nama}: {_hu_e}")
+                                _hps_upd_line.write(f"❌ [{_hu_i+1}] {_hu_nama} — {_hu_e}")
+                        _hps_upd_bp.progress(1.0)
+                        _hps_upd_line.empty()
+                        _hps_upd_status.update(
+                            label=f"💰 HPS selesai: ✅ {_hps_upd_ok} sukses, ❌ {_hps_upd_fail} gagal",
+                            state="complete", expanded=_hps_upd_fail > 0,
+                        )
+                        if _hps_upd_gagal:
+                            st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
 
-                        # 3. Buka Explorer
-                        if _col3.button("📂 Explorer", key=f"btn_exp_{_bkp_s}", use_container_width=True):
-                            if _folder_path and os.path.exists(_folder_path):
-                                _pl_sp.Popen(f'explorer "{_folder_path.replace("/", chr(92))}"')
-                            else:
-                                st.error("Folder tidak ada di disk.")
+
 
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
@@ -4912,9 +4823,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
+                        if _plsp_chk_key not in st.session_state:
+                            st.session_state[_plsp_chk_key] = False
                         _chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
-                            value=st.session_state.get(_plsp_chk_key, False),
                             key=_plsp_chk_key,
                         )
                     with _col_file:
@@ -5465,10 +5377,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
                     _nama_disp = _rr.get("nama_penyedia") or "—"
+                    _pp_chk_key = f"pp_chk_{_kp}"
+                    if _pp_chk_key not in st.session_state:
+                        st.session_state[_pp_chk_key] = False
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
-                        value=st.session_state.get(f"pp_chk_{_kp}", False),
-                        key=f"pp_chk_{_kp}",
+                        key=_pp_chk_key,
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
                     )
                     if _chk:
