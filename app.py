@@ -6330,134 +6330,6 @@ with tab0:
         st.caption(f"✅ Draft: {len(_gd2.get('paket',[]))} | Aktif: {len(_ga2.get('paket',[]))}{_cache_info}")
 
         st.divider()
-        # ── Cek Semua Dokumen PPK (batch) ──
-        if st.session_state.get("global_paket_draft") or st.session_state.get("global_paket_aktif"):
-            st.divider()
-            if st.button("🔍 Cek Semua Dokumen PPK", use_container_width=True, key="btn_cek_semua_dok"):
-                import dokumen_ppk_engine as _dpk_batch
-                # Ambil semua paket yg punya dokumen_snapshot dari Supabase
-                _snap_rows = inbox_engine._sb().table("draft_paket") \
-                    .select("kode_tender, folder_dibuat, dokumen_snapshot") \
-                    .not_.is_("dokumen_snapshot", "null") \
-                    .execute()
-                _snap_paket = _snap_rows.data if _snap_rows.data else []
-                if not _snap_paket:
-                    st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
-                else:
-                    # Build lookup nama paket dari SPSE data
-                    _nama_map = {p["kode"]: p["nama"] for p in _get_paket_gabungan()}
-                    _hasil_batch = []
-                    with st.status(f"Memeriksa {len(_snap_paket)} paket...", expanded=True) as _cek_st:
-                        for _sp in _snap_paket:
-                            _kt = _sp["kode_tender"]
-                            _nama = _nama_map.get(_kt) or _sp.get("folder_dibuat") or _kt
-                            _cek_st.write(f"🔍 {_nama[:50]}...")
-                            try:
-                                _diff = _dpk_batch.cek_update_dokumen(_kt)
-                                # Deteksi cookie invalid: semua endpoint return kosong
-                                _snap_baru_total = sum(len(v) for v in _diff["snapshot_baru"].values())
-                                _cookie_invalid = _snap_baru_total == 0
-                                # Hanya hitung ada_update jika cookie valid
-                                _ada_update = (not _cookie_invalid) and bool(
-                                    _diff["berubah"] or _diff["baru"] or _diff.get("hilang")
-                                )
-                                _hasil_batch.append({
-                                    "kode": _kt,
-                                    "nama": _nama,
-                                    "berubah": _diff["berubah"],
-                                    "baru": _diff["baru"],
-                                    "hilang": _diff.get("hilang", []),
-                                    "ada_update": _ada_update,
-                                    "cookie_invalid": _cookie_invalid,
-                                })
-                            except Exception as _e_cek:
-                                _hasil_batch.append({
-                                    "kode": _kt,
-                                    "nama": _nama,
-                                    "error": str(_e_cek),
-                                    "ada_update": False,
-                                })
-                        _cek_st.update(label="✅ Selesai cek dokumen PPK", state="complete")
-                    # Simpan juga folder_dibuat per kode untuk download nanti
-                    _folder_map = {r["kode_tender"]: r.get("folder_dibuat", "") for r in _snap_paket}
-                    st.session_state["_batch_cek_hasil"] = _hasil_batch
-                    st.session_state["_batch_folder_map"] = _folder_map
-
-            # Tampil hasil batch (persist setelah rerun)
-            if "_batch_cek_hasil" in st.session_state:
-                _bh = st.session_state["_batch_cek_hasil"]
-                _ada_update_list = [x for x in _bh if x.get("ada_update")]
-                _error_list = [x for x in _bh if x.get("error")]
-                _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
-                if _cookie_invalid_list:
-                    st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Chrome.")
-                if _ada_update_list:
-                    st.warning(f"⚠️ {len(_ada_update_list)} paket ada update dokumen PPK")
-                    _folder_map_bh = st.session_state.get("_batch_folder_map", {})
-                    for _item in _ada_update_list:
-                        with st.expander(f"📄 {_item['nama'][:60]}"):
-                            if _item.get("cookie_invalid"):
-                                st.error("⚠️ Cookie SPSE expired — login ulang di Chrome lalu cek lagi")
-                            for _b in _item.get("berubah", []):
-                                st.markdown(f"- **Berubah** [{_b['jenis']}]: `{_b['nama_lama']}` → `{_b['nama_baru']}`")
-                            for _b in _item.get("baru", []):
-                                st.markdown(f"- **File Baru** [{_b['jenis']}]: `{_b['nama']}`")
-                            for _b in _item.get("hilang", []):
-                                st.markdown(f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti")
-                            # Tombol download update per paket
-                            _kt_dl = _item["kode"]
-                            _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                            _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
-                            if _folder_dl and _os.path.exists(_folder_dl):
-                                st.button("⬇️ Download Update", key=f"btn_dl_upd_{_kt_dl}", type="primary")
-                            else:
-                                st.caption(f"⚠️ Folder tidak ditemukan: `{_folder_dl or 'tidak diketahui'}`")
-
-                    # Proses download di luar expander (hindari nested expander/status)
-                    for _item in _ada_update_list:
-                        _kt_dl = _item["kode"]
-                        if st.session_state.get(f"btn_dl_upd_{_kt_dl}"):
-                            _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                            _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
-                            import dokumen_ppk_engine as _dpk_dl
-                            _sn_r2 = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_dl).execute()
-                            _sn_lama2 = {}
-                            if _sn_r2.data and _sn_r2.data[0].get("dokumen_snapshot"):
-                                _raw2 = _sn_r2.data[0]["dokumen_snapshot"]
-                                _sn_lama2 = _raw2 if isinstance(_raw2, dict) else __import__("json").loads(_raw2)
-                            _diff_dl = _dpk_dl.cek_update_dokumen(_kt_dl)
-                            _dl_log4 = []
-                            _dl_st4 = st.status(f"⬇️ Mengunduh update {_item['nama'][:40]}...", expanded=True)
-                            _dl_area4 = _dl_st4.empty()
-                            def _dl_cb4(msg, _log=_dl_log4, _area=_dl_area4, _st=_dl_st4):
-                                _log.append(msg)
-                                _area.code("\n".join(_log[-15:]))
-                                _st.update(label=f"⬇️ {msg[:60]}...")
-                            _dl_res4 = _dpk_dl.download_update_dokumen(
-                                _kt_dl, _folder_dl,
-                                _diff_dl["berubah"], _diff_dl["baru"],
-                                _sn_lama2, progress_cb=_dl_cb4,
-                            )
-                            _dpk_dl.simpan_snapshot(_kt_dl, _diff_dl["snapshot_baru"])
-                            _dl_st4.update(
-                                label=f"✅ {len(_dl_res4['ok'])} file diupdate, ❌ {len(_dl_res4['error'])} gagal",
-                                state="complete", expanded=False,
-                            )
-                            if _dl_res4["error"]:
-                                for _e6 in _dl_res4["error"]:
-                                    st.error(_e6)
-                            else:
-                                st.success(f"✅ {_item['nama'][:50]} — selesai. Parse Draft ulang di Excel.")
-                            st.session_state["_batch_cek_hasil"] = [
-                                x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
-                            ]
-                            st.rerun()
-                else:
-                    st.success(f"✅ Semua {len(_bh)} paket — tidak ada update dokumen PPK")
-                if _error_list:
-                    with st.expander(f"⚠️ {len(_error_list)} paket gagal dicek"):
-                        for _item in _error_list:
-                            st.caption(f"`{_item['kode']}` — {_item['error'][:80]}")
 
     # ══════════════════════════════════════════
     # KOLOM KANAN — 2. Buat Folder Paket
@@ -6677,14 +6549,136 @@ with tab0:
                 st.rerun()
         else:
             st.info("Semua paket tahun ini sudah punya folder.")
-            if st.button(
+            st.button(
                 "📁 Buat Folder Terpilih (0 paket)",
                 disabled=True,
                 use_container_width=True,
                 key="t_btn_buat_terpilih_empty",
                 type="primary",
-            ):
-                pass
+            )
+
+        # ── Cek Semua Dokumen PPK (batch) ── (Dipindah ke sini agar selalu di bawah seksi 2)
+        st.divider()
+        if st.button("🔍 Cek Semua Dokumen PPK", use_container_width=True, key="btn_cek_semua_dok"):
+            import dokumen_ppk_engine as _dpk_batch
+            # Ambil semua paket yg punya dokumen_snapshot dari Supabase
+            _snap_rows = inbox_engine._sb().table("draft_paket") \
+                .select("kode_tender, folder_dibuat, dokumen_snapshot") \
+                .not_.is_("dokumen_snapshot", "null") \
+                .execute()
+            _snap_paket = _snap_rows.data if _snap_rows.data else []
+            if not _snap_paket:
+                st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
+            else:
+                _nama_map = {p["kode"]: p["nama"] for p in _get_paket_gabungan()}
+                _hasil_batch = []
+                with st.status(f"Memeriksa {len(_snap_paket)} paket...", expanded=True) as _cek_st:
+                    for _sp in _snap_paket:
+                        _kt = _sp["kode_tender"]
+                        _nama = _nama_map.get(_kt) or _sp.get("folder_dibuat") or _kt
+                        _cek_st.write(f"🔍 {_nama[:50]}...")
+                        try:
+                            _diff = _dpk_batch.cek_update_dokumen(_kt)
+                            _snap_baru_total = sum(len(v) for v in _diff["snapshot_baru"].values())
+                            _cookie_invalid = _snap_baru_total == 0
+                            _ada_update = (not _cookie_invalid) and bool(
+                                _diff["berubah"] or _diff["baru"] or _diff.get("hilang")
+                            )
+                            _hasil_batch.append({
+                                "kode": _kt,
+                                "nama": _nama,
+                                "berubah": _diff["berubah"],
+                                "baru": _diff["baru"],
+                                "hilang": _diff.get("hilang", []),
+                                "ada_update": _ada_update,
+                                "cookie_invalid": _cookie_invalid,
+                            })
+                        except Exception as _e_cek:
+                            _hasil_batch.append({
+                                "kode": _kt,
+                                "nama": _nama,
+                                "error": str(_e_cek),
+                                "ada_update": False,
+                            })
+                    _cek_st.update(label="✅ Selesai cek dokumen PPK", state="complete")
+                _folder_map = {r["kode_tender"]: r.get("folder_dibuat", "") for r in _snap_paket}
+                st.session_state["_batch_cek_hasil"] = _hasil_batch
+                st.session_state["_batch_folder_map"] = _folder_map
+
+        # Tampil hasil batch (persist setelah rerun)
+        if "_batch_cek_hasil" in st.session_state:
+            _bh = st.session_state["_batch_cek_hasil"]
+            _ada_update_list = [x for x in _bh if x.get("ada_update")]
+            _error_list = [x for x in _bh if x.get("error")]
+            _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
+            if _cookie_invalid_list:
+                st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Chrome.")
+            if _ada_update_list:
+                st.warning(f"⚠️ {len(_ada_update_list)} paket ada update dokumen PPK")
+                _folder_map_bh = st.session_state.get("_batch_folder_map", {})
+                for _item in _ada_update_list:
+                    with st.expander(f"📄 {_item['nama'][:60]}"):
+                        if _item.get("cookie_invalid"):
+                            st.error("⚠️ Cookie SPSE expired — login ulang di Chrome lalu cek lagi")
+                        for _b in _item.get("berubah", []):
+                            st.markdown(f"- **Berubah** [{_b['jenis']}]: `{_b['nama_lama']}` → `{_b['nama_baru']}`")
+                        for _b in _item.get("baru", []):
+                            st.markdown(f"- **File Baru** [{_b['jenis']}]: `{_b['nama']}`")
+                        for _b in _item.get("hilang", []):
+                            st.markdown(f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti")
+                        _kt_dl = _item["kode"]
+                        _fd_dl = _folder_map_bh.get(_kt_dl, "")
+                        _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
+                        if _folder_dl and _os.path.exists(_folder_dl):
+                            st.button("⬇️ Download Update", key=f"btn_dl_upd_{_kt_dl}", type="primary")
+                        else:
+                            st.caption(f"⚠️ Folder tidak ditemukan: `{_folder_dl or 'tidak diketahui'}`")
+
+                # Proses download di luar expander
+                for _item in _ada_update_list:
+                    _kt_dl = _item["kode"]
+                    if st.session_state.get(f"btn_dl_upd_{_kt_dl}"):
+                        _fd_dl = _folder_map_bh.get(_kt_dl, "")
+                        _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
+                        import dokumen_ppk_engine as _dpk_dl
+                        _sn_r2 = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_dl).execute()
+                        _sn_lama2 = {}
+                        if _sn_r2.data and _sn_r2.data[0].get("dokumen_snapshot"):
+                            _raw2 = _sn_r2.data[0]["dokumen_snapshot"]
+                            _sn_lama2 = _raw2 if isinstance(_raw2, dict) else __import__("json").loads(_raw2)
+                        _diff_dl = _dpk_dl.cek_update_dokumen(_kt_dl)
+                        _dl_log4 = []
+                        _dl_st4 = st.status(f"⬇️ Mengunduh update {_item['nama'][:40]}...", expanded=True)
+                        _dl_area4 = _dl_st4.empty()
+                        def _dl_cb4(msg, _log=_dl_log4, _area=_dl_area4, _st=_dl_st4):
+                            _log.append(msg)
+                            _area.code("\n".join(_log[-15:]))
+                            _st.update(label=f"⬇️ {msg[:60]}...")
+                        _dl_res4 = _dpk_dl.download_update_dokumen(
+                            _kt_dl, _folder_dl,
+                            _diff_dl["berubah"], _diff_dl["baru"],
+                            _sn_lama2, progress_cb=_dl_cb4,
+                        )
+                        _dpk_dl.simpan_snapshot(_kt_dl, _diff_dl["snapshot_baru"])
+                        _dl_st4.update(
+                            label=f"✅ {len(_dl_res4['ok'])} file diupdate, ❌ {len(_dl_res4['error'])} gagal",
+                            state="complete", expanded=False,
+                        )
+                        if _dl_res4["error"]:
+                            for _e6 in _dl_res4["error"]:
+                                st.error(_e6)
+                        else:
+                            st.success(f"✅ {_item['nama'][:50]} — selesai. Parse Draft ulang di Excel.")
+                        st.session_state["_batch_cek_hasil"] = [
+                            x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
+                        ]
+                        st.rerun()
+            else:
+                st.success(f"✅ Semua {len(_bh)} paket — tidak ada update dokumen PPK")
+            if _error_list:
+                with st.expander(f"⚠️ {len(_error_list)} paket gagal dicek"):
+                    for _item in _error_list:
+                        st.caption(f"`{_item['kode']}` — {_item['error'][:80]}")
 
     # ── Paket sudah-folder: expander per-paket dengan aksi kompak (tiru PL) ──
     if _rows_sudah:
