@@ -6550,6 +6550,7 @@ with tab0:
         # ── Checkbox aksi global (jalan untuk tiap paket saat buat folder) ──
         st.caption("Pilih aksi yang dijalankan otomatis untuk tiap paket saat buat folder.")
         _t_cb_dl  = st.checkbox("📦 Download dokumen SPSE + lampiran", value=True, key="t_cb_dl_dokumen")
+        _t_cb_hps = st.checkbox("📊 Scrape HPS → Excel", value=True, key="t_cb_hps")
         st.divider()
 
         # ── Daftar paket: belum-folder (checklist) + sudah-folder (expander aksi) ──
@@ -6576,8 +6577,8 @@ with tab0:
             }
 
         # ── Checklist pilih paket untuk buat folder (tiru pola PL) ──
+        st.markdown("**Pilih paket yang akan dibuat foldernya:**")
         if _rows_belum:
-            st.markdown("**Pilih paket yang akan dibuat foldernya:**")
             _tf_c1, _tf_c2 = st.columns(2)
             if _tf_c1.button("✅ Pilih Semua", key="tf_pilih_semua", use_container_width=True):
                 for _r in _rows_belum:
@@ -6676,6 +6677,14 @@ with tab0:
                 st.rerun()
         else:
             st.info("Semua paket tahun ini sudah punya folder.")
+            if st.button(
+                "📁 Buat Folder Terpilih (0 paket)",
+                disabled=True,
+                use_container_width=True,
+                key="t_btn_buat_terpilih_empty",
+                type="primary",
+            ):
+                pass
 
     # ── Paket sudah-folder: expander per-paket dengan aksi kompak (tiru PL) ──
     if _rows_sudah:
