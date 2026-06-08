@@ -6329,44 +6329,6 @@ with tab0:
             _cache_info = f" (cache {_age}m lalu)"
         st.caption(f"✅ Draft: {len(_gd2.get('paket',[]))} | Aktif: {len(_ga2.get('paket',[]))}{_cache_info}")
 
-        # ── Lanjutan: Re-parse PDF per paket (jarang dipakai, collapse) ─────
-        with st.expander("🔧 Lanjutan — Re-parse PDF Disposisi"):
-            st.caption("Parse ulang PDF Lembar Disposisi untuk paket yang sudah ada di DB — tanpa serap inbox ulang.")
-            _tahun_skrg_rp = str(datetime.now().year)
-            _reparse_opts = {f"{_r.get('nomor_urut','?')}. {_r.get('nama_tender','?')} ({_r.get('kode_tender','')})": _r
-                            for _r in _draft_rows
-                            if (_r.get("link_pdf") or _r.get("nomor_surat_dinas"))
-                            and _tahun_skrg_rp in str(_r.get("nomor_pp") or "")
-                            and not str(_r.get("kode_tender", "")).startswith("_err_")}
-            _reparse_opts_label = ["(pilih paket)"] + list(_reparse_opts.keys())
-            _reparse_sel = st.selectbox("Pilih paket", _reparse_opts_label, key="sel_reparse_pdf")
-
-            if _reparse_sel != "(pilih paket)":
-                _reparse_row = _reparse_opts[_reparse_sel]
-                _reparse_link = _reparse_row.get("link_pdf") or ""
-                if not _reparse_link:
-                    st.caption("⚠️ Link PDF belum tersimpan — akan di-fetch otomatis saat re-parse.")
-                if st.button("🔁 Re-parse PDF", type="secondary", use_container_width=True, key="btn_reparse_pdf"):
-                    with st.spinner("Parsing PDF..."):
-                        try:
-                            _rp_kode = _reparse_row["kode_tender"]
-                            if not _reparse_link:
-                                _rp_detail = inbox_engine.parse_detail_pesan(str(_reparse_row.get("id_pesan", "")))
-                                _reparse_link = _rp_detail.get("link_pdf") or ""
-                            if not _reparse_link:
-                                st.error("Tidak bisa mendapatkan link PDF untuk paket ini.")
-                            else:
-                                _rp_hasil = inbox_engine.parse_pdf_inmemory(_reparse_link)
-                                _rp_data  = {k: v for k, v in _rp_hasil.items() if k in inbox_engine._KOLOM_DRAFT_PAKET and v}
-                                _rp_data["link_pdf"] = _reparse_link
-                                inbox_engine._sb().table("draft_paket").update(_rp_data).eq("kode_tender", _rp_kode).execute()
-                                st.success(f"✅ Re-parse berhasil. Field diperbarui: {', '.join(_rp_data.keys())}")
-                                with st.container(border=True):
-                                    for k, v in _rp_hasil.items():
-                                        st.text(f"{k}: {v}")
-                        except Exception as _rp_e:
-                            st.error(f"Gagal re-parse: {_rp_e}")
-
         st.divider()
         # ── Cek Semua Dokumen PPK (batch) ──
         if st.session_state.get("global_paket_draft") or st.session_state.get("global_paket_aktif"):
@@ -6588,9 +6550,6 @@ with tab0:
         # ── Checkbox aksi global (jalan untuk tiap paket saat buat folder) ──
         st.caption("Pilih aksi yang dijalankan otomatis untuk tiap paket saat buat folder.")
         _t_cb_dl  = st.checkbox("📦 Download dokumen SPSE + lampiran", value=True, key="t_cb_dl_dokumen")
-        _t_cb_hps = st.checkbox("📊 Scrape HPS → Excel",               value=True, key="t_cb_hps")
-        _t_cb_pen = st.checkbox("💰 Scrape Penawaran → Excel",         value=True, key="t_cb_pen")
-
         st.divider()
 
         # ── Daftar paket: belum-folder (checklist) + sudah-folder (expander aksi) ──
@@ -6687,7 +6646,7 @@ with tab0:
                                 _bulk_status_line.code("\n".join(_log[-10:]))
                             _jalankan_aksi_tender(
                                 _bp["kode_tender"], _bp.get("id_pesan"), _bp.get("kode_pokja"),
-                                _bp_target, _t_cb_dl, _t_cb_hps, _t_cb_pen,
+                                _bp_target, _t_cb_dl, _t_cb_hps, False,
                                 st_ctx=_ctx_bulk, log=_paket_log,
                             )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
@@ -6718,39 +6677,47 @@ with tab0:
         else:
             st.info("Semua paket tahun ini sudah punya folder.")
 
-        # ── Paket sudah-folder: expander per-paket dengan aksi kompak (tiru PL) ──
-        if _rows_sudah:
-            st.divider()
-            st.markdown("**📂 Paket Sudah Berfolder — Aksi per Paket:**")
-            for _r in _rows_sudah:
-                _kt = _r.get("kode_tender", "")
-                _pk = str(_r.get("kode_pokja") or "").strip()
-                _nm = str(_r.get("nama_tender") or "-")
-                _fd = _r.get("folder_dibuat", "")
-                _tpath = _os.path.join(_POKJA_ROOT, _fd) if _fd else ""
-                _ada = bool(_tpath and _os.path.exists(_tpath))
-                with st.expander(f"✅ [Pokja {_pk}] {_nm[:45]}"):
-                    st.caption(f"`{_kt}` | Folder: {'✅ ada' if _ada else '⚠️ tidak ditemukan'}")
-                    if not _ada:
-                        st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
-                        continue
-                    _ac1, _ac2, _ac3, _ac4 = st.columns(4)
-                    # 📦 Unduh
-                    if _ac1.button("📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True):
-                        st.session_state[f"_t_act_{_kt}"] = "dl"
-                    # 💰 HPS
-                    if _ac2.button("💰 HPS", key=f"t_hps_{_kt}", use_container_width=True):
-                        st.session_state[f"_t_act_{_kt}"] = "hps"
-                    # 💰 Penawaran
-                    if _ac3.button("💰 Penaw.", key=f"t_pen_{_kt}", use_container_width=True):
-                        st.session_state[f"_t_act_{_kt}"] = "pen"
-                    # 📂 Explorer
-                    if _ac4.button("📂 Buka", key=f"t_exp_{_kt}", use_container_width=True):
-                        _sp.Popen(f'explorer "{_tpath.replace("/", chr(92))}"')
+    # ── Paket sudah-folder: expander per-paket dengan aksi kompak (tiru PL) ──
+    if _rows_sudah:
+        st.divider()
+        st.markdown("#### 3. Status Folder")
+        st.write("")
+        for _r in _rows_sudah:
+            _kt = _r.get("kode_tender", "")
+            _pk = str(_r.get("kode_pokja") or "").strip()
+            _nm = str(_r.get("nama_tender") or "-")
+            _fd = _r.get("folder_dibuat", "")
+            _tpath = _os.path.join(_POKJA_ROOT, _fd) if _fd else ""
+            _ada = bool(_tpath and _os.path.exists(_tpath))
+            with st.expander(f"✅ [Pokja {_pk}] {_nm[:45]}"):
+                st.caption(f"`{_kt}` | Folder: {'✅ ada' if _ada else '⚠️ tidak ditemukan'}")
+                if not _ada:
+                    st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
+                    continue
+                _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
+                # 📦 Unduh
+                if _ac1.button("📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "dl"
+                # 💰 HPS
+                if _ac2.button("💰 HPS", key=f"t_hps_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "hps"
+                # 🔄 Refresh
+                if _ac3.button("🔄 Refresh", key=f"t_ref_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "ref"
+                # 👀 Peserta
+                if _ac4.button("👀 Peserta", key=f"t_mon_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "mon"
+                # 📂 Buka
+                if _ac5.button("📂 Buka", key=f"t_open_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "open"
+                # 🔁 Parse
+                if _ac6.button("🔁 Parse", key=f"t_parse_{_kt}", use_container_width=True):
+                    st.session_state[f"_t_act_{_kt}"] = "parse"
 
-                # Proses aksi di LUAR expander (hindari nested st.status di expander)
-                _act = st.session_state.pop(f"_t_act_{_kt}", None)
-                if _act:
+            # Proses aksi di LUAR expander (hindari nested st.status di expander)
+            _act = st.session_state.pop(f"_t_act_{_kt}", None)
+            if _act:
+                if _act in ("dl", "hps", "pen"):
                     _do_dl  = _act == "dl"
                     _do_hps = _act == "hps"
                     _do_pen = _act == "pen"
@@ -6766,223 +6733,78 @@ with tab0:
                     _areaA.code("\n".join(_logA))
                     _stA.update(label=f"✅ Selesai: {_nm[:40]}", state="complete", expanded=False)
 
-        # ── Refresh Template ke Folder Tender Existing ────────────────────────
-        st.divider()
-        with st.expander("🔄 Refresh Template ke Folder Tender Existing"):
-            st.caption("Copy file template terbaru ke folder paket tender yang sudah dibuat (tanpa download ulang SPSE).")
-            from refresh_template import refresh_template_paket as _rtt_refresh
-            from config import POKJA_ROOT as _rtt_POKJA_ROOT
-            from pathlib import Path as _rtt_Path
-            _TEMPLATE_DIR_TENDER = str(_rtt_Path(_rtt_POKJA_ROOT) / "Paket Experiment")
-
-            _rtt_rows_ada = [r for r in _draft_rows if r.get("folder_dibuat")]
-            if not _rtt_rows_ada:
-                st.info("Belum ada paket tender dengan folder yang sudah dibuat.")
-            else:
-                _rtt_opsi = {
-                    f"{r.get('nama_tender','')[:70]} (Pokja {r.get('kode_pokja','?')})": r
-                    for r in _rtt_rows_ada
-                }
-                _rtt_all = st.checkbox("Pilih Semua", key="rtt_all")
-                _rtt_pilih = st.multiselect(
-                    "Pilih paket tender:",
-                    list(_rtt_opsi.keys()),
-                    default=list(_rtt_opsi.keys()) if _rtt_all else [],
-                    key="rtt_ms",
-                )
-                _rtt_dry = st.checkbox("Dry-run (preview saja, tidak ada perubahan)", value=True, key="rtt_dry")
-                _rtt_relink = st.checkbox("Auto-relink Word → Excel setelah copy", value=True, key="rtt_relink")
-
-                if _rtt_pilih and st.button(
-                    f"🔄 Refresh Template Tender ke {len(_rtt_pilih)} Paket",
-                    type="primary",
-                    key="rtt_btn",
-                ):
-                    _rtt_folders = []
-                    for _rtt_k in _rtt_pilih:
-                        _rtt_r = _rtt_opsi[_rtt_k]
-                        _rtt_fd = _rtt_r.get("folder_dibuat", "")
-                        if _rtt_fd:
-                            _rtt_folders.append(_rtt_Path(_rtt_POKJA_ROOT) / _rtt_fd)
-
-                    _rtt_src = _rtt_Path(_TEMPLATE_DIR_TENDER)
-                    _rtt_ok, _rtt_fail = 0, 0
-                    _rtt_log_container = st.container(border=True)
-                    _rtt_res = _rtt_refresh(
-                        _rtt_folders, _rtt_src, "tender",
-                        auto_relink=_rtt_relink, dry_run=_rtt_dry,
-                    )
-                    for _rtt_fk, _rtt_logs in _rtt_res.items():
-                        _rtt_ok_f = all("❌" not in l for l in _rtt_logs)
-                        if _rtt_ok_f:
-                            _rtt_ok += 1
+                elif _act == "ref":
+                    from refresh_template import refresh_template_paket as _rtt_refresh
+                    from pathlib import Path as _rtt_Path
+                    with st.spinner(f"🔄 Refresh Template untuk {_nm[:40]}..."):
+                        _res = _rtt_refresh(
+                            [_rtt_Path(_tpath)],
+                            _rtt_Path(_POKJA_ROOT) / "Paket Experiment",
+                            "tender",
+                            auto_relink=True,
+                            dry_run=False
+                        )
+                        _logs = _res.get(str(_rtt_Path(_tpath)), [])
+                        _ok = all("❌" not in l for l in _logs)
+                        if _ok:
+                            st.success("✅ Refresh Template selesai.")
                         else:
-                            _rtt_fail += 1
-                        _rtt_log_container.markdown(f"**{_rtt_Path(_rtt_fk).name[:60]}**")
-                        for _l in _rtt_logs:
-                            _rtt_log_container.caption(_l)
-                    _rtt_label = f"✅ {_rtt_ok} OK, ❌ {_rtt_fail} gagal"
-                    if _rtt_dry:
-                        _rtt_label = "[DRY-RUN] " + _rtt_label
-                    if _rtt_fail == 0:
-                        st.success(_rtt_label)
-                    else:
-                        st.warning(_rtt_label)
+                            st.warning("⚠️ Ada error saat Refresh Template.")
+                        with st.expander("Lihat Log"):
+                            for _l in _logs:
+                                st.caption(_l)
 
-        # ── Monitor Peserta Tender ────────────────────────────────────────────
-        st.divider()
-        with st.expander("👀 Monitor Peserta Tender"):
-            st.caption("Cek jumlah peserta per paket tender via Chrome SPSE (butuh Chrome CDP aktif + login akun PP).")
-            import peserta_monitor_tender as _pmt
+                elif _act == "mon":
+                    import peserta_monitor_tender as _pmt
+                    with st.spinner(f"👀 Mengambil data peserta {_nm[:40]}..."):
+                        _hasil = _pmt.fetch_semua_paket([_kt])
+                        _data = _hasil.get(_kt, {})
+                        _jum = _data.get("jumlah", 0)
+                        _err = _data.get("error")
+                        _peserta = _data.get("peserta", [])
 
-            _mon_rows_ada = [r for r in _draft_rows if r.get("folder_dibuat") and r.get("kode_tender")]
-            if not _mon_rows_ada:
-                st.info("Belum ada paket tender dengan folder yang sudah dibuat.")
-            else:
-                _mon_opsi = {
-                    f"{r.get('nama_tender','')[:70]} (Pokja {r.get('kode_pokja','?')})": r
-                    for r in _mon_rows_ada
-                }
-                _mon_all = st.checkbox("Pilih Semua", key="mon_all")
-                _mon_pilih = st.multiselect(
-                    "Pilih paket:",
-                    list(_mon_opsi.keys()),
-                    default=list(_mon_opsi.keys()) if _mon_all else [],
-                    key="mon_ms",
-                )
-
-                if _mon_pilih and st.button("🔄 Cek Peserta", type="primary", key="mon_btn"):
-                    _mon_kode_list = [_mon_opsi[k]["kode_tender"] for k in _mon_pilih]
-                    _mon_nama_map  = {_mon_opsi[k]["kode_tender"]: k for k in _mon_pilih}
-
-                    with st.spinner(f"Mengambil data {len(_mon_kode_list)} paket via browser..."):
-                        _mon_hasil = _pmt.fetch_semua_paket(_mon_kode_list)
-
-                    # Tabel ringkasan
-                    _mon_tbl = []
-                    for _mk, _mv in sorted(_mon_hasil.items()):
-                        _mon_tbl.append({
-                            "Paket": _mon_nama_map.get(_mk, _mk)[:60],
-                            "Peserta": _mv["jumlah"],
-                            "Status": "⚠️ Error" if _mv["error"] else ("✅ Ada" if _mv["jumlah"] > 0 else "⬜ Belum ada"),
-                        })
-                    st.dataframe(_mon_tbl, use_container_width=True)
-
-                    # Detail per paket (nama peserta)
-                    for _mk, _mv in sorted(_mon_hasil.items()):
-                        if _mv.get("peserta"):
+                        if _err:
+                            st.error(f"❌ Error: {_err}")
+                        elif _jum == 0:
+                            st.info("⬜ Belum ada peserta.")
+                        else:
+                            st.success(f"✅ Ditemukan {_jum} peserta.")
                             with st.container(border=True):
-                                st.markdown(f"**📋 {_mon_nama_map.get(_mk,_mk)[:60]}**")
-                                for _mp in _mv["peserta"]:
+                                for _mp in _peserta:
                                     _bintang = " ⭐ (Pemenang)" if _mp.get("is_pemenang") else ""
-                                    st.caption(f"{_mp['nama']}{' — ' + _mp['npwp'] if _mp['npwp'] else ''}{_bintang}")
-                        elif _mv.get("error"):
-                            st.warning(f"❌ {_mon_nama_map.get(_mk,_mk)[:50]}: {_mv['error']}")
+                                    st.caption(f"{_mp['nama']}{' — ' + _mp['npwp'] if _mp.get('npwp') else ''}{_bintang}")
 
-    # ══════════════════════════════════════════
-    # BAWAH — 3. Data Draft Paket
-    # ══════════════════════════════════════════
-    st.divider()
-    st.markdown("#### 3. Data Draft Paket")
+                elif _act == "open":
+                    import os as _os_open
+                    try:
+                        _os_open.startfile(_tpath)
+                        st.success(f"📂 Membuka folder: `{_tpath}`")
+                    except Exception as _op_e:
+                        st.error(f"Gagal membuka folder: {_op_e}")
 
-    _t_filter, _t_info, _t_refresh = st.columns([2, 3, 1])
-
-    _hari_ini = datetime.now().strftime("%Y-%m-%d")
-    _tahun_ini = datetime.now().year
-    _tahun_data = sorted({
-        int(str(r.get("nomor_pp") or "")[-4:])
-        for r in _draft_rows
-        if str(r.get("nomor_pp") or "")[-4:].isdigit()
-    }, reverse=True)
-    _tahun_options = ["Semua"] + [str(t) for t in range(_tahun_ini, min(_tahun_data or [_tahun_ini]) - 1, -1)] + ["Baru (hari ini)", "Sudah Folder", "Belum Folder"]
-    _default_idx = next((i for i, o in enumerate(_tahun_options) if o == str(_tahun_ini)), 1)
-    _filter_status = _t_filter.selectbox("Filter:", _tahun_options, index=_default_idx,
-                                         key="filter_draft_status", label_visibility="collapsed")
-    if _t_refresh.button("🔄", key="refresh_draft"):
-        st.rerun()
-
-    def _filter_row(r):
-        if _filter_status.isdigit():
-            return str(r.get("nomor_pp") or "").endswith(_filter_status)
-        if _filter_status == "Baru (hari ini)":
-            return str(r.get("diambil_pada") or "").startswith(_hari_ini)
-        if _filter_status == "Sudah Folder":
-            return bool(r.get("folder_dibuat"))
-        if _filter_status == "Belum Folder":
-            return not bool(r.get("folder_dibuat"))
-        return True
-
-    _rows_tampil = [r for r in _draft_rows
-                    if _filter_row(r) and not str(r.get("kode_tender","")).startswith("_err_")]
-    _t_info.caption(f"Menampilkan {len(_rows_tampil)} dari {len(_draft_rows)} paket")
-
-    if _rows_tampil:
-        import pandas as pd
-        _df_tampil = pd.DataFrame([{
-            "No": i + 1,
-            "Pokja": str(r.get("kode_pokja") or "").strip(),
-            "Kode Tender": str(r.get("kode_tender") or ""),
-            "Nama Tender": str(r.get("nama_tender") or ""),
-            "Status": ("🆕 " if str(r.get("diambil_pada","")).startswith(_hari_ini) else "") +
-                      ("✅ Folder" if r.get("folder_dibuat") else ""),
-        } for i, r in enumerate(_rows_tampil)])
-        st.dataframe(_df_tampil, use_container_width=True, hide_index=True,
-                     height=min(400, 35 + len(_rows_tampil) * 35))
-
-        # ── Reset folder_dibuat ──
-        with st.expander("↩️ Reset Status Folder"):
-            st.caption("Kosongkan `folder_dibuat` agar paket muncul kembali di Bulk Create (folder fisik tidak dihapus).")
-            _opsi_reset = {
-                f"Pokja {str(r.get('kode_pokja') or '').strip()} — {str(r.get('nama_tender') or '')[:60]}": r.get("kode_tender")
-                for r in _rows_tampil if r.get("folder_dibuat") and r.get("kode_tender")
-            }
-            if _opsi_reset:
-                _pilih_reset = st.multiselect("Pilih paket:", list(_opsi_reset.keys()), key="ms_reset_folder")
-                if _pilih_reset:
-                    if st.button("↩️ Reset Sekarang", type="secondary", key="btn_reset_folder_confirm"):
-                        _reset_ok = 0
-                        for _kr in [_opsi_reset[k] for k in _pilih_reset]:
-                            try:
-                                inbox_engine._sb().table("draft_paket").update(
-                                    {"folder_dibuat": None, "folder_dibuat_pada": None}
-                                ).eq("kode_tender", _kr).execute()
-                                _reset_ok += 1
-                            except Exception as _er:
-                                st.error(f"{_kr}: {_er}")
-                        if _reset_ok:
-                            st.success(f"✅ {_reset_ok} paket berhasil direset.")
-                        st.rerun()
-            else:
-                st.info("Tidak ada paket dengan status folder yang bisa direset.")
-
-        # ── Hapus paket dari Supabase ──
-        with st.expander("🗑️ Hapus Paket dari Database"):
-            st.caption("Pilih paket yang ingin dihapus dari tabel `draft_paket` Supabase.")
-            _opsi_hapus = {
-                f"Pokja {str(r.get('kode_pokja') or '').strip()} — {str(r.get('nama_tender') or '')[:60]}": r.get("kode_tender")
-                for r in _rows_tampil if r.get("kode_tender")
-            }
-            _pilih_hapus = st.multiselect("Pilih paket yang akan dihapus:", list(_opsi_hapus.keys()), key="ms_hapus_draft")
-            if _pilih_hapus:
-                st.warning(f"⚠️ {len(_pilih_hapus)} paket akan dihapus permanen dari Supabase.")
-                if st.button("🗑️ Hapus Sekarang", type="primary", key="btn_hapus_draft_confirm"):
-                    _kode_hapus = [_opsi_hapus[k] for k in _pilih_hapus]
-                    _hapus_ok, _hapus_err = 0, []
-                    for _kh in _kode_hapus:
+                elif _act == "parse":
+                    with st.status(f"⏳ Re-parsing PDF untuk {_nm[:40]}...", expanded=True) as _st_rp:
                         try:
-                            inbox_engine._sb().table("draft_paket").delete().eq("kode_tender", _kh).execute()
-                            _hapus_ok += 1
-                        except Exception as _eh:
-                            _hapus_err.append(f"{_kh}: {_eh}")
-                    if _hapus_ok:
-                        st.success(f"✅ {_hapus_ok} paket berhasil dihapus.")
-                    if _hapus_err:
-                        for _em in _hapus_err:
-                            st.error(_em)
-                    st.rerun()
-    else:
-        st.info("Belum ada data. Klik 'Update Inbox' untuk mulai.")
-
+                            _reparse_link = _r.get("link_pdf")
+                            if not _reparse_link:
+                                _st_rp.write("🔗 Mengambil link PDF dari detail pesan...")
+                                _rp_detail = inbox_engine.parse_detail_pesan(str(_r.get("id_pesan", "")))
+                                _reparse_link = _rp_detail.get("link_pdf") or ""
+                            if not _reparse_link:
+                                _st_rp.update(label="❌ Gagal: Link PDF tidak ditemukan", state="error")
+                            else:
+                                _st_rp.write("📄 Parsing PDF di memory...")
+                                _rp_hasil = inbox_engine.parse_pdf_inmemory(_reparse_link)
+                                _rp_data  = {k: v for k, v in _rp_hasil.items() if k in inbox_engine._KOLOM_DRAFT_PAKET and v}
+                                _rp_data["link_pdf"] = _reparse_link
+                                _st_rp.write("💾 Mengupdate Supabase...")
+                                inbox_engine._sb().table("draft_paket").update(_rp_data).eq("kode_tender", _kt).execute()
+                                _st_rp.update(label=f"✅ Selesai: {_nm[:40]}", state="complete", expanded=True)
+                                with st.container(border=True):
+                                    for k, v in _rp_hasil.items():
+                                        st.text(f"{k}: {v}")
+                        except Exception as _rp_e:
+                            _st_rp.update(label=f"❌ Gagal re-parse: {_rp_e}", state="error")
 
 # ============================================================
 # Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
