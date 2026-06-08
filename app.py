@@ -2726,62 +2726,40 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.divider()
 
             # Header tabel per paket
-            # Daftar paket
+            # Daftar paket — 1 baris horizontal per paket
             for _p8 in _pl8_rows:
-                _k8    = _p8.get("kode_paket", "")
-                _id8   = _k8  # BA nontender pakai kode_paket
-                _label8 = f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:60]}**"
-                with st.container(border=True):
-                    st.markdown(_label8)
-                    st.caption(f"kode paket: `{_k8}`")
-
-                    # Tanggal per paket: OTOMATIS dari tgl_evaluasi (atau manual global)
-                    if _pl8_tgl_mode == "Satu tanggal semua manual":
-                        _tgl8 = _pl8_tgl_global
-                    else:
-                        _tgl8 = _auto_tgl_pl8(_p8)
-
+                _k8  = _p8.get("kode_paket", "")
+                _id8 = _k8
+                if _pl8_tgl_mode == "Satu tanggal semua manual":
+                    _tgl8 = _pl8_tgl_global
+                else:
+                    _tgl8 = _auto_tgl_pl8(_p8)
+                _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
+                _no8hs = _auto_nomor_pl8(_p8, "hasil")
+                _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
+                with _col_nama:
+                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:55]}**")
+                with _col_tgl:
                     if _tgl8:
-                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} "
-                                   f"{_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
+                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
                     else:
-                        st.caption("⚠️ Tanggal Evaluasi belum ada — isi jadwal dulu atau pakai mode manual.")
-
-                    # Nomor hardcode (tidak ditampilkan)
-                    _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
-                    _no8hs = _auto_nomor_pl8(_p8, "hasil")
-
-                    # 1 tombol — cetak + upload evaluasi & hasil sekaligus
-                    if st.button(
-                        "🖨️ Cetak + Upload",
-                        key=f"pl8_ev_hs_{_k8}",
-                        use_container_width=True,
-                        type="primary",
-                    ):
-                        _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                        for _jk8, _no8, _lbl8 in [
-                            ("evaluasi", _no8ev, "BA Evaluasi"),
-                            ("hasil",    _no8hs, "BA Hasil"),
-                        ]:
-                            with st.spinner(f"Proses {_lbl8} {_k8}..."):
-                                _rc8x = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key=_jk8,
-                                    nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                )
+                        st.caption("⚠️ Tanggal belum ada")
+                with _col_btn:
+                    if _tgl8 and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
+                        _tgl8s = _tgl8.strftime("%d-%m-%Y")
+                        for _jk8, _no8, _lbl8 in [("evaluasi", _no8ev, "BA Evaluasi"), ("hasil", _no8hs, "BA Hasil")]:
+                            with st.spinner(f"Proses {_lbl8}..."):
+                                _rc8x = _ba_pl_engine5.cetak_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s)
                                 if _rc8x["ok"]:
                                     _backup_pdf_pl8(_p8, _jk8, _rc8x["pdf_bytes"])
                                     _fn8x = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_k8}.pdf"
-                                    _ru8x = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key=_jk8,
-                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x,
-                                    )
+                                    _ru8x = _ba_pl_engine5.upload_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s, file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x)
                                     if _ru8x.get("ok"):
-                                        st.success(f"✅ {_lbl8} {_k8} berhasil")
+                                        st.success(f"✅ {_lbl8} berhasil")
                                     else:
-                                        st.error(f"❌ {_lbl8} upload gagal: status {_ru8x.get('status')}")
+                                        st.error(f"❌ {_lbl8} upload gagal: {_ru8x.get('status')}")
                                 else:
-                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')} (status {_rc8x.get('status')})")
+                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')}")
 
             # Tombol batch semua
 
@@ -2898,11 +2876,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             m = _ba_re.match(r"\s*(\d+)", nama)
             return int(m.group(1)) if m else 9999
 
+        # Hanya paket yang belum selesai (reuse _pl8_rows yang sudah di-filter)
+        _ba_kode_aktif = {r.get("kode_paket", "") for r in _pl8_rows if r.get("kode_paket")}
+
         _ba_found = []  # (nomor, nama_folder, path_pdf)
         if _ba_os.path.isdir(_ba_root_in):
             for _entry in _ba_os.listdir(_ba_root_in):
                 _sub = _ba_os.path.join(_ba_root_in, _entry)
                 if not _ba_os.path.isdir(_sub):
+                    continue
+                # Skip folder paket yang sudah selesai (kode_paket tidak ada di set aktif)
+                if _ba_kode_aktif and not any(k in _entry for k in _ba_kode_aktif):
                     continue
                 # Match BA_PLJKK_*.pdf (bukan BA_REVIU_* / BA lain)
                 _matches = [
@@ -2983,7 +2967,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 state="error",
                             )
         elif _ba_os.path.isdir(_ba_root_in):
-            st.info("Tidak ada file `BA_PLJKK_*.pdf` ditemukan di folder paket manapun.")
+            _ba_nama_paket_aktif = ", ".join(
+                (r.get("nama_paket") or r.get("kode_paket","?"))
+                + (_pl_hint_ulang(r) and " (PL - Ulang)" or "")
+                for r in _pl8_rows
+            )
+            st.info(f"Tidak ada file `BA_PLJKK_*.pdf` ditemukan. Paket yang di-scan: {_ba_nama_paket_aktif or '(kosong)'}.")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
     with _pl_tab5:
@@ -3633,11 +3622,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             m = _ba_re.match(r"\s*(\d+)", nama)
             return int(m.group(1)) if m else 9999
 
+        # Hanya paket yang belum selesai (reuse _pl8_rows yang sudah di-filter)
+        _ba_kode_aktif = {r.get("kode_paket", "") for r in _pl8_rows if r.get("kode_paket")}
+
         _ba_found = []  # (nomor, nama_folder, path_pdf)
         if _ba_os.path.isdir(_ba_root_in):
             for _entry in _ba_os.listdir(_ba_root_in):
                 _sub = _ba_os.path.join(_ba_root_in, _entry)
                 if not _ba_os.path.isdir(_sub):
+                    continue
+                # Skip folder paket yang sudah selesai (kode_paket tidak ada di set aktif)
+                if _ba_kode_aktif and not any(k in _entry for k in _ba_kode_aktif):
                     continue
                 # Match BA_PLJKK_*.pdf (bukan BA_REVIU_* / BA lain)
                 _matches = [
@@ -5860,62 +5855,40 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.divider()
 
             # Header tabel per paket
-            # Daftar paket
+            # Daftar paket — 1 baris horizontal per paket
             for _p8 in _pl8_rows:
-                _k8    = _p8.get("kode_paket", "")
-                _id8   = _k8  # BA nontender pakai kode_paket
-                _label8 = f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:60]}**"
-                with st.container(border=True):
-                    st.markdown(_label8)
-                    st.caption(f"kode paket: `{_k8}`")
-
-                    # Tanggal per paket: OTOMATIS dari tgl_evaluasi (atau manual global)
-                    if _pl8_tgl_mode == "Satu tanggal semua manual":
-                        _tgl8 = _pl8_tgl_global
-                    else:
-                        _tgl8 = _auto_tgl_pl8(_p8)
-
+                _k8  = _p8.get("kode_paket", "")
+                _id8 = _k8
+                if _pl8_tgl_mode == "Satu tanggal semua manual":
+                    _tgl8 = _pl8_tgl_global
+                else:
+                    _tgl8 = _auto_tgl_pl8(_p8)
+                _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
+                _no8hs = _auto_nomor_pl8(_p8, "hasil")
+                _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
+                with _col_nama:
+                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:55]}**")
+                with _col_tgl:
                     if _tgl8:
-                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} "
-                                   f"{_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
+                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
                     else:
-                        st.caption("⚠️ Tanggal Evaluasi belum ada — isi jadwal dulu atau pakai mode manual.")
-
-                    # Nomor hardcode (tidak ditampilkan)
-                    _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
-                    _no8hs = _auto_nomor_pl8(_p8, "hasil")
-
-                    # 1 tombol — cetak + upload evaluasi & hasil sekaligus
-                    if st.button(
-                        "🖨️ Cetak + Upload",
-                        key=f"pl8_ev_hs_{_k8}",
-                        use_container_width=True,
-                        type="primary",
-                    ):
-                        _tgl8s = _tgl8.strftime("%d-%m-%Y") if _tgl8 else ""
-                        for _jk8, _no8, _lbl8 in [
-                            ("evaluasi", _no8ev, "BA Evaluasi"),
-                            ("hasil",    _no8hs, "BA Hasil"),
-                        ]:
-                            with st.spinner(f"Proses {_lbl8} {_k8}..."):
-                                _rc8x = _ba_pl_engine5.cetak_ba_pl(
-                                    id_nontender=_id8, jenis_key=_jk8,
-                                    nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                )
+                        st.caption("⚠️ Tanggal belum ada")
+                with _col_btn:
+                    if _tgl8 and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
+                        _tgl8s = _tgl8.strftime("%d-%m-%Y")
+                        for _jk8, _no8, _lbl8 in [("evaluasi", _no8ev, "BA Evaluasi"), ("hasil", _no8hs, "BA Hasil")]:
+                            with st.spinner(f"Proses {_lbl8}..."):
+                                _rc8x = _ba_pl_engine5.cetak_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s)
                                 if _rc8x["ok"]:
                                     _backup_pdf_pl8(_p8, _jk8, _rc8x["pdf_bytes"])
                                     _fn8x = f"{_ba_cfg_pl.FILE_LABEL_PL[_jk8]}-{_k8}.pdf"
-                                    _ru8x = _ba_pl_engine5.upload_ba_pl(
-                                        id_nontender=_id8, jenis_key=_jk8,
-                                        nomor_ba=_no8, tanggal_ba=_tgl8s,
-                                        file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x,
-                                    )
+                                    _ru8x = _ba_pl_engine5.upload_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s, file_bytes=_rc8x["pdf_bytes"], file_name=_fn8x)
                                     if _ru8x.get("ok"):
-                                        st.success(f"✅ {_lbl8} {_k8} berhasil")
+                                        st.success(f"✅ {_lbl8} berhasil")
                                     else:
-                                        st.error(f"❌ {_lbl8} upload gagal: status {_ru8x.get('status')}")
+                                        st.error(f"❌ {_lbl8} upload gagal: {_ru8x.get('status')}")
                                 else:
-                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')} (status {_rc8x.get('status')})")
+                                    st.error(f"❌ {_lbl8} cetak gagal: {_rc8x.get('error')}")
 
             # Tombol batch semua
 

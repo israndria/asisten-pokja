@@ -121,6 +121,7 @@ def launch_chrome_dengan_cdp():
     # Pakai BROWSER_SESSION_DIR sebagai profile terpisah khusus SPSE
     subprocess.Popen([
         CHROME_EXE,
+        "https://spse.inaproc.id/tapinkab",
         f"--remote-debugging-port={CDP_PORT}",
         f"--user-data-dir={BROWSER_SESSION_DIR}",
         "--no-first-run",
