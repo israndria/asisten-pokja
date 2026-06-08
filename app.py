@@ -6772,7 +6772,7 @@ with tab0:
                             st.info("⬜ Belum ada peserta.")
                         else:
                             st.success(f"✅ Ditemukan {_jum} peserta.")
-                            with st.container(border=True):
+                            with st.expander(f"📋 Daftar Peserta ({_jum})", expanded=True):
                                 for _mp in _peserta:
                                     _bintang = " ⭐ (Pemenang)" if _mp.get("is_pemenang") else ""
                                     st.caption(f"{_mp['nama']}{' — ' + _mp['npwp'] if _mp.get('npwp') else ''}{_bintang}")
