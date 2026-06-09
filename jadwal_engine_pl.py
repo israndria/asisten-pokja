@@ -57,9 +57,12 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
     - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +26 hari kerja replace(hour=16)
     """
-    # T1 Upload Penawaran — 5 hari KALENDER (bukan hari kerja)
+    # T1 Upload Penawaran — 5 hari KALENDER, geser ke hari kerja jika jatuh di weekend/libur
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
-    t1_selesai = (t1_mulai + timedelta(days=5)).replace(
+    t1_selesai_kand = (t1_mulai + timedelta(days=5)).replace(
+        hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
+    )
+    t1_selesai = geser_ke_hari_kerja(t1_selesai_kand).replace(
         hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
     )
 
