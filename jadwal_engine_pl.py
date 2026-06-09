@@ -81,7 +81,8 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     # T5 Penandatanganan Kontrak
     t5_mulai_kand = t4_selesai + timedelta(days=1)
     t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=8, minute=0, second=0, microsecond=0)
-    t5_selesai = _tambah_hari_kerja(t5_mulai, 26).replace(hour=16, minute=0, second=0, microsecond=0)
+    t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
+    t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [
         {"nama": "Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
