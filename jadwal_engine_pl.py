@@ -50,16 +50,16 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung 5 tahap PL dari tanggal mulai (T1).
 
-    Pola yang dikonfirmasi user (2026-05-17):
-    - T1: mulai D jam X → selesai D+2 hari kerja jam X (jam sama)
+    Pola yang dikonfirmasi user (2026-06-10):
+    - T1: mulai D jam X → selesai D+5 hari kerja jam X (jam sama)
     - T2: T1.selesai → T1.selesai + 65 menit (hari sama, no geser)
-    - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 2 hari kerja replace(hour=16)
+    - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 1 hari kerja replace(hour=16)
     - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
-    - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +7 hari kerja replace(hour=16)
+    - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +26 hari kerja replace(hour=16)
     """
     # T1 Upload Penawaran
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
-    t1_selesai = _tambah_hari_kerja(t1_mulai, 2).replace(
+    t1_selesai = _tambah_hari_kerja(t1_mulai, 5).replace(
         hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
     )
 
@@ -69,7 +69,7 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
 
     # T3 Evaluasi Penawaran
     t3_mulai = t2_selesai + timedelta(minutes=1)
-    t3_selesai = _tambah_hari_kerja(t3_mulai, 2).replace(hour=16, minute=0, second=0, microsecond=0)
+    t3_selesai = _tambah_hari_kerja(t3_mulai, 1).replace(hour=16, minute=0, second=0, microsecond=0)
 
     # T4 Klarifikasi + Negosiasi (hari sama T3.selesai)
     t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -78,7 +78,7 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     # T5 Penandatanganan Kontrak
     t5_mulai_kand = t4_selesai + timedelta(days=1)
     t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=8, minute=0, second=0, microsecond=0)
-    t5_selesai = _tambah_hari_kerja(t5_mulai, 7).replace(hour=16, minute=0, second=0, microsecond=0)
+    t5_selesai = _tambah_hari_kerja(t5_mulai, 26).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [
         {"nama": "Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},

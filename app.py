@@ -1685,6 +1685,44 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _ic = "✅" if h["ok"] else "❌"
                         st.markdown(f"{_ic} **{h['paket']}** — {h['pesan']}" + (f" — mulai {h.get('mulai','')}" if h["ok"] else ""))
 
+                    # Expander preview jadwal per paket sukses
+                    _hasil_sukses = [h for h in _hasil if h["ok"]]
+                    if _hasil_sukses:
+                        with st.expander(f"📅 Lihat Detail Jadwal ({len(_hasil_sukses)} paket)", expanded=True):
+                            for _ph in _hasil_sukses:
+                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"][:40] == _ph["paket"]), None)
+                                if not _pk_match:
+                                    continue
+                                _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
+                                _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
+                                _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
+                                _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
+                                import pandas as _pd_jad
+                                _jad_rows = []
+                                for _idx_jad, _jd in enumerate(_jadwal_preview, 1):
+                                    _dur = _jd["selesai"] - _jd["mulai"]
+                                    _dur_str = ""
+                                    _dur_days = _dur.days
+                                    _dur_hours = _dur.seconds // 3600
+                                    _dur_mins = (_dur.seconds % 3600) // 60
+                                    if _dur_days > 0:
+                                        _dur_str = f"{_dur_days} hari"
+                                        if _dur_hours > 0:
+                                            _dur_str += f" {_dur_hours} jam"
+                                    elif _dur_hours > 0:
+                                        _dur_str = f"{_dur_hours} jam {_dur_mins} menit"
+                                    else:
+                                        _dur_str = f"{_dur_mins} menit"
+                                    _jad_rows.append({
+                                        "No": _idx_jad,
+                                        "Tahap": _jd["nama"],
+                                        "Mulai": _jd["mulai"].strftime("%d-%m-%Y %H:%M"),
+                                        "Selesai": _jd["selesai"].strftime("%d-%m-%Y %H:%M"),
+                                        "Durasi": _dur_str,
+                                    })
+                                st.dataframe(_pd_jad.DataFrame(_jad_rows), use_container_width=True, hide_index=True)
+
                 with st.expander("ℹ️ Libur Nasional Tersisa"):
                     _hari_ini = datetime.now().date()
                     _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
@@ -1735,7 +1773,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             "KAK / Rancangan Kontrak / Uraian Singkat / Informasi Lainnya tugas PPK (bukan PP)."
         )
 
-        _depl = _depl_jkk  # alias — sudah di-import top-level
+        _depl = _depl_jkk  # alias JKK — sudah di-import top-level
 
         _plsp_rows = pl_engine.load_draft_pl()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
@@ -1775,7 +1813,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             key=_plsp_chk_key,
                         )
-                    with _col_file:
+                    with _col_file: # JKK tab3 marker
                         _dokpil_up = st.file_uploader(
                             "Dokpil PDF",
                             type=["pdf"],
@@ -2008,9 +2046,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
                     st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
 
+                    _tgl_dokpil_default = datetime.now().date()
+                    if _plsp_selected:
+                        _tgl_db = _plsp_selected[0].get("tgl_dokpil")
+                        if _tgl_db:
+                            try:
+                                from datetime import date as _date
+                                _tgl_dokpil_default = _date.fromisoformat(str(_tgl_db)[:10])
+                            except Exception:
+                                pass
                     _plsp_tgl_dokpil = st.date_input(
                         "Tanggal Dokpil",
-                        value=datetime.now().date(),
+                        value=_tgl_dokpil_default,
                         key="plsp_tgl_dokpil",
                         format="DD/MM/YYYY",
                     )
@@ -2080,22 +2127,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _ldk_teknis_ckm_ids.append(_cid)
 
                     import ldk_config as _ldk_cfg_pl
-                    _ldk_tambah_kinerja = st.checkbox(
-                        "➕ Tambah Syarat Teknis: Penilaian Kinerja Penyedia (ckm_id=996)",
-                        value=True, key="plsp_centang_kinerja",
-                    )
-                    _ldk_kinerja_text = ""
-                    if _ldk_tambah_kinerja:
-                        _ldk_kinerja_text = st.text_area(
-                            "Teks Syarat Kinerja",
-                            value=_ldk_cfg_pl.KINERJA_PENYEDIA_DEFAULT,
-                            key="plsp_kinerja_text",
-                            height=120,
-                        )
+                    # Kinerja penyedia wajib — text beda JKK vs PK
+                    _jenis_pl_paket = _plsp_selected[0].get("jenis_pl", "JKK").upper() if _plsp_selected else "JKK"
+                    _ldk_kinerja_text = _ldk_cfg_pl.KINERJA_PENYEDIA_JKK if _jenis_pl_paket == "JKK" else _ldk_cfg_pl.KINERJA_PENYEDIA_PK
 
                     st.caption(
                         "ℹ️ Default: admin all + teknis idx 0+1 (Pengalaman + Dispensasi). "
-                        "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia = custom row ckm_id=996."
+                        "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia wajib dikirim otomatis."
                     )
 
                     if st.button("📋 Submit Dokumen Kualifikasi (LDK)", key="plsp_btn_ldk", use_container_width=True):
@@ -2121,36 +2159,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     st.divider()
 
-                    # ── SEKSI 4: Dokumen Penawaran (Checklist) ────────────────
-                    st.markdown("#### 📝 Seksi 4 — Dokumen Penawaran (Checklist)")
-                    st.caption("ℹ️ Centang sesuai dokumen penawaran yang diminta ke peserta. Di-submit ke SPSE bagian Checklist Dokumen Penawaran.")
-
-                    _cd_a, _cd_b, _cd_c = st.columns(3)
-                    with _cd_a:
-                        _cd_centang_admin = st.checkbox(
-                            "Admin (Masa Berlaku, Surat Penawaran)",
-                            value=True, key="plsp_cd_admin",
-                        )
-                    with _cd_b:
-                        _cd_centang_syarat = st.checkbox(
-                            "Teknis (Metodologi, Pengalaman, Kualif TA)",
-                            value=True, key="plsp_cd_syarat",
-                        )
-                    with _cd_c:
-                        _cd_centang_harga = st.checkbox(
-                            "Harga (DKH, AHS, Remunerasi)",
-                            value=True, key="plsp_cd_harga",
-                        )
-
-                    if st.button("📝 Submit Dokumen Penawaran (Checklist)", key="plsp_btn_checklist", use_container_width=True):
-                        for _p in _plsp_selected:
-                            _r_cd = _depl.submit_checklist_pl(
-                                _p["kode_paket"],
-                                centang_admin_all=_cd_centang_admin,
-                                centang_syarat_all=_cd_centang_syarat,
-                                centang_harga_all=_cd_centang_harga,
-                            )
-                            st.write(f"{'✅' if _r_cd['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_cd['status']}")
+                    # Seksi 4 — Checklist Dokumen Penawaran (hardcode semua wajib)
+                    _cd_centang_admin = True
+                    _cd_centang_syarat = True
+                    _cd_centang_harga = True
 
                     st.divider()
                     st.caption("⬇️ Atau jalankan semua seksi sekaligus:")
@@ -2331,7 +2343,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _nama_disp = _rr.get("nama_penyedia") or "—"
                     _pp_chk_key = f"pp_chk_{_kp}"
                     if _pp_chk_key not in st.session_state:
-                        st.session_state[_pp_chk_key] = False
+                        st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
                         key=_pp_chk_key,
@@ -4815,6 +4827,44 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _ic = "✅" if h["ok"] else "❌"
                         st.markdown(f"{_ic} **{h['paket']}** — {h['pesan']}" + (f" — mulai {h.get('mulai','')}" if h["ok"] else ""))
 
+                    # Expander preview jadwal per paket sukses
+                    _hasil_sukses = [h for h in _hasil if h["ok"]]
+                    if _hasil_sukses:
+                        with st.expander(f"📅 Lihat Detail Jadwal ({len(_hasil_sukses)} paket)", expanded=True):
+                            for _ph in _hasil_sukses:
+                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"][:40] == _ph["paket"]), None)
+                                if not _pk_match:
+                                    continue
+                                _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
+                                _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
+                                _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
+                                _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
+                                import pandas as _pd_jad
+                                _jad_rows = []
+                                for _idx_jad, _jd in enumerate(_jadwal_preview, 1):
+                                    _dur = _jd["selesai"] - _jd["mulai"]
+                                    _dur_str = ""
+                                    _dur_days = _dur.days
+                                    _dur_hours = _dur.seconds // 3600
+                                    _dur_mins = (_dur.seconds % 3600) // 60
+                                    if _dur_days > 0:
+                                        _dur_str = f"{_dur_days} hari"
+                                        if _dur_hours > 0:
+                                            _dur_str += f" {_dur_hours} jam"
+                                    elif _dur_hours > 0:
+                                        _dur_str = f"{_dur_hours} jam {_dur_mins} menit"
+                                    else:
+                                        _dur_str = f"{_dur_mins} menit"
+                                    _jad_rows.append({
+                                        "No": _idx_jad,
+                                        "Tahap": _jd["nama"],
+                                        "Mulai": _jd["mulai"].strftime("%d-%m-%Y %H:%M"),
+                                        "Selesai": _jd["selesai"].strftime("%d-%m-%Y %H:%M"),
+                                        "Durasi": _dur_str,
+                                    })
+                                st.dataframe(_pd_jad.DataFrame(_jad_rows), use_container_width=True, hide_index=True)
+
                 with st.expander("ℹ️ Libur Nasional Tersisa"):
                     _hari_ini = datetime.now().date()
                     _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
@@ -5138,9 +5188,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
                     st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
 
+                    _tgl_dokpil_default = datetime.now().date()
+                    if _plsp_selected:
+                        _tgl_db = _plsp_selected[0].get("tgl_dokpil")
+                        if _tgl_db:
+                            try:
+                                from datetime import date as _date
+                                _tgl_dokpil_default = _date.fromisoformat(str(_tgl_db)[:10])
+                            except Exception:
+                                pass
                     _plsp_tgl_dokpil = st.date_input(
                         "Tanggal Dokpil",
-                        value=datetime.now().date(),
+                        value=_tgl_dokpil_default,
                         key="plsp_tgl_dokpil",
                         format="DD/MM/YYYY",
                     )
@@ -5210,22 +5269,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _ldk_teknis_ckm_ids.append(_cid)
 
                     import ldk_config as _ldk_cfg_pl
-                    _ldk_tambah_kinerja = st.checkbox(
-                        "➕ Tambah Syarat Teknis: Penilaian Kinerja Penyedia (ckm_id=996)",
-                        value=True, key="plsp_centang_kinerja",
-                    )
-                    _ldk_kinerja_text = ""
-                    if _ldk_tambah_kinerja:
-                        _ldk_kinerja_text = st.text_area(
-                            "Teks Syarat Kinerja",
-                            value=_ldk_cfg_pl.KINERJA_PENYEDIA_DEFAULT,
-                            key="plsp_kinerja_text",
-                            height=120,
-                        )
+                    # Kinerja penyedia wajib — text beda JKK vs PK
+                    _jenis_pl_paket = _plsp_selected[0].get("jenis_pl", "JKK").upper() if _plsp_selected else "JKK"
+                    _ldk_kinerja_text = _ldk_cfg_pl.KINERJA_PENYEDIA_JKK if _jenis_pl_paket == "JKK" else _ldk_cfg_pl.KINERJA_PENYEDIA_PK
 
                     st.caption(
                         "ℹ️ Default: admin all + teknis idx 0+1 (Pengalaman + Dispensasi). "
-                        "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia = custom row ckm_id=996."
+                        "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia wajib dikirim otomatis."
                     )
 
                     if st.button("📋 Submit Dokumen Kualifikasi (LDK)", key="plsp_btn_ldk", use_container_width=True):
@@ -5251,36 +5301,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     st.divider()
 
-                    # ── SEKSI 4: Dokumen Penawaran (Checklist) ────────────────
-                    st.markdown("#### 📝 Seksi 4 — Dokumen Penawaran (Checklist)")
-                    st.caption("ℹ️ Centang sesuai dokumen penawaran yang diminta ke peserta. Di-submit ke SPSE bagian Checklist Dokumen Penawaran.")
-
-                    _cd_a, _cd_b, _cd_c = st.columns(3)
-                    with _cd_a:
-                        _cd_centang_admin = st.checkbox(
-                            "Admin (Masa Berlaku, Surat Penawaran)",
-                            value=True, key="plsp_cd_admin",
-                        )
-                    with _cd_b:
-                        _cd_centang_syarat = st.checkbox(
-                            "Teknis (Metodologi, Pengalaman, Kualif TA)",
-                            value=True, key="plsp_cd_syarat",
-                        )
-                    with _cd_c:
-                        _cd_centang_harga = st.checkbox(
-                            "Harga (DKH, AHS, Remunerasi)",
-                            value=True, key="plsp_cd_harga",
-                        )
-
-                    if st.button("📝 Submit Dokumen Penawaran (Checklist)", key="plsp_btn_checklist", use_container_width=True):
-                        for _p in _plsp_selected:
-                            _r_cd = _depl.submit_checklist_pl(
-                                _p["kode_paket"],
-                                centang_admin_all=_cd_centang_admin,
-                                centang_syarat_all=_cd_centang_syarat,
-                                centang_harga_all=_cd_centang_harga,
-                            )
-                            st.write(f"{'✅' if _r_cd['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_cd['status']}")
+                    # Seksi 4 — Checklist Dokumen Penawaran (hardcode semua wajib)
+                    _cd_centang_admin = True
+                    _cd_centang_syarat = True
+                    _cd_centang_harga = True
 
                     st.divider()
                     st.caption("⬇️ Atau jalankan semua seksi sekaligus:")
@@ -5461,7 +5485,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _nama_disp = _rr.get("nama_penyedia") or "—"
                     _pp_chk_key = f"pp_chk_{_kp}"
                     if _pp_chk_key not in st.session_state:
-                        st.session_state[_pp_chk_key] = False
+                        st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
                         key=_pp_chk_key,
