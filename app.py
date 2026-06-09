@@ -959,6 +959,33 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             if _pl_r2.returncode == 0:
                                 _pl_ok += 1
                                 _pl_paket_log.append("✅ Folder dibuat")
+                                # Copy file evaluator AI ke folder paket
+                                try:
+                                    import shutil as _pl_shutil
+                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT)
+                                    _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
+                                    if _pl_bp_item["jenis_pl"] == "JKK":
+                                        _pl_eval_files_base += [
+                                            "EVALUATOR_PRA_REVIU_DPP.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
+                                        ]
+                                    else:
+                                        _pl_eval_files_base += [
+                                            "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
+                                        ]
+                                    _pl_eval_copied = []
+                                    for _ef in _pl_eval_files_base:
+                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
+                                        if _pl_os.path.isfile(_pl_ef_src):
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_target_b, _ef))
+                                            _pl_eval_copied.append(_ef)
+                                    if _pl_eval_copied:
+                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
+                                    else:
+                                        _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+                                except Exception as _pl_eval_e:
+                                    _pl_paket_log.append(f"⚠ Evaluator copy: {_pl_eval_e}")
                                 try:
                                     pl_engine.tandai_folder_dibuat(_pl_kp_b)
                                 except Exception as _pl_e_upd:
@@ -4045,6 +4072,33 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             if _pl_r2.returncode == 0:
                                 _pl_ok += 1
                                 _pl_paket_log.append("✅ Folder dibuat")
+                                # Copy file evaluator AI ke folder paket
+                                try:
+                                    import shutil as _pl_shutil
+                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT)
+                                    _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
+                                    if _pl_bp_item["jenis_pl"] == "JKK":
+                                        _pl_eval_files_base += [
+                                            "EVALUATOR_PRA_REVIU_DPP.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
+                                        ]
+                                    else:
+                                        _pl_eval_files_base += [
+                                            "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
+                                        ]
+                                    _pl_eval_copied = []
+                                    for _ef in _pl_eval_files_base:
+                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
+                                        if _pl_os.path.isfile(_pl_ef_src):
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_target_b, _ef))
+                                            _pl_eval_copied.append(_ef)
+                                    if _pl_eval_copied:
+                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
+                                    else:
+                                        _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+                                except Exception as _pl_eval_e:
+                                    _pl_paket_log.append(f"⚠ Evaluator copy: {_pl_eval_e}")
                                 try:
                                     pl_engine.tandai_folder_dibuat(_pl_kp_b)
                                 except Exception as _pl_e_upd:
@@ -6506,6 +6560,25 @@ with tab0:
                             _ok += 1
                             _paket_log.append("✅ Folder dibuat")
                             _bp_target = os.path.join(_POKJA_ROOT, _nf)
+                            # Copy file evaluator AI ke folder paket Tender PK
+                            try:
+                                import shutil as _t_shutil
+                                _t_eval_files = [
+                                    "PROTOKOL_EVALUASI_AI.md",
+                                    "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
+                                ]
+                                _t_eval_copied = []
+                                for _tef in _t_eval_files:
+                                    _tef_src = os.path.join(_POKJA_ROOT, _tef)
+                                    if os.path.isfile(_tef_src):
+                                        _t_shutil.copy2(_tef_src, os.path.join(_bp_target, _tef))
+                                        _t_eval_copied.append(_tef)
+                                if _t_eval_copied:
+                                    _paket_log.append(f"📄 Evaluator: {len(_t_eval_copied)} file disalin")
+                                else:
+                                    _paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+                            except Exception as _t_eval_e:
+                                _paket_log.append(f"⚠ Evaluator copy: {_t_eval_e}")
                             try:
                                 inbox_engine._sb().table("draft_paket").update({
                                     "nomor_urut": _bp["nomor_urut"],
