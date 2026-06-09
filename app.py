@@ -1,4 +1,4 @@
-﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
+"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -1518,8 +1518,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 ):
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
-    # ── Tab 3: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab3:
+    # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
+    with _pl_tab4:
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -1721,8 +1721,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
 
-    # ── Tab 4: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    with _pl_tab4:
+    # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
+    with _pl_tab3:
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -2283,7 +2283,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
 
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    with _pl_tab4:
+    with _pl_tab3:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -4631,8 +4631,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 ):
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
-    # ── Tab 3: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab3:
+    # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
+    with _pl_tab4:
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -4834,8 +4834,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
 
-    # ── Tab 4: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    with _pl_tab4:
+    # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
+    with _pl_tab3:
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -5396,7 +5396,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
 
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    with _pl_tab4:
+    with _pl_tab3:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
