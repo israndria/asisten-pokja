@@ -51,15 +51,15 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     Hitung 5 tahap PL dari tanggal mulai (T1).
 
     Pola yang dikonfirmasi user (2026-06-10):
-    - T1: mulai D jam X → selesai D+5 hari kerja jam X (jam sama)
+    - T1: mulai D jam X → selesai D+5 hari KALENDER jam X (bukan hari kerja)
     - T2: T1.selesai → T1.selesai + 65 menit (hari sama, no geser)
     - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 1 hari kerja replace(hour=16)
     - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
     - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +26 hari kerja replace(hour=16)
     """
-    # T1 Upload Penawaran
+    # T1 Upload Penawaran — 5 hari KALENDER (bukan hari kerja)
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
-    t1_selesai = _tambah_hari_kerja(t1_mulai, 5).replace(
+    t1_selesai = (t1_mulai + timedelta(days=5)).replace(
         hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
     )
 

@@ -1571,11 +1571,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _pljd_beda = st.checkbox("Jadwal berbeda per paket", value=False, key="pljd_beda")
 
                 if not _pljd_beda:
+                    # Default: baca tgl_batas_penawaran (T1.selesai) dari DB, kurangi 5 hari
+                    _pljd_tgl_default = datetime.now().date()
+                    if _pljd_selected:
+                        _tbp = _pljd_selected[0].get("tgl_batas_penawaran")
+                        if _tbp:
+                            try:
+                                from datetime import date as _date2, timedelta as _td2
+                                _pljd_tgl_default = _date2.fromisoformat(str(_tbp)[:10]) - _td2(days=5)
+                            except Exception:
+                                pass
                     _c1, _c2 = st.columns(2)
                     with _c1:
                         _pljd_tgl_global = st.date_input(
                             "Tanggal",
-                            value=datetime.now().date(),
+                            value=_pljd_tgl_default,
                             format="DD/MM/YYYY",
                             key="pljd_tgl_global",
                         )
@@ -4713,11 +4723,21 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _pljd_beda = st.checkbox("Jadwal berbeda per paket", value=False, key="pljd_beda")
 
                 if not _pljd_beda:
+                    # Default: baca tgl_batas_penawaran (T1.selesai) dari DB, kurangi 5 hari
+                    _pljd_tgl_default = datetime.now().date()
+                    if _pljd_selected:
+                        _tbp = _pljd_selected[0].get("tgl_batas_penawaran")
+                        if _tbp:
+                            try:
+                                from datetime import date as _date2, timedelta as _td2
+                                _pljd_tgl_default = _date2.fromisoformat(str(_tbp)[:10]) - _td2(days=5)
+                            except Exception:
+                                pass
                     _c1, _c2 = st.columns(2)
                     with _c1:
                         _pljd_tgl_global = st.date_input(
                             "Tanggal",
-                            value=datetime.now().date(),
+                            value=_pljd_tgl_default,
                             format="DD/MM/YYYY",
                             key="pljd_tgl_global",
                         )
