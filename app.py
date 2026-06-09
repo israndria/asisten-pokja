@@ -962,7 +962,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 # Copy file evaluator AI ke folder paket
                                 try:
                                     import shutil as _pl_shutil
-                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT)
+                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
                                     _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
                                     if _pl_bp_item["jenis_pl"] == "JKK":
                                         _pl_eval_files_base += [
@@ -4092,7 +4092,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 # Copy file evaluator AI ke folder paket
                                 try:
                                     import shutil as _pl_shutil
-                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT)
+                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
                                     _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
                                     if _pl_bp_item["jenis_pl"] == "JKK":
                                         _pl_eval_files_base += [
@@ -6602,8 +6602,9 @@ with tab0:
                                     "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
                                 ]
                                 _t_eval_copied = []
+                                _t_eval_src_dir = os.path.join(_POKJA_ROOT, "_SOP Evaluator")
                                 for _tef in _t_eval_files:
-                                    _tef_src = os.path.join(_POKJA_ROOT, _tef)
+                                    _tef_src = os.path.join(_t_eval_src_dir, _tef)
                                     if os.path.isfile(_tef_src):
                                         _t_eval_dir = os.path.join(_bp_target, "5. SOP Evaluator")
                                         os.makedirs(_t_eval_dir, exist_ok=True)
@@ -6612,7 +6613,7 @@ with tab0:
                                 if _t_eval_copied:
                                     _paket_log.append(f"📄 Evaluator: {len(_t_eval_copied)} file disalin")
                                 else:
-                                    _paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+                                    _paket_log.append("⚠ Evaluator: tidak ada file ditemukan di master _SOP Evaluator")
                             except Exception as _t_eval_e:
                                 _paket_log.append(f"⚠ Evaluator copy: {_t_eval_e}")
                             try:
