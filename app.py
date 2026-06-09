@@ -1558,7 +1558,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
-                        value=st.session_state.get(_key, False),
+                        value=st.session_state.get(_key, True),
                         key=_key,
                     )
                     if _chk:
@@ -3003,6 +3003,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.session_state["pl7_checked"] = {}
 
                 _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
+                for _k in _pl7_kodes:
+                    if f"pl7_chk_{_k}" not in st.session_state:
+                        st.session_state[f"pl7_chk_{_k}"] = True
                 _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
                 # Pilih Semua / Batal Semua — hanya set state, TIDAK fetch CDP
                 if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
@@ -3147,6 +3150,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.session_state["pl8_checked"] = {}
 
                 _pl8_kodes = [r["kode_paket"] for r in _pl8_rows]
+                for _k in _pl8_kodes:
+                    if f"pl8_chk_{_k}" not in st.session_state:
+                        st.session_state[f"pl8_chk_{_k}"] = True
                 _pl8bc1, _pl8bc2 = st.columns(2)
                 if _pl8bc1.button("✅ Pilih Semua", key="pl8_select_all", use_container_width=True):
                     for _k in _pl8_kodes:
@@ -4682,7 +4688,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
                         f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
-                        value=st.session_state.get(_key, False),
+                        value=st.session_state.get(_key, True),
                         key=_key,
                     )
                     if _chk:
@@ -6004,6 +6010,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.session_state["pl7_checked"] = {}
 
                 _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
+                for _k in _pl7_kodes:
+                    if f"pl7_chk_{_k}" not in st.session_state:
+                        st.session_state[f"pl7_chk_{_k}"] = True
                 _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
                 # Pilih Semua / Batal Semua — hanya set state, TIDAK fetch CDP
                 if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
@@ -6148,6 +6157,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.session_state["pl8_checked"] = {}
 
                 _pl8_kodes = [r["kode_paket"] for r in _pl8_rows]
+                for _k in _pl8_kodes:
+                    if f"pl8_chk_{_k}" not in st.session_state:
+                        st.session_state[f"pl8_chk_{_k}"] = True
                 _pl8bc1, _pl8bc2 = st.columns(2)
                 if _pl8bc1.button("✅ Pilih Semua", key="pl8_select_all", use_container_width=True):
                     for _k in _pl8_kodes:
