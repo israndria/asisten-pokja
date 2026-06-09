@@ -586,7 +586,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         elif _dpa_search_q and len(_dpa_search_q.strip()) < 3:
             st.caption("Ketik minimal 3 karakter.")
 
-    # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
+    # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
@@ -978,7 +978,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
                                         if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_target_b, _ef))
+                                            _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                            _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     if _pl_eval_copied:
                                         _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
@@ -1071,12 +1073,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+            else:
+                st.info("✅ Semua paket sudah punya folder.")
+                st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
             st.markdown("#### 4. Update Data Folder")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
-            _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
 
             if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder"):
@@ -1135,23 +1139,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             state="complete", expanded=_dl_bulk_fail > 0,
                         )
 
-                # Aksi: Reset status folder
-                if _cb_reset_folder:
-                    _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-                    if _opsi_reset_pl:
-                        from config import sb as _sb_reset
-                        _reset_ok_pl = 0
-                        for _kr in _opsi_reset_pl.keys():
-                            try:
-                                _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
-                                _reset_ok_pl += 1
-                            except Exception as _er_pl:
-                                st.error(f"{_kr}: {_er_pl}")
-                        if _reset_ok_pl:
-                            st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
-                        st.rerun()
-                    else:
-                        st.info("Tidak ada paket dengan status folder untuk direset.")
 
                 # Aksi: Update HPS bulk
                 if _cb_hps_update:
@@ -1200,6 +1187,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         )
                         if _hps_upd_gagal:
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
+
+            st.divider()
+            if st.button("↩️ Reset Status Folder", key="pl_btn_reset_folder", use_container_width=True):
+                _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+                if _opsi_reset_pl:
+                    from config import sb as _sb_reset
+                    _reset_ok_pl = 0
+                    for _kr in _opsi_reset_pl.keys():
+                        try:
+                            _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
+                            _reset_ok_pl += 1
+                        except Exception as _er_pl:
+                            st.error(f"{_kr}: {_er_pl}")
+                    if _reset_ok_pl:
+                        st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
+                    st.rerun()
+                else:
+                    st.info("Tidak ada paket dengan status folder untuk direset.")
 
 
 
@@ -3699,7 +3704,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         elif _ba_os.path.isdir(_ba_root_in):
             st.info("Tidak ada file `BA_PLJKK_*.pdf` ditemukan di folder paket manapun.")
 
-    # ── Tab 1: Draft Paket PL ─────────────────────────────────────────────────
+    # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
     with _pl_tab1:
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
@@ -4091,7 +4096,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
                                         if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_target_b, _ef))
+                                            _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                            _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     if _pl_eval_copied:
                                         _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
@@ -4184,12 +4191,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+            else:
+                st.info("✅ Semua paket sudah punya folder.")
+                st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled_pk")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
             st.markdown("#### 4. Update Data Folder")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk_pk")
-            _cb_reset_folder = st.checkbox("↩️ Reset Status Folder (kosongkan folder_dibuat)", value=False, key="pl_cb_reset_folder_pk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update_pk")
 
             if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder_pk"):
@@ -4248,23 +4257,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             state="complete", expanded=_dl_bulk_fail > 0,
                         )
 
-                # Aksi: Reset status folder
-                if _cb_reset_folder:
-                    _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-                    if _opsi_reset_pl:
-                        from config import sb as _sb_reset
-                        _reset_ok_pl = 0
-                        for _kr in _opsi_reset_pl.keys():
-                            try:
-                                _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
-                                _reset_ok_pl += 1
-                            except Exception as _er_pl:
-                                st.error(f"{_kr}: {_er_pl}")
-                        if _reset_ok_pl:
-                            st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
-                        st.rerun()
-                    else:
-                        st.info("Tidak ada paket dengan status folder untuk direset.")
 
                 # Aksi: Update HPS bulk
                 if _cb_hps_update:
@@ -4313,6 +4305,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         )
                         if _hps_upd_gagal:
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
+
+            st.divider()
+            if st.button("↩️ Reset Status Folder", key="pl_btn_reset_folder_pk", use_container_width=True):
+                _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+                if _opsi_reset_pl:
+                    from config import sb as _sb_reset
+                    _reset_ok_pl = 0
+                    for _kr in _opsi_reset_pl.keys():
+                        try:
+                            _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
+                            _reset_ok_pl += 1
+                        except Exception as _er_pl:
+                            st.error(f"{_kr}: {_er_pl}")
+                    if _reset_ok_pl:
+                        st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
+                    st.rerun()
+                else:
+                    st.info("Tidak ada paket dengan status folder untuk direset.")
 
 
 
@@ -6571,7 +6581,9 @@ with tab0:
                                 for _tef in _t_eval_files:
                                     _tef_src = os.path.join(_POKJA_ROOT, _tef)
                                     if os.path.isfile(_tef_src):
-                                        _t_shutil.copy2(_tef_src, os.path.join(_bp_target, _tef))
+                                        _t_eval_dir = os.path.join(_bp_target, "5. SOP Evaluator")
+                                        os.makedirs(_t_eval_dir, exist_ok=True)
+                                        _t_shutil.copy2(_tef_src, os.path.join(_t_eval_dir, _tef))
                                         _t_eval_copied.append(_tef)
                                 if _t_eval_copied:
                                     _paket_log.append(f"📄 Evaluator: {len(_t_eval_copied)} file disalin")
