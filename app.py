@@ -2034,6 +2034,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             try:
                                 _client_mb.table("draft_paket_pl").update({
                                     "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
+                                    "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
                                 st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket'][:30]}: {_e_mb}")
@@ -2203,6 +2204,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             # 2. Masa berlaku penawaran
                             try:
                                 _r_mb = _depl.submit_masa_berlaku_pl(_kp, int(_ldk_masa_berlaku))
+                                try:
+                                    from config import sb as _sb_mb_bulk
+                                    _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
+                                except Exception:
+                                    pass
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Masa Berlaku",
                                     "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari)",
@@ -5152,6 +5158,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             try:
                                 _client_mb.table("draft_paket_pl").update({
                                     "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
+                                    "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
                                 st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket'][:30]}: {_e_mb}")
@@ -5321,6 +5328,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             # 2. Masa berlaku penawaran
                             try:
                                 _r_mb = _depl.submit_masa_berlaku_pl(_kp, int(_ldk_masa_berlaku))
+                                try:
+                                    from config import sb as _sb_mb_bulk
+                                    _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
+                                except Exception:
+                                    pass
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Masa Berlaku",
                                     "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari)",
