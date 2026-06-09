@@ -382,7 +382,6 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
 def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
     """Auto-generate file markdown sebagai sumber data HPS untuk AI pra-reviu."""
     folder = os.path.dirname(os.path.abspath(excel_path))
-    md_path = os.path.join(folder, f"_HPS_{kode_paket}.md")
 
     items = hasil.get("items", [])
     total_nilai = hasil.get("total_nilai", 0)
@@ -402,6 +401,10 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
     import re as _re
     nama_paket = _re.sub(r'^\d+\.\s*(PLJKK|PLPK)\s*-\s*', '', nama_folder).strip()
     nama_paket = _re.sub(r'\s*\(PL\s*-?\s*Ulang\)\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
+
+    # Nama file pakai nama paket (bukan kode), sanitasi karakter Windows
+    nama_md = _re.sub(r'[/<>:"\|?*]', "-", nama_paket).strip()
+    md_path = os.path.join(folder, f"_HPS_{nama_md}.md")
     status_paket = " **(PAKET ULANG)**" if is_ulang else ""
 
     lines = [
