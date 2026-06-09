@@ -1765,7 +1765,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
                         if _plsp_chk_key not in st.session_state:
-                            st.session_state[_plsp_chk_key] = False
+                            st.session_state[_plsp_chk_key] = True
                         _chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             key=_plsp_chk_key,
@@ -2021,7 +2021,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Masa Berlaku", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    if st.button("💾 Submit Tanggal Dokpil + Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
                         for _p in _plsp_selected:
@@ -4878,7 +4878,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _col_chk, _col_file = st.columns([3, 2])
                     with _col_chk:
                         if _plsp_chk_key not in st.session_state:
-                            st.session_state[_plsp_chk_key] = False
+                            st.session_state[_plsp_chk_key] = True
                         _chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             key=_plsp_chk_key,
@@ -5134,7 +5134,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Masa Berlaku", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    if st.button("💾 Submit Tanggal Dokpil + Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
                         for _p in _plsp_selected:
