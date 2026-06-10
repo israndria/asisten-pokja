@@ -270,31 +270,36 @@ def parse_draft_pl(pdf_path: str) -> dict:
 
 
 def parse_sub_kegiatan_dari_draft_pl(pdf_path: str) -> str:
-    """Extract Sub Kegiatan (prefer) atau Kegiatan (fallback) dari Draft_PL PDF.
+    """Extract Sub Kegiatan atau Kegiatan dari Draft_PL PDF — pilih yang lebih pendek.
 
-    Stop terminator: 'NAMA PAKET' / 'TAHUN ANGGARAN' / baris kosong ganda.
-    Gabung multi-line, strip, return.
+    Keduanya valid secara substansi; Sub Kegiatan biasanya lebih spesifik tapi lebih panjang.
+    Jika keduanya tersedia, ambil yang karakternya lebih sedikit.
+    Fallback: jika hanya satu tersedia, ambil itu.
     """
     teks = _text_dari_pdf(pdf_path)
     if not teks:
         return ""
+
+    sub_keg = ""
+    keg = ""
 
     m = re.search(
         r"NAMA\s+SUB\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+PAKET|TAHUN\s+ANGGARAN|\n\s*\n)",
         teks, re.IGNORECASE | re.DOTALL,
     )
     if m:
-        raw = m.group(1).strip()
-        return re.sub(r"\s+", " ", raw).strip()
+        sub_keg = re.sub(r"\s+", " ", m.group(1).strip()).strip()
 
     m2 = re.search(
         r"NAMA\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+SUB|NAMA\s+PAKET|TAHUN|\n)",
         teks, re.IGNORECASE,
     )
     if m2:
-        return re.sub(r"\s+", " ", m2.group(1).strip()).strip()
+        keg = re.sub(r"\s+", " ", m2.group(1).strip()).strip()
 
-    return ""
+    if sub_keg and keg:
+        return sub_keg if len(sub_keg) <= len(keg) else keg
+    return sub_keg or keg
 
 
 def cari_daftar_personil_di_folder(folder: str) -> str | None:
