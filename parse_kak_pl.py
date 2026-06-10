@@ -283,19 +283,24 @@ def parse_sub_kegiatan_dari_draft_pl(pdf_path: str) -> str:
     sub_keg = ""
     keg = ""
 
+    # Toleransi: spasi ganda, separator : atau - atau =, multi-line value
     m = re.search(
-        r"NAMA\s+SUB\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+PAKET|TAHUN\s+ANGGARAN|\n\s*\n)",
+        r"NAMA\s+SUB\s+KEGIATAN\s*[:\-=]\s*(.+?)(?=NAMA\s+PAKET|TAHUN\s+ANGGARAN|\n\s*\n)",
         teks, re.IGNORECASE | re.DOTALL,
     )
     if m:
         sub_keg = re.sub(r"\s+", " ", m.group(1).strip()).strip()
 
+    # Stop terminator tidak bergantung urutan sub kegiatan vs kegiatan
     m2 = re.search(
-        r"NAMA\s+KEGIATAN\s*:\s*(.+?)(?=NAMA\s+SUB|NAMA\s+PAKET|TAHUN|\n)",
+        r"NAMA\s+KEGIATAN\s*[:\-=]\s*(.+?)(?=NAMA\s+(?:SUB\s+)?(?:KEGIATAN|PAKET)|TAHUN|\n)",
         teks, re.IGNORECASE,
     )
     if m2:
-        keg = re.sub(r"\s+", " ", m2.group(1).strip()).strip()
+        raw2 = re.sub(r"\s+", " ", m2.group(1).strip()).strip()
+        # Pastikan tidak menangkap label berikutnya (artefak OCR tanpa newline)
+        raw2 = re.split(r"\bNAMA\b", raw2, maxsplit=1)[0].strip()
+        keg = raw2
 
     if sub_keg and keg:
         return sub_keg if len(sub_keg) <= len(keg) else keg
