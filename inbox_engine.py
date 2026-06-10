@@ -251,9 +251,13 @@ def serap_inbox_pl(progress_cb=None) -> dict:
 
     log(0.25, f"Ditemukan {len(pesan_pl)} pesan Delegasi PP")
 
-    # Snapshot daftar paket PL existing untuk match
-    existing = _sb().table("draft_paket_pl").select("kode_paket").execute().data or []
-    existing_kode = {r["kode_paket"] for r in existing}
+    # Snapshot daftar paket PL aktif (bukan selesai) untuk match
+    from pl_engine import _TAHAP_SELESAI_KEYWORDS
+    existing = _sb().table("draft_paket_pl").select("kode_paket,tahap_spse").execute().data or []
+    existing_kode = {
+        r["kode_paket"] for r in existing
+        if not any(k in (r.get("tahap_spse") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS)
+    }
 
     scraped = 0
     matched = 0

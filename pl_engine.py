@@ -31,16 +31,17 @@ def load_draft_pl() -> list[dict]:
         return []
 
 
+_TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
+
 def is_paket_selesai(r: dict) -> bool:
     """
-    True jika paket sudah 'Penandatanganan Kontrak' (selesai dari sisi PP).
+    True jika paket sudah selesai dari sisi PP.
     Sumber: kolom tahap_spse (dt/pengadaan-pp). Fallback ke status lama.
     """
     tahap = (r.get("tahap_spse") or "").lower()
     if tahap:
-        return "penandatanganan kontrak" in tahap
-    # Fallback paket lama yg belum re-serap (tahap_spse NULL)
-    return "penandatanganan kontrak" in (r.get("status") or "").lower()
+        return any(k in tahap for k in _TAHAP_SELESAI_KEYWORDS)
+    return any(k in (r.get("status") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS)
 
 
 def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
@@ -336,6 +337,11 @@ def _copy_data_dari_paket_lama(
     log(f"  [ulang] salin dari {kode_lama} → {kode_paket_baru}: {list(update_data.keys())}")
     try:
         _sb().table("draft_paket_pl").update(update_data).eq("kode_paket", kode_paket_baru).execute()
+        # Mark paket lama selesai — sudah digantikan oleh paket ulang
+        _sb().table("draft_paket_pl").update(
+            {"tahap_spse": "Paket Sudah Selesai"}
+        ).eq("kode_paket", kode_lama).execute()
+        log(f"  [ulang] {kode_lama} di-mark selesai (digantikan {kode_paket_baru})")
         return True
     except Exception as e:
         log(f"  [ulang] GAGAL update {kode_paket_baru}: {e}")
@@ -373,6 +379,16 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     # 1b. Fetch status TAHAPAN (Penandatanganan Kontrak dll) dari dt/pengadaan-pp
     tahap_map = _fetch_tahap_spse(cookie_str, base_url, log_fn)
 
+    # 1c. Ambil kode_paket yang sudah selesai dari DB (fallback jika tidak muncul di tahap_map)
+    _selesai_db = set()
+    try:
+        _res = _sb().table("draft_paket_pl").select("kode_paket,tahap_spse").execute()
+        for _r in (_res.data or []):
+            if any(k in (_r.get("tahap_spse") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS):
+                _selesai_db.add(str(_r["kode_paket"]))
+    except Exception:
+        pass
+
     errors = []
     scraped = 0
 
@@ -383,10 +399,16 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         satker       = row[4]
         kode_paket   = str(row[5])   # kode resmi non-tender
 
-        # Skip paket selesai (Penandatanganan Kontrak) — data DB sudah cukup
+        # Paket selesai — skip scrape detail sama sekali (sudah tidak relevan)
         _tahap_skrg = (tahap_map.get(kode_paket) or "").lower()
-        if "penandatanganan kontrak" in _tahap_skrg:
-            log(f"  Skip {kode_paket} — sudah Penandatanganan Kontrak")
+        if any(k in _tahap_skrg for k in _TAHAP_SELESAI_KEYWORDS) or kode_paket in _selesai_db:
+            log(f"  Skip detail {kode_paket} — sudah Penandatanganan Kontrak, update tahap saja")
+            try:
+                _sb().table("draft_paket_pl").update(
+                    {"tahap_spse": tahap_map.get(kode_paket)}
+                ).eq("kode_paket", kode_paket).execute()
+            except Exception:
+                pass
             continue
 
         log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
@@ -463,10 +485,13 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         if hasil_copy:
             log(f"  [ulang] {kode} — {nama[:40]}: data disalin dari paket lama")
 
-    # 5. Auto set Usaha Kecil (kualifikasiId=21) untuk semua paket
-    log("Auto set Usaha Kecil untuk semua paket...")
-    kode_list = [str(row[5]) for row in rows]
-    for kode in kode_list:
+    # 5. Auto set Usaha Kecil — hanya paket aktif (bukan selesai)
+    log("Auto set Usaha Kecil untuk paket aktif...")
+    for row in rows:
+        kode = str(row[5])
+        _tahap = (tahap_map.get(kode) or "").lower()
+        if any(k in _tahap for k in _TAHAP_SELESAI_KEYWORDS) or kode in _selesai_db:
+            continue
         ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
         log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
 
