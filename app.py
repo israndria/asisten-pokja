@@ -1078,12 +1078,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Update Data Folder")
+            st.markdown("#### 4. Serap Penyedia & Parse Dokumen")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
 
-            if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder"):
+            if st.button("🔄 Serap Penyedia & Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_pl as _keng_pl_dl
@@ -4230,12 +4230,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled_pk")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Update Data Folder")
+            st.markdown("#### 4. Serap Penyedia & Parse Dokumen")
             st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk_pk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update_pk")
 
-            if st.button("🔄 Update Data Folder", use_container_width=True, key="btn_update_data_folder_pk"):
+            if st.button("🔄 Serap Penyedia & Parse Dokumen", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_plpk as _keng_pl_dl
