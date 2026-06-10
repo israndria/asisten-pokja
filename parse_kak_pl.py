@@ -132,12 +132,9 @@ def parse_kak(pdf_path: str) -> dict:
     if not teks:
         return {}
 
-    sbu_baru, sbu_lama = _extract_sbu(teks)
     return {
         "nama_ppk":     _extract_nama_ppk(teks),
         "jangka_waktu": _extract_jangka_waktu(teks),
-        "sbu_baru":     sbu_baru,
-        "sbu_lama":     sbu_lama,
         "jabatan_k3":   _extract_jabatan_k3(teks),
         "lokasi":       _extract_lokasi(teks),
     }
