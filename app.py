@@ -162,6 +162,86 @@ def _pl_hint_ulang(row: dict) -> str:
     return " (PL - Ulang)" if _pl_paket_ulang(row) else ""
 
 
+# ── Helper modul-level PL: cari xlsm + proses Excel ───────────────────────────
+def _cari_xlsm_pl(folder):
+    """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
+    try:
+        xs = [f for f in os.listdir(folder)
+              if f.lower().endswith(".xlsm") and "backup" not in f.lower()]
+    except Exception:
+        return None
+    if not xs:
+        return None
+    xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
+    return os.path.join(folder, xs[0])
+
+
+def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
+                            template_dir_jkk, template_dir_pk):
+    """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->
+    1 sesi COM gabungan (HPS + Master Data). Return list[str] log lines.
+    Urutan BENAR: Refresh dulu (hapus xlsm lama, copy fresh), baru
+    resolve xlsm (nama mungkin berubah), lalu tulis HPS + IsiDataPLByKode
+    dalam 1x DispatchEx.
+    """
+    import hps_engine as _hps_eng2
+    import isi_master_data_pl as _imd2
+    logs = []
+
+    # 1. Refresh template DULU (hapus xlsm lama, copy fresh)
+    if refresh_on:
+        try:
+            from refresh_template import refresh_template_paket as _rt_fn2
+            from pathlib import Path as _rt_P2
+            _rt_mode2 = "pl_jkk" if jenis_pl == "JKK" else "pl_pk"
+            _rt_src2  = _rt_P2(template_dir_jkk if jenis_pl == "JKK" else template_dir_pk)
+            _rt_fn2([_rt_P2(target_dir)], _rt_src2, _rt_mode2, auto_relink=True, dry_run=False)
+            logs.append("Refresh Template: selesai")
+        except Exception as _rt_e2:
+            logs.append(f"WARN Refresh Template: {_rt_e2}")
+
+    # 2. Resolve xlsm SETELAH refresh (nama file bisa berubah)
+    xlsm = _cari_xlsm_pl(target_dir)
+    if not xlsm:
+        logs.append("WARN Excel dilewati -- tidak ada .xlsm setelah refresh")
+        return logs
+
+    # 3. Fetch HPS dict (tanpa COM) via scrape_hps_pl
+    hps_hasil = None
+    try:
+        hps_hasil = _hps_eng2.scrape_hps_pl(kode_paket)
+        if not hps_hasil.get("items"):
+            logs.append("WARN HPS: tidak ada item (fetch gagal/kosong)")
+            hps_hasil = None
+    except Exception as _hps_e2:
+        logs.append(f"WARN HPS fetch: {_hps_e2}")
+
+    # 4. 1 sesi COM: tulis HPS + IsiDataPLByKode
+    try:
+        _res2 = _imd2.proses_hps_dan_master_data(kode_paket, xlsm, hps_hasil)
+        _hps_r2 = _res2.get("hps", {})
+        _md_r2  = _res2.get("md", {})
+        if _hps_r2.get("ok") and _hps_r2.get("count", 0) > 0:
+            logs.append(f"HPS: {_hps_r2['count']} baris -> Excel")
+        elif hps_hasil:
+            logs.append(f"WARN HPS tulis: {_hps_r2.get('pesan','-')}")
+        if _md_r2.get("ok"):
+            logs.append("Master Data: terisi")
+        else:
+            logs.append(f"WARN Master Data: {_md_r2.get('pesan','-')}")
+    except Exception as _com_e2:
+        logs.append(f"WARN COM gabungan: {_com_e2}")
+
+    # 5. Generate MD file HPS (no COM) jika hps_hasil ada
+    if hps_hasil and hps_hasil.get("items"):
+        try:
+            _hps_eng2._tulis_hps_ke_md(kode_paket, xlsm, hps_hasil)
+        except Exception as _md_e2:
+            logs.append(f"WARN HPS MD: {_md_e2}")
+
+    return logs
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -597,18 +677,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        def _cari_xlsm_pl(folder):
-            """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
-            try:
-                xs = [f for f in _pl_os.listdir(folder)
-                      if f.lower().endswith(".xlsm") and "backup" not in f.lower()]
-            except Exception:
-                return None
-            if not xs:
-                return None
-            xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
-            return _pl_os.path.join(folder, xs[0])
-
         _pl_rows = pl_engine.load_draft_pl()
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
@@ -1028,31 +1096,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
-                                if _pl_kp_b:
-                                    try:
-                                        import hps_engine as _pl_hps_eng
-                                        _xl_plb = _cari_xlsm_pl(_pl_target_b)
-                                        if _xl_plb:
-                                            _pl_hps_res = _pl_hps_eng.scrape_hps_pl_ke_excel(_pl_kp_b, _xl_plb)
-                                            if _pl_hps_res.get("ok"):
-                                                _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} baris → Excel")
-                                            else:
-                                                _pl_paket_log.append(f"⚠ HPS: {_pl_hps_res.get('pesan','-')}")
-                                        else:
-                                            _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
-                                    except Exception as _pl_hps_e:
-                                        _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
-                                # Refresh Template (jika dicentang)
-                                if _pl_rt_refresh:
-                                    try:
-                                        from refresh_template import refresh_template_paket as _rt_fn
-                                        from pathlib import Path as _rt_P
-                                        _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
-                                        _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
-                                        _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
-                                        _pl_paket_log.append("🔄 Refresh Template: selesai")
-                                    except Exception as _rt_e:
-                                        _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
+                                # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
+                                _excel_logs = _proses_excel_paket_pl(
+                                    _pl_target_b, _pl_kp_b,
+                                    _pl_bp_item["jenis_pl"], _pl_rt_refresh,
+                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                )
+                                for _el in _excel_logs:
+                                    _icon = "📊" if _el.startswith("HPS:") else (
+                                            "📝" if _el.startswith("Master Data") else (
+                                            "🔄" if _el.startswith("Refresh") else "⚠"))
+                                    _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
@@ -3749,18 +3803,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        def _cari_xlsm_pl(folder):
-            """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
-            try:
-                xs = [f for f in _pl_os.listdir(folder)
-                      if f.lower().endswith(".xlsm") and "backup" not in f.lower()]
-            except Exception:
-                return None
-            if not xs:
-                return None
-            xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
-            return _pl_os.path.join(folder, xs[0])
-
         _pl_rows = pl_engine.load_draft_pl()
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
@@ -4180,31 +4222,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
-                                if _pl_kp_b:
-                                    try:
-                                        import hps_engine as _pl_hps_eng
-                                        _xl_plb = _cari_xlsm_pl(_pl_target_b)
-                                        if _xl_plb:
-                                            _pl_hps_res = _pl_hps_eng.scrape_hps_pl_ke_excel(_pl_kp_b, _xl_plb)
-                                            if _pl_hps_res.get("ok"):
-                                                _pl_paket_log.append(f"📊 HPS: {_pl_hps_res.get('count', 0)} baris → Excel")
-                                            else:
-                                                _pl_paket_log.append(f"⚠ HPS: {_pl_hps_res.get('pesan','-')}")
-                                        else:
-                                            _pl_paket_log.append("⚠ HPS dilewati — tidak ada .xlsm")
-                                    except Exception as _pl_hps_e:
-                                        _pl_paket_log.append(f"⚠ HPS gagal: {_pl_hps_e}")
-                                # Refresh Template (jika dicentang)
-                                if _pl_rt_refresh:
-                                    try:
-                                        from refresh_template import refresh_template_paket as _rt_fn
-                                        from pathlib import Path as _rt_P
-                                        _rt_mode = "pl_jkk" if _pl_bp_item["jenis_pl"] == "JKK" else "pl_pk"
-                                        _rt_src = _rt_P(_TEMPLATE_DIR_PL if _pl_bp_item["jenis_pl"] == "JKK" else _TEMPLATE_DIR_PL_PK)
-                                        _rt_res = _rt_fn([_rt_P(_pl_target_b)], _rt_src, _rt_mode, auto_relink=True, dry_run=False)
-                                        _pl_paket_log.append("🔄 Refresh Template: selesai")
-                                    except Exception as _rt_e:
-                                        _pl_paket_log.append(f"⚠ Refresh Template: {_rt_e}")
+                                # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
+                                _excel_logs = _proses_excel_paket_pl(
+                                    _pl_target_b, _pl_kp_b,
+                                    _pl_bp_item["jenis_pl"], _pl_rt_refresh,
+                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                )
+                                for _el in _excel_logs:
+                                    _icon = "📊" if _el.startswith("HPS:") else (
+                                            "📝" if _el.startswith("Master Data") else (
+                                            "🔄" if _el.startswith("Refresh") else "⚠"))
+                                    _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")

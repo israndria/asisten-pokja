@@ -184,9 +184,10 @@ def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
 _SHEET_HPS = "5. HPS"
 
 
-def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
+def _tulis_hps_ke_ws(ws, wb, hasil: dict, progress_cb=None) -> dict:
     """
-    Tulis hasil scrape HPS ke sheet '5. HPS' via COM. Pola identik input_ba_engine.
+    Tulis data HPS ke worksheet yang SUDAH dibuka (tanpa COM init/open/save/quit).
+    Dipanggil dari sesi COM gabungan (HPS + Master Data) agar cukup 1x DispatchEx.
 
     Layout sheet (port dari VBA MuatHPS):
       Header baris 1, data dari baris 2.
@@ -205,6 +206,106 @@ def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
                 pass
 
     items = hasil["items"]
+
+    try:
+        ws.Unprotect()
+    except Exception:
+        pass
+
+    # Bersih A2:I bawah + reset highlight
+    last_a = ws.Cells(ws.Rows.Count, 1).End(-4162).Row  # xlUp
+    last_b = ws.Cells(ws.Rows.Count, 2).End(-4162).Row
+    last_row = max(last_a, last_b, 60)
+    if last_row >= 2:
+        rng = ws.Range(f"A2:I{last_row}")
+        rng.ClearContents()
+        rng.Interior.ColorIndex = -4142  # xlNone
+
+    RGB_KUNING = 65535  # RGB(255,255,0)
+    baris = 2
+    total_hitung_all = 0.0
+    total_nilai = hasil["total_nilai"]
+    total_bulat = hasil["total_nilai_bulat"]
+    warning = []
+
+    for it in items:
+        ws.Cells(baris, 1).Value = it["urutan"]
+        ws.Cells(baris, 2).Value = it["jenis_bj"]
+        if not it["is_divisi"]:
+            if it["satuan"]:
+                ws.Cells(baris, 3).Value = it["satuan"]
+            if it["vol"]:
+                ws.Cells(baris, 4).Value = it["vol"]
+                ws.Cells(baris, 4).NumberFormat = "#,##0.00"
+            if it["harga"]:
+                ws.Cells(baris, 5).Value = it["harga"]
+                ws.Cells(baris, 5).NumberFormat = "#,##0.00"
+            if it["pajak_pct"]:
+                ws.Cells(baris, 6).Value = it["pajak_pct"]
+                ws.Cells(baris, 6).NumberFormat = "0.00"
+            if it["total_spse"]:
+                ws.Cells(baris, 7).Value = it["total_spse"]
+                ws.Cells(baris, 7).NumberFormat = "#,##0.00"
+            if it["total_hitung"]:
+                ws.Cells(baris, 8).Value = it["total_hitung"]
+                ws.Cells(baris, 8).NumberFormat = "#,##0.00"
+            ws.Cells(baris, 9).Value = it["selisih"]
+            ws.Cells(baris, 9).NumberFormat = "#,##0.00"
+            total_hitung_all += it["total_hitung"] or 0.0
+            if not it["selisih_ok"]:
+                ws.Range(ws.Cells(baris, 1), ws.Cells(baris, 9)).Interior.Color = RGB_KUNING
+                warning.append(it)
+        baris += 1
+
+    # Header H-I jika kosong
+    if not ws.Cells(1, 8).Value:
+        ws.Cells(1, 8).Value = "Total (Hitung)"
+        ws.Cells(1, 8).Font.Bold = True
+    if not ws.Cells(1, 9).Value:
+        ws.Cells(1, 9).Value = "Selisih"
+        ws.Cells(1, 9).Font.Bold = True
+
+    # Baris total
+    bt = baris + 1
+    ws.Cells(bt, 2).Value = "TOTAL NILAI (SPSE)"
+    ws.Cells(bt, 2).Font.Bold = True
+    ws.Cells(bt, 7).Value = total_nilai
+    ws.Cells(bt, 7).NumberFormat = "#,##0.00"
+
+    ws.Cells(bt + 1, 2).Value = "TOTAL NILAI (Setelah Pembulatan SPSE)"
+    ws.Cells(bt + 1, 2).Font.Bold = True
+    ws.Cells(bt + 1, 7).Value = total_bulat
+    ws.Cells(bt + 1, 7).NumberFormat = "#,##0.00"
+
+    ws.Cells(bt + 2, 2).Value = "TOTAL HITUNG MANUAL"
+    ws.Cells(bt + 2, 2).Font.Bold = True
+    ws.Cells(bt + 2, 8).Value = total_hitung_all
+    ws.Cells(bt + 2, 8).NumberFormat = "#,##0.00"
+
+    _log(f"HPS ditulis: {len(items)} baris.")
+    return {
+        "ok": True,
+        "pesan": f"{len(items)} baris HPS ditulis ke sheet '{_SHEET_HPS}'",
+        "count": len(items),
+        "warning": warning,
+    }
+
+
+def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
+    """
+    Tulis hasil scrape HPS ke sheet '5. HPS' via COM (buka Excel sendiri).
+    Wrapper: DispatchEx -> Open -> _tulis_hps_ke_ws -> Save -> Close/Quit.
+    Dipakai oleh scrape_hps_ke_excel (tender) dan scrape_hps_pl_ke_excel (PL single).
+    Untuk bulk-create folder PL, gunakan proses_hps_dan_master_data() di isi_master_data_pl.
+
+    Return: {"ok": bool, "pesan": str, "count": int, "warning": list}
+    """
+    def _log(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
 
     try:
         import win32com.client
@@ -242,90 +343,10 @@ def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
         return {"ok": False, "pesan": f"Gagal buka Excel: {e}", "count": 0, "warning": []}
 
     try:
-        try: ws.Unprotect()
-        except Exception: pass
-
-        # ── Bersih A2:I bawah + highlight ────────────────────────────────────
-        # Ambil baris terakhir dari kolom A DAN B (data lama bisa lebih panjang
-        # di salah satunya), pakai yang terbesar agar baris hantu ikut terhapus.
-        last_a = ws.Cells(ws.Rows.Count, 1).End(-4162).Row  # xlUp
-        last_b = ws.Cells(ws.Rows.Count, 2).End(-4162).Row
-        last_row = max(last_a, last_b, 60)  # min 60: jangkau baris total lama
-        if last_row >= 2:
-            rng = ws.Range(f"A2:I{last_row}")
-            rng.ClearContents()   # WAJIB pakai () — tanpa kurung = property, tidak eksekusi
-            rng.Interior.ColorIndex = -4142  # xlNone
-
-        RGB_KUNING = 65535  # RGB(255,255,0)
-        baris = 2
-        total_hitung_all = 0.0
-        total_nilai = hasil["total_nilai"]
-        total_bulat = hasil["total_nilai_bulat"]
-        warning = []
-
-        for it in items:
-            ws.Cells(baris, 1).Value = it["urutan"]
-            ws.Cells(baris, 2).Value = it["jenis_bj"]
-            if not it["is_divisi"]:
-                if it["satuan"]:
-                    ws.Cells(baris, 3).Value = it["satuan"]
-                if it["vol"]:
-                    ws.Cells(baris, 4).Value = it["vol"]
-                    ws.Cells(baris, 4).NumberFormat = "#,##0.00"
-                if it["harga"]:
-                    ws.Cells(baris, 5).Value = it["harga"]
-                    ws.Cells(baris, 5).NumberFormat = "#,##0.00"
-                if it["pajak_pct"]:
-                    ws.Cells(baris, 6).Value = it["pajak_pct"]
-                    ws.Cells(baris, 6).NumberFormat = "0.00"
-                if it["total_spse"]:
-                    ws.Cells(baris, 7).Value = it["total_spse"]
-                    ws.Cells(baris, 7).NumberFormat = "#,##0.00"
-                if it["total_hitung"]:
-                    ws.Cells(baris, 8).Value = it["total_hitung"]
-                    ws.Cells(baris, 8).NumberFormat = "#,##0.00"
-                ws.Cells(baris, 9).Value = it["selisih"]
-                ws.Cells(baris, 9).NumberFormat = "#,##0.00"
-                total_hitung_all += it["total_hitung"] or 0.0
-                if not it["selisih_ok"]:
-                    ws.Range(ws.Cells(baris, 1), ws.Cells(baris, 9)).Interior.Color = RGB_KUNING
-                    warning.append(it)
-            baris += 1
-
-        # Header H–I jika kosong
-        if not ws.Cells(1, 8).Value:
-            ws.Cells(1, 8).Value = "Total (Hitung)"
-            ws.Cells(1, 8).Font.Bold = True
-        if not ws.Cells(1, 9).Value:
-            ws.Cells(1, 9).Value = "Selisih"
-            ws.Cells(1, 9).Font.Bold = True
-
-        # ── Baris total ──────────────────────────────────────────────────────
-        bt = baris + 1
-        ws.Cells(bt, 2).Value = "TOTAL NILAI (SPSE)"
-        ws.Cells(bt, 2).Font.Bold = True
-        ws.Cells(bt, 7).Value = total_nilai
-        ws.Cells(bt, 7).NumberFormat = "#,##0.00"
-
-        ws.Cells(bt + 1, 2).Value = "TOTAL NILAI (Setelah Pembulatan SPSE)"
-        ws.Cells(bt + 1, 2).Font.Bold = True
-        ws.Cells(bt + 1, 7).Value = total_bulat
-        ws.Cells(bt + 1, 7).NumberFormat = "#,##0.00"
-
-        ws.Cells(bt + 2, 2).Value = "TOTAL HITUNG MANUAL"
-        ws.Cells(bt + 2, 2).Font.Bold = True
-        ws.Cells(bt + 2, 8).Value = total_hitung_all
-        ws.Cells(bt + 2, 8).NumberFormat = "#,##0.00"
-
+        r = _tulis_hps_ke_ws(ws, wb, hasil, progress_cb)
         _log("Menyimpan Excel...")
         wb.Save()
-        _log(f"HPS berhasil ditulis: {len(items)} baris.")
-        return {
-            "ok": True,
-            "pesan": f"{len(items)} baris HPS ditulis ke sheet '{_SHEET_HPS}'",
-            "count": len(items),
-            "warning": warning,
-        }
+        return r
     except Exception as e:
         return {"ok": False, "pesan": f"Error saat menulis: {e}", "count": 0, "warning": []}
     finally:
