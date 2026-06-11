@@ -337,8 +337,23 @@ def cari_daftar_personil_di_folder(folder: str) -> str | None:
     return None
 
 
+def _is_petugas_jenjang_rendah(jabatan_str: str) -> bool:
+    """Deteksi 'Petugas K3' / 'Petugas Keselamatan' (jenjang petugas 3/4, BUKAN Ahli K3).
+
+    Dipakai untuk mengecualikan baris ini dari Tenaga Ahli walau berada di section
+    'TENAGA AHLI' pada tabel HPS (PPK kadang menaruh Petugas K3 di section tsb).
+    """
+    if not jabatan_str:
+        return False
+    s = jabatan_str
+    # 'Ahli K3' tetap Tenaga Ahli — jangan dikecualikan
+    if re.search(r"\bAhli\s+K3\b", s, re.IGNORECASE):
+        return False
+    return bool(re.search(r"\bPetugas\s+(?:K3|Keselamatan)\b", s, re.IGNORECASE))
+
+
 def _is_tenaga_ahli(jabatan_str: str) -> bool:
-    """Klasifikasi baris personil: Tenaga Ahli atau bukan.
+    """Klasifikasi baris personil: Tenaga Ahli atau bukan (untuk sumber PDF Daftar Personil).
 
     Tenaga Ahli = teks jabatan mengandung 'SKA' (Sertifikat Keahlian, jenjang ahli)
                   ATAU mengandung 'Ahli K3' (K3 jenjang 7, bukan Petugas K3).
@@ -347,6 +362,9 @@ def _is_tenaga_ahli(jabatan_str: str) -> bool:
     - SKK saja (Sertifikat Kompetensi Kerja) — bisa jenjang operator/teknisi, bukan ahli
     - Petugas K3 (jenjang 3/4) — SKK, bukan SKA
     - Surveyor, Admin, Estimator, Drafter tanpa SKA
+
+    Catatan: untuk sumber HPS gunakan konteks section (lihat parse_personil_dari_hps)
+    yang loloskan semua item di section 'TENAGA AHLI' KECUALI Petugas K3.
     """
     if not jabatan_str:
         return False
@@ -371,22 +389,25 @@ def _extract_sertifikat_dari_jabatan(jabatan_str: str) -> str:
         return ""
     s = jabatan_str
 
-    # Pattern 1: SKA/SKK + bidang + level Muda/Madya/Utama
-    m = re.search(
-        r"SK[AK]/?SK[AK]?\s+([\w/\s]+?)\s+(?:Ahli\s+)?(Muda|Madya|Utama)",
-        s, re.IGNORECASE,
-    )
-    if m:
-        bidang = re.sub(r"\s+", " ", m.group(1)).strip().rstrip("/")
-        level = m.group(2).strip().title()
-        return f"SKA {bidang} - Ahli {level}"
-
-    # Pattern 2: Ahli K3 Konstruksi (jenjang 7)
+    # Pattern 0 (prioritas): Ahli K3 Konstruksi (jenjang 7)
     if re.search(r"\bAhli\s+K3\b", s, re.IGNORECASE):
         return "SKA Ahli K3 Konstruksi"
 
-    # Pattern 3: SKA + bidang (tanpa level eksplisit) — ambil sampai koma/paren
-    m3 = re.search(r"\bSKA\b\s*[/,]?\s*([^,\(\)]+?)(?:\)|,|$)", s, re.IGNORECASE)
+    # Pattern 1: SKA/SKK + bidang + level Muda/Madya/Utama
+    # Toleransi separator koma (format HPS: "SKK Jembatan/Jalan Ahli Muda").
+    m = re.search(
+        r"SK[AK](?:/SK[AK])?\s*[,]?\s*([\w/\s]+?)\s+(?:Ahli\s+)?(Muda|Madya|Utama)",
+        s, re.IGNORECASE,
+    )
+    if m:
+        bidang = re.sub(r"\s+", " ", m.group(1)).strip().rstrip("/").rstrip(",").strip()
+        # Buang kata 'Ahli' yang ikut terserap di ujung bidang
+        bidang = re.sub(r"\s+Ahli$", "", bidang, flags=re.IGNORECASE).strip()
+        level = m.group(2).strip().title()
+        return f"SKA {bidang} - Ahli {level}"
+
+    # Pattern 3: SKA/SKK + bidang (tanpa level eksplisit) — ambil sampai koma/paren
+    m3 = re.search(r"\bSK[AK]\b\s*[/,]?\s*([^,\(\)]+?)(?:\)|,|$)", s, re.IGNORECASE)
     if m3:
         bidang = re.sub(r"\s+", " ", m3.group(1)).strip()
         return f"SKA {bidang}" if bidang else "SKA"
@@ -447,6 +468,133 @@ def _parse_baris_personil(teks: str) -> list[dict]:
     return result
 
 
+def cari_hps_md_di_folder(folder: str) -> str | None:
+    """Cari file '_HPS_*.md' di root folder paket."""
+    if not os.path.isdir(folder):
+        return None
+    for f in os.listdir(folder):
+        if f.lower().startswith("_hps_") and f.lower().endswith(".md"):
+            return os.path.join(folder, f)
+    return None
+
+
+def _baca_items_dari_hps_md(md_path: str) -> list[dict]:
+    """Parse tabel BoQ dari file _HPS_*.md → list {jenis_bj, satuan, vol, is_divisi}.
+
+    Format baris tabel (9 kolom, pipe-separated):
+      No | Jenis B/J | Satuan | Vol | Harga | Pajak% | Total SPSE | Total Hitung | Selisih OK
+    Divisi/section header: kolom Jenis di-bold (**...**), kolom lain '-'.
+    """
+    try:
+        with open(md_path, "r", encoding="utf-8") as fp:
+            teks = fp.read()
+    except Exception:
+        return []
+
+    items = []
+    for line in teks.split("\n"):
+        line = line.strip()
+        if not line.startswith("|") and " | " not in line:
+            continue
+        cols = [c.strip() for c in line.split("|")]
+        # Buang sel kosong di ujung akibat leading/trailing pipe
+        cols = [c for c in cols if c != ""]
+        if len(cols) < 4:
+            continue
+        # Skip header tabel + separator
+        if cols[0].lower() in ("no", "---") or set(cols[0]) <= set("-"):
+            continue
+        if not re.match(r"^\d+$", cols[0]):
+            continue
+        jenis_raw = cols[1]
+        satuan = cols[2]
+        vol_raw = cols[3]
+        is_divisi = jenis_raw.startswith("**") or satuan == "-"
+        jenis_bj = jenis_raw.strip("*").strip()
+        # Volume → float (buang Rp/koma ribuan tak relevan; vol biasanya angka kecil)
+        vol = 0.0
+        m_vol = re.search(r"[\d.,]+", vol_raw)
+        if m_vol and not is_divisi:
+            v = m_vol.group(0).replace(".", "").replace(",", ".")
+            try:
+                vol = float(v)
+            except ValueError:
+                vol = 0.0
+        items.append({
+            "jenis_bj": jenis_bj,
+            "satuan": "" if satuan == "-" else satuan,
+            "vol": vol,
+            "is_divisi": is_divisi,
+        })
+    return items
+
+
+def parse_personil_dari_hps(items_or_md) -> list[dict]:
+    """Ekstrak Tenaga Ahli dari data HPS (paling akurat untuk PL JKK).
+
+    Input fleksibel:
+      - list[dict] items HPS (dari hps_engine: {jenis_bj, satuan, vol, is_divisi, ...})
+      - str path file '_HPS_*.md' → di-parse via _baca_items_dari_hps_md
+
+    Logika:
+      - Scan berurutan. Divisi 'TENAGA AHLI' → in_ahli=True.
+        Divisi lain (TENAGA PENDUKUNG / BIAYA / dll) → in_ahli=False.
+      - Ambil item non-divisi saat in_ahli=True, KECUALI 'Petugas K3' (jenjang petugas).
+      - Per item: jabatan (sebelum '('), pengalaman ('N tahun' dalam kurung),
+        sertifikat (_extract_sertifikat_dari_jabatan), jumlah_orang (int dari vol).
+
+    Return list[{jabatan, pengalaman, sertifikat, jumlah_orang}] (max 3 — slot Excel R32-R40).
+    """
+    if isinstance(items_or_md, str):
+        items = _baca_items_dari_hps_md(items_or_md)
+    else:
+        items = items_or_md or []
+
+    hasil = []
+    in_ahli = False
+    for it in items:
+        jenis = (it.get("jenis_bj") or "").strip()
+        if it.get("is_divisi"):
+            up = jenis.upper()
+            in_ahli = ("TENAGA AHLI" in up or "PROFESSIONAL STAFF" in up)
+            continue
+        if not in_ahli:
+            continue
+        # Di section TENAGA AHLI tapi Petugas K3 jenjang petugas → bukan Tenaga Ahli
+        if _is_petugas_jenjang_rendah(jenis):
+            continue
+
+        # jabatan = teks sebelum '(' pertama
+        m_jab = re.match(r"^(.+?)\s*\(", jenis)
+        jabatan = m_jab.group(1).strip() if m_jab else jenis
+
+        # pengalaman = 'N tahun' di mana saja
+        m_th = re.search(r"(\d+)\s*tahun", jenis, re.IGNORECASE)
+        pengalaman = f"{m_th.group(1)} Tahun" if m_th else "1 Tahun"
+
+        # Ambil teks mentah di dalam kurung (...) — tidak dinormalisasi
+        m_ket = re.search(r"\((.+)\)", jenis)
+        sertifikat = m_ket.group(1).strip() if m_ket else ""
+
+        vol = it.get("vol") or 0
+        try:
+            jumlah_orang = int(round(float(vol)))
+        except (ValueError, TypeError):
+            jumlah_orang = 1
+        if jumlah_orang < 1:
+            jumlah_orang = 1
+
+        hasil.append({
+            "jabatan": jabatan,
+            "pengalaman": pengalaman,
+            "sertifikat": sertifikat,
+            "jumlah_orang": jumlah_orang,
+        })
+        if len(hasil) >= 3:
+            break
+    return hasil
+
+
 def parse_personil_daftar(pdf_path: str) -> list[dict]:
     """Parse Daftar Personil PDF → hanya Tenaga Ahli (baris ber-SKA atau Ahli K3).
 
@@ -455,7 +603,7 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
     Pass 2 — fallback: jika Pass 1 kosong (PDF tidak cantumkan SKA), ambil baris
              nomor 1 saja sebagai Ketua Tim minimum.
 
-    Max 6 slot (praktisnya JKK biasanya 1-2 Tenaga Ahli).
+    Max 3 slot (slot Excel R32-R40 — praktisnya JKK biasanya 1-2 Tenaga Ahli).
     """
     teks = _text_dari_pdf(pdf_path)
     if not teks:
@@ -478,8 +626,9 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
             "jabatan": p["jabatan"],
             "pengalaman": p["pengalaman"],
             "sertifikat": _extract_sertifikat_dari_jabatan(p["jabatan"]),
+            "jumlah_orang": 1,
         }
-        for p in ahli[:6]
+        for p in ahli[:3]
     ]
 
 
@@ -507,42 +656,56 @@ def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
             "jabatan": p["jabatan"],
             "pengalaman": p["pengalaman"],
             "sertifikat": _extract_sertifikat_dari_jabatan(p["jabatan"]),
+            "jumlah_orang": 1,
         }
-        for p in ahli[:6]
+        for p in ahli[:3]
     ]
 
 
 def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fallback_jabatan_k3: str = "") -> list[dict]:
-    """3-layer extraction:
-    Layer 1: Daftar Personil PDF
-    Layer 2: Draft_PL PDF (section Personil Inti)
-    Layer 3: fallback Supabase (jabatan_teknis + jabatan_k3 — slot 1+2)
-    Tiap item: {jabatan, pengalaman, sertifikat}
+    """Multi-layer extraction Tenaga Ahli (prioritas akurasi):
+    Layer 1: HPS markdown (_HPS_*.md) — paling akurat untuk PL JKK (section TENAGA AHLI + vol)
+    Layer 2: Daftar Personil PDF
+    Layer 3: Draft_PL PDF (section Personil Inti)
+    Layer 4: fallback Supabase (jabatan_teknis + jabatan_k3)
+    Tiap item: {jabatan, pengalaman, sertifikat, jumlah_orang}
     """
+    # Layer 1: HPS markdown (sumber utama JKK)
+    hps_md = cari_hps_md_di_folder(folder)
+    if hps_md:
+        result = parse_personil_dari_hps(hps_md)
+        if result:
+            return result
+
+    # Layer 2: Daftar Personil PDF
     daftar_pdf = cari_daftar_personil_di_folder(folder)
     if daftar_pdf:
         result = parse_personil_daftar(daftar_pdf)
         if result:
             return result
 
+    # Layer 3: Draft_PL PDF
     draft_pdf = cari_draft_pl_di_folder(folder)
     if draft_pdf:
         result = parse_personil_dari_draft_pl(draft_pdf)
         if result:
             return result
 
+    # Layer 4: fallback Supabase
     result = []
     if fallback_jabatan_teknis:
         result.append({
             "jabatan": fallback_jabatan_teknis,
             "pengalaman": "1 Tahun",
-            "sertifikat": _extract_sertifikat_dari_jabatan(fallback_jabatan_teknis),
+            "sertifikat": "",
+            "jumlah_orang": 1,
         })
     if fallback_jabatan_k3:
         result.append({
             "jabatan": fallback_jabatan_k3,
             "pengalaman": "1 Tahun",
-            "sertifikat": _extract_sertifikat_dari_jabatan(fallback_jabatan_k3),
+            "sertifikat": "",
+            "jumlah_orang": 1,
         })
     return result
 
@@ -563,18 +726,22 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: boo
     nama_clean = sanitasi_nama_folder(nama_paket or "")
     nomor = nomor_urut or ""
 
-    if is_ulang:
-        folder_ulang_name = f"{nomor}. PL{jenis} - {nama_clean} (PL - Ulang)"
-        folder_ulang = os.path.join(root, folder_ulang_name)
-        if os.path.isdir(folder_ulang):
-            return folder_ulang
-
     nama_lower = nama_clean.lower()
+
+    if is_ulang:
+        # Coba exact match dengan nomor dulu
+        if nomor:
+            folder_ulang_name = f"{nomor}. PL{jenis} - {nama_clean} (PL - Ulang)"
+            folder_ulang = os.path.join(root, folder_ulang_name)
+            if os.path.isdir(folder_ulang):
+                return folder_ulang
+
     folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
         if not is_ulang:
             return candidate
+
     best = None
     best_score = 0
     for f in os.listdir(root):
@@ -587,15 +754,20 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: boo
             continue
         if not is_ulang and ulang_in_f:
             continue
-        # Prioritas 1: exact suffix (case-insensitive)
-        if fl.endswith(nama_lower) or fl.rstrip().endswith(nama_lower + " (pl - ulang)"):
+        # Prioritas 1: exact suffix nama (case-insensitive)
+        suffix_ulang = nama_lower + " (pl - ulang)"
+        if is_ulang and fl.rstrip().endswith(suffix_ulang):
             return full
-        # Prioritas 2: semua kata nama ada di nama folder (word-set match)
+        if not is_ulang and fl.endswith(nama_lower):
+            return full
+        # Prioritas 2: word-set match — semua kata nama ada di folder
+        # Gunakan nama lengkap termasuk angka (mis "paket 1") agar tidak salah ke "paket 10"
         words = set(nama_lower.split())
         folder_words = set(fl.split())
-        common = len(words & folder_words)
-        if common > best_score and common == len(words):
-            best_score = common
+        # Skor: jumlah kata cocok, tapi harus semua kata nama ada
+        common = words & folder_words
+        if len(common) == len(words) and len(common) > best_score:
+            best_score = len(common)
             best = full
     return best
 
