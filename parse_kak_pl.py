@@ -305,32 +305,73 @@ def parse_sub_kegiatan_dari_draft_pl(pdf_path: str) -> str:
 
 
 def cari_daftar_personil_di_folder(folder: str) -> str | None:
-    """Cari PDF 'Daftar Personil*.pdf' di folder paket (case-insensitive)."""
+    """Cari PDF 'Daftar Personil*.pdf' di folder paket atau subfolder '1. KAK*' (case-insensitive)."""
     if not os.path.isdir(folder):
         return None
-    for f in os.listdir(folder):
-        fl = f.lower()
-        if fl.endswith(".pdf") and ("daftar personil" in fl or "personil" in fl):
-            if fl.startswith("draft_pl"):
-                continue
-            return os.path.join(folder, f)
+
+    def _cari_di(d: str):
+        for f in os.listdir(d):
+            fl = f.lower()
+            if fl.endswith(".pdf") and ("daftar personil" in fl or "personil" in fl):
+                if fl.startswith("draft_pl"):
+                    continue
+                return os.path.join(d, f)
+        return None
+
+    # Cari di root folder dulu
+    hasil = _cari_di(folder)
+    if hasil:
+        return hasil
+    # Cari di subfolder "1. KAK*" / "KAK*"
+    try:
+        for sub in os.listdir(folder):
+            sub_lower = sub.lower()
+            if sub_lower.startswith("1. kak") or sub_lower.startswith("kak"):
+                sub_path = os.path.join(folder, sub)
+                if os.path.isdir(sub_path):
+                    hasil = _cari_di(sub_path)
+                    if hasil:
+                        return hasil
+    except Exception:
+        pass
     return None
+
+
+def _is_tenaga_ahli(jabatan_str: str) -> bool:
+    """Klasifikasi baris personil: Tenaga Ahli atau bukan.
+
+    Tenaga Ahli = teks jabatan mengandung 'SKA' (Sertifikat Keahlian, jenjang ahli)
+                  ATAU mengandung 'Ahli K3' (K3 jenjang 7, bukan Petugas K3).
+
+    Bukan Tenaga Ahli:
+    - SKK saja (Sertifikat Kompetensi Kerja) — bisa jenjang operator/teknisi, bukan ahli
+    - Petugas K3 (jenjang 3/4) — SKK, bukan SKA
+    - Surveyor, Admin, Estimator, Drafter tanpa SKA
+    """
+    if not jabatan_str:
+        return False
+    s = jabatan_str
+    if re.search(r"\bSKA\b", s, re.IGNORECASE):
+        return True
+    if re.search(r"\bAhli\s+K3\b", s, re.IGNORECASE):
+        return True
+    return False
 
 
 def _extract_sertifikat_dari_jabatan(jabatan_str: str) -> str:
     """Tebak sertifikat dari teks jabatan (regex keyword matching).
 
+    Dipanggil hanya untuk Tenaga Ahli (baris yang lolos _is_tenaga_ahli).
     Pola:
-    - "SKA/SKK [Bidang] [Level]" -> "SKK [Bidang] - Ahli [Level]"
-    - "K3 Konstruksi" + "Petugas/Ahli" -> "SKK Petugas K3 Konstruksi" / "SKA Ahli K3 Konstruksi"
-    - "Sertifikasi ..." -> "Sertifikat ..."
-    - Fallback: "" kosong (tidak memaksa tebakan)
+    - "SKA/SKK [Bidang] [Level Muda/Madya/Utama]" -> "SKA [Bidang] - Ahli [Level]"
+    - "Ahli K3" -> "SKA Ahli K3 Konstruksi"
+    - Fallback: ambil segmen setelah "SKA" sampai koma/paren pertama
     """
     if not jabatan_str:
         return ""
     s = jabatan_str
 
-    # Pattern 1: SKK/SKA eksplisit + bidang + level (Muda/Madya/Utama)
+    # Pattern 1: SKA/SKK + bidang + level Muda/Madya/Utama
     m = re.search(
         r"SK[AK]/?SK[AK]?\s+([\w/\s]+?)\s+(?:Ahli\s+)?(Muda|Madya|Utama)",
         s, re.IGNORECASE,
@@ -338,53 +379,112 @@ def _extract_sertifikat_dari_jabatan(jabatan_str: str) -> str:
     if m:
         bidang = re.sub(r"\s+", " ", m.group(1)).strip().rstrip("/")
         level = m.group(2).strip().title()
-        return f"SKK {bidang} - Ahli {level}"
+        return f"SKA {bidang} - Ahli {level}"
 
-    # Pattern 2: K3 Konstruksi
-    if re.search(r"K3\s+Konstruksi", s, re.IGNORECASE):
-        if re.search(r"\bAhli\b", s, re.IGNORECASE):
-            return "SKA Ahli K3 Konstruksi"
-        return "SKK Petugas K3 Konstruksi"
+    # Pattern 2: Ahli K3 Konstruksi (jenjang 7)
+    if re.search(r"\bAhli\s+K3\b", s, re.IGNORECASE):
+        return "SKA Ahli K3 Konstruksi"
 
-    # Pattern 3: Sertifikasi eksplisit
-    m2 = re.search(r"Sertifikasi\s+([^,\)]+?)(?:\)|,|$)", s, re.IGNORECASE)
-    if m2:
-        return f"Sertifikat {m2.group(1).strip()}"
+    # Pattern 3: SKA + bidang (tanpa level eksplisit) — ambil sampai koma/paren
+    m3 = re.search(r"\bSKA\b\s*[/,]?\s*([^,\(\)]+?)(?:\)|,|$)", s, re.IGNORECASE)
+    if m3:
+        bidang = re.sub(r"\s+", " ", m3.group(1)).strip()
+        return f"SKA {bidang}" if bidang else "SKA"
 
     return ""
 
 
-def parse_personil_daftar(pdf_path: str) -> list[dict]:
-    """Parse Daftar Personil PDF ke list of {jabatan, pengalaman, sertifikat} (max 6).
+def _parse_baris_personil(teks: str) -> list[dict]:
+    """Parse baris bernomor dari teks PDF ke raw list of {nomor, jabatan, pengalaman}.
 
-    Pola tiap baris: '<no> <jabatan...> <N Tahun>'.
+    Robustness:
+    - Abaikan trailing text kolom KET. (Non Tenaga Ahli, dll) — anchor \b bukan $
+    - Baris tanpa nomor di depan di-skip (cegah baris lanjutan tabel masuk)
+    - Multiline join: jika baris nomor-N tidak mengandung 'Tahun', gabung dengan
+      baris berikutnya hingga 'N Tahun' ditemukan (maks 3 baris lanjutan)
+    """
+    lines = [l.strip() for l in teks.split("\n") if l.strip()]
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Hanya proses baris yang diawali nomor
+        if not re.match(r"^\d+\s", line):
+            i += 1
+            continue
+        # Coba match langsung (jabatan + tahun dalam 1 baris)
+        m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\b", line)
+        if m:
+            result.append({
+                "nomor": int(m.group(1)),
+                "jabatan": m.group(2).strip(),
+                "pengalaman": m.group(3).strip(),
+            })
+            i += 1
+            continue
+        # Multiline join: 'N Tahun' belum ditemukan → gabung baris berikutnya (maks 3)
+        joined = line
+        for j in range(1, 4):
+            if i + j >= len(lines):
+                break
+            next_line = lines[i + j]
+            # Stop join jika baris berikutnya dimulai nomor baru
+            if re.match(r"^\d+\s", next_line):
+                break
+            joined = joined + " " + next_line
+            m2 = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\b", joined)
+            if m2:
+                result.append({
+                    "nomor": int(m2.group(1)),
+                    "jabatan": m2.group(2).strip(),
+                    "pengalaman": m2.group(3).strip(),
+                })
+                i += j + 1
+                break
+        else:
+            # Loop selesai tanpa menemukan 'N Tahun' → skip baris ini
+            i += 1
+    return result
+
+
+def parse_personil_daftar(pdf_path: str) -> list[dict]:
+    """Parse Daftar Personil PDF → hanya Tenaga Ahli (baris ber-SKA atau Ahli K3).
+
+    Algoritma 2-pass:
+    Pass 1 — filter SKA: ambil hanya baris yang _is_tenaga_ahli() = True.
+    Pass 2 — fallback: jika Pass 1 kosong (PDF tidak cantumkan SKA), ambil baris
+             nomor 1 saja sebagai Ketua Tim minimum.
+
+    Max 6 slot (praktisnya JKK biasanya 1-2 Tenaga Ahli).
     """
     teks = _text_dari_pdf(pdf_path)
     if not teks:
         return []
 
-    personil = []
-    for line in teks.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
-        if m:
-            jabatan = m.group(2).strip()
-            idx_p = len(personil)
-            sertifikat = _extract_sertifikat_dari_jabatan(jabatan) if idx_p < 2 else "(Tidak Dipersyaratkan)"
-            personil.append({
-                "jabatan": jabatan,
-                "pengalaman": m.group(3).strip(),
-                "sertifikat": sertifikat,
-            })
-            if len(personil) >= 6:
-                break
-    return personil
+    semua = _parse_baris_personil(teks)
+    if not semua:
+        return []
+
+    # Pass 1: filter Tenaga Ahli (SKA / Ahli K3)
+    ahli = [p for p in semua if _is_tenaga_ahli(p["jabatan"])]
+
+    # Pass 2: fallback ke baris nomor 1 jika tidak ada SKA ditemukan
+    if not ahli:
+        baris1 = next((p for p in semua if p["nomor"] == 1), semua[0])
+        ahli = [baris1]
+
+    return [
+        {
+            "jabatan": p["jabatan"],
+            "pengalaman": p["pengalaman"],
+            "sertifikat": _extract_sertifikat_dari_jabatan(p["jabatan"]),
+        }
+        for p in ahli[:6]
+    ]
 
 
 def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
-    """Fallback: parse personil dari Draft_PL PDF section 'Personil Inti'."""
+    """Fallback: parse personil dari Draft_PL PDF section 'Personil Inti' — hanya Tenaga Ahli."""
     teks = _text_dari_pdf(pdf_path)
     if not teks:
         return []
@@ -393,23 +493,23 @@ def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
     if idx < 0:
         return []
 
-    sub = teks[idx:idx + 3000]
-    personil = []
-    for line in sub.split("\n"):
-        line = line.strip()
-        m = re.match(r"^(\d+)\s+(.+?)\s+(\d+\s*[Tt]ahun)\s*$", line)
-        if m:
-            jabatan = m.group(2).strip()
-            idx_p = len(personil)
-            sertifikat = _extract_sertifikat_dari_jabatan(jabatan) if idx_p < 2 else "(Tidak Dipersyaratkan)"
-            personil.append({
-                "jabatan": jabatan,
-                "pengalaman": m.group(3).strip(),
-                "sertifikat": sertifikat,
-            })
-            if len(personil) >= 6:
-                break
-    return personil
+    semua = _parse_baris_personil(teks[idx:idx + 3000])
+    if not semua:
+        return []
+
+    ahli = [p for p in semua if _is_tenaga_ahli(p["jabatan"])]
+    if not ahli:
+        baris1 = next((p for p in semua if p["nomor"] == 1), semua[0])
+        ahli = [baris1]
+
+    return [
+        {
+            "jabatan": p["jabatan"],
+            "pengalaman": p["pengalaman"],
+            "sertifikat": _extract_sertifikat_dari_jabatan(p["jabatan"]),
+        }
+        for p in ahli[:6]
+    ]
 
 
 def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fallback_jabatan_k3: str = "") -> list[dict]:
