@@ -760,6 +760,28 @@ def get_html() -> str:
     return _run(page.content())
 
 
+def fetch_json_via_cdp(url: str, params: dict | None = None) -> dict:
+    """Fetch JSON endpoint via browser CDP — session cookie otomatis ikut (sudah login)."""
+    import urllib.parse
+    page = halaman_aktif()
+    if not page:
+        raise RuntimeError("Browser belum terbuka.")
+    if params:
+        url = url + "?" + urllib.parse.urlencode(params)
+    result = _run(page.evaluate(f"""async () => {{
+        const r = await fetch({repr(url)}, {{
+            headers: {{
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json",
+            }},
+            credentials: "include",
+        }});
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return await r.json();
+    }}"""))
+    return result
+
+
 # ============================================================
 # Scan & Download
 # ============================================================

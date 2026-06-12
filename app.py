@@ -248,6 +248,126 @@ st.set_page_config(
     layout="wide",
 )
 
+# Baca dark mode preference dari session_state sebelum inject CSS
+_is_dark = st.session_state.get("toggle_dark_mode", True)
+
+if _is_dark:
+    st.markdown("""
+<style>
+/* VS Code Dark+ Theme */
+:root {
+    color-scheme: dark;
+}
+.stApp {
+    background-color: #141414 !important;
+    color: #D4D4D4 !important;
+}
+[data-testid="stSidebar"] {
+    background-color: #1A1A1B !important;
+}
+[data-testid="stHeader"] {
+    background-color: #141414 !important;
+}
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #1A1A1B !important;
+}
+.stTabs [data-baseweb="tab"] {
+    color: #D4D4D4 !important;
+}
+input, textarea, select, [data-baseweb="input"] input, [data-baseweb="textarea"] textarea {
+    background-color: #3C3C3C !important;
+    color: #D4D4D4 !important;
+    border-color: #444444 !important;
+}
+[data-baseweb="select"] div, [data-baseweb="select"] span {
+    background-color: #3C3C3C !important;
+    color: #D4D4D4 !important;
+}
+.stDataFrame, [data-testid="stTable"] {
+    background-color: #252526 !important;
+}
+[data-testid="stExpander"] {
+    background-color: #252526 !important;
+    border-color: #444444 !important;
+}
+/* Fix: label teks (checkbox, radio, selectbox, text_input) */
+label, .stCheckbox label, .stRadio label,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span,
+.stRadio [data-testid="stWidgetLabel"] p {
+    color: #D4D4D4 !important;
+}
+/* Fix: radio button option text */
+[data-baseweb="radio"] label, [data-baseweb="radio"] span,
+[role="radio"] + div, [role="radio"] ~ span {
+    color: #D4D4D4 !important;
+}
+/* Fix: caption / small text */
+[data-testid="stCaptionContainer"] p,
+.stCaption, small, .caption {
+    color: #D4D4D4 !important;
+}
+/* Fix: semua paragraph / markdown text */
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span {
+    color: #D4D4D4 !important;
+}
+/* Fix: metric labels dan values */
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricValue"] div {
+    color: #D4D4D4 !important;
+}
+/* Fix: semua input label */
+[data-testid="stNumberInput"] label,
+[data-testid="stDateInput"] label,
+[data-testid="stSelectbox"] label,
+[data-testid="stMultiSelect"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stFileUploader"] label {
+    color: #D4D4D4 !important;
+}
+/* Fix: info/warning/success/error box text */
+[data-testid="stAlert"] p {
+    color: #D4D4D4 !important;
+}
+/* Fix: warning box — amber border biar beda dari bg */
+[data-testid="stAlert"][data-baseweb="notification"] {
+    border-left: 4px solid #CCA700 !important;
+}
+/* Fix: semua st.button() → VS Code Dark+ button style */
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stBaseButton-secondary"]:focus,
+[data-testid="stBaseButton-secondary"]:active {
+    background-color: #0E639C !important;
+    color: #ffffff !important;
+    border-color: #1177BB !important;
+}
+[data-testid="stBaseButton-primary"],
+[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stBaseButton-primary"]:focus,
+[data-testid="stBaseButton-primary"]:active {
+    background-color: #0E639C !important;
+    color: #ffffff !important;
+    border-color: #1177BB !important;
+}
+/* Fix: button text jangan wrap patah di tengah kata */
+[data-testid^="stBaseButton"] p,
+button p {
+    white-space: nowrap !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Fix: expander header text */
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] details summary p {
+    color: #D4D4D4 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🤖 Asisten Pokja")
 st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 
@@ -274,6 +394,27 @@ st.divider()
 # ============================================================
 
 with st.sidebar:
+    # ── Toggle Light/Dark Mode ──────────────────────────────────────────────
+    _dark_mode = st.toggle("🌙 Dark Mode", value=True, key="toggle_dark_mode")
+    if not _dark_mode:
+        st.markdown("""
+<style>
+.stApp { background-color: #ffffff !important; color: #1e1e1e !important; }
+[data-testid="stSidebar"] { background-color: #f3f3f3 !important; }
+[data-testid="stHeader"] { background-color: #ffffff !important; }
+.stTabs [data-baseweb="tab-list"] { background-color: #f3f3f3 !important; }
+.stTabs [data-baseweb="tab"] { color: #1e1e1e !important; }
+label, [data-testid="stWidgetLabel"] p, [data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li, [data-testid="stMarkdownContainer"] span,
+[data-baseweb="radio"] label, [data-baseweb="radio"] span { color: #1e1e1e !important; }
+[data-testid="stCaptionContainer"] p { color: #555555 !important; }
+input, textarea, [data-baseweb="input"] input { background-color: #ffffff !important; color: #1e1e1e !important; border-color: #cccccc !important; }
+[data-baseweb="select"] div, [data-baseweb="select"] span { background-color: #ffffff !important; color: #1e1e1e !important; }
+[data-testid="stExpander"] { background-color: #f3f3f3 !important; border-color: #dddddd !important; }
+[data-testid="stExpander"] summary p { color: #1e1e1e !important; }
+</style>
+""", unsafe_allow_html=True)
+    st.divider()
     st.header("Browser SPSE")
 
     # Auto-reconnect Playwright hanya saat dibutuhkan (lazy) — sidebar info pakai CDP HTTP saja
@@ -1296,7 +1437,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
-                            value=st.session_state.get(_kd_key, True),
+                            value=st.session_state.get(_kd_key, bool(_rr.get("is_ulang") or _pl_paket_ulang(_rr))),
                             key=_kd_key,
                         )
                     with _col_tgl:
@@ -1349,8 +1490,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             )
 
             st.divider()
-            st.caption("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
-
+            st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
             if not st.session_state.get("kd_konfirmasi"):
                 if st.button(
                     f"📨 Kirim Undangan DPP ke {len(_kd_selected)} Paket",
@@ -1527,7 +1667,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.dataframe(hasil, use_container_width=True, hide_index=True)
 
                 # Centang Semua / Hapus Semua
-                _ba_col_sel, _ba_col_clr, _ = st.columns([1, 1, 4])
+                _ba_col_sel, _ba_col_clr, _ = st.columns([2, 2, 2])
                 with _ba_col_sel:
                     if st.button("☑️ Centang Semua", key="plba_sel_all", use_container_width=True):
                         for _pp2 in _pl_rows_ba:
@@ -1544,11 +1684,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _pp in _pl_rows_ba:
                     _ba_key  = f"plba_chk_{_pp['kode_paket']}"
                     _ba_fkey = f"plba_file_{_pp['kode_paket']}"
-                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([3, 3, 1])
+                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
                     with _bcol_chk:
                         _ba_chk = st.checkbox(
                             f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:40]}",
-                            value=st.session_state.get(_ba_key, False),
+                            value=st.session_state.get(_ba_key, True),
                             key=_ba_key,
                         )
                     with _bcol_file:
@@ -1796,9 +1936,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.divider()
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        _gcalpl_col1, _gcalpl_col2 = st.columns([2, 3])
-        with _gcalpl_col1:
-            _sync_gcal_pl_btn = st.button("🔄 Sync GCal PL", key="sync_gcal_pl_btn", use_container_width=True, type="primary")
+        _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_jkk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
@@ -2186,7 +2324,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _cols_tk = st.columns(2)
                     for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
                         with _cols_tk[_idx_iter % 2]:
-                            _default = _cid in ("433", "434")
+                            _default = True
                             if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
                                 _ldk_teknis_ckm_ids.append(_cid)
 
@@ -2379,12 +2517,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if not _paket_berfolder_umum:
             st.info("Tidak ada paket berfolder yang bisa diumumkan.")
         else:
-            _pilih_umum = st.multiselect(
-                "Pilih paket:",
-                options=[r["kode_paket"] for r in _paket_berfolder_umum],
-                format_func=lambda k: next((r["nama_paket"] for r in _paket_berfolder_umum if r["kode_paket"] == k), k),
-                key="pl_pilih_umum_jkk",
-            )
+            _umum_col1, _umum_col2 = st.columns(2)
+            with _umum_col1:
+                if st.button("✅ Semua", key="umum_sel_all_jkk", use_container_width=True):
+                    for _r in _paket_berfolder_umum:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
+                    st.rerun()
+            with _umum_col2:
+                if st.button("⬜ Kosong", key="umum_sel_none_jkk", use_container_width=True):
+                    for _r in _paket_berfolder_umum:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
+                    st.rerun()
+            _pilih_umum = []
+            for _r in _paket_berfolder_umum:
+                _umum_key = f"umum_chk_{_r['kode_paket']}"
+                _umum_chk = st.checkbox(
+                    f"{_r['nama_paket'][:70]}",
+                    value=st.session_state.get(_umum_key, True),
+                    key=_umum_key,
+                )
+                if _umum_chk:
+                    _pilih_umum.append(_r["kode_paket"])
             if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_jkk", disabled=not _pilih_umum):
                 try:
                     import spse_browser as _spse_br_umum
@@ -4455,7 +4608,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
-                            value=st.session_state.get(_kd_key, True),
+                            value=st.session_state.get(_kd_key, bool(_rr.get("is_ulang") or _pl_paket_ulang(_rr))),
                             key=_kd_key,
                         )
                     with _col_tgl:
@@ -4508,8 +4661,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             )
 
             st.divider()
-            st.caption("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
-
+            st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
             if not st.session_state.get("kd_konfirmasi"):
                 if st.button(
                     f"📨 Kirim Undangan DPP ke {len(_kd_selected)} Paket",
@@ -4686,7 +4838,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.dataframe(hasil, use_container_width=True, hide_index=True)
 
                 # Centang Semua / Hapus Semua
-                _ba_col_sel, _ba_col_clr, _ = st.columns([1, 1, 4])
+                _ba_col_sel, _ba_col_clr, _ = st.columns([2, 2, 2])
                 with _ba_col_sel:
                     if st.button("☑️ Centang Semua", key="plba_sel_all", use_container_width=True):
                         for _pp2 in _pl_rows_ba:
@@ -4703,11 +4855,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _pp in _pl_rows_ba:
                     _ba_key  = f"plba_chk_{_pp['kode_paket']}"
                     _ba_fkey = f"plba_file_{_pp['kode_paket']}"
-                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([3, 3, 1])
+                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
                     with _bcol_chk:
                         _ba_chk = st.checkbox(
                             f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:40]}",
-                            value=st.session_state.get(_ba_key, False),
+                            value=st.session_state.get(_ba_key, True),
                             key=_ba_key,
                         )
                     with _bcol_file:
@@ -4955,9 +5107,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.divider()
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        _gcalpl_col1, _gcalpl_col2 = st.columns([2, 3])
-        with _gcalpl_col1:
-            _sync_gcal_pl_btn = st.button("🔄 Sync GCal PL", key="sync_gcal_pl_btn", use_container_width=True, type="primary")
+        _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_pk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
@@ -5345,7 +5495,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _cols_tk = st.columns(2)
                     for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
                         with _cols_tk[_idx_iter % 2]:
-                            _default = _cid in ("433", "434")
+                            _default = True
                             if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
                                 _ldk_teknis_ckm_ids.append(_cid)
 
@@ -5538,12 +5688,27 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         if not _paket_berfolder_umum_pk:
             st.info("Tidak ada paket berfolder yang bisa diumumkan.")
         else:
-            _pilih_umum_pk = st.multiselect(
-                "Pilih paket:",
-                options=[r["kode_paket"] for r in _paket_berfolder_umum_pk],
-                format_func=lambda k: next((r["nama_paket"] for r in _paket_berfolder_umum_pk if r["kode_paket"] == k), k),
-                key="pl_pilih_umum_pk_pk",
-            )
+            _umum_col1_pk, _umum_col2_pk = st.columns(2)
+            with _umum_col1_pk:
+                if st.button("✅ Semua", key="umum_sel_all_pk", use_container_width=True):
+                    for _r in _paket_berfolder_umum_pk:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
+                    st.rerun()
+            with _umum_col2_pk:
+                if st.button("⬜ Kosong", key="umum_sel_none_pk", use_container_width=True):
+                    for _r in _paket_berfolder_umum_pk:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
+                    st.rerun()
+            _pilih_umum_pk = []
+            for _r in _paket_berfolder_umum_pk:
+                _umum_key_pk = f"umum_chk_{_r['kode_paket']}"
+                _umum_chk_pk = st.checkbox(
+                    f"{_r['nama_paket'][:70]}",
+                    value=st.session_state.get(_umum_key_pk, True),
+                    key=_umum_key_pk,
+                )
+                if _umum_chk_pk:
+                    _pilih_umum_pk.append(_r["kode_paket"])
             if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_pk", disabled=not _pilih_umum_pk):
                 try:
                     import spse_browser as _spse_br_umum_pk
@@ -8156,7 +8321,7 @@ with tab9:
         kp_hadir = kirimpesan_engine.DEFAULT_HADIR
 
         st.divider()
-        st.caption("⚠️ Undangan yang sudah terkirim **tidak bisa dihapus** dari sistem SPSE.")
+        st.warning("⚠️ Undangan yang sudah terkirim **tidak bisa dihapus** dari sistem SPSE.")
 
         kirim_disabled = len(kp_selected) == 0
 

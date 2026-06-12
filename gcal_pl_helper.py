@@ -164,77 +164,45 @@ def _parse_datetime_spse(s: str) -> datetime | None:
 
 def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
     """
-    Scrape /jadwalnontender/{kode_paket}/list, baca nilai tglawal+tglakhir
-    dari input fields yang sudah terisi (bukan hidden form submit).
+    Scrape /nontender/{kode_paket}/jadwal — public endpoint, tidak butuh login.
     Returns: [{"nama": str, "mulai": datetime, "selesai": datetime}, ...]
     """
-    import spse_browser
     from config import SPSE_BASE_URL
+    from bs4 import BeautifulSoup as _BS
+
+    _BULAN = {"Januari":1,"Februari":2,"Maret":3,"April":4,"Mei":5,"Juni":6,
+              "Juli":7,"Agustus":8,"September":9,"Oktober":10,"November":11,"Desember":12}
+
+    def _parse_tgl(s: str):
+        s = s.strip()
+        try:
+            parts = s.split()  # ['12','Juni','2026','15:15']
+            d, bln, y, t = int(parts[0]), _BULAN[parts[1]], int(parts[2]), parts[3]
+            h, m = map(int, t.split(":"))
+            return datetime(y, bln, d, h, m)
+        except Exception:
+            return None
 
     base = SPSE_BASE_URL.rstrip("/")
-    cookie_str = spse_browser.get_spse_cookies()
-    if not cookie_str:
-        raise RuntimeError("Cookie SPSE kosong.")
-
-    url = f"{base}/jadwalnontender/{kode_paket}/list"
-    r = requests.get(url, headers={
-        "User-Agent": "Mozilla/5.0",
-        "Cookie": cookie_str,
-    }, timeout=20)
+    url = f"{base}/nontender/{kode_paket}/jadwal"
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
     if r.status_code != 200:
-        raise RuntimeError(f"GET jadwalnontender gagal: HTTP {r.status_code}")
+        raise RuntimeError(f"GET jadwal gagal: HTTP {r.status_code}")
 
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    # Cari form simpanjadwalnontender
-    form_jadwal = None
-    for f in soup.find_all("form"):
-        if "simpanjadwalnontender" in (f.get("action") or ""):
-            form_jadwal = f
-            break
-    if not form_jadwal:
-        raise RuntimeError("Form jadwal tidak ditemukan.")
-
-    # Baca semua rows jadwalList[N]
-    seen = {}
-    for inp in form_jadwal.find_all("input"):
-        name = inp.get("name", "")
-        m = re.match(r"jadwalList\[(\d+)\]\.(dtj_tglawal|dtj_tglakhir|thp_nama)", name)
-        if not m:
-            continue
-        idx = int(m.group(1))
-        field = m.group(2)
-        if idx not in seen:
-            seen[idx] = {}
-        seen[idx][field] = inp.get("value", "")
-
-    # Fallback: nama tahap dari label/td teks di baris
-    # Ambil nama dari thp_nama input, atau dari teks td di tabel
-    nama_fallback = [
-        "Upload Dokumen Penawaran",
-        "Pembukaan Dokumen Penawaran",
-        "Evaluasi Penawaran",
-        "Klarifikasi Teknis dan Negosiasi",
-        "Penandatanganan Kontrak",
-    ]
+    soup = _BS(r.text, "html.parser")
+    table = soup.find("table")
+    if not table:
+        raise RuntimeError("Tabel jadwal tidak ditemukan di halaman SPSE.")
 
     hasil = []
-    for idx in sorted(seen.keys()):
-        row = seen[idx]
-        mulai_str = row.get("dtj_tglawal", "")
-        selesai_str = row.get("dtj_tglakhir", "")
-        nama = row.get("thp_nama", "") or (nama_fallback[idx] if idx < len(nama_fallback) else f"Tahap {idx+1}")
-        mulai = _parse_datetime_spse(mulai_str)
-        selesai = _parse_datetime_spse(selesai_str)
-        if mulai and selesai:
-            hasil.append({"nama": nama, "mulai": mulai, "selesai": selesai})
-
+    for tr in table.find_all("tr")[1:]:  # skip header
+        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
+        if len(tds) >= 4:
+            mulai = _parse_tgl(tds[2])
+            selesai = _parse_tgl(tds[3])
+            if mulai and selesai:
+                hasil.append({"nama": tds[1], "mulai": mulai, "selesai": selesai})
     return hasil
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sync satu paket: SPSE → GCal + Supabase tgl_*
-# ─────────────────────────────────────────────────────────────────────────────
 
 def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
     """
@@ -297,7 +265,9 @@ def sync_semua_paket_pl(progress_cb=None) -> list[dict]:
     """
     from config import sb as _sb
 
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket").execute().data or []
+    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket") \
+        .or_("tahap_spse.neq.Paket Sudah Selesai,tahap_spse.is.null") \
+        .execute().data or []
     total = max(len(rows), 1)
     results = []
 
