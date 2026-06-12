@@ -1936,7 +1936,19 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.divider()
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_jkk", use_container_width=True, type="primary")
+        import gcal_pl_helper as _gcalpl_tc
+        if not _gcalpl_tc.check_gcal_token():
+            st.warning("🔐 Token Google Calendar tidak valid atau expired.")
+            if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_jkk", type="primary", use_container_width=True):
+                import gcal_helper as _gcalh_ra
+                try:
+                    _gcalh_ra.generate_token()
+                    st.success("✅ Token diperbarui! Klik Sync untuk melanjutkan.")
+                    st.rerun()
+                except Exception as _e_ra:
+                    st.error(f"❌ Gagal reauth: {_e_ra}")
+        else:
+            _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_jkk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
@@ -5107,7 +5119,19 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.divider()
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_pk", use_container_width=True, type="primary")
+        import gcal_pl_helper as _gcalpl_tc
+        if not _gcalpl_tc.check_gcal_token():
+            st.warning("🔐 Token Google Calendar tidak valid atau expired.")
+            if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_pk", type="primary", use_container_width=True):
+                import gcal_helper as _gcalh_ra
+                try:
+                    _gcalh_ra.generate_token()
+                    st.success("✅ Token diperbarui! Klik Sync untuk melanjutkan.")
+                    st.rerun()
+                except Exception as _e_ra:
+                    st.error(f"❌ Gagal reauth: {_e_ra}")
+        else:
+            _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_pk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")

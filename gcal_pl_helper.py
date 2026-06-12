@@ -70,6 +70,37 @@ def _build_service():
     return build("calendar", "v3", credentials=creds)
 
 
+def check_gcal_token() -> bool:
+    """Cek token GCal valid. Auto-refresh kalau expired tapi refresh_token masih ada.
+    Return False kalau token tidak ada / revoked / perlu re-auth."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+
+    if not os.path.exists(TOKEN_PATH):
+        return False
+    try:
+        with open(TOKEN_PATH, "r") as f:
+            token_data = json.load(f)
+        creds = Credentials(
+            token=token_data.get("token"),
+            refresh_token=token_data.get("refresh_token"),
+            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id=token_data.get("client_id"),
+            client_secret=token_data.get("client_secret"),
+            scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/calendar"]),
+        )
+        if creds.valid:
+            return True
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(TOKEN_PATH, "w") as f:
+                f.write(creds.to_json())
+            return True
+    except Exception:
+        pass
+    return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Delete event lama milik paket ini
 # ─────────────────────────────────────────────────────────────────────────────
