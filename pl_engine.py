@@ -705,6 +705,24 @@ SUBFOLDER_DOK_PPK = {
     "Nota Dinas PPK":            "4. Informasi Lainnya",
 }
 
+
+def buat_subfolder_dokumen(folder_paket: str) -> list:
+    """Buat semua subfolder dokumen di folder_paket. Return list subfolder yang baru dibuat."""
+    dibuat = []
+    subfolder_unik = list(dict.fromkeys(SUBFOLDER_DOK_PPK.values()))
+    for sub in subfolder_unik:
+        p = os.path.join(folder_paket, sub)
+        if not os.path.isdir(p):
+            os.makedirs(p, exist_ok=True)
+            dibuat.append(sub)
+    for extra in ["5. SOP Evaluator"]:
+        p = os.path.join(folder_paket, extra)
+        if not os.path.isdir(p):
+            os.makedirs(p, exist_ok=True)
+            dibuat.append(extra)
+    return dibuat
+
+
 def download_dokumen_paket_pl(
     kode_paket: str,
     folder_tujuan: str,
@@ -887,3 +905,69 @@ def _pl_pdf_sort_key(fname: str) -> tuple:
     if "rekomendasi" in f or "lainnya" in f: return (6, f)
     if "permohonan" in f or "nota" in f: return (7, f)
     return (9, f)
+
+
+def umumkan_paket_pl(kode_paket: str, cookie_str: str) -> dict:
+    """
+    Umumkan paket non-tender ke SPSE via POST /nontender/{kode}/pengumumanpp.
+    Langkah: GET edit page → ambil authenticityToken → POST pengumumanpp.
+    Return: {ok: bool, pesan: str, status_code: int}
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from config import SPSE_BASE_URL
+
+    headers = {
+        'Cookie': cookie_str,
+        'User-Agent': 'Mozilla/5.0',
+    }
+
+    # Step 1: GET halaman edit → ambil authenticityToken
+    try:
+        resp_get = requests.get(
+            f"{SPSE_BASE_URL}nontender/{kode_paket}/edit",
+            headers=headers,
+            timeout=15
+        )
+        soup = BeautifulSoup(resp_get.text, 'html.parser')
+        token_input = soup.find('input', {'name': 'authenticityToken'})
+        if not token_input:
+            return {'ok': False, 'pesan': 'authenticityToken tidak ditemukan di halaman edit', 'status_code': resp_get.status_code}
+        token = token_input.get('value', '')
+    except Exception as e:
+        return {'ok': False, 'pesan': f'GET edit gagal: {e}', 'status_code': 0}
+
+    # Step 2: POST pengumumanpp
+    try:
+        payload = {
+            'authenticityToken': token,
+            'alasan': '',
+            'setuju': 'setuju',
+        }
+        resp_post = requests.post(
+            f"{SPSE_BASE_URL}nontender/{kode_paket}/pengumumanpp",
+            data=payload,
+            headers={
+                **headers,
+                'Referer': f"{SPSE_BASE_URL}nontender/{kode_paket}/edit",
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            allow_redirects=False,
+            timeout=15
+        )
+        if resp_post.status_code == 302:
+            location = resp_post.headers.get('Location', '')
+            # Cek apakah redirect ke halaman error
+            if 'error' in location.lower() or 'login' in location.lower() or location == '/':
+                return {'ok': False, 'pesan': f'Redirect ke {location} — kemungkinan session expired atau gagal', 'status_code': 302}
+            return {'ok': True, 'pesan': f'Paket {kode_paket} berhasil diumumkan → {location}', 'status_code': 302, 'location': location}
+        elif resp_post.status_code == 200:
+            # Cek apakah ada pesan error di body
+            soup_resp = BeautifulSoup(resp_post.text, 'html.parser')
+            body_text = soup_resp.get_text(' ', strip=True)[:300]
+            return {'ok': False, 'pesan': f'HTTP 200 (bukan redirect) — mungkin error: {body_text}', 'status_code': 200}
+        else:
+            return {'ok': False, 'pesan': f'POST gagal: HTTP {resp_post.status_code}', 'status_code': resp_post.status_code}
+    except Exception as e:
+        return {'ok': False, 'pesan': f'POST pengumumanpp gagal: {e}', 'status_code': 0}
+

@@ -371,8 +371,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
-        "0️⃣ Import DPA",
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab0 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -381,6 +380,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "6️⃣ Evaluasi & Teknis/Biaya",
         "7️⃣ Kirim Verifikasi",
         "8️⃣ Upload BA PL",
+        "9️⃣ Import DPA",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -2369,6 +2369,39 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 use_container_width=True, hide_index=True,
                             )
 
+
+    # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
+    with _pl_tab3:
+        st.divider()
+        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
+        _paket_berfolder_umum = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        if not _paket_berfolder_umum:
+            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        else:
+            _pilih_umum = st.multiselect(
+                "Pilih paket:",
+                options=[r["kode_paket"] for r in _paket_berfolder_umum],
+                format_func=lambda k: next((r["nama_paket"] for r in _paket_berfolder_umum if r["kode_paket"] == k), k),
+                key="pl_pilih_umum_jkk",
+            )
+            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_jkk", disabled=not _pilih_umum):
+                try:
+                    import spse_browser as _spse_br_umum
+                    _spse_br_umum.buka_browser(navigate=False)
+                    _cookie_umum = _spse_br_umum.get_spse_cookies()
+                except Exception as _e_br_umum:
+                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum}")
+                    _cookie_umum = None
+                if _cookie_umum:
+                    for _kp_umum in _pilih_umum:
+                        _nm_umum = next((r["nama_paket"] for r in _paket_berfolder_umum if r["kode_paket"] == _kp_umum), _kp_umum)
+                        _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
+                        if _ru["ok"]:
+                            st.success(f"✅ {_nm_umum[:60]} — {_ru['pesan']}")
+                        else:
+                            st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
+
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     with _pl_tab3:
         st.divider()
@@ -3380,8 +3413,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ============================================================
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
-    _pl_tab0, _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
-        "0️⃣ Import DPA",
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab0 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -3390,6 +3422,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         "6️⃣ Evaluasi & Teknis/Biaya",
         "7️⃣ Kirim Verifikasi",
         "8️⃣ Upload BA PL",
+        "9️⃣ Import DPA",
     ])
 
     # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
@@ -5494,6 +5527,39 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _df_sp[["status", "paket", "step", "pesan"]],
                                 use_container_width=True, hide_index=True,
                             )
+
+
+    # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
+    with _pl_tab3:
+        st.divider()
+        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
+        _paket_berfolder_umum_pk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        if not _paket_berfolder_umum_pk:
+            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        else:
+            _pilih_umum_pk = st.multiselect(
+                "Pilih paket:",
+                options=[r["kode_paket"] for r in _paket_berfolder_umum_pk],
+                format_func=lambda k: next((r["nama_paket"] for r in _paket_berfolder_umum_pk if r["kode_paket"] == k), k),
+                key="pl_pilih_umum_pk_pk",
+            )
+            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_pk", disabled=not _pilih_umum_pk):
+                try:
+                    import spse_browser as _spse_br_umum_pk
+                    _spse_br_umum_pk.buka_browser(navigate=False)
+                    _cookie_umum_pk = _spse_br_umum_pk.get_spse_cookies()
+                except Exception as _e_br_umum_pk:
+                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum_pk}")
+                    _cookie_umum_pk = None
+                if _cookie_umum_pk:
+                    for _kp_umum_pk in _pilih_umum_pk:
+                        _nm_umum_pk = next((r["nama_paket"] for r in _paket_berfolder_umum_pk if r["kode_paket"] == _kp_umum_pk), _kp_umum_pk)
+                        _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
+                        if _ru_pk["ok"]:
+                            st.success(f"✅ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+                        else:
+                            st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
 
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     with _pl_tab3:
