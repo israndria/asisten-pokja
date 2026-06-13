@@ -31,10 +31,21 @@ def load_draft_pl() -> list[dict]:
         return []
 
 
+_TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
+
+def is_paket_selesai(r: dict) -> bool:
+    """True jika paket sudah Penandatanganan Kontrak / selesai.
+    Identik dengan pl_engine.is_paket_selesai — tabel dan kolom sama (draft_paket_pl, tahap_spse).
+    """
+    tahap = (r.get("tahap_spse") or "").lower()
+    if tahap:
+        return any(k in tahap for k in _TAHAP_SELESAI_KEYWORDS)
+    return any(k in (r.get("status") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS)
+
+
 def simpan_paket_pl(data: dict) -> dict:
     """
     Upsert satu paket PL ke draft_paket_pl.
-    data harus memiliki key 'kode_paket'.
     Return: {"ok": True} atau {"ok": False, "error": str}
     """
     if not data.get("kode_paket"):
