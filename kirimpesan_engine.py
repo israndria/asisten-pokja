@@ -439,6 +439,49 @@ def fetch_paket_semua() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
+def fetch_tahap_tender(paket_list: list[dict]) -> dict:
+    """
+    Scrape tahap aktif Tender dari badge di /lelang/{kode} per paket.
+    Tiru pola _fetch_tahap_spse di pl_engine — return {id_lelang: tahap_str}.
+    Pakai ThreadPoolExecutor supaya N paket tidak lambat.
+    Non-fatal: kode yang gagal di-skip (return empty string).
+    """
+    import re as _re
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str or not paket_list:
+        return {}
+
+    base = SPSE_BASE_URL.rstrip("/")
+    hdr = {"Cookie": cookie_str, "User-Agent": "Mozilla/5.0", "Referer": f"{base}/paket"}
+
+    _BADGE_PAT = _re.compile(
+        r'badge[^>]*>([^<]*(?:Hasil Evaluasi|Masa Sanggah|Surat Penunjukan|'
+        r'Penandatanganan Kontrak|Penandatanganan|Klarifikasi|Negosiasi|Selesai)[^<]*)',
+        _re.IGNORECASE,
+    )
+
+    def _scrape_one(id_lelang: str) -> tuple[str, str]:
+        try:
+            r = requests.get(f"{base}/lelang/{id_lelang}", headers=hdr, timeout=10)
+            if r.status_code != 200:
+                return id_lelang, ""
+            m = _BADGE_PAT.search(r.text)
+            return id_lelang, m.group(1).strip() if m else ""
+        except Exception:
+            return id_lelang, ""
+
+    result = {}
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futs = {ex.submit(_scrape_one, p["id_lelang"]): p["id_lelang"] for p in paket_list}
+        for fut in as_completed(futs):
+            id_lelang, tahap = fut.result()
+            if tahap:
+                result[id_lelang] = tahap
+    return result
+
+
 def fetch_paket_aktif() -> dict:
     """
     Ambil daftar paket yang sedang berjalan (bukan Draft, bukan Selesai) dari dt/paketpanitia.
@@ -476,7 +519,9 @@ def fetch_paket_aktif() -> dict:
         data = resp.json()
         rows = data.get("data", [])
 
-        _SKIP_STATUS = ("draft", "tender sudah selesai", "selesai")
+        # Skip hanya paket yang benar-benar tidak aktif sama sekali
+        # Masa Sanggah / Penunjukan / Penandatanganan = masih relevan, filter di UI saja
+        _SKIP_STATUS = ("draft", "tender sudah selesai")
         paket = []
         for r in rows:
             status = str(r[_COL_STATUS]) if len(r) > _COL_STATUS else ""
@@ -495,9 +540,12 @@ def fetch_paket_aktif() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
-def enrich_paket_supabase(paket_list: list[dict]) -> list[dict]:
+def enrich_paket_supabase(paket_list: list[dict], tahap_map: dict | None = None) -> list[dict]:
     """
     Enrich daftar paket dengan kode_unik + kode_pokja dari Supabase draft_paket.
+    Sekaligus upsert status_tahap (dari tahap_map scrape /lelang/{kode}) ke Supabase
+    agar filter UI bisa berjalan independent dari session state.
+    tahap_map: {id_lelang: tahap_str} — dari fetch_tahap_tender(). None = skip upsert.
     Query bulk 1x — match by kode_tender (= id_lelang).
     Return: paket_list yang sama, tiap dict ditambah field kode_unik + kode_pokja.
     """
@@ -512,6 +560,16 @@ def enrich_paket_supabase(paket_list: list[dict]) -> list[dict]:
             sb_row = lookup.get(p["id_lelang"], {})
             p["kode_unik"] = sb_row.get("kode_unik") or ""
             p["kode_pokja"] = sb_row.get("kode_pokja") or ""
+            # Upsert status_tahap ke Supabase — hanya kalau paket ada di DB dan tahap_map tersedia
+            if tahap_map is not None and p["id_lelang"] in lookup:
+                tahap = tahap_map.get(p["id_lelang"]) or p.get("status") or ""
+                if tahap:
+                    try:
+                        _sb().table("draft_paket").update(
+                            {"status_tahap": tahap}
+                        ).eq("kode_tender", p["id_lelang"]).execute()
+                    except Exception:
+                        pass
     except Exception:
         pass
     return paket_list

@@ -495,7 +495,7 @@ _KOLOM_DRAFT_PAKET = {
     "nama_dinas", "bidang", "nama_ppk", "jangka_waktu", "sumber_anggaran",
     "anggota_1", "anggota_2", "anggota_3",
     "diambil_pada", "nomor_urut", "folder_dibuat", "folder_dibuat_pada", "kode_unik",
-    "sbu_baru", "sbu_lama",
+    "sbu_baru", "sbu_lama", "status_tahap",
 }
 
 # ── SBU Detection Engine ────────────────────────────────────────────────────────

@@ -370,6 +370,14 @@ def scrape_hps_ke_excel(kode_tender: str, excel_path: str, progress_cb=None) -> 
         r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
         r["total_nilai"] = hasil["total_nilai"]
         r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+
+        # Auto-generate markdown sebagai sumber data AI
+        try:
+            md_path = _tulis_hps_ke_md(kode_tender, excel_path, hasil, mode="tender")
+            r["md_path"] = md_path
+        except Exception as e:
+            print(f"Warning: Gagal tulis MD HPS Tender: {e}")
+
         return r
     except Exception as e:
         return {"ok": False, "pesan": str(e), "count": 0, "warning": [],
@@ -400,8 +408,12 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
                 "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
 
-def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
-    """Auto-generate file markdown sebagai sumber data HPS untuk AI pra-reviu."""
+def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = "pl") -> str:
+    """Auto-generate file markdown sebagai sumber data HPS untuk AI pra-reviu.
+
+    mode="pl"     — Pengadaan Langsung JKK/PK (default, backward compat)
+    mode="tender" — Tender Pokja (folder naming berbeda, skip auto-parse personil PL)
+    """
     folder = os.path.dirname(os.path.abspath(excel_path))
 
     items = hasil.get("items", [])
@@ -416,12 +428,20 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
 
     # Ambil nama paket dari nama folder (parent langsung dari excel_path)
     nama_folder = os.path.basename(folder)
+    import re as _re
+
     # Deteksi paket ulang dari suffix "(PL - Ulang)" di nama folder
     is_ulang = "(PL - Ulang)" in nama_folder or "(PL-Ulang)" in nama_folder
-    # Bersihkan nama paket: buang prefix "N. PLJKK - " dan suffix "(PL - Ulang)"
-    import re as _re
-    nama_paket = _re.sub(r'^\d+\.\s*(PLJKK|PLPK)\s*-\s*', '', nama_folder).strip()
-    nama_paket = _re.sub(r'\s*\(PL\s*-?\s*Ulang\)\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
+
+    if mode == "tender":
+        # Folder tender: "N. Nama Paket - Pokja XXX"
+        # Buang prefix "N. " dan suffix " - Pokja XXX"
+        nama_paket = _re.sub(r'^\d+\.\s*', '', nama_folder).strip()
+        nama_paket = _re.sub(r'\s*-\s*Pokja\s*\d+\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
+    else:
+        # Folder PL: "N. PLJKK - Nama Paket" atau "N. PLPK - Nama Paket"
+        nama_paket = _re.sub(r'^\d+\.\s*(PLJKK|PLPK)\s*-\s*', '', nama_folder).strip()
+        nama_paket = _re.sub(r'\s*\(PL\s*-?\s*Ulang\)\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
 
     # Nama file pakai nama paket (bukan kode), sanitasi karakter Windows
     nama_md = _re.sub(r'[/<>:"\|?*]', "-", nama_paket).strip()

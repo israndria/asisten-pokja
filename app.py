@@ -46,6 +46,16 @@ def _get_paket_gabungan() -> list[dict]:
             result.append(p)
     return result
 
+_TENDER_SELESAI_KW = (
+    "hasil evaluasi", "masa sanggah", "surat penunjukan penyedia",
+    "penandatanganan kontrak", "penandatanganan", "tender sudah selesai", "selesai",
+)
+
+def _is_tender_selesai(p: dict) -> bool:
+    """True jika paket Tender sudah di tahap akhir (Masa Sanggah / Penunjukan / Penandatanganan)."""
+    status = str(p.get("status") or "").lower()
+    return any(k in status for k in _TENDER_SELESAI_KW)
+
 from config import SPSE_BASE_URL
 import spse_browser
 import ldk_engine
@@ -7000,8 +7010,9 @@ with tab0:
                 with st.spinner("Memuat daftar paket dari SPSE..."):
                     _gd0 = kirimpesan_engine.fetch_paket_draft()
                     _ga0 = kirimpesan_engine.fetch_paket_aktif()
+                    _tahap0 = kirimpesan_engine.fetch_tahap_tender(_ga0.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_gd0.get("paket", []))
-                    kirimpesan_engine.enrich_paket_supabase(_ga0.get("paket", []))
+                    kirimpesan_engine.enrich_paket_supabase(_ga0.get("paket", []), tahap_map=_tahap0)
                     st.session_state["global_paket_draft"] = _gd0
                     st.session_state["global_paket_aktif"] = _ga0
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
@@ -7039,8 +7050,9 @@ with tab0:
                 with st.spinner("Mengambil daftar paket dari SPSE..."):
                     _gd_r = kirimpesan_engine.fetch_paket_draft()
                     _ga_r = kirimpesan_engine.fetch_paket_aktif()
+                    _tahap_r = kirimpesan_engine.fetch_tahap_tender(_ga_r.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_gd_r.get("paket", []))
-                    kirimpesan_engine.enrich_paket_supabase(_ga_r.get("paket", []))
+                    kirimpesan_engine.enrich_paket_supabase(_ga_r.get("paket", []), tahap_map=_tahap_r)
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
@@ -7128,6 +7140,8 @@ with tab0:
                         _hr = _hps_eng2.scrape_hps_ke_excel(kode_tender, _xl)
                         if _hr.get("ok"):
                             log.append(f"📊 HPS: {_hr.get('count',0)} baris → Excel")
+                            if _hr.get("md_path"):
+                                log.append(f"📝 HPS MD: {os.path.basename(_hr['md_path'])}")
                         else:
                             log.append(f"⚠ HPS: {_hr.get('pesan','-')}")
                     except Exception as _e:
@@ -7155,14 +7169,44 @@ with tab0:
         st.divider()
 
         # ── Daftar paket: belum-folder (checklist) + sudah-folder (expander aksi) ──
+        # ── Filter paket selesai — baca dari status_tahap Supabase (independent dari session SPSE) ──
+        _selesai_kodes = {
+            str(_r.get("kode_tender", ""))
+            for _r in _draft_rows
+            if _is_tender_selesai({"status": _r.get("status_tahap") or ""})
+        }
+        _t_show_done = st.checkbox(
+            "Tampilkan paket selesai (Masa Sanggah / Penunjukan / Penandatanganan)",
+            value=False,
+            key="t_show_done_tender",
+        )
+        _t_done_n = len(_selesai_kodes)
+
+        # Checkbox hide paket sudah-folder (tiru pola PL hide-selesai)
+        _t_hide_done = st.checkbox(
+            "🙈 Sembunyikan paket yang sudah punya folder",
+            value=True,
+            key="t_hide_done_chk",
+        )
         _rows_valid = [
             _r for _r in _draft_rows
             if _r.get("nama_tender")
             and not str(_r.get("kode_tender", "")).startswith("_err_")
             and _tahun_skrg in str(_r.get("nomor_pp") or "")
+            and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
         ]
-        _rows_belum = [_r for _r in _rows_valid if not _r.get("folder_dibuat")]
-        _rows_sudah = [_r for _r in _rows_valid if _r.get("folder_dibuat")]
+        if _t_done_n and not _t_show_done:
+            st.caption(f"🔒 {_t_done_n} paket selesai (Masa Sanggah/Penunjukan/Penandatanganan) disembunyikan — centang di atas untuk tampilkan.")
+        _rows_belum = [
+            _r for _r in _rows_valid
+            if not _r.get("folder_dibuat") or not _t_hide_done
+        ]
+        # Filter rows_sudah: sembunyikan paket selesai kecuali _t_show_done
+        _rows_sudah = [
+            _r for _r in _rows_valid
+            if _r.get("folder_dibuat")
+            and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
+        ]
 
         # Plan nama folder per paket belum-folder (auto-nomor)
         _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
@@ -8363,25 +8407,25 @@ with tab8:
         st.divider()
         st.markdown("### 3. Sinkronisasi Google Calendar")
         st.caption("Update acara di Google Calendar berdasarkan data jadwal terbaru SPSE.")
-        
-        col_gcal1, col_gcal2 = st.columns(2)
-        
-        with col_gcal1:
+
+        import gcal_pl_helper as _gcal_td
+        if not _gcal_td.check_gcal_token():
+            st.warning("⚠️ Token Google Calendar tidak valid atau belum login. Klik tombol di bawah untuk login ulang.")
+            gcal_login_btn = st.button(
+                "🔑 Login Ulang ke Google Calendar",
+                type="primary",
+                use_container_width=True,
+                key="jd_login_gcal"
+            )
+            gcal_sync_btn = False
+        else:
             gcal_sync_btn = st.button(
-                "📅 Sync Jadwal ke GCalendar",
+                "🔄 Sync Jadwal ke GCalendar",
                 type="primary",
                 use_container_width=True,
                 key="jd_sync_gcal"
             )
-            
-        with col_gcal2:
-            gcal_login_btn = st.button(
-                "🔑 Re-Login Google Calendar",
-                type="secondary",
-                help="Gunakan tombol ini JIKA proses sinkronisasi gagal karena Token Expired.",
-                use_container_width=True,
-                key="jd_login_gcal"
-            )
+            gcal_login_btn = False
         
         if gcal_sync_btn:
             if not jd_selected:
@@ -8399,12 +8443,10 @@ with tab8:
                 _script = _v19_dir / "sync_jadwal.py"
                 _no_win = 0x08000000
                 
-                # Memastikan encoding output UTF-8 untuk print emoji
                 _env = _os.environ.copy()
                 _env["PYTHONIOENCODING"] = "utf-8"
                 
                 with st.status("🔄 Menyiapkan data Sinkronisasi...", expanded=True) as sync_status:
-                    # 1. Update database_tender.csv V19
                     st.write("Mendaftarkan URL paket ke database V19...")
                     try:
                         if _db_path.exists():
@@ -8412,7 +8454,6 @@ with tab8:
                         else:
                             df_db = _pd.DataFrame(columns=['url', 'members', 'nama_paket', 'last_sync', 'content_hash'])
                             
-                        # Pastikan kolom wajib ada
                         for _col in ['url', 'members', 'nama_paket', 'last_sync', 'content_hash']:
                             if _col not in df_db.columns:
                                 df_db[_col] = ''
@@ -8439,7 +8480,6 @@ with tab8:
                     except Exception as e:
                         st.error(f"Gagal mengupdate database: {e}")
                 
-                    # 2. Jalankan sync_jadwal.py
                     st.write("Memanggil script `sync_jadwal.py`...")
                     log_container = st.empty()
                     try:
@@ -8458,7 +8498,7 @@ with tab8:
                             log_container.code(res.stdout, language="text")
                         if res.stderr:
                             if "RefreshError" in res.stderr or "invalid_grant" in res.stderr:
-                                st.error("🔐 **Token Google Calendar Kedaluwarsa!**\n\nSistem Google menolak akses karena sesi login sudah *expired*. Silakan klik tombol **🔑 Re-Login Google Calendar** di sebelah kanan untuk menyegarkan sesi.")
+                                st.error("🔐 **Token Google Calendar Kedaluwarsa!**\n\nSilakan klik tombol Login Ulang (refresh halaman dulu agar tombol muncul).")
                             else:
                                 st.error(f"Error output:\n{res.stderr}")
                             
@@ -8522,6 +8562,7 @@ except Exception as e:
                     if res.returncode == 0:
                         auth_status.update(label="✅ Login Google Calendar berhasil!", state="complete")
                         st.success("Autentikasi selesai. Kamu bisa menggunakan fitur Sync Jadwal sekarang.")
+                        st.rerun()
                     else:
                         auth_status.update(label="⚠️ Login Dibatalkan atau Error", state="error")
                         st.error(res.stderr or "Gagal mendapatkan otorisasi.")
@@ -8531,8 +8572,6 @@ except Exception as e:
                 except Exception as e:
                     auth_status.update(label="⚠️ Terjadi Kesalahan", state="error")
                     st.error(str(e))
-
-# ============================================================
 # Tab 9: Kirim Undangan
 # ============================================================
 
@@ -8790,7 +8829,7 @@ with tab9:
                     with _col_chk:
                         _checked = st.checkbox(
                             f"**{_p['kode']}** — {_p['nama']}",
-                            value=st.session_state.get(_key_chk, False),
+                            value=st.session_state.get(_key_chk, True),
                             key=_key_chk,
                         )
                     with _col_file:
