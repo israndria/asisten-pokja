@@ -6996,6 +6996,13 @@ with tab0:
     except Exception as _e:
         st.warning(f"Gagal load data: {_e}")
 
+    # Isi tender_tahap_map dari Supabase kalau session state belum ada (startup/refresh)
+    if "tender_tahap_map" not in st.session_state:
+        st.session_state["tender_tahap_map"] = {
+            str(_r["kode_tender"]): (_r.get("status_tahap") or "")
+            for _r in _draft_rows if _r.get("status_tahap")
+        }
+
     # ── Layout: kolom kiri (1) dan kanan (2) ──
     _col_kiri, _col_kanan = st.columns(2)
 
