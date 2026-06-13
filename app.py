@@ -55,8 +55,9 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     return result
 
 _TENDER_SELESAI_KW = (
-    "hasil evaluasi", "masa sanggah", "surat penunjukan penyedia",
-    "penandatanganan kontrak", "penandatanganan", "tender sudah selesai", "selesai",
+    "surat penunjukan penyedia",
+    "penandatanganan kontrak", "penandatanganan",
+    "tender sudah selesai", "selesai",
 )
 
 def _is_tender_selesai(p: dict) -> bool:
