@@ -141,7 +141,7 @@ def generate_checklist_pdf_pl(kualifikasi_id: str, dest_path: str) -> dict:
         return {"ok": False, "pesan": str(e)}
 
 
-def resolve_folder_paket_pl(kode_paket: str) -> dict:
+def resolve_folder_paket_pl(kode_paket: str, buat_subfolder: bool = True) -> dict:
     """
     Lookup folder paket PL dari draft_paket_pl, resolve via parse_kak_pl._resolve_folder_pl.
     Return: {"ok": bool, "path": str, "pesan": str}
@@ -164,7 +164,10 @@ def resolve_folder_paket_pl(kode_paket: str) -> dict:
         if not folder_paket:
             return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 4)"}
 
-        path = os.path.join(folder_paket, "1. Dokumen Kualifikasi")
+        if not buat_subfolder:
+            return {"ok": True, "path": folder_paket, "pesan": folder_paket}
+
+        path = os.path.join(folder_paket, "8. Dokumen Kualifikasi")
         os.makedirs(path, exist_ok=True)
         return {"ok": True, "path": path, "pesan": folder_paket}
     except Exception as e:

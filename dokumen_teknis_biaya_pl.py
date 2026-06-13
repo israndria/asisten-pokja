@@ -291,7 +291,7 @@ def download_teknis_biaya_peserta(
                 pass
 
     slug_nama = _slug(nama_peserta)
-    dest_folder = os.path.join(folder_paket, "2. Dokumen Teknis Biaya", f"{urutan}. {slug_nama}")
+    dest_folder = os.path.join(folder_paket, "9. Dokumen Teknis Biaya", f"{urutan}. {slug_nama}")
     os.makedirs(dest_folder, exist_ok=True)
 
     _log(f"  Fetch dokumen teknis id={id_nontender}...")

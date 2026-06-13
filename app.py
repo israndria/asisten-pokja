@@ -950,8 +950,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
-                        # Badge peserta pendaftaran
-                        _pr_id_nt = _pr.get("id_nontender", "")
+                        # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
+                        _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
                             _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
                             if _pr_jml_peserta > 0:
@@ -4133,8 +4133,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
-                        # Badge peserta pendaftaran
-                        _pr_id_nt = _pr.get("id_nontender", "")
+                        # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
+                        _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
                             _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
                             if _pr_jml_peserta > 0:
@@ -9524,7 +9524,7 @@ with tab_apendo:
         _gab_valid = [
             _gp for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", ""))
             if os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
-            or os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Kualifikasi"))
+            or os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
         ]
         if st.button("📎 Gabung Semua Paket", key="gab2_semua", type="primary", use_container_width=False):
             _gab_all_log = st.empty()
@@ -9618,7 +9618,7 @@ with tab_apendo:
             _log_cb(f"=== Input BA: {kode_tender} ===")
 
             # Folder dok teknis ada di "1. Dokumen Penawaran" (sibling folder kualifikasi),
-            # BUKAN di "1. Dokumen Kualifikasi". Resolve dari parent folder paket.
+            # BUKAN di "8. Dokumen Kualifikasi". Resolve dari parent folder paket.
             _folder_paket_root = os.path.dirname(folder_kualifikasi) if folder_kualifikasi else ""
             _folder_penawaran = os.path.join(_folder_paket_root, "1. Dokumen Penawaran") if _folder_paket_root else ""
 
