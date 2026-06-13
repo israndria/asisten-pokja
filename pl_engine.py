@@ -715,7 +715,7 @@ def buat_subfolder_dokumen(folder_paket: str) -> list:
         if not os.path.isdir(p):
             os.makedirs(p, exist_ok=True)
             dibuat.append(sub)
-    for extra in ["5. SOP Evaluator"]:
+    for extra in ["5. Evaluator Kualifikasi & Teknis"]:
         p = os.path.join(folder_paket, extra)
         if not os.path.isdir(p):
             os.makedirs(p, exist_ok=True)

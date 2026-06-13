@@ -1196,7 +1196,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     # Copy evaluasi → 5. SOP Evaluator
-                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. Evaluator Kualifikasi & Teknis")
                                     _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
@@ -4391,7 +4391,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     # Copy evaluasi → 5. SOP Evaluator
-                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. Evaluator Kualifikasi & Teknis")
                                     _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
@@ -6957,7 +6957,7 @@ with tab0:
                                 for _tef in _t_eval_files:
                                     _tef_src = os.path.join(_t_eval_src_dir, _tef)
                                     if os.path.isfile(_tef_src):
-                                        _t_eval_dir = os.path.join(_bp_target, "5. SOP Evaluator")
+                                        _t_eval_dir = os.path.join(_bp_target, "5. Evaluator Kualifikasi & Teknis")
                                         os.makedirs(_t_eval_dir, exist_ok=True)
                                         _t_shutil.copy2(_tef_src, os.path.join(_t_eval_dir, _tef))
                                         _t_eval_copied.append(_tef)
