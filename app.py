@@ -55,7 +55,7 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     return result
 
 _TENDER_SELESAI_KW = (
-    "surat penunjukan penyedia",
+    "surat penunjukan penyedia", "penunjukan penyedia",
     "penandatanganan kontrak", "penandatanganan",
     "tender sudah selesai", "selesai",
 )

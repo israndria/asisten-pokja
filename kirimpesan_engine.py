@@ -456,9 +456,13 @@ def fetch_tahap_tender(paket_list: list[dict]) -> dict:
     base = SPSE_BASE_URL.rstrip("/")
     hdr = {"Cookie": cookie_str, "User-Agent": "Mozilla/5.0", "Referer": f"{base}/paket"}
 
+    _TAHAP_PAT = _re.compile(
+        r'Tahap Tender Saat Ini.*?<td[^>]*>\s*<a[^>]*>([^<]+)',
+        _re.IGNORECASE | _re.DOTALL,
+    )
     _BADGE_PAT = _re.compile(
         r'badge[^>]*>([^<]*(?:Hasil Evaluasi|Masa Sanggah|Surat Penunjukan|'
-        r'Penandatanganan Kontrak|Penandatanganan|Klarifikasi|Negosiasi|Selesai)[^<]*)',
+        r'Penunjukan Penyedia|Penandatanganan Kontrak|Penandatanganan|Klarifikasi|Negosiasi|Selesai)[^<]*)',
         _re.IGNORECASE,
     )
 
@@ -467,8 +471,13 @@ def fetch_tahap_tender(paket_list: list[dict]) -> dict:
             r = requests.get(f"{base}/lelang/{id_lelang}", headers=hdr, timeout=10)
             if r.status_code != 200:
                 return id_lelang, ""
-            m = _BADGE_PAT.search(r.text)
-            return id_lelang, m.group(1).strip() if m else ""
+            # Prioritas: ambil dari "Tahap Tender Saat Ini" (lebih akurat)
+            m = _TAHAP_PAT.search(r.text)
+            if m:
+                return id_lelang, m.group(1).strip()
+            # Fallback: badge
+            m2 = _BADGE_PAT.search(r.text)
+            return id_lelang, m2.group(1).strip() if m2 else ""
         except Exception:
             return id_lelang, ""
 
