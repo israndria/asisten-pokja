@@ -35,14 +35,22 @@ def _pokja_label(p: dict) -> str:
     return f"Pokja {pokja_no} · {p['kode']} — {p['nama']}"
 
 
-def _get_paket_gabungan() -> list[dict]:
-    """Gabung global_paket_draft + global_paket_aktif, deduplikasi by kode."""
+def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
+    """Gabung global_paket_draft + global_paket_aktif, deduplikasi by kode.
+    filter_selesai=True (default): sembunyikan paket yang sudah Hasil Evaluasi/Masa Sanggah/dll.
+    Status tahap dibaca dari session state 'tender_tahap_map' (di-isi saat enrich_paket_supabase).
+    """
     draft_list = st.session_state.get("global_paket_draft", {}).get("paket", [])
     aktif_list = st.session_state.get("global_paket_aktif", {}).get("paket", [])
+    tahap_map = st.session_state.get("tender_tahap_map", {})
     seen, result = set(), []
     for p in draft_list + aktif_list:
         if p["kode"] not in seen:
             seen.add(p["kode"])
+            if filter_selesai:
+                tahap = tahap_map.get(p["kode"]) or p.get("status") or ""
+                if _is_tender_selesai({"status": tahap}):
+                    continue
             result.append(p)
     return result
 
@@ -7013,6 +7021,7 @@ with tab0:
                     _tahap0 = kirimpesan_engine.fetch_tahap_tender(_ga0.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_gd0.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_ga0.get("paket", []), tahap_map=_tahap0)
+                    st.session_state["tender_tahap_map"] = _tahap0
                     st.session_state["global_paket_draft"] = _gd0
                     st.session_state["global_paket_aktif"] = _ga0
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
@@ -7053,6 +7062,7 @@ with tab0:
                     _tahap_r = kirimpesan_engine.fetch_tahap_tender(_ga_r.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_gd_r.get("paket", []))
                     kirimpesan_engine.enrich_paket_supabase(_ga_r.get("paket", []), tahap_map=_tahap_r)
+                    st.session_state["tender_tahap_map"] = _tahap_r
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
