@@ -481,6 +481,17 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict) -> str:
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
+    # Auto re-parse personil dari HPS yang baru ditulis → update Supabase langsung
+    # Ini memastikan sertifikat selalu up-to-date tanpa perlu klik Refresh manual
+    try:
+        from parse_kak_pl import ekstrak_personil_3layer
+        from pl_engine import simpan_paket_pl
+        personil = ekstrak_personil_3layer(folder, require_hps=True)
+        if personil:
+            simpan_paket_pl({"kode_paket": kode_paket, "personil_json": personil})
+    except Exception:
+        pass  # best-effort, jangan block HPS flow
+
     return md_path
 
 

@@ -694,118 +694,408 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         else:
             st.info("Upload PDF DPA untuk memulai parsing.")
 
-        # ── Dashboard / Search DPA ────────────────────────────────────────────
+        # ── Dashboard Index DPA ───────────────────────────────────────────────
         st.divider()
-        st.markdown("### 🔍 Cari Paket di DPA")
-        st.caption("Ketik nama pekerjaan → sistem cari di seluruh item belanja DPA yang tersimpan.")
+        with st.expander("📚 Index DPA Tersimpan", expanded=False):
+            if st.button("🔄 Muat Daftar DPA", key="dpa_load_index"):
+                st.session_state["dpa_index_loaded"] = True
+            if st.session_state.get("dpa_index_loaded"):
+                try:
+                    from config import sb as _sb_idx
+                    _sb_i = _sb_idx()
+                    _idx_rows = (
+                        _sb_i.table("dpa_subkegiatan")
+                        .select("satker, tahun_anggaran, subkegiatan_kode, subkegiatan_nama, alokasi_sesudah, sumber_pendanaan")
+                        .order("tahun_anggaran", desc=True)
+                        .order("satker")
+                        .execute()
+                        .data
+                    ) or []
+                    if _idx_rows:
+                        # Ringkasan per satker+tahun
+                        _satker_summary: dict = {}
+                        for _r in _idx_rows:
+                            _k = (_r["satker"], _r["tahun_anggaran"])
+                            if _k not in _satker_summary:
+                                _satker_summary[_k] = {"count": 0, "total": 0.0}
+                            _satker_summary[_k]["count"] += 1
+                            _satker_summary[_k]["total"] += (_r["alokasi_sesudah"] or 0.0)
 
+                        _idx_display = []
+                        for (_s, _t), _v in _satker_summary.items():
+                            _idx_display.append({
+                                "Satker": _s or "-",
+                                "Tahun": _t or "-",
+                                "Sub Kegiatan": _v["count"],
+                                "Total Alokasi (Rp)": f"{_v['total']:,.0f}",
+                            })
+                        st.dataframe(_idx_display, use_container_width=True, hide_index=True)
+                        st.caption(f"Total {len(_idx_rows)} sub kegiatan dari {len(_satker_summary)} DPA")
+                    else:
+                        st.info("Belum ada data DPA di database.")
+                except Exception as _idx_ex:
+                    st.error(f"Gagal muat index: {_idx_ex}")
+
+        # ── Search DPA Canggih ────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔍 Cari di DPA")
+        st.caption(
+            "FTS + trigram fuzzy — cari di uraian, nama paket, spesifikasi, nama sub/kegiatan. "
+            "Typo tetap ketemu. Support tanda kutip untuk frasa eksak: \"pemeliharaan jalan\"."
+        )
+
+        # ── Filter panel ──────────────────────────────────────────────────────
+        with st.expander("⚙️ Filter & Opsi Pencarian", expanded=False):
+            _dpa_fcol1, _dpa_fcol2, _dpa_fcol3 = st.columns(3)
+            with _dpa_fcol1:
+                _dpa_f_satker = st.text_input(
+                    "Filter Satker (opsional):",
+                    placeholder="Dinas Pekerjaan Umum...",
+                    key="dpa_f_satker",
+                )
+            with _dpa_fcol2:
+                _dpa_f_tahun = st.text_input(
+                    "Filter Tahun Anggaran:",
+                    placeholder="2026",
+                    key="dpa_f_tahun",
+                )
+            with _dpa_fcol3:
+                _dpa_f_kode_rek = st.text_input(
+                    "Prefix Kode Rekening:",
+                    placeholder="5.1.02 atau 5.2",
+                    key="dpa_f_kode_rek",
+                )
+
+            _dpa_fcol4, _dpa_fcol5, _dpa_fcol6 = st.columns(3)
+            with _dpa_fcol4:
+                _dpa_f_min_val = st.number_input(
+                    "Nilai Min (Rp juta):",
+                    min_value=0.0,
+                    value=0.0,
+                    step=10.0,
+                    key="dpa_f_min_val",
+                    help="0 = tidak difilter",
+                )
+            with _dpa_fcol5:
+                _dpa_f_max_val = st.number_input(
+                    "Nilai Max (Rp juta):",
+                    min_value=0.0,
+                    value=0.0,
+                    step=100.0,
+                    key="dpa_f_max_val",
+                    help="0 = tidak difilter",
+                )
+            with _dpa_fcol6:
+                _dpa_f_tipe = st.selectbox(
+                    "Tipe baris:",
+                    options=["item + rekening", "item saja", "rekening saja"],
+                    index=0,
+                    key="dpa_f_tipe",
+                )
+            _dpa_f_sumber_dana = st.text_input(
+                "Filter Sumber Dana (opsional):",
+                placeholder="APBD / DAK / DAU...",
+                key="dpa_f_sumber_dana",
+            )
+            _dpa_f_limit = st.slider(
+                "Maks hasil ditampilkan:", min_value=10, max_value=200, value=50, step=10,
+                key="dpa_f_limit",
+            )
+
+        # ── Search input ──────────────────────────────────────────────────────
         _dpa_search_q = st.text_input(
-            "Nama pekerjaan / uraian belanja:",
-            placeholder="Contoh: Pemeliharaan Bangunan Gedung",
+            "Ketik nama pekerjaan / uraian belanja:",
+            placeholder='Contoh: Pemeliharaan Jalan  atau  "Rehab Gedung Kantor"',
             key="dpa_search_q",
         )
 
-        if _dpa_search_q and len(_dpa_search_q.strip()) >= 3:
+        def _dpa_do_search(query: str, f_satker: str, f_tahun: str, f_kode_rek: str,
+                           f_min_juta: float, f_max_juta: float, f_tipe: str,
+                           f_sumber_dana: str, limit: int):
+            """
+            Hybrid search: FTS primary → trigram fuzzy fallback.
+            Semua filter opsional. Return (items, sk_map, mode).
+            mode = 'fts' | 'fuzzy' | 'ilike'
+            """
             from config import sb as _sb_search
             _sb_s = _sb_search()
+            q = query.strip()
 
-            with st.spinner("Mencari..."):
-                _q = _dpa_search_q.strip()
-                _cols = "uraian, kode_rekening, jumlah_sesudah, subkegiatan_id, sumber_dana_item, spesifikasi, nama_paket"
-                _r1 = (
-                    _sb_s.table("dpa_item_belanja")
-                    .select(_cols)
-                    .ilike("uraian", f"%{_q}%")
-                    .eq("tipe", "item")
-                    .order("jumlah_sesudah", desc=True)
-                    .limit(50)
-                    .execute()
-                    .data
-                ) or []
-                _r2 = (
-                    _sb_s.table("dpa_item_belanja")
-                    .select(_cols)
-                    .ilike("nama_paket", f"%{_q}%")
-                    .eq("tipe", "item")
-                    .order("jumlah_sesudah", desc=True)
-                    .limit(50)
-                    .execute()
-                    .data
-                ) or []
-                # Merge deduplicate by (subkegiatan_id, uraian, jumlah_sesudah)
-                _seen = set()
-                _search_items = []
-                for _it in _r1 + _r2:
-                    _key = (_it["subkegiatan_id"], _it["uraian"], _it["jumlah_sesudah"])
-                    if _key not in _seen:
-                        _seen.add(_key)
-                        _search_items.append(_it)
-                _search_items.sort(key=lambda x: x["jumlah_sesudah"] or 0, reverse=True)
-                _search_items = _search_items[:50]
+            # Tentukan tipe filter
+            tipe_filter = None
+            if f_tipe == "item saja":
+                tipe_filter = "item"
+            elif f_tipe == "rekening saja":
+                tipe_filter = "rekening"
 
-            if not _search_items:
-                st.warning("Tidak ada item belanja yang cocok.")
-            else:
-                # Kumpulkan semua subkegiatan_id unik → batch fetch SK
-                _sk_ids = list({it["subkegiatan_id"] for it in _search_items})
-                _sk_map = {}
-                for _chunk_start in range(0, len(_sk_ids), 20):
-                    _chunk = _sk_ids[_chunk_start:_chunk_start+20]
-                    _sk_rows = (
-                        _sb_s.table("dpa_subkegiatan")
-                        .select("id, subkegiatan_kode, subkegiatan_nama, kegiatan_kode, kegiatan_nama, program_nama, alokasi_sesudah, sumber_pendanaan, satker, tahun_anggaran")
-                        .in_("id", _chunk)
-                        .execute()
-                        .data
+            # Subkegiatan IDs dari filter satker/tahun (join via subkegiatan_id)
+            _sk_id_filter: list | None = None
+            _sk_map: dict = {}
+            if f_satker.strip() or f_tahun.strip() or f_sumber_dana.strip():
+                _sk_q = _sb_s.table("dpa_subkegiatan").select(
+                    "id, subkegiatan_kode, subkegiatan_nama, kegiatan_kode, kegiatan_nama, "
+                    "program_nama, alokasi_sesudah, sumber_pendanaan, satker, tahun_anggaran"
+                )
+                if f_satker.strip():
+                    _sk_q = _sk_q.ilike("satker", f"%{f_satker.strip()}%")
+                if f_tahun.strip():
+                    _sk_q = _sk_q.eq("tahun_anggaran", f_tahun.strip())
+                if f_sumber_dana.strip():
+                    _sk_q = _sk_q.ilike("sumber_pendanaan", f"%{f_sumber_dana.strip()}%")
+                _sk_rows = _sk_q.execute().data or []
+                _sk_id_filter = [r["id"] for r in _sk_rows]
+                for r in _sk_rows:
+                    _sk_map[r["id"]] = r
+                if not _sk_id_filter:
+                    return [], {}, "no_result"
+
+            _cols = (
+                "id, uraian, kode_rekening, jumlah_sesudah, jumlah_sebelum, "
+                "subkegiatan_id, sumber_dana_item, spesifikasi, nama_paket, tipe, satuan, koefisien"
+            )
+            _min_val = f_min_juta * 1_000_000 if f_min_juta > 0 else None
+            _max_val = f_max_juta * 1_000_000 if f_max_juta > 0 else None
+
+            def _apply_common_filters(qobj):
+                if tipe_filter:
+                    qobj = qobj.eq("tipe", tipe_filter)
+                if _sk_id_filter is not None:
+                    qobj = qobj.in_("subkegiatan_id", _sk_id_filter)
+                if f_kode_rek.strip():
+                    qobj = qobj.like("kode_rekening", f"{f_kode_rek.strip()}%")
+                if _min_val is not None:
+                    qobj = qobj.gte("jumlah_sesudah", _min_val)
+                if _max_val is not None:
+                    qobj = qobj.lte("jumlah_sesudah", _max_val)
+                return qobj
+
+            # ── Coba FTS dulu (via Supabase textSearch) ───────────────────────
+            # Konversi query user: "frasa eksak" → 'frasa <-> eksak', kata biasa → 'kata1 & kata2'
+            def _build_tsquery(raw: str) -> str:
+                import re as _re2
+                parts = []
+                # Ekstrak frasa dalam tanda kutip
+                for ph in _re2.findall(r'"([^"]+)"', raw):
+                    words = ph.strip().split()
+                    if words:
+                        parts.append(" <-> ".join(f"'{w}':*" for w in words))
+                # Kata-kata biasa (di luar kutipan)
+                plain = _re2.sub(r'"[^"]*"', "", raw).strip()
+                for word in plain.split():
+                    if len(word) >= 2:
+                        parts.append(f"'{word}':*")
+                return " & ".join(parts) if parts else ""
+
+            tsq = _build_tsquery(q)
+            _items_fts = []
+            if tsq:
+                try:
+                    _fts_q = _sb_s.table("dpa_item_belanja").select(_cols).text_search(
+                        "search_vec", tsq, config="simple"
                     )
-                    for _sk in _sk_rows:
-                        _sk_map[_sk["id"]] = _sk
+                    _fts_q = _apply_common_filters(_fts_q)
+                    _items_fts = (
+                        _fts_q.order("jumlah_sesudah", desc=True).limit(limit).execute().data
+                    ) or []
+                except Exception:
+                    _items_fts = []
 
-                st.markdown(f"**{len(_search_items)} item ditemukan** (maks 50)")
+            # ── Fallback trigram ILIKE kalau FTS kosong ───────────────────────
+            _mode = "fts"
+            if not _items_fts:
+                _mode = "fuzzy"
+                # Multi-field ILIKE (lebih broad dari FTS, cover singkatan)
+                q_pat = f"%{q}%"
+                _r1 = _apply_common_filters(
+                    _sb_s.table("dpa_item_belanja").select(_cols).ilike("uraian", q_pat)
+                ).order("jumlah_sesudah", desc=True).limit(limit).execute().data or []
 
-                # Grup hasil per sub kegiatan
-                _groups: dict = {}
-                for it in _search_items:
-                    _sid = it["subkegiatan_id"]
-                    if _sid not in _groups:
-                        _groups[_sid] = {"sk": _sk_map.get(_sid), "items": []}
-                    _groups[_sid]["items"].append(it)
+                _r2 = _apply_common_filters(
+                    _sb_s.table("dpa_item_belanja").select(_cols).ilike("nama_paket", q_pat)
+                ).order("jumlah_sesudah", desc=True).limit(limit // 2).execute().data or []
 
-                for _sid, _grp in _groups.items():
+                _r3 = _apply_common_filters(
+                    _sb_s.table("dpa_item_belanja").select(_cols).ilike("spesifikasi", q_pat)
+                ).order("jumlah_sesudah", desc=True).limit(limit // 3).execute().data or []
+
+                _seen_ids = set()
+                _items_fts = []
+                for _it in _r1 + _r2 + _r3:
+                    if _it["id"] not in _seen_ids:
+                        _seen_ids.add(_it["id"])
+                        _items_fts.append(_it)
+                _items_fts.sort(key=lambda x: x["jumlah_sesudah"] or 0, reverse=True)
+                _items_fts = _items_fts[:limit]
+
+                if not _items_fts:
+                    _mode = "no_result"
+
+            # ── Batch fetch subkegiatan yg belum di-cache ─────────────────────
+            _missing_sk_ids = [
+                it["subkegiatan_id"] for it in _items_fts
+                if it["subkegiatan_id"] not in _sk_map
+            ]
+            for _chunk_start in range(0, len(_missing_sk_ids), 20):
+                _chunk = list(set(_missing_sk_ids[_chunk_start:_chunk_start + 20]))
+                _sk_rows2 = (
+                    _sb_s.table("dpa_subkegiatan")
+                    .select(
+                        "id, subkegiatan_kode, subkegiatan_nama, kegiatan_kode, kegiatan_nama, "
+                        "program_nama, alokasi_sesudah, sumber_pendanaan, satker, tahun_anggaran"
+                    )
+                    .in_("id", _chunk)
+                    .execute()
+                    .data
+                ) or []
+                for _sk in _sk_rows2:
+                    _sk_map[_sk["id"]] = _sk
+
+            return _items_fts, _sk_map, _mode
+
+        def _dpa_highlight(text: str, query: str) -> str:
+            """Bold-highlight kata dari query di dalam teks."""
+            import re as _re3
+            if not text or not query:
+                return text or ""
+            # Ekstrak kata dari query (buang tanda kutip dan operator)
+            words = _re3.findall(r'[a-zA-Z0-9\u00C0-\u024F]{2,}', query)
+            result = text
+            for w in words:
+                result = _re3.sub(
+                    f"({_re3.escape(w)})",
+                    r"**\1**",
+                    result,
+                    flags=_re3.IGNORECASE,
+                )
+            return result
+
+        # ── Eksekusi search ────────────────────────────────────────────────────
+        _do_search = (
+            _dpa_search_q and len(_dpa_search_q.strip()) >= 2
+        )
+
+        if _do_search:
+            with st.spinner("Mencari..."):
+                _search_items, _sk_map_res, _search_mode = _dpa_do_search(
+                    query=_dpa_search_q,
+                    f_satker=st.session_state.get("dpa_f_satker", ""),
+                    f_tahun=st.session_state.get("dpa_f_tahun", ""),
+                    f_kode_rek=st.session_state.get("dpa_f_kode_rek", ""),
+                    f_min_juta=st.session_state.get("dpa_f_min_val", 0.0),
+                    f_max_juta=st.session_state.get("dpa_f_max_val", 0.0),
+                    f_tipe=st.session_state.get("dpa_f_tipe", "item + rekening"),
+                    f_sumber_dana=st.session_state.get("dpa_f_sumber_dana", ""),
+                    limit=st.session_state.get("dpa_f_limit", 50),
+                )
+
+            if _search_mode == "no_result":
+                st.warning("❌ Tidak ada item ditemukan. Coba kata kunci berbeda atau longgarkan filter.")
+            else:
+                # Badge mode
+                _mode_badge = {
+                    "fts": "🔵 FTS (full-text search)",
+                    "fuzzy": "🟡 Fuzzy ILIKE (fallback)",
+                }.get(_search_mode, "")
+                _badge_col, _export_col = st.columns([3, 1])
+                _badge_col.markdown(
+                    f"**{len(_search_items)} item ditemukan** &nbsp;&nbsp; {_mode_badge}",
+                    unsafe_allow_html=True,
+                )
+
+                # ── Export CSV ─────────────────────────────────────────────────
+                import csv, io as _csv_io
+                _csv_buf = _csv_io.StringIO()
+                _csv_writer = csv.writer(_csv_buf)
+                _csv_writer.writerow([
+                    "Satker", "Tahun", "Sub Kegiatan Kode", "Sub Kegiatan Nama",
+                    "Kegiatan", "Kode Rekening", "Uraian", "Nama Paket", "Spesifikasi",
+                    "Koefisien", "Satuan", "Jumlah Sesudah (Rp)", "Sumber Dana",
+                ])
+                for _it in _search_items:
+                    _sk_r = _sk_map_res.get(_it["subkegiatan_id"], {})
+                    _csv_writer.writerow([
+                        _sk_r.get("satker", ""),
+                        _sk_r.get("tahun_anggaran", ""),
+                        _sk_r.get("subkegiatan_kode", ""),
+                        _sk_r.get("subkegiatan_nama", ""),
+                        f"{_sk_r.get('kegiatan_kode','')} {_sk_r.get('kegiatan_nama','')}".strip(),
+                        _it.get("kode_rekening", "") or "",
+                        _it.get("uraian", "") or "",
+                        _it.get("nama_paket", "") or "",
+                        _it.get("spesifikasi", "") or "",
+                        _it.get("koefisien", "") or "",
+                        _it.get("satuan", "") or "",
+                        _it.get("jumlah_sesudah", 0) or 0,
+                        _it.get("sumber_dana_item", "") or "",
+                    ])
+                _export_col.download_button(
+                    "📥 Export CSV",
+                    data=_csv_buf.getvalue().encode("utf-8-sig"),
+                    file_name=f"dpa_search_{_dpa_search_q[:20].replace(' ','_')}.csv",
+                    mime="text/csv",
+                    key="dpa_export_csv",
+                )
+
+                # ── Grup per sub kegiatan ──────────────────────────────────────
+                _dpa_groups: dict = {}
+                for _it in _search_items:
+                    _sid = _it["subkegiatan_id"]
+                    if _sid not in _dpa_groups:
+                        _dpa_groups[_sid] = {"sk": _sk_map_res.get(_sid), "items": []}
+                    _dpa_groups[_sid]["items"].append(_it)
+
+                for _sid, _grp in _dpa_groups.items():
                     _sk = _grp["sk"]
                     if _sk:
-                        _label = f"📌 {_sk['subkegiatan_kode']} — {_sk['subkegiatan_nama']}"
-                        _alokasi_fmt = f"Rp {_sk['alokasi_sesudah']:,.0f}" if _sk['alokasi_sesudah'] else "-"
+                        _label = f"📌 [{_sk.get('tahun_anggaran','')}] {_sk['subkegiatan_kode']} — {_sk['subkegiatan_nama']}"
+                        _alokasi_fmt = f"Rp {_sk['alokasi_sesudah']:,.0f}" if _sk.get('alokasi_sesudah') else "-"
                     else:
                         _label = f"📌 {_sid}"
                         _alokasi_fmt = "-"
 
                     with st.expander(_label, expanded=True):
                         if _sk:
-                            _i1, _i2, _i3 = st.columns(3)
-                            _i1.caption("Kegiatan")
-                            _i1.write(f"{_sk['kegiatan_kode']} — {_sk['kegiatan_nama']}")
-                            _i2.metric("Alokasi SK", _alokasi_fmt)
-                            _i3.metric("Sumber Dana", _sk['sumber_pendanaan'] or '-')
-                            _i4, _i5 = st.columns(2)
-                            _i4.metric("Satker", _sk['satker'] or '-')
-                            _i5.metric("Tahun", _sk['tahun_anggaran'] or '-')
+                            _i1, _i2, _i3, _i4 = st.columns(4)
+                            _i1.caption("Satker")
+                            _i1.write(_sk.get("satker") or "-")
+                            _i2.caption("Kegiatan")
+                            _i2.write(f"{_sk.get('kegiatan_kode','')} {_sk.get('kegiatan_nama','')}".strip() or "-")
+                            _i3.metric("Alokasi SK", _alokasi_fmt)
+                            _i4.metric("Sumber Dana", _sk.get("sumber_pendanaan") or "-")
                             st.markdown("---")
 
                         # Tabel item yang cocok
                         _tbl = []
-                        for it in _grp["items"]:
+                        for _it in _grp["items"]:
+                            _uraian_hl = _dpa_highlight(_it.get("uraian") or "", _dpa_search_q)
+                            _paket_hl = _dpa_highlight(_it.get("nama_paket") or "", _dpa_search_q)
+                            _jml = _it.get("jumlah_sesudah") or 0
                             _tbl.append({
-                                "Kode Rek": it["kode_rekening"] or "-",
-                                "Uraian": it["uraian"],
-                                "Nama Paket": it.get("nama_paket") or "-",
-                                "Jumlah (Rp)": f"{it['jumlah_sesudah']:,.0f}" if it["jumlah_sesudah"] else "-",
-                                "Sumber Dana": it["sumber_dana_item"] or "-",
+                                "Kode Rek": _it.get("kode_rekening") or "-",
+                                "Tipe": _it.get("tipe") or "-",
+                                "Uraian": _it.get("uraian") or "-",
+                                "Nama Paket": _it.get("nama_paket") or "-",
+                                "Spesifikasi": (_it.get("spesifikasi") or "")[:80],
+                                "Koef": _it.get("koefisien") or "-",
+                                "Satuan": _it.get("satuan") or "-",
+                                "Jumlah (Rp)": f"{_jml:,.0f}" if _jml else "-",
+                                "Sumber Dana": _it.get("sumber_dana_item") or "-",
                             })
+
                         st.dataframe(_tbl, use_container_width=True, hide_index=True)
 
-        elif _dpa_search_q and len(_dpa_search_q.strip()) < 3:
-            st.caption("Ketik minimal 3 karakter.")
+                        # Summary per sub kegiatan
+                        _total_sk_items = sum(
+                            (_it.get("jumlah_sesudah") or 0) for _it in _grp["items"]
+                        )
+                        if _total_sk_items > 0:
+                            st.caption(
+                                f"Total {len(_grp['items'])} baris — Rp {_total_sk_items:,.0f}"
+                            )
+
+        elif _dpa_search_q and len(_dpa_search_q.strip()) < 2:
+            st.caption("Ketik minimal 2 karakter.")
+
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     with _pl_tab1:

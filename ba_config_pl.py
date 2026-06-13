@@ -6,8 +6,8 @@ JENIS_BA_PL = {
     "hasil":    "BA Hasil Non Tender (BAHNT)",
 }
 JENIS_LABEL_PL = {
-    "evaluasi": "1. BA Evaluasi Penawaran",
-    "hasil":    "2. BA Hasil Non Tender",
+    "evaluasi": "5. BA Evaluasi Penawaran",
+    "hasil":    "7. BA Hasil Non Tender",
 }
 # Slot nomor urut (dikonfirmasi user): evaluasi=05, hasil=07
 NOMOR_URUT_PL = {
@@ -21,6 +21,6 @@ DEFAULT_INFO_PL = {
 }
 # Label nama file backup PDF
 FILE_LABEL_PL = {
-    "evaluasi": "1. BA Evaluasi Penawaran PL",
-    "hasil":    "2. BA Hasil Non Tender PL",
+    "evaluasi": "5. BA Evaluasi Penawaran PL",
+    "hasil":    "7. BA Hasil Non Tender PL",
 }
