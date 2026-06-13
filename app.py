@@ -1172,27 +1172,39 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 try:
                                     import shutil as _pl_shutil
                                     _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
-                                    _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
+                                    # File pra-reviu → 0. Draft Dokumen PPK
+                                    _pl_prareviu_files = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
+                                    # File evaluasi pasca-reviu → 5. SOP Evaluator
                                     if _pl_bp_item["jenis_pl"] == "JKK":
-                                        _pl_eval_files_base += [
-                                            "EVALUATOR_PRA_REVIU_DPP.md",
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
                                         ]
                                     else:
-                                        _pl_eval_files_base += [
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
                                             "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
                                         ]
                                     _pl_eval_copied = []
+                                    # Copy pra-reviu → 0. Draft Dokumen PPK
+                                    _pl_draft_ppk_dir = _pl_os.path.join(_pl_target_b, "0. Draft Dokumen PPK")
+                                    _pl_os.makedirs(_pl_draft_ppk_dir, exist_ok=True)
+                                    for _ef in _pl_prareviu_files:
+                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
+                                        if _pl_os.path.isfile(_pl_ef_src):
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
+                                            _pl_eval_copied.append(_ef)
+                                    # Copy evaluasi → 5. SOP Evaluator
+                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                    _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
                                         if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
-                                            _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                             _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     if _pl_eval_copied:
-                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
+                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin (0.+5.)")
                                     else:
                                         _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
                                 except Exception as _pl_eval_e:
@@ -4355,27 +4367,39 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 try:
                                     import shutil as _pl_shutil
                                     _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
-                                    _pl_eval_files_base = ["PROTOKOL_EVALUASI_AI.md"]
+                                    # File pra-reviu → 0. Draft Dokumen PPK
+                                    _pl_prareviu_files = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
+                                    # File evaluasi pasca-reviu → 5. SOP Evaluator
                                     if _pl_bp_item["jenis_pl"] == "JKK":
-                                        _pl_eval_files_base += [
-                                            "EVALUATOR_PRA_REVIU_DPP.md",
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
                                         ]
                                     else:
-                                        _pl_eval_files_base += [
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
                                             "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
                                         ]
                                     _pl_eval_copied = []
+                                    # Copy pra-reviu → 0. Draft Dokumen PPK
+                                    _pl_draft_ppk_dir = _pl_os.path.join(_pl_target_b, "0. Draft Dokumen PPK")
+                                    _pl_os.makedirs(_pl_draft_ppk_dir, exist_ok=True)
+                                    for _ef in _pl_prareviu_files:
+                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
+                                        if _pl_os.path.isfile(_pl_ef_src):
+                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
+                                            _pl_eval_copied.append(_ef)
+                                    # Copy evaluasi → 5. SOP Evaluator
+                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
+                                    _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                     for _ef in _pl_eval_files_base:
                                         _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
                                         if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. SOP Evaluator")
-                                            _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
                                             _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
                                             _pl_eval_copied.append(_ef)
                                     if _pl_eval_copied:
-                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin")
+                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin (0.+5.)")
                                     else:
                                         _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
                                 except Exception as _pl_eval_e:

@@ -1063,7 +1063,9 @@ def download_dokumen_paket(
     # ════════════════════════════════
     import glob as _glob2
     label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
-    draft_path = os.path.join(folder_tujuan, f"Draft_{label}.pdf")
+    _draft_ppk_dir = os.path.join(folder_tujuan, "0. Draft Dokumen PPK")
+    os.makedirs(_draft_ppk_dir, exist_ok=True)
+    draft_path = os.path.join(_draft_ppk_dir, f"Draft_{label}.pdf")
 
     # Urutan: lampiran inbox (bagian 1) duluan, lalu dokumen SPSE (bagian 2)
     files_didownload = hasil["ok"][:]

@@ -166,13 +166,18 @@ def cari_kak_di_folder(folder: str) -> str | None:
 # ============================================================
 
 def cari_draft_pl_di_folder(folder: str) -> str | None:
-    """Cari PDF Draft_PL_*.pdf di folder paket."""
+    """Cari PDF Draft_PL_*.pdf di folder paket (root atau subfolder 0. Draft Dokumen PPK)."""
     if not os.path.isdir(folder):
         return None
-    for f in os.listdir(folder):
-        fl = f.lower()
-        if fl.endswith(".pdf") and fl.startswith("draft_pl"):
-            return os.path.join(folder, f)
+    # Cek subfolder 0. Draft Dokumen PPK dulu (lokasi baru)
+    subfolder_0 = os.path.join(folder, "0. Draft Dokumen PPK")
+    for search_dir in [subfolder_0, folder]:
+        if not os.path.isdir(search_dir):
+            continue
+        for f in os.listdir(search_dir):
+            fl = f.lower()
+            if fl.endswith(".pdf") and fl.startswith("draft_pl"):
+                return os.path.join(search_dir, f)
     return None
 
 
@@ -662,13 +667,16 @@ def parse_personil_dari_draft_pl(pdf_path: str) -> list[dict]:
     ]
 
 
-def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fallback_jabatan_k3: str = "") -> list[dict]:
+def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fallback_jabatan_k3: str = "", require_hps: bool = False) -> list[dict]:
     """Multi-layer extraction Tenaga Ahli (prioritas akurasi):
     Layer 1: HPS markdown (_HPS_*.md) — paling akurat untuk PL JKK (section TENAGA AHLI + vol)
     Layer 2: Daftar Personil PDF
     Layer 3: Draft_PL PDF (section Personil Inti)
     Layer 4: fallback Supabase (jabatan_teknis + jabatan_k3)
     Tiap item: {jabatan, pengalaman, sertifikat, jumlah_orang}
+
+    require_hps=True: kalau HPS tidak ada, return [] tanpa fallback ke layer lain.
+    Ini mencegah data stale (SKA lama dari Daftar Personil) menimpa data HPS yang belum tersedia.
     """
     # Layer 1: HPS markdown (sumber utama JKK)
     hps_md = cari_hps_md_di_folder(folder)
@@ -676,6 +684,14 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
         result = parse_personil_dari_hps(hps_md)
         if result:
             return result
+        # HPS ada tapi parse kosong → skip fallback, kembalikan kosong
+        # (HPS mungkin sedang ditulis atau formatnya berubah)
+        return []
+
+    # HPS tidak ada sama sekali
+    if require_hps:
+        # Caller minta strict HPS → skip semua fallback
+        return []
 
     # Layer 2: Daftar Personil PDF
     daftar_pdf = cari_daftar_personil_di_folder(folder)
