@@ -261,6 +261,38 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     return logs
 
 
+def _proses_excel_paket_tender(target_dir, kode_tender):
+    """COM: IsiDataByKodeTender → isi @ Master Data Excel Tender saat create folder.
+
+    Identik dengan _proses_excel_paket_pl tapi tanpa HPS (HPS sudah dijalankan
+    via _jalankan_aksi_tender sebelum fungsi ini dipanggil).
+    Return list[str] log lines.
+    """
+    import isi_master_data_tender as _imd_t
+    logs = []
+
+    # Cari .xlsm di folder paket
+    try:
+        _xs = [f for f in os.listdir(target_dir) if f.lower().endswith(".xlsm")]
+    except Exception as _e:
+        return [f"WARN Excel: gagal scan folder — {_e}"]
+    if not _xs:
+        return ["WARN Excel dilewati — tidak ada .xlsm di folder"]
+    _xs.sort(key=lambda f: (not f.lower().startswith("0. bapk"), f))
+    xlsm = os.path.join(target_dir, _xs[0])
+
+    try:
+        _res = _imd_t.proses_master_data_tender(kode_tender, xlsm)
+        if _res.get("ok"):
+            logs.append("Master Data Tender: terisi otomatis")
+        else:
+            logs.append(f"WARN Master Data Tender: {_res.get('pesan', '-')}")
+    except Exception as _e:
+        logs.append(f"WARN COM Master Data: {_e}")
+
+    return logs
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -7335,6 +7367,10 @@ with tab0:
                                 _bp_target, _t_cb_dl, _t_cb_hps, False,
                                 st_ctx=_ctx_bulk, log=_paket_log,
                             )
+                            _bulk_status_line.code("\n".join(_paket_log[-10:]))
+                            # Isi @ Master Data Excel via COM
+                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"])
+                            _paket_log.extend(_excel_t_logs)
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Snapshot dokumen PPK
                             try:
