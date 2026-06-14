@@ -24,9 +24,18 @@ STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
 
 
 def load_draft_pl() -> list[dict]:
-    """Ambil semua baris draft_paket_pl, urut terbaru dulu."""
+    """Ambil paket PL JKK (jenis_pl=JKK, jenis_kontrak=Lumsum/Waktu Penugasan), urut terbaru dulu."""
     try:
-        return _sb().table("draft_paket_pl").select("*").order("diambil_pada", desc=True).execute().data or []
+        return (
+            _sb()
+            .table("draft_paket_pl")
+            .select("*")
+            .eq("jenis_pl", "JKK")
+            .in_("jenis_kontrak", ["Lumsum", "Waktu Penugasan"])
+            .order("diambil_pada", desc=True)
+            .execute()
+            .data or []
+        )
     except Exception as e:
         return []
 
