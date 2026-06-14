@@ -60,8 +60,8 @@ def _run(coro, timeout=60):
 # Session management
 # ============================================================
 
-CHROME_EXE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "Google", "Chrome", "User Data")
+CHROME_EXE = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
+CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "BraveSoftware", "Brave-Browser", "User Data")
 CDP_PORT = 9222
 
 
@@ -107,25 +107,27 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
     """
     if not _cek_cdp_aktif():
         raise RuntimeError(
-            "Chrome SPSE belum terbuka. "
-            "Jalankan dulu file 'Buka Chrome SPSE.bat' di folder Asisten_Pokja."
+            "Brave SPSE belum terbuka. "
+            "Brave harus sudah dibuka via 'Buka Brave POKJA.bat' terlebih dahulu."
         )
     return _run(_connect_cdp_async(url, navigate=navigate))
 
 
 def launch_chrome_dengan_cdp():
-    """Launch Chrome baru (instance terpisah) dengan remote-debugging-port.
-    Tidak mematikan Chrome yang sudah jalan (agar Streamlit tidak terganggu).
-    """
-    import subprocess
-    # Pakai BROWSER_SESSION_DIR sebagai profile terpisah khusus SPSE
+    """Launch Brave baru dengan remote-debugging-port + buka SPSE langsung (1 tab)."""
+    import subprocess, shutil
+    # Hapus session lama agar tidak restore tab
+    session_dir = BROWSER_SESSION_DIR
+    if os.path.exists(session_dir):
+        shutil.rmtree(session_dir, ignore_errors=True)
+    os.makedirs(session_dir, exist_ok=True)
     subprocess.Popen([
         CHROME_EXE,
-        "https://spse.inaproc.id/tapinkab",
         f"--remote-debugging-port={CDP_PORT}",
-        f"--user-data-dir={BROWSER_SESSION_DIR}",
+        f"--user-data-dir={session_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        SPSE_BASE_URL,
     ])
 
 

@@ -491,9 +491,9 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
             spse_browser.diskonek()
             st.rerun()
     else:
-        st.info("Chrome SPSE belum terhubung")
+        st.info("Brave SPSE belum terhubung")
 
-        if st.button("🌐 Hubungkan ke Chrome SPSE", type="primary", use_container_width=True):
+        if st.button("🌐 Hubungkan ke Brave SPSE", type="primary", use_container_width=True):
             try:
                 with st.spinner("Menghubungkan..."):
                     spse_browser.buka_browser(SPSE_BASE_URL)
@@ -503,21 +503,25 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 st.error(str(e))
 
         st.divider()
-        st.caption("💡 **Opsi otomatis:** Chrome akan diluncurkan langsung dari sini")
+        st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")
 
-        if st.button("🚀 Launch Chrome Otomatis", type="secondary", use_container_width=True):
+        if st.button("🚀 Launch Brave Otomatis", type="secondary", use_container_width=True):
             try:
-                with st.spinner("Meluncurkan Chrome SPSE..."):
+                with st.spinner("Meluncurkan Brave SPSE..."):
                     spse_browser.launch_chrome_dengan_cdp()
-                    # Tunggu Chrome siap
-                    time.sleep(3)
-                # Auto-connect setelah Chrome launch
-                with st.spinner("Menghubungkan ke Chrome..."):
-                    spse_browser.buka_browser(SPSE_BASE_URL)
-                st.success("Chrome SPSE berhasil diluncurkan & terhubung!")
+                    # Retry sampai CDP ready (max 15 detik)
+                    import time as _t
+                    for _i in range(15):
+                        _t.sleep(1)
+                        if spse_browser._cek_cdp_aktif():
+                            break
+                # Auto-connect setelah Brave ready — navigate=False, pakai tab yang sudah ada
+                with st.spinner("Menghubungkan ke Brave..."):
+                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                st.success("Brave SPSE berhasil diluncurkan & terhubung!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Gagal launch Chrome: {e}")
+                st.error(f"Gagal launch Brave: {e}")
 
 # ============================================================
 # Tabs
@@ -1196,7 +1200,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     import spse_browser as _sb_pl
                     _pl_cookie = _sb_pl.get_spse_cookies()
                     if not _pl_cookie:
-                        st.error("Cookie SPSE kosong — buka Chrome SPSE dan login sebagai PP.")
+                        st.error("Cookie SPSE kosong — buka Brave SPSE dan login sebagai PP.")
                     else:
                         _pl_pb = st.progress(0.0)
                         _pl_st = st.empty()
@@ -4391,7 +4395,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     import spse_browser as _sb_pl
                     _pl_cookie = _sb_pl.get_spse_cookies()
                     if not _pl_cookie:
-                        st.error("Cookie SPSE kosong — buka Chrome SPSE dan login sebagai PP.")
+                        st.error("Cookie SPSE kosong — buka Brave SPSE dan login sebagai PP.")
                     else:
                         _pl_pb = st.progress(0.0)
                         _pl_st = st.empty()
@@ -7169,7 +7173,7 @@ with tab0:
                     )
                     _cdp_gagal = not _dh["ok"] and not _dh.get("draft_pdf")
                     if _cdp_gagal:
-                        log.append("❌ Chrome CDP tidak aktif — buka Chrome lalu ulangi")
+                        log.append("❌ Brave CDP tidak aktif — buka Brave lalu ulangi")
                     else:
                         log.append(
                             f"📎 Download: ✅{len(_dh['ok'])} file"
@@ -7461,14 +7465,14 @@ with tab0:
             _error_list = [x for x in _bh if x.get("error")]
             _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
             if _cookie_invalid_list:
-                st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Chrome.")
+                st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Brave.")
             if _ada_update_list:
                 st.warning(f"⚠️ {len(_ada_update_list)} paket ada update dokumen PPK")
                 _folder_map_bh = st.session_state.get("_batch_folder_map", {})
                 for _item in _ada_update_list:
                     with st.expander(f"📄 {_item['nama'][:60]}"):
                         if _item.get("cookie_invalid"):
-                            st.error("⚠️ Cookie SPSE expired — login ulang di Chrome lalu cek lagi")
+                            st.error("⚠️ Cookie SPSE expired — login ulang di Brave lalu cek lagi")
                         for _b in _item.get("berubah", []):
                             st.markdown(f"- **Berubah** [{_b['jenis']}]: `{_b['nama_lama']}` → `{_b['nama_baru']}`")
                         for _b in _item.get("baru", []):
