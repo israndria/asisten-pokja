@@ -41,8 +41,8 @@ def get_last_dir() -> str:
             return open(_LAST_DIR_FILE, encoding="utf-8").read().strip()
     except Exception:
         pass
-    from config import POKJA_ROOT
-    return POKJA_ROOT
+    from config import TENDER_ROOT
+    return TENDER_ROOT
 
 
 def save_last_dir(path: str):
@@ -135,7 +135,7 @@ def resolve_folder_paket(kode_tender: str) -> dict:
     Return: {"ok": bool, "path": str, "pesan": str}
     path = POKJA_ROOT / folder_dibuat / 1. Dokumen Kualifikasi  (dibuat jika belum ada)
     """
-    from config import sb, POKJA_ROOT
+    from config import sb, POKJA_ROOT, TENDER_ROOT
     try:
         r = sb().table("draft_paket").select("folder_dibuat").eq("kode_tender", kode_tender).maybe_single().execute()
         if not r.data:
@@ -145,7 +145,7 @@ def resolve_folder_paket(kode_tender: str) -> dict:
             return {"ok": False, "path": "", "pesan": "Folder paket belum dibuat (tab 0)"}
         # Windows tidak izinkan '/' dalam nama folder — sanitasi sama seperti saat folder dibuat
         folder_dibuat_safe = re.sub(r'[/\\:*?"<>|]', "-", folder_dibuat).strip()
-        path = os.path.join(POKJA_ROOT, folder_dibuat_safe, "1. Dokumen Kualifikasi")
+        path = os.path.join(TENDER_ROOT, folder_dibuat_safe, "1. Dokumen Kualifikasi")
         os.makedirs(path, exist_ok=True)
         return {"ok": True, "path": path, "pesan": folder_dibuat}
     except Exception as e:

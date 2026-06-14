@@ -191,15 +191,15 @@ def sync_from_pdf(
 
 
 def _resolve_folder_paket(kode_pokja: str) -> str | None:
-    """Cari folder paket di POKJA_ROOT yang mengandung 'Pokja {kode_pokja zero-padded}'."""
-    from config import POKJA_ROOT
+    """Cari folder paket di TENDER_ROOT yang mengandung 'Pokja {kode_pokja zero-padded}'."""
+    from config import TENDER_ROOT
     if not kode_pokja:
         return None
     import os
     label = f"Pokja {kode_pokja.zfill(3)}"
     try:
-        for d in os.listdir(POKJA_ROOT):
-            full = os.path.join(POKJA_ROOT, d)
+        for d in os.listdir(TENDER_ROOT):
+            full = os.path.join(TENDER_ROOT, d)
             if os.path.isdir(full) and label in d:
                 return full
     except Exception:

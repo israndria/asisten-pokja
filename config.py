@@ -10,6 +10,10 @@ POKJA_ROOT = os.path.dirname(BASE_DIR)  # D:\Dokumen\@ POKJA 2026
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 BROWSER_SESSION_DIR = os.path.join(BASE_DIR, ".browser_session")
 
+# === Tender Output Dir ===
+TENDER_ROOT = os.path.join(POKJA_ROOT, "@ Tender 2026")
+os.makedirs(TENDER_ROOT, exist_ok=True)
+
 # === PL Output Dirs ===
 OUTPUT_DIR_PL_JKK = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026", "@ Pengadaan Langsung JKK")
 OUTPUT_DIR_PL_PK  = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026", "@ Pengadaan Langsung PK")

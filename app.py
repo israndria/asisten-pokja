@@ -7015,7 +7015,7 @@ tab0, tab9, tab8, tab_setup, tab7, tab_kual, tab_apendo, tab_ba = st.tabs([
 with tab0:
     import inbox_engine
     import os as _os, subprocess as _sp
-    from config import POKJA_ROOT as _POKJA_ROOT
+    from config import POKJA_ROOT as _POKJA_ROOT, TENDER_ROOT as _TENDER_ROOT
 
     _PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
     _SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
@@ -7322,13 +7322,13 @@ with tab0:
                     _bulk_status.update(label=f"[{_i+1}/{len(_t_terpilih)}] {_nf[:60]}")
                     _paket_log = []
                     try:
-                        _r2 = _sp.run([_PY, _SCRIPT, _nf],
+                        _r2 = _sp.run([_PY, _SCRIPT, "--output-dir", _TENDER_ROOT, _nf],
                                       capture_output=True, text=True, timeout=60,
                                       creationflags=_NO_WIN)
                         if _r2.returncode == 0:
                             _ok += 1
                             _paket_log.append("✅ Folder dibuat")
-                            _bp_target = os.path.join(_POKJA_ROOT, _nf)
+                            _bp_target = os.path.join(_TENDER_ROOT, _nf)
                             # Copy file evaluator AI ke folder paket Tender PK
                             try:
                                 import shutil as _t_shutil
@@ -7477,7 +7477,7 @@ with tab0:
                             st.markdown(f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti")
                         _kt_dl = _item["kode"]
                         _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                        _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
+                        _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
                         if _folder_dl and _os.path.exists(_folder_dl):
                             st.button("⬇️ Download Update", key=f"btn_dl_upd_{_kt_dl}", type="primary")
                         else:
@@ -7488,7 +7488,7 @@ with tab0:
                     _kt_dl = _item["kode"]
                     if st.session_state.get(f"btn_dl_upd_{_kt_dl}"):
                         _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                        _folder_dl = _os.path.join(_POKJA_ROOT, _fd_dl) if _fd_dl else ""
+                        _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
                         import dokumen_ppk_engine as _dpk_dl
                         _sn_r2 = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_dl).execute()
                         _sn_lama2 = {}
@@ -7539,7 +7539,7 @@ with tab0:
             _pk = str(_r.get("kode_pokja") or "").strip()
             _nm = str(_r.get("nama_tender") or "-")
             _fd = _r.get("folder_dibuat", "")
-            _tpath = _os.path.join(_POKJA_ROOT, _fd) if _fd else ""
+            _tpath = _os.path.join(_TENDER_ROOT, _fd) if _fd else ""
             _ada = bool(_tpath and _os.path.exists(_tpath))
             with st.expander(f"✅ [Pokja {_pk}] {_nm[:45]}"):
                 st.caption(f"`{_kt}` | Folder: {'✅ ada' if _ada else '⚠️ tidak ditemukan'}")
@@ -9160,7 +9160,7 @@ with tab_ba:
     if st.session_state.get("ba_auto_target"):
         import os as _os
         import re as _re
-        from config import POKJA_ROOT as _POKJA_ROOT
+        from config import POKJA_ROOT as _POKJA_ROOT, TENDER_ROOT as _TENDER_ROOT
         from config import sb as _sb_ba
         jenis_target = st.session_state["ba_auto_target"]
         target_paket = st.session_state.pop("ba_super_paket", None) or ba_selected
@@ -9180,11 +9180,11 @@ with tab_ba:
                 _folder_dibuat = (_sb_row.data or {}).get("folder_dibuat", "")
                 if _folder_dibuat:
                     _folder_safe = _re.sub(r'[/\\:*?"<>|]', "-", _folder_dibuat).strip()
-                    target_dir = _os.path.join(_POKJA_ROOT, _folder_safe, "BA + Summary")
+                    target_dir = _os.path.join(_TENDER_ROOT, _folder_safe, "BA + Summary")
                 else:
-                    target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
+                    target_dir = _os.path.join(_TENDER_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
             except Exception:
-                target_dir = _os.path.join(_POKJA_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
+                target_dir = _os.path.join(_TENDER_ROOT, "Asisten_Pokja_Downloads", f"Cetak_BA_{p['kode']}")
             _os.makedirs(target_dir, exist_ok=True)
             import time as _time
             for jenis_key in jenis_list:
@@ -9927,18 +9927,18 @@ with tab_apendo:
         st.warning(f"⚠️ Gagal ambil daftar paket: {_gab_e}")
 
     if _gab_paket_list:
-        from config import POKJA_ROOT as _POKJA_ROOT_GAB
+        from config import TENDER_ROOT as _TENDER_ROOT_GAB
         _gab_valid = [
             _gp for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", ""))
-            if os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
-            or os.path.isdir(os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
+            if os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
+            or os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
         ]
         if st.button("📎 Gabung Semua Paket", key="gab2_semua", type="primary", use_container_width=False):
             _gab_all_log = st.empty()
             _gab_all_lines = []
             _gab_all_ok = 0
             for _gp in _gab_valid:
-                _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
+                _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
                 def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
                     _lines.append(m)
                     _area.code("\n".join(_lines[-20:]))
@@ -9947,7 +9947,7 @@ with tab_apendo:
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_valid)} paket.")
         st.divider()
         for _gp in _gab_valid:
-            _gp_folder = os.path.join(_POKJA_ROOT_GAB, _gp["folder_dibuat"])
+            _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
             _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
             _gp_c1, _gp_c2 = st.columns([4, 1])
             with _gp_c1:

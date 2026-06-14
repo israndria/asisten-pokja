@@ -152,7 +152,7 @@ def generate_undangan_pdf(
     """
     # ── Ambil data Supabase ──
     try:
-        from config import sb, POKJA_ROOT
+        from config import sb, POKJA_ROOT, TENDER_ROOT
         client = sb()
         r = client.table("draft_paket").select("*").eq("kode_tender", kode_tender).single().execute()
         data: dict = r.data or {}
@@ -166,9 +166,9 @@ def generate_undangan_pdf(
     if not output_path:
         folder_rel = data.get("folder_dibuat", "")
         if folder_rel:
-            folder_abs = folder_rel if os.path.isabs(folder_rel) else os.path.join(POKJA_ROOT, folder_rel)
+            folder_abs = folder_rel if os.path.isabs(folder_rel) else os.path.join(TENDER_ROOT, folder_rel)
         else:
-            folder_abs = POKJA_ROOT
+            folder_abs = TENDER_ROOT
         safe_kode = re.sub(r'[\\/]', '-', kode_tender)
         output_path = os.path.join(folder_abs, f"Undangan_{safe_kode}.pdf")
 

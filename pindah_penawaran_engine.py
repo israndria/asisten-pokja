@@ -5,7 +5,7 @@ Scan D:\data\biddings, lookup Supabase, pindah file ke folder paket, gabung PDF 
 import os
 import re
 import shutil
-from config import sb as _sb, POKJA_ROOT, sanitasi_nama_folder
+from config import sb as _sb, POKJA_ROOT, TENDER_ROOT, sanitasi_nama_folder
 
 APENDO_ROOT       = os.path.join(os.path.splitdrive(POKJA_ROOT)[0] + os.sep, "data", "biddings")
 DEST_SUBFOLDER    = "1. Dokumen Penawaran"
@@ -161,7 +161,7 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
                 "nama_tender":     paket.get("nama_tender", kt),
                 "folder_dibuat":   folder_nama,
                 "nomor_pokja":     _nomor_pokja(folder_nama),
-                "folder_paket":    os.path.join(POKJA_ROOT, folder_nama) if folder_nama else "",
+                "folder_paket":    os.path.join(TENDER_ROOT, folder_nama) if folder_nama else "",
                 "nama_perusahaan": nama_map.get(item["peserta_id"], f"Peserta {item['peserta_id']}"),
             })
     return hasil

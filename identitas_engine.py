@@ -10,7 +10,7 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
-from config import sb as _sb, SPSE_BASE_URL, POKJA_ROOT, sanitasi_nama_folder
+from config import sb as _sb, SPSE_BASE_URL, POKJA_ROOT, TENDER_ROOT, sanitasi_nama_folder
 import spse_browser
 
 
@@ -390,7 +390,7 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
                 try:
                     folder_safe = sanitasi_nama_folder(folder_dibuat)
                     slug = sanitasi_nama_folder(nama)[:80].strip("-")
-                    fp = os.path.join(POKJA_ROOT, folder_safe, "1. Dokumen Kualifikasi",
+                    fp = os.path.join(TENDER_ROOT, folder_safe, "1. Dokumen Kualifikasi",
                                       f"{urutan}. {slug}")
                     if os.path.isdir(fp):
                         folder_peserta = fp
