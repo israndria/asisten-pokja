@@ -353,50 +353,67 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
     return await _gemini_captcha_attempt(page, password, log_fn=log_fn)
 
 
+_MAX_GEMINI_RETRY = 3
+
 async def _gemini_captcha_attempt(page, password: str, log_fn=None) -> bool:
-    """1x attempt login pakai Gemini Vision untuk baca CAPTCHA."""
+    """3x retry login pakai Gemini Vision — refresh captcha tiap attempt."""
     def _log(msg):
         if log_fn: log_fn(msg)
 
     _log("🤖 Fallback ke Gemini Vision untuk baca CAPTCHA...")
 
-    await page.wait_for_selector("#txtPassword", timeout=8000)
-    await page.fill("#txtPassword", password)
+    for _gi in range(1, _MAX_GEMINI_RETRY + 1):
+        await page.wait_for_selector("#txtPassword", timeout=8000)
+        await page.fill("#txtPassword", password)
 
-    captcha_el = await page.query_selector("img[src*='showcaptcha']")
-    if not captcha_el:
-        raise RuntimeError("Elemen CAPTCHA tidak ditemukan (Gemini attempt).")
+        captcha_el = await page.query_selector("img[src*='showcaptcha']")
+        if not captcha_el:
+            raise RuntimeError("Elemen CAPTCHA tidak ditemukan (Gemini attempt).")
 
-    captcha_src = await captcha_el.get_attribute("src")
-    captcha_b64 = await page.evaluate(f"""async () => {{
-        const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
-        const buf = await r.arrayBuffer();
-        return btoa(String.fromCharCode(...new Uint8Array(buf)));
-    }}""")
-    import base64 as _b64
-    captcha_bytes = _b64.b64decode(captcha_b64)
+        captcha_src = await captcha_el.get_attribute("src")
+        captcha_b64 = await page.evaluate(f"""async () => {{
+            const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
+            const buf = await r.arrayBuffer();
+            return btoa(String.fromCharCode(...new Uint8Array(buf)));
+        }}""")
+        import base64 as _b64
+        captcha_bytes = _b64.b64decode(captcha_b64)
 
-    # Simpan debug
-    from pathlib import Path as _P
-    (_P(__file__).parent / "scratch" / "captcha_gemini.png").write_bytes(captcha_bytes)
+        # Simpan debug
+        from pathlib import Path as _P
+        (_P(__file__).parent / "scratch" / f"captcha_gemini_{_gi}.png").write_bytes(captcha_bytes)
 
-    captcha_text = _ocr_captcha_gemini(captcha_bytes)
-    _log(f"Gemini OCR: '{captcha_text}'")
+        captcha_text = _ocr_captcha_gemini(captcha_bytes)
+        _log(f"Gemini OCR [{_gi}/{_MAX_GEMINI_RETRY}]: '{captcha_text}'")
 
-    if not captcha_text:
-        raise RuntimeError("Gemini gagal membaca CAPTCHA.")
+        if not captcha_text:
+            _log(f"Gemini gagal baca CAPTCHA attempt {_gi}, refresh...")
+            refresh = await page.query_selector("a:has-text('klik di sini')")
+            if refresh:
+                await refresh.click()
+                await page.wait_for_timeout(800)
+            continue
 
-    await page.fill("#txtCode", captcha_text)
-    await page.click("button[type='submit']")
-    await page.wait_for_timeout(2000)
+        await page.fill("#txtCode", captcha_text)
+        await page.click("button[type='submit']")
+        await page.wait_for_timeout(2000)
 
-    if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
-        _log("✅ Login berhasil via Gemini!")
-        return True
+        if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
+            _log(f"✅ Login berhasil via Gemini (attempt {_gi})!")
+            return True
 
-    err_el = await page.query_selector(".alert-danger, .alert-error, .error")
-    err_msg = (await err_el.inner_text()).strip() if err_el else ""
-    raise RuntimeError(f"Login gagal setelah Gemini fallback: {err_msg[:120] or 'Unknown error'}")
+        err_el = await page.query_selector(".alert-danger, .alert-error, .error")
+        err_msg = (await err_el.inner_text()).strip() if err_el else ""
+        if any(k in err_msg.lower() for k in ["captcha", "kode", "code"]):
+            _log(f"Gemini CAPTCHA salah attempt {_gi}, refresh...")
+            refresh = await page.query_selector("a:has-text('klik di sini')")
+            if refresh:
+                await refresh.click()
+                await page.wait_for_timeout(800)
+        elif err_msg:
+            raise RuntimeError(f"Login gagal (Gemini): {err_msg[:120]}")
+
+    raise RuntimeError(f"Login gagal setelah {_MAX_GEMINI_RETRY}x Gemini — CAPTCHA tidak terbaca.")
 
 
 async def _retry_captcha_async(password: str, log_fn=None) -> bool:
