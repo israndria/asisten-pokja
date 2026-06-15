@@ -150,23 +150,50 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
     username, password = _get_creds(role)
     _log(f"Menghubungkan ke Brave CDP (port {_sb.CDP_PORT})...")
 
-    # Reuse _pw dari spse_browser (sudah jalan di background loop)
-    if _sb._pw is None:
-        _sb._pw = await _sb.async_playwright().start()
-    browser = await _sb._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{_sb.CDP_PORT}")
-    ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    # Reuse page dari spse_browser (sudah di-init via buka_browser sebelum login)
+    if _sb._page is None:
+        raise RuntimeError("spse_browser belum di-init — panggil buka_browser() dulu.")
+    page = _sb._page
 
-    # Step 1: Home SPSE — navigate fresh (jangan asumsi state halaman)
+    # Step 1: Home SPSE — navigate fresh, tunggu sampai networkidle (Bootstrap JS siap)
     from config import SPSE_BASE_URL
     _log("Membuka halaman SPSE...")
-    await page.goto(SPSE_BASE_URL, wait_until="domcontentloaded", timeout=20000)
-    await page.wait_for_timeout(1000)  # tunggu JS Bootstrap load
+    await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+    await page.wait_for_timeout(500)
+
+    # Step 1b: Logout dulu kalau sudah login
+    already_logged_in = await page.evaluate("""() => {
+        var links = Array.from(document.querySelectorAll('a, button'));
+        return links.some(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
+                                (l.innerText||'').toUpperCase().includes('LOGOUT') ||
+                                (l.href||'').includes('logout'));
+    }""")
+    if already_logged_in:
+        _log("Sesi lama terdeteksi, logout dulu...")
+        await page.evaluate("""() => {
+            var links = Array.from(document.querySelectorAll('a, button'));
+            var btn = links.find(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
+                                       (l.innerText||'').toUpperCase().includes('LOGOUT') ||
+                                       (l.href||'').includes('logout'));
+            if (btn) btn.click();
+        }""")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(500)
 
     # Step 2: Klik tombol LOGIN via JS
     _log("Klik tombol Login...")
     await page.evaluate("document.querySelector('#login').click()")
-    await page.wait_for_timeout(1500)  # tunggu modal Bootstrap animate-in
+
+    # Tunggu modal Bootstrap animate-in (max 5 detik)
+    for _i in range(10):
+        await page.wait_for_timeout(500)
+        modal_visible = await page.evaluate("""() => {
+            var m = document.querySelector('.modal.show');
+            return m !== null && m.offsetParent !== null;
+        }""")
+        if modal_visible:
+            break
+    _log(f"Modal visible: {modal_visible}")
 
     # Step 3: Pilih Non Penyedia via JS (modal Bootstrap, Playwright wait_for_selector tidak reliable)
     _log("Pilih Non Penyedia...")

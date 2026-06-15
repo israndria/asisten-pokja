@@ -525,14 +525,19 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                         _t.sleep(1)
                         if spse_browser._cek_cdp_aktif():
                             break
+                    # Init Playwright + connect CDP di loop spse_browser
+                    spse_browser.buka_browser(navigate=False)
 
                 _log_box = st.empty()
+                # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
                 def _log(msg: str):
                     _login_logs.append(msg)
-                    _log_box.info("\n".join(_login_logs))
 
                 with st.spinner("Auto-login SPSE..."):
                     _spse_login.login_spse(role=_login_role, log_fn=_log)
+
+                # Tampilkan log setelah selesai (di main thread)
+                _log_box.info("\n".join(_login_logs))
 
                 # Connect CDP setelah login berhasil
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
