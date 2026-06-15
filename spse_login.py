@@ -94,27 +94,30 @@ def _ocr_captcha(img_bytes: bytes) -> str:
     else:
         gray = img
     big = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+    big4 = cv2.resize(gray, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
 
     # Auto-detect: kalau background gelap (teks terang) → invert dulu
     mean_val = big.mean()
-    work = 255 - big if mean_val < 128 else big.copy()
+    work  = 255 - big  if mean_val < 128 else big.copy()
+    work4 = 255 - big4 if mean_val < 128 else big4.copy()
 
     # Hapus grid noise via morfologi — selalu dijalankan
-    # Erode hancurkan titik/garis grid tipis, dilate kembalikan huruf tebal
-    inv = 255 - work
-    k_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-    k_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    eroded = cv2.erode(inv, k_erode, iterations=1)
-    dilated = cv2.dilate(eroded, k_dilate, iterations=1)
-    cleaned = 255 - dilated  # huruf hitam, background putih
+    def _clean(w):
+        inv = 255 - w
+        ke = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+        kd = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        return 255 - cv2.dilate(cv2.erode(inv, ke), kd)
+
+    cleaned  = _clean(work)
+    cleaned4 = _clean(work4)
 
     whitelist = "abcdefghijklmnopqrstuvwxyz0123456789"
     results = []
     variants = [
-        cleaned,                                                           # morfologi
-        work,                                                              # raw
-        cv2.threshold(work, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],  # otsu
-        cv2.threshold(work, 127, 255, cv2.THRESH_BINARY)[1],              # fixed threshold
+        cleaned,   work,                                                    # fx=3
+        cleaned4,  work4,                                                   # fx=4
+        cv2.threshold(work,  0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+        cv2.threshold(work4, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
     ]
 
     for processed in variants:
@@ -142,7 +145,7 @@ def _ocr_captcha(img_bytes: bytes) -> str:
 # ============================================================
 
 _LOGIN_URL = "https://spse.inaproc.id/tapinkab/loginpass"
-_MAX_RETRY  = 3
+_MAX_RETRY = 5
 
 
 async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
