@@ -291,6 +291,79 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
     raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} percobaan — CAPTCHA tidak terbaca.")
 
 
+async def _retry_captcha_async(password: str, log_fn=None) -> bool:
+    """Hanya isi ulang password + captcha di halaman /loginpass yang sudah terbuka."""
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    page = _sb._page
+    if page is None:
+        raise RuntimeError("Browser belum terhubung.")
+
+    for attempt in range(1, _MAX_RETRY + 1):
+        _log(f"Retry captcha {attempt}/{_MAX_RETRY}...")
+
+        # Pastikan masih di halaman loginpass
+        if "loginpass" not in page.url:
+            raise RuntimeError("Halaman sudah berpindah — tidak bisa retry captcha saja.")
+
+        await page.wait_for_selector("#txtPassword", timeout=8000)
+        await page.fill("#txtPassword", password)
+
+        captcha_el = await page.query_selector("img[src*='showcaptcha']")
+        if not captcha_el:
+            raise RuntimeError("Elemen CAPTCHA tidak ditemukan.")
+
+        captcha_src = await captcha_el.get_attribute("src")
+        captcha_b64 = await page.evaluate(f"""async () => {{
+            const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
+            const buf = await r.arrayBuffer();
+            return btoa(String.fromCharCode(...new Uint8Array(buf)));
+        }}""")
+        import base64 as _b64
+        captcha_bytes = _b64.b64decode(captcha_b64)
+
+        from pathlib import Path as _Path
+        (_Path(__file__).parent / "scratch").mkdir(exist_ok=True)
+        (_Path(__file__).parent / "scratch" / f"captcha_attempt_{attempt}.png").write_bytes(captcha_bytes)
+
+        captcha_text = _ocr_captcha(captcha_bytes)
+        _log(f"OCR CAPTCHA: '{captcha_text}'")
+
+        if not captcha_text:
+            refresh = await page.query_selector("a:has-text('klik di sini')")
+            if refresh:
+                await refresh.click()
+                await page.wait_for_timeout(800)
+            continue
+
+        await page.fill("#txtCode", captcha_text)
+        await page.click("button[type='submit']")
+        await page.wait_for_timeout(2000)
+
+        if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
+            _log("✅ Login berhasil!")
+            return True
+
+        err_el = await page.query_selector(".alert-danger, .alert-error, .error")
+        err_msg = (await err_el.inner_text()).strip() if err_el else ""
+        _log(f"Salah, retry... ({err_msg[:60]})")
+
+        refresh = await page.query_selector("a:has-text('klik di sini')")
+        if refresh:
+            await refresh.click()
+            await page.wait_for_timeout(800)
+
+    raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} retry captcha.")
+
+
+def retry_captcha(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
+    """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
+    _, password = _get_creds(role)
+    return _sb._run(_retry_captcha_async(password, log_fn=log_fn))
+
+
 def login_spse(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
     """
     Entry point sinkronus untuk dipanggil dari Streamlit / app.py.

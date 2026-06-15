@@ -559,8 +559,36 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 st.rerun()
             except Exception as e:
                 import traceback
+                st.session_state["login_failed"] = True
+                st.session_state["login_failed_role"] = _login_role
                 st.error(f"Gagal: {e}")
                 st.code(traceback.format_exc())
+
+        # Tombol retry — muncul kalau login gagal & browser masih di loginpass
+        if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
+            _retry_role = st.session_state.get("login_failed_role", "PP")
+            if st.button("🔄 Coba Lagi (captcha only)", type="primary", use_container_width=True):
+                try:
+                    import spse_login as _spse_login
+                    _retry_logs: list[str] = []
+                    _rlog_box = st.empty()
+                    def _rlog(msg: str):
+                        _retry_logs.append(msg)
+
+                    with st.spinner("Retry captcha..."):
+                        _spse_login.retry_captcha(role=_retry_role, log_fn=_rlog)
+
+                    _rlog_box.info("\n".join(_retry_logs))
+                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                    st.session_state["spse_role"] = _retry_role
+                    st.session_state.pop("login_failed", None)
+                    st.session_state.pop("login_failed_role", None)
+                    st.success(f"✅ Login berhasil sebagai {_retry_role}!")
+                    st.rerun()
+                except Exception as e2:
+                    import traceback
+                    st.error(f"Retry gagal: {e2}")
+                    st.code(traceback.format_exc())
 
 # ============================================================
 # Tabs
