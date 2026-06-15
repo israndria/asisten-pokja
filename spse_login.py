@@ -469,7 +469,7 @@ async def _retry_captcha_async(password: str, log_fn=None) -> bool:
 def retry_captcha(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     _, password = _get_creds(role)
-    return _sb._run(_retry_captcha_async(password, log_fn=log_fn))
+    return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
 
 
 def login_spse(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
@@ -479,6 +479,6 @@ def login_spse(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
     log_fn: callable(str) untuk progress logging (opsional)
     """
     import spse_browser as _sb
-    # Pakai loop + _run dari spse_browser (ProactorEventLoop Windows)
+    # Timeout 180s — cover 5x Tesseract retry + Gemini fallback
     _sb._ensure_loop()
-    return _sb._run(_login_async(role, log_fn=log_fn))
+    return _sb._run(_login_async(role, log_fn=log_fn), timeout=180)
