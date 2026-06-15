@@ -425,6 +425,19 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
+
+# Auto-detect role dari CDP kalau session baru tapi Brave masih aktif (misal F5 refresh)
+if not _spse_role:
+    try:
+        import spse_browser as _sb_detect
+        if _sb_detect.is_browser_open():
+            import spse_login as _sl_detect
+            _detected = _sl_detect.detect_login_role()
+            if _detected:
+                st.session_state["spse_role"] = _detected
+                _spse_role = _detected
+    except Exception:
+        pass
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PP = PL saja
@@ -1861,7 +1874,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
         st.caption("Hermes Agent membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
 
-        _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat") and r.get("nomor_urut")]
+        _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
         if not _pl_rows_punya_folder:
             st.info("Belum ada paket dengan folder. Buat folder dulu di atas.")
         else:

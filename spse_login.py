@@ -52,6 +52,38 @@ def _get_creds(role: Literal["PP", "POKJA"]) -> tuple[str, str]:
     return username, password
 
 
+def detect_login_role() -> str | None:
+    """
+    Deteksi role login aktif dari halaman SPSE via CDP.
+    Bandingkan username di halaman vs credentials PP/POKJA.
+    Return: "PP", "POKJA", atau None kalau tidak bisa deteksi / belum login.
+    """
+    import spse_browser as _sb
+    try:
+        html = _sb.get_html()
+        if not html:
+            return None
+        # Ambil username PP dan POKJA dari env
+        env = _load_env()
+        user_pp    = env.get("SPSE_USERNAME_PP", "").strip().lower()
+        user_pokja = env.get("SPSE_USERNAME_POKJA", "").strip().lower()
+        html_lower = html.lower()
+        # Cari kemunculan username di HTML (biasanya di navbar/profil)
+        if user_pp and user_pp in html_lower:
+            return "PP"
+        if user_pokja and user_pokja in html_lower:
+            return "POKJA"
+        # Fallback: cek URL — /nontendering = PP, /tender = POKJA
+        url = _sb.get_url()
+        if "nontendering" in url or "nontender" in url:
+            return "PP"
+        if "/tender" in url:
+            return "POKJA"
+    except Exception:
+        pass
+    return None
+
+
 # ============================================================
 # OCR CAPTCHA
 # ============================================================

@@ -26,16 +26,19 @@ FALLBACK_MODEL = "gc/gemini-3-flash-preview"
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 
 
-def _folder_paket(nomor_urut: int | str, nama_paket: str) -> Path:
-    """Cari folder paket berdasarkan nomor urut (prefix N.)."""
-    prefix = f"{nomor_urut}."
-    for d in PL_JKK_ROOT.iterdir():
-        if d.is_dir() and d.name.startswith(prefix):
-            return d
-    # Fallback: cari by nama_paket substring
-    for d in PL_JKK_ROOT.iterdir():
-        if d.is_dir() and nama_paket and nama_paket[:20].lower() in d.name.lower():
-            return d
+def _folder_paket(nomor_urut, nama_paket: str) -> Path:
+    """Cari folder paket — prioritas nomor urut, fallback nama paket substring."""
+    if nomor_urut:
+        prefix = f"{nomor_urut}."
+        for d in PL_JKK_ROOT.iterdir():
+            if d.is_dir() and d.name.startswith(prefix):
+                return d
+    # Fallback: cari by nama_paket substring (case-insensitive)
+    if nama_paket:
+        nama_lower = nama_paket[:30].lower()
+        for d in PL_JKK_ROOT.iterdir():
+            if d.is_dir() and nama_lower in d.name.lower():
+                return d
     return None
 
 
