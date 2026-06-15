@@ -423,12 +423,24 @@ st.title("🤖 Asisten Pokja")
 st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
-_MODE_OPTIONS = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
+# Filter mode berdasarkan role login
+_spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
+_ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
+if _spse_role == "PP":
+    _MODE_OPTIONS = ["Tender"]          # PP hanya akses Tender
+elif _spse_role == "POKJA":
+    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # POKJA hanya PL
+else:
+    _MODE_OPTIONS = _ALL_MODES          # belum login → semua tampil
+
 if "app_mode" not in st.session_state:
     st.session_state["app_mode"] = "Tender"
 
 _mode_col, _ = st.columns([2, 5])
 with _mode_col:
+    # Snap mode ke opsi valid (kalau habis ganti role)
+    if st.session_state["app_mode"] not in _MODE_OPTIONS:
+        st.session_state["app_mode"] = _MODE_OPTIONS[0]
     _selected_mode = st.radio(
         "Mode:",
         _MODE_OPTIONS,
@@ -486,8 +498,11 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
         with col2:
             if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Kill Brave CDP → kembali ke form login"):
                 spse_browser.tutup_browser()
+                st.session_state.pop("spse_role", None)
                 st.rerun()
-        st.success(f"✅ Terhubung ke Brave SPSE")
+        _role_label = st.session_state.get("spse_role", "?")
+        _role_emoji = "🏛️" if _role_label == "PP" else "👥" if _role_label == "POKJA" else "🌐"
+        st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
     else:
         st.info("Brave SPSE belum terhubung")
 
@@ -539,6 +554,7 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 
                 # Connect CDP setelah login berhasil
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                st.session_state["spse_role"] = _login_role
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun()
             except Exception as e:
