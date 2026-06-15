@@ -427,9 +427,9 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
 if _spse_role == "PP":
-    _MODE_OPTIONS = ["Tender"]          # PP hanya akses Tender
+    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PP = PL saja
 elif _spse_role == "POKJA":
-    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # POKJA hanya PL
+    _MODE_OPTIONS = ["Tender"]          # POKJA = Tender saja
 else:
     _MODE_OPTIONS = _ALL_MODES          # belum login → semua tampil
 
