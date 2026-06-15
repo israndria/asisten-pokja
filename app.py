@@ -7360,12 +7360,17 @@ with tab0:
         # Plan nama folder per paket belum-folder (auto-nomor)
         _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
         _t_plan, _ctr = {}, _max_urut
+        import kode_unik_engine as _ku_engine
         for _r in sorted(_rows_belum, key=lambda x: x.get("diambil_pada") or ""):
             _n = int(_r["nomor_urut"]) if _r.get("nomor_urut") else (_ctr := _ctr + 1) and _ctr
+            _nama_tender = str(_r.get("nama_tender", "")).strip()
+            # Pakai kode_unik dari DB kalau sudah ada, generate kalau belum
+            _ku = _r.get("kode_unik") or _ku_engine.generate_kode_unik(_nama_tender)
             _t_plan[_r["kode_tender"]] = {
                 "kode_tender": _r["kode_tender"],
                 "nomor_urut": _n,
-                "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {str(_r.get('nama_tender','')).strip()} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
+                "kode_unik": _ku,
+                "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {_nama_tender} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
                 "id_pesan": _r.get("id_pesan", ""),
                 "kode_pokja": _r.get("kode_pokja", ""),
             }
@@ -7391,6 +7396,7 @@ with tab0:
                 st.checkbox(
                     f"{str(_r.get('nama_tender',''))[:55]} — Pokja {_pk}",
                     key=_ck,
+                    help=f"Kode unik: {_t_plan.get(_kt, {}).get('kode_unik', '...')}",
                 )
             _t_terpilih = [
                 _t_plan[_r["kode_tender"]] for _r in _rows_belum
@@ -7427,6 +7433,16 @@ with tab0:
                         if _r2.returncode == 0:
                             _ok += 1
                             _paket_log.append("✅ Folder dibuat")
+                            # Simpan kode_unik ke Supabase
+                            _ku_val = _bp.get("kode_unik")
+                            if _ku_val:
+                                try:
+                                    _sb_client.table("tender").update(
+                                        {"kode_unik": _ku_val}
+                                    ).eq("kode_tender", _bp["kode_tender"]).execute()
+                                    _paket_log.append(f"🔑 Kode unik: {_ku_val}")
+                                except Exception as _ku_err:
+                                    _paket_log.append(f"⚠️ Gagal simpan kode_unik: {_ku_err}")
                             _bp_target = os.path.join(_TENDER_ROOT, _nf)
                             # Copy file evaluator AI ke folder paket Tender PK
                             try:
