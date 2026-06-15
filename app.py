@@ -430,8 +430,9 @@ _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 if not _spse_role:
     try:
         import spse_browser as _sb_detect
-        if _sb_detect.is_browser_open():
-            import spse_login as _sl_detect
+        import spse_login as _sl_detect
+        _cdp_url = _sb_detect.get_url()  # kosong "" kalau CDP tidak aktif
+        if _cdp_url:
             _detected = _sl_detect.detect_login_role()
             if _detected:
                 st.session_state["spse_role"] = _detected

@@ -54,31 +54,23 @@ def _get_creds(role: Literal["PP", "POKJA"]) -> tuple[str, str]:
 
 def detect_login_role() -> str | None:
     """
-    Deteksi role login aktif dari halaman SPSE via CDP.
-    Bandingkan username di halaman vs credentials PP/POKJA.
-    Return: "PP", "POKJA", atau None kalau tidak bisa deteksi / belum login.
+    Deteksi role login aktif.
+    Strategi: baca .browser_session/last_role.txt yang ditulis saat login berhasil.
+    Return: "PP", "POKJA", atau None.
     """
     import spse_browser as _sb
     try:
-        html = _sb.get_html()
-        if not html:
-            return None
-        # Ambil username PP dan POKJA dari env
-        env = _load_env()
-        user_pp    = env.get("SPSE_USERNAME_PP", "").strip().lower()
-        user_pokja = env.get("SPSE_USERNAME_POKJA", "").strip().lower()
-        html_lower = html.lower()
-        # Cari kemunculan username di HTML (biasanya di navbar/profil)
-        if user_pp and user_pp in html_lower:
-            return "PP"
-        if user_pokja and user_pokja in html_lower:
-            return "POKJA"
-        # Fallback: cek URL — /nontendering = PP, /tender = POKJA
+        # Cek CDP aktif dulu
         url = _sb.get_url()
-        if "nontendering" in url or "nontender" in url:
-            return "PP"
-        if "/tender" in url:
-            return "POKJA"
+        if not url or "spse" not in url:
+            return None
+        # Baca file last_role — ditulis oleh _login_async saat login berhasil
+        _session_dir = Path(__file__).parent / ".browser_session"
+        _role_file = _session_dir / "last_role.txt"
+        if _role_file.exists():
+            role = _role_file.read_text(encoding="utf-8").strip()
+            if role in ("PP", "POKJA"):
+                return role
     except Exception:
         pass
     return None
@@ -365,6 +357,13 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
 
         if "loginpass" not in current_url and "login" not in current_url.split("/")[-1]:
             _log(f"✅ Login berhasil sebagai {role}!")
+            # Simpan role ke file agar bisa di-detect saat F5 refresh
+            try:
+                _sess_dir = Path(__file__).parent / ".browser_session"
+                _sess_dir.mkdir(exist_ok=True)
+                (_sess_dir / "last_role.txt").write_text(role, encoding="utf-8")
+            except Exception:
+                pass
             return True
 
         err_el = await page.query_selector(".alert-danger, .alert-error, .error")

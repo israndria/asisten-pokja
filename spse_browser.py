@@ -165,6 +165,14 @@ def tutup_browser():
     _pw = _context = _page = None
     _cdp_tabs_cache = []
     _cdp_tabs_cache_ts = 0.0
+    # Hapus last_role saat browser ditutup
+    try:
+        from pathlib import Path as _Path
+        _rf = _Path(__file__).parent / ".browser_session" / "last_role.txt"
+        if _rf.exists():
+            _rf.unlink()
+    except Exception:
+        pass
 
 
 def refresh_browser():
