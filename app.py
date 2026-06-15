@@ -505,23 +505,43 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
         st.divider()
         st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")
 
-        if st.button("🚀 Launch Brave Otomatis", type="secondary", use_container_width=True):
+        _login_role = st.radio(
+            "Login sebagai",
+            ["PP", "POKJA"],
+            horizontal=True,
+            key="sidebar_login_role",
+        )
+
+        if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
             try:
+                import spse_login as _spse_login
+                _login_logs: list[str] = []
+
                 with st.spinner("Meluncurkan Brave SPSE..."):
                     spse_browser.launch_chrome_dengan_cdp()
-                    # Retry sampai CDP ready (max 15 detik)
+                    # Tunggu CDP ready (max 15 detik)
                     import time as _t
                     for _i in range(15):
                         _t.sleep(1)
                         if spse_browser._cek_cdp_aktif():
                             break
-                # Auto-connect setelah Brave ready — navigate=False, pakai tab yang sudah ada
-                with st.spinner("Menghubungkan ke Brave..."):
-                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                st.success("Brave SPSE berhasil diluncurkan & terhubung!")
+
+                _log_box = st.empty()
+                def _log(msg: str):
+                    _login_logs.append(msg)
+                    _log_box.info("\n".join(_login_logs))
+
+                with st.spinner("Auto-login SPSE..."):
+                    _spse_login.login_spse(role=_login_role, log_fn=_log)
+
+                # Connect CDP setelah login berhasil
+                spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Gagal launch Brave: {e}")
+                import traceback
+                st.error(f"Gagal: {e}")
+                st.code(traceback.format_exc())
 
 # ============================================================
 # Tabs

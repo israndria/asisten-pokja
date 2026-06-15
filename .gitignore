@@ -16,6 +16,7 @@ scratch/_backup_*.csv
 credentials.json
 token.json
 secret_supabase.env
+secret_spse.env
 harness_block_log.md
 *.log
 .paket_cache*.json
