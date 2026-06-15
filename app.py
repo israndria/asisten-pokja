@@ -484,12 +484,10 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                     st.toast("⚠️ Reload gagal — CDP tidak responsif", icon="⚠️")
                 st.rerun()
         with col2:
-            if st.button("❌ Tutup", use_container_width=True):
+            if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Kill Brave CDP → kembali ke form login"):
                 spse_browser.tutup_browser()
                 st.rerun()
-        if st.button("🔌 Diskonek", use_container_width=True, help="Reset status tanpa menutup browser (pakai jika CDP sudah ditutup manual)"):
-            spse_browser.diskonek()
-            st.rerun()
+        st.success(f"✅ Terhubung ke Brave SPSE")
     else:
         st.info("Brave SPSE belum terhubung")
 

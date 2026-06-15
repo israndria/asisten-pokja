@@ -215,6 +215,17 @@ def diskonek():
     _cdp_tabs_cache_ts = 0.0
 
 
+def tutup_browser():
+    """Kill proses Brave CDP + reset semua state Playwright."""
+    import subprocess
+    diskonek()
+    # Kill Brave yang jalan dengan --remote-debugging-port=9222
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "brave.exe"],
+        capture_output=True, shell=True
+    )
+
+
 async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
     """
     Navigasi ke /metode via Playwright, pilih kategori + radio, accept confirm dialog, klik Simpan.
