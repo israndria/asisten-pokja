@@ -216,14 +216,26 @@ def diskonek():
 
 
 def tutup_browser():
-    """Kill proses Brave CDP + reset semua state Playwright."""
+    """Kill hanya proses Brave CDP (--remote-debugging-port=9222) + reset state."""
     import subprocess
     diskonek()
-    # Kill Brave yang jalan dengan --remote-debugging-port=9222
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "brave.exe"],
-        capture_output=True, shell=True
-    )
+    # Cari PID Brave yang jalan dengan --remote-debugging-port=9222
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where",
+             "name='brave.exe' and commandline like '%remote-debugging-port=9222%'",
+             "get", "processid", "/format:csv"],
+            capture_output=True, text=True, shell=True, timeout=5
+        )
+        pids = [
+            line.strip().split(",")[-1]
+            for line in result.stdout.splitlines()
+            if line.strip() and line.strip().split(",")[-1].isdigit()
+        ]
+        for pid in pids:
+            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, shell=True)
+    except Exception:
+        pass
 
 
 async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
