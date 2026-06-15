@@ -216,24 +216,29 @@ def diskonek():
 
 
 def tutup_browser():
-    """Kill hanya proses Brave CDP (--remote-debugging-port=9222) + reset state."""
+    """Kill hanya proses Brave CDP (listen port 9222) + reset state."""
     import subprocess
     diskonek()
-    # Cari PID Brave yang jalan dengan --remote-debugging-port=9222
     try:
+        # Cari PID yang listen di port 9222
         result = subprocess.run(
-            ["wmic", "process", "where",
-             "name='brave.exe' and commandline like '%remote-debugging-port=9222%'",
-             "get", "processid", "/format:csv"],
+            ["netstat", "-ano"],
             capture_output=True, text=True, shell=True, timeout=5
         )
-        pids = [
-            line.strip().split(",")[-1]
-            for line in result.stdout.splitlines()
-            if line.strip() and line.strip().split(",")[-1].isdigit()
-        ]
+        pids = set()
+        for line in result.stdout.splitlines():
+            if ":9222" in line and "LISTENING" in line:
+                parts = line.strip().split()
+                if parts:
+                    pids.add(parts[-1])
+
+        # Kill hanya PID tersebut (bukan semua brave.exe)
         for pid in pids:
-            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, shell=True)
+            if pid.isdigit():
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", pid],
+                    capture_output=True, shell=True
+                )
     except Exception:
         pass
 

@@ -71,17 +71,24 @@ def _ocr_captcha(img_bytes: bytes) -> str:
     os.environ["TESSDATA_PREFIX"] = r"C:\Users\MSI\scoop\apps\tesseract\5.5.0.20241111\tessdata"
 
     nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)  # baca RGBA
+    img = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
     if img is None:
         return ""
 
-    # Handle RGBA — composite ke background putih
+    # Handle RGBA — CAPTCHA SPSE: RGB=0, teks dikodekan di alpha channel
     if img.ndim == 3 and img.shape[2] == 4:
-        alpha = img[:, :, 3:4] / 255.0
-        rgb = img[:, :, :3].astype(float)
-        white = np.ones_like(rgb) * 255
-        img_rgb = (rgb * alpha + white * (1 - alpha)).astype(np.uint8)
-        gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        r_ch, g_ch, b_ch, a_ch = cv2.split(img)
+        rgb_sum = r_ch.astype(float) + g_ch.astype(float) + b_ch.astype(float)
+        if rgb_sum.max() < 10:
+            # RGB semua nol → pakai alpha channel sebagai grayscale
+            gray = a_ch
+        else:
+            # Normal RGBA → composite ke putih
+            alpha = img[:, :, 3:4] / 255.0
+            rgb = img[:, :, :3].astype(float)
+            white = np.ones_like(rgb) * 255
+            img_rgb = (rgb * alpha + white * (1 - alpha)).astype(np.uint8)
+            gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
     elif img.ndim == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
