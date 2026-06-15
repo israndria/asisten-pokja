@@ -485,24 +485,52 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 
     url_aktif = spse_browser.get_url()
     if url_aktif:
-        st.success("Browser terhubung")
-        st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+        _role_label = st.session_state.get("spse_role", None)
+        _at_loginpass = "loginpass" in url_aktif
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 Refresh", use_container_width=True):
-                ok = spse_browser.refresh_browser()
-                if not ok:
-                    st.toast("⚠️ Reload gagal — CDP tidak responsif", icon="⚠️")
-                st.rerun()
-        with col2:
-            if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Kill Brave CDP → kembali ke form login"):
+        if _role_label:
+            # Sudah login berhasil
+            st.success("Browser terhubung")
+            st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Refresh", use_container_width=True):
+                    ok = spse_browser.refresh_browser()
+                    if not ok:
+                        st.toast("⚠️ Reload gagal — CDP tidak responsif", icon="⚠️")
+                    st.rerun()
+            with col2:
+                if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Kill Brave CDP → kembali ke form login"):
+                    spse_browser.tutup_browser()
+                    st.session_state.pop("spse_role", None)
+                    st.session_state.pop("login_failed", None)
+                    st.rerun()
+            _role_emoji = "🏛️" if _role_label == "PP" else "👥" if _role_label == "POKJA" else "🌐"
+            st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
+
+        elif _at_loginpass or st.session_state.get("login_failed"):
+            # Browser terbuka tapi masih di halaman login / gagal — tampilkan retry
+            st.warning("⏳ Menunggu login...")
+            st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+            if st.button("❌ Tutup & Mulai Ulang", use_container_width=True):
                 spse_browser.tutup_browser()
-                st.session_state.pop("spse_role", None)
+                st.session_state.pop("login_failed", None)
+                st.session_state.pop("login_failed_role", None)
                 st.rerun()
-        _role_label = st.session_state.get("spse_role", "?")
-        _role_emoji = "🏛️" if _role_label == "PP" else "👥" if _role_label == "POKJA" else "🌐"
-        st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
+        else:
+            # Browser terhubung tapi URL bukan loginpass dan belum ada role
+            st.success("Browser terhubung")
+            st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Refresh", use_container_width=True):
+                    spse_browser.refresh_browser()
+                    st.rerun()
+            with col2:
+                if st.button("❌ Tutup", use_container_width=True):
+                    spse_browser.tutup_browser()
+                    st.session_state.pop("login_failed", None)
+                    st.rerun()
     else:
         st.info("Brave SPSE belum terhubung")
 
