@@ -1856,6 +1856,47 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
 
 
+        # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
+        st.divider()
+        st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
+        st.caption("Hermes Agent membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
+
+        _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat") and r.get("nomor_urut")]
+        if not _pl_rows_punya_folder:
+            st.info("Belum ada paket dengan folder. Buat folder dulu di atas.")
+        else:
+            import hermes_evaluator as _heval
+            _pr_selected = {}
+            for _rpr in _pl_rows_punya_folder:
+                _kpr = _rpr["kode_paket"]
+                _lpr = f"{_rpr.get('nomor_urut','')}. {_rpr.get('nama_paket','?')}"
+                _pr_selected[_kpr] = st.checkbox(_lpr, value=False, key=f"pr_chk_{_kpr}")
+            _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
+            _pr_model = st.selectbox(
+                "Model Hermes",
+                ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                key="pr_model",
+            )
+            _btn_pr = st.button(
+                f"🤖 Jalankan Pra-Reviu — {len(_pr_terpilih)} paket",
+                key="btn_pra_reviu", disabled=not _pr_terpilih,
+                type="primary", use_container_width=True,
+            )
+            if _btn_pr and _pr_terpilih:
+                _pr_pb = st.progress(0.0, text="Memulai pra-reviu...")
+                _pr_jobs = [{"nomor_urut": r["nomor_urut"], "nama_paket": r["nama_paket"]} for r in _pr_terpilih]
+                _pr_results = _heval.evaluasi_bulk(_pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=3)
+                for _pri, _prr in enumerate(_pr_results):
+                    _pr_pb.progress((_pri + 1) / len(_pr_results))
+                    if _prr["status"] == "ok":
+                        st.success(f"✅ {_prr['nama'][:50]} — selesai")
+                        with st.expander(f"Output: {_prr['nama'][:40]}"):
+                            st.markdown(_prr["output"][:3000])
+                    else:
+                        st.error(f"❌ {_prr['nama'][:50]} — {_prr['error'][:200]}")
+                _pr_pb.progress(1.0, text="Selesai.")
+
+
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     with _pl_tab2:
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
@@ -3914,6 +3955,45 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
+
+                    st.divider()
+                    st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
+                    st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    _ai_eval_model = st.selectbox(
+                        "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                        key="pl8_ai_model",
+                    )
+                    _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8_do_ai_kual")
+                    _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=False, key="pl8_do_ai_teknis")
+                    _btn_ai_eval = st.button(
+                        f"🤖 Jalankan Evaluasi AI — {_n_paket8} paket",
+                        key="pl8_btn_ai_eval", use_container_width=True,
+                        disabled=not (_do_ai_kualifikasi or _do_ai_teknis),
+                    )
+                    if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis):
+                        import hermes_evaluator as _heval8
+                        _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
+                        if _do_ai_kualifikasi:
+                            st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
+                            _res_kual = _heval8.evaluasi_bulk(_ai_jobs, jenis="kualifikasi", model=_ai_eval_model, max_workers=3)
+                            for _rk in _res_kual:
+                                if _rk["status"] == "ok":
+                                    st.success(f"✅ {_rk['nama'][:50]}")
+                                    with st.expander(f"Output kualifikasi: {_rk['nama'][:35]}"):
+                                        st.markdown(_rk["output"][:3000])
+                                else:
+                                    st.error(f"❌ {_rk['nama'][:50]} — {_rk['error'][:200]}")
+                        if _do_ai_teknis:
+                            st.info("🔬 Menjalankan evaluasi Teknis...")
+                            _res_teknis = _heval8.evaluasi_bulk(_ai_jobs, jenis="teknis", model=_ai_eval_model, max_workers=3)
+                            for _rt in _res_teknis:
+                                if _rt["status"] == "ok":
+                                    st.success(f"✅ {_rt['nama'][:50]}")
+                                    with st.expander(f"Output teknis: {_rt['nama'][:35]}"):
+                                        st.markdown(_rt["output"][:3000])
+                                else:
+                                    st.error(f"❌ {_rt['nama'][:50]} — {_rt['error'][:200]}")
+
 
                     st.divider()
                     st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
