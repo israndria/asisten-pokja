@@ -195,6 +195,17 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
 
     # Step 2: Klik tombol LOGIN via JS
     _log("Klik tombol Login...")
+    # Cek dulu #login ada — kalau tidak ada berarti halaman bukan home (akses ditolak / error)
+    login_el = await page.query_selector("#login")
+    if not login_el:
+        # Screenshot untuk debug
+        from pathlib import Path as _P
+        _ss = _P(__file__).parent / "scratch" / "debug_nologin.png"
+        _ss.parent.mkdir(exist_ok=True)
+        await page.screenshot(path=str(_ss))
+        current_url = page.url
+        page_text = await page.evaluate("() => document.body?.innerText?.slice(0,200) || ''")
+        raise RuntimeError(f"Tombol #login tidak ditemukan — halaman: {current_url}\n{page_text}")
     await page.evaluate("document.querySelector('#login').click()")
 
     # Tunggu modal Bootstrap animate-in (max 5 detik)
