@@ -88,10 +88,16 @@ def _ocr_captcha(img_bytes: bytes) -> str:
         gray = img
     big = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
-    # Hapus grid noise via morfologi:
-    # 1. Invert (huruf jadi putih), 2. Erode hancurkan grid tipis,
-    # 3. Dilate kembalikan huruf, 4. Invert balik (huruf hitam untuk tesseract)
-    inv = 255 - big
+    # Auto-detect background: gelap (mean<128) → teks putih → invert dulu
+    mean_val = big.mean()
+    if mean_val < 128:
+        # Background gelap, teks terang → invert jadi background terang, teks gelap
+        work = 255 - big
+    else:
+        work = big.copy()
+
+    # Hapus grid noise via morfologi (untuk CAPTCHA background grid terang)
+    inv = 255 - work
     k_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
     k_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     eroded = cv2.erode(inv, k_erode, iterations=1)
@@ -103,8 +109,9 @@ def _ocr_captcha(img_bytes: bytes) -> str:
 
     variants = [
         cleaned,
-        255 - big,  # raw inverted
-        cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+        work,  # langsung (teks gelap di background terang)
+        cv2.threshold(work, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+        cv2.threshold(work, 127, 255, cv2.THRESH_BINARY)[1],
     ]
 
     for processed in variants:
