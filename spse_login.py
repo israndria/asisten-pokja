@@ -140,6 +140,56 @@ def _ocr_captcha(img_bytes: bytes) -> str:
     return freq.most_common(1)[0][0]
 
 
+def _ocr_captcha_gemini(img_bytes: bytes) -> str:
+    """
+    Fallback OCR via Gemini Vision API.
+    Dipanggil hanya setelah Tesseract gagal MAX_RETRY kali.
+    Return string hasil OCR (lowercase, alfanumerik only), atau '' kalau gagal.
+    """
+    import os, base64
+    from pathlib import Path
+
+    # Load API key dari secret_spse.env
+    env_path = Path(__file__).parent / "secret_spse.env"
+    api_key = None
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("GEMINI_API_KEY="):
+                api_key = line.split("=", 1)[1].strip()
+                break
+    if not api_key:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return ""
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            "This is a CAPTCHA image from a government procurement website. "
+            "Read the text exactly as shown. It contains exactly 4-8 alphanumeric characters (letters and/or digits). "
+            "Return ONLY the characters in lowercase, nothing else — no spaces, no punctuation, no explanation."
+        )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[
+                types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
+                prompt,
+            ],
+        )
+        raw = response.text.strip().lower()
+        result = "".join(c for c in raw if c.isalnum())
+        # Sanity check panjang
+        if 4 <= len(result) <= 8:
+            return result
+        # Kalau terlalu panjang → ambil 6 char pertama
+        return result[:6] if len(result) > 8 else ""
+    except Exception:
+        return ""
+
+
 # ============================================================
 # Auto-login via CDP (Playwright async)
 # ============================================================
@@ -299,7 +349,54 @@ async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
         else:
             _log("Login belum berhasil, retry...")
 
-    raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} percobaan — CAPTCHA tidak terbaca.")
+    # Semua Tesseract retry habis — fallback ke Gemini Vision
+    return await _gemini_captcha_attempt(page, password, log_fn=log_fn)
+
+
+async def _gemini_captcha_attempt(page, password: str, log_fn=None) -> bool:
+    """1x attempt login pakai Gemini Vision untuk baca CAPTCHA."""
+    def _log(msg):
+        if log_fn: log_fn(msg)
+
+    _log("🤖 Fallback ke Gemini Vision untuk baca CAPTCHA...")
+
+    await page.wait_for_selector("#txtPassword", timeout=8000)
+    await page.fill("#txtPassword", password)
+
+    captcha_el = await page.query_selector("img[src*='showcaptcha']")
+    if not captcha_el:
+        raise RuntimeError("Elemen CAPTCHA tidak ditemukan (Gemini attempt).")
+
+    captcha_src = await captcha_el.get_attribute("src")
+    captcha_b64 = await page.evaluate(f"""async () => {{
+        const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
+        const buf = await r.arrayBuffer();
+        return btoa(String.fromCharCode(...new Uint8Array(buf)));
+    }}""")
+    import base64 as _b64
+    captcha_bytes = _b64.b64decode(captcha_b64)
+
+    # Simpan debug
+    from pathlib import Path as _P
+    (_P(__file__).parent / "scratch" / "captcha_gemini.png").write_bytes(captcha_bytes)
+
+    captcha_text = _ocr_captcha_gemini(captcha_bytes)
+    _log(f"Gemini OCR: '{captcha_text}'")
+
+    if not captcha_text:
+        raise RuntimeError("Gemini gagal membaca CAPTCHA.")
+
+    await page.fill("#txtCode", captcha_text)
+    await page.click("button[type='submit']")
+    await page.wait_for_timeout(2000)
+
+    if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
+        _log("✅ Login berhasil via Gemini!")
+        return True
+
+    err_el = await page.query_selector(".alert-danger, .alert-error, .error")
+    err_msg = (await err_el.inner_text()).strip() if err_el else ""
+    raise RuntimeError(f"Login gagal setelah Gemini fallback: {err_msg[:120] or 'Unknown error'}")
 
 
 async def _retry_captcha_async(password: str, log_fn=None) -> bool:
