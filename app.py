@@ -3597,8 +3597,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             m = _ba_re.match(r"\s*(\d+)", nama)
             return int(m.group(1)) if m else 9999
 
-        # Hanya paket yang belum selesai (reuse _pl8_rows yang sudah di-filter)
-        _ba_kode_aktif = {r.get("kode_paket", "") for r in _pl8_rows if r.get("kode_paket")}
+        # Hanya paket yang belum selesai (reuse _pl8_rows kalau ada, fallback ke semua)
+        _ba_kode_aktif = {r.get("kode_paket", "") for r in locals().get("_pl8_rows", []) if r.get("kode_paket")}
 
         _ba_found = []  # (nomor, nama_folder, path_pdf)
         if _ba_os.path.isdir(_ba_root_in):
@@ -4349,8 +4349,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             m = _ba_re.match(r"\s*(\d+)", nama)
             return int(m.group(1)) if m else 9999
 
-        # Hanya paket yang belum selesai (reuse _pl8_rows yang sudah di-filter)
-        _ba_kode_aktif = {r.get("kode_paket", "") for r in _pl8_rows if r.get("kode_paket")}
+        # Hanya paket yang belum selesai (reuse _pl8_rows kalau ada, fallback ke semua)
+        _ba_kode_aktif = {r.get("kode_paket", "") for r in locals().get("_pl8_rows", []) if r.get("kode_paket")}
 
         _ba_found = []  # (nomor, nama_folder, path_pdf)
         if _ba_os.path.isdir(_ba_root_in):
