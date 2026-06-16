@@ -47,7 +47,10 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) 
     Jalankan claude --print secara sinkron.
     Returns stdout string. Raise RuntimeError jika gagal.
     """
-    cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions", "--model", model, prompt]
+    import os as _os
+    cmd = [CLAUDE_BIN, "-p", "--dangerously-skip-permissions", prompt]
+    env = _os.environ.copy()
+    env["CLAUDE_MODEL"] = model
     try:
         result = subprocess.run(
             cmd,
@@ -56,9 +59,10 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) 
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
         if result.returncode != 0:
-            err = (result.stderr or "")[:500]
+            err = ((result.stderr or "") + (result.stdout or ""))[:800]
             raise RuntimeError(f"Claude CLI exit {result.returncode}: {err}")
         return result.stdout.strip()
     except subprocess.TimeoutExpired:

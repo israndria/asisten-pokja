@@ -1889,12 +1889,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         else:
             import ai_evaluator as _heval
             _pr_selected = {}
-            _pr_all = st.checkbox("✅ Pilih Semua", value=False, key="pr_chk_all")
+            _pr_kodes = [r["kode_paket"] for r in _pl_rows_punya_folder]
+            for _k in _pr_kodes:
+                if f"pr_chk_{_k}" not in st.session_state:
+                    st.session_state[f"pr_chk_{_k}"] = True
+            _pr_bc1, _pr_bc2 = st.columns(2)
+            if _pr_bc1.button("✅ Pilih Semua", key="pr_chk_all", use_container_width=True):
+                for _k in _pr_kodes:
+                    st.session_state[f"pr_chk_{_k}"] = True
+            if _pr_bc2.button("❌ Batal Semua", key="pr_chk_none", use_container_width=True):
+                for _k in _pr_kodes:
+                    st.session_state[f"pr_chk_{_k}"] = False
             for _rpr in _pl_rows_punya_folder:
                 _kpr = _rpr["kode_paket"]
                 _nomor_urut = _rpr.get('nomor_urut') or ''
                 _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
-                _pr_selected[_kpr] = st.checkbox(_lpr, value=_pr_all, key=f"pr_chk_{_kpr}")
+                _pr_selected[_kpr] = st.checkbox(_lpr, value=st.session_state.get(f"pr_chk_{_kpr}", True), key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_model = st.selectbox(
                 "Model Claude",
