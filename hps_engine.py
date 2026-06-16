@@ -384,6 +384,34 @@ def scrape_hps_ke_excel(kode_tender: str, excel_path: str, progress_cb=None) -> 
                 "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
 
+def _build_uraian_singkat_pk(items: list, excel_path: str) -> str:
+    """Bangun kalimat 'Uraian Singkat Pekerjaan' untuk PK (konstruksi) dari divisi BoQ.
+
+    Format: "Mengerjakan {Nama Paket} meliputi: 1. {Divisi A}, 2. {Divisi B}, dan 3. {Divisi C}"
+    Divisi diambil dari item is_divisi=True (baris tanpa satuan & harga di BoQ HPS).
+    Return "" kalau tidak ada divisi terdeteksi (biar VBA fallback ke template JKK).
+    """
+    divisi_list = [it["jenis_bj"].strip() for it in items if it.get("is_divisi") and it.get("jenis_bj", "").strip()]
+    if not divisi_list:
+        return ""
+
+    # Nama paket dari nama folder (parent dari excel_path), bersihkan prefix "N. PLPK - "
+    import re as _re
+    nama_folder = os.path.basename(os.path.dirname(os.path.abspath(excel_path)))
+    nama_paket = _re.sub(r'^\d+\.\s*(PLJKK|PLPK)\s*-\s*', '', nama_folder).strip()
+    nama_paket = _re.sub(r'\s*\(PL\s*-?\s*Ulang\)\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
+
+    # Susun list bernomor: "1. A, 2. B, dan 3. C"
+    n = len(divisi_list)
+    bagian = [f"{i+1}. {d}" for i, d in enumerate(divisi_list)]
+    if n == 1:
+        daftar = bagian[0]
+    else:
+        daftar = ", ".join(bagian[:-1]) + ", dan " + bagian[-1]
+
+    return f"Mengerjakan {nama_paket} meliputi: {daftar}"
+
+
 def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -> dict:
     """PL: scrape HPS non-tender via kode_paket (resolve DOKID live) → tulis sheet '5. HPS'."""
     try:
@@ -401,6 +429,16 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
             r["md_path"] = md_path
         except Exception as e:
             print(f"Warning: Gagal tulis MD HPS: {e}")
+
+        # Upsert uraian_singkat_pk ke Supabase (untuk PK konstruksi)
+        try:
+            uraian = _build_uraian_singkat_pk(hasil["items"], excel_path)
+            if uraian:
+                from config import sb as _sb
+                _sb().table("draft_paket_pl").update({"uraian_singkat": uraian}).eq("kode_paket", kode_paket).execute()
+                r["uraian_singkat"] = uraian
+        except Exception as e:
+            print(f"Warning: Gagal upsert uraian_singkat: {e}")
 
         return r
     except Exception as e:
