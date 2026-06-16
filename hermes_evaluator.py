@@ -1,5 +1,5 @@
 """
-hermes_evaluator.py — Trigger Hermes Agent untuk evaluasi dokumen PL JKK.
+hermes_evaluator.py — Trigger Hermes Agent untuk evaluasi dokumen Pengadaan Langsung (JKK & PK).
 
 Flow:
   Streamlit tombol → generate prompt → subprocess hermes --oneshot
@@ -24,19 +24,21 @@ DEFAULT_MODEL  = "ag/gemini-3.5-flash-extra-low"
 FALLBACK_MODEL = "gc/gemini-3-flash-preview"
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
+PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
 
 
-def _folder_paket(nomor_urut, nama_paket: str) -> Path:
+def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK") -> Path:
     """Cari folder paket — prioritas nomor urut, fallback nama paket substring."""
+    root = PL_PK_ROOT if jenis_pl == "PK" else PL_JKK_ROOT
     if nomor_urut:
         prefix = f"{nomor_urut}."
-        for d in PL_JKK_ROOT.iterdir():
+        for d in root.iterdir():
             if d.is_dir() and d.name.startswith(prefix):
                 return d
     # Fallback: cari by nama_paket substring (case-insensitive)
     if nama_paket:
         nama_lower = nama_paket[:30].lower()
-        for d in PL_JKK_ROOT.iterdir():
+        for d in root.iterdir():
             if d.is_dir() and nama_lower in d.name.lower():
                 return d
     return None
@@ -116,9 +118,9 @@ Mulai sekarang."""
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL) -> dict:
+def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
     """Jalankan pra-reviu 1 paket. Returns dict {nama, status, output, error}."""
-    folder = _folder_paket(nomor_urut, nama_paket)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
@@ -129,9 +131,9 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL) 
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL) -> dict:
+def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
     """Evaluasi Admin+Kualifikasi 1 paket."""
-    folder = _folder_paket(nomor_urut, nama_paket)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
@@ -142,9 +144,9 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL) -> dict:
+def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
     """Evaluasi Teknis (Sesi 2) 1 paket."""
-    folder = _folder_paket(nomor_urut, nama_paket)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
@@ -155,7 +157,7 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL) -> 
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3) -> list[dict]:
+def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK") -> list[dict]:
     """
     Evaluasi paralel N paket.
     paket_list: list of {nomor_urut, nama_paket}
@@ -174,7 +176,7 @@ def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_w
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model): p
+            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl): p
             for p in paket_list
         }
         for future in as_completed(futures):

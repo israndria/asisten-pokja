@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1634,6 +1635,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             "PROTOKOL_EVALUASI_AI.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
+                                        ]
+                                    elif _pl_bp_item["jenis_pl"] == "PK":
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_PK.md",
                                         ]
                                     else:
                                         _pl_eval_files_base = [
@@ -4912,6 +4918,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
                                             "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
                                         ]
+                                    elif _pl_bp_item["jenis_pl"] == "PK":
+                                        _pl_eval_files_base = [
+                                            "PROTOKOL_EVALUASI_AI.md",
+                                            "EVALUATOR_KUALIFIKASI_PL_PK.md",
+                                        ]
                                     else:
                                         _pl_eval_files_base = [
                                             "PROTOKOL_EVALUASI_AI.md",
@@ -7082,6 +7093,44 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
+
+                    st.divider()
+                    st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
+                    st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    _ai_eval_model_pk = st.selectbox(
+                        "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                        key="pl8pk_ai_model",
+                    )
+                    _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8pk_do_ai_kual")
+                    _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=False, key="pl8pk_do_ai_teknis")
+                    _btn_ai_eval_pk = st.button(
+                        f"🤖 Jalankan Evaluasi AI — {_n_paket8} paket",
+                        key="pl8pk_btn_ai_eval", use_container_width=True,
+                        disabled=not (_do_ai_kualifikasi_pk or _do_ai_teknis_pk),
+                    )
+                    if _btn_ai_eval_pk and (_do_ai_kualifikasi_pk or _do_ai_teknis_pk):
+                        import hermes_evaluator as _heval8pk
+                        _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
+                        if _do_ai_kualifikasi_pk:
+                            st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
+                            _res_kual_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="kualifikasi", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK")
+                            for _rk_pk in _res_kual_pk:
+                                if _rk_pk["status"] == "ok":
+                                    st.success(f"✅ {_rk_pk['nama'][:50]}")
+                                    with st.expander(f"Output kualifikasi: {_rk_pk['nama'][:35]}"):
+                                        st.markdown(_rk_pk["output"][:3000])
+                                else:
+                                    st.error(f"❌ {_rk_pk['nama'][:50]} — {_rk_pk['error'][:200]}")
+                        if _do_ai_teknis_pk:
+                            st.info("🔬 Menjalankan evaluasi Teknis...")
+                            _res_teknis_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="teknis", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK")
+                            for _rt_pk in _res_teknis_pk:
+                                if _rt_pk["status"] == "ok":
+                                    st.success(f"✅ {_rt_pk['nama'][:50]}")
+                                    with st.expander(f"Output teknis: {_rt_pk['nama'][:35]}"):
+                                        st.markdown(_rt_pk["output"][:3000])
+                                else:
+                                    st.error(f"❌ {_rt_pk['nama'][:50]} — {_rt_pk['error'][:200]}")
 
                     st.divider()
                     st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
@@ -10008,6 +10057,78 @@ with tab_kual:
             # Auto-tampil dari data Supabase yang sudah ada (tanpa sync folder)
             _render_konflik_dashboard(trigger_sync_doktek=False)
 
+        st.divider()
+        st.markdown("#### 🤖 Evaluasi AI (Hermes Agent) — Tender")
+        st.caption("Hermes baca dokumen di folder paket Tender → output `.md`. Paralel per paket. Centang paket di Section 1 di atas.")
+
+        import hermes_evaluator as _heval_t
+
+        def _prompt_evaluasi_tender(folder_paket, nama_paket):
+            return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
+
+Nama paket: {nama_paket}
+Folder paket: {folder_paket}
+
+Langkah:
+1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
+2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
+3. Evaluasi semua penyedia yang ditemukan di folder Dokumen Evaluasi / Dokumen Kualifikasi paket ini.
+4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
+
+Mulai sekarang."""
+
+        _ai_eval_model_t = st.selectbox(
+            "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+            key="tkual_ai_model",
+        )
+        _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
+        _btn_ai_eval_t = st.button(
+            f"🤖 Jalankan Evaluasi AI — {len(_ai_t_selected_kode)} paket",
+            key="tkual_btn_ai_eval", use_container_width=True,
+            disabled=len(_ai_t_selected_kode) == 0,
+        )
+        if _btn_ai_eval_t and _ai_t_selected_kode:
+            from config import sb as _sb_ait, TENDER_ROOT as _TENDER_ROOT_AIT
+            import os as _os_ait
+            _ait_rows = _sb_ait().table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").in_("kode_tender", _ai_t_selected_kode).execute().data or []
+            _ait_jobs = []
+            for _r in _ait_rows:
+                _fd = _r.get("folder_dibuat") or ""
+                if not _fd:
+                    st.warning(f"⚠️ {_r.get('nama_tender','')[:50]} — folder belum dibuat, skip.")
+                    continue
+                _folder_full = _os_ait.path.join(_TENDER_ROOT_AIT, _fd)
+                if not _os_ait.path.isdir(_folder_full):
+                    st.warning(f"⚠️ {_r.get('nama_tender','')[:50]} — folder tidak ditemukan di disk, skip.")
+                    continue
+                _ait_jobs.append({"nama": _r.get("nama_tender", _fd), "folder": _folder_full})
+
+            if not _ait_jobs:
+                st.error("Tidak ada paket dengan folder valid untuk dievaluasi.")
+            else:
+                st.info(f"🤖 Menjalankan evaluasi AI untuk {len(_ait_jobs)} paket...")
+                def _run_ait(job):
+                    try:
+                        _prompt = _prompt_evaluasi_tender(job["folder"], job["nama"])
+                        _out = _heval_t._run_hermes(_prompt, model=_ai_eval_model_t)
+                        return {"nama": job["nama"], "status": "ok", "output": _out, "error": ""}
+                    except Exception as _e:
+                        return {"nama": job["nama"], "status": "error", "output": "", "error": str(_e)}
+
+                _ait_results = []
+                with ThreadPoolExecutor(max_workers=3) as _pool_ait:
+                    _futures_ait = {_pool_ait.submit(_run_ait, j): j for j in _ait_jobs}
+                    for _fut in as_completed(_futures_ait):
+                        _ait_results.append(_fut.result())
+
+                for _rt in _ait_results:
+                    if _rt["status"] == "ok":
+                        st.success(f"✅ {_rt['nama'][:50]}")
+                        with st.expander(f"Output evaluasi: {_rt['nama'][:35]}"):
+                            st.markdown(_rt["output"][:3000])
+                    else:
+                        st.error(f"❌ {_rt['nama'][:50]} — {_rt['error'][:200]}")
+
 # ============================================================
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
@@ -10157,10 +10278,25 @@ with tab_apendo:
                 _gab_all_ok += _r["ok"]
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_valid)} paket.")
         st.divider()
+
+        def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket):
+            return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
+
+Nama paket: {nama_paket}
+Folder paket: {folder_paket}
+
+Langkah:
+1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
+2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
+3. Evaluasi semua penyedia yang ditemukan di folder Dokumen Evaluasi / Dokumen Kualifikasi paket ini.
+4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
+
+Mulai sekarang."""
+
         for _gp in _gab_valid:
             _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
             _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
-            _gp_c1, _gp_c2 = st.columns([4, 1])
+            _gp_c1, _gp_c2, _gp_c3 = st.columns([3, 1, 1])
             with _gp_c1:
                 st.markdown(f"**{_gp_label}**")
             with _gp_c2:
@@ -10177,6 +10313,18 @@ with tab_apendo:
                             st.caption(f"• {_ge}")
                     for _gm in _gab2_log:
                         st.caption(_gm)
+            with _gp_c3:
+                if st.button("🤖 Eval AI", key=f"gab2_ai_{_gp['kode_tender']}", use_container_width=True):
+                    import hermes_evaluator as _heval_ap
+                    with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
+                        try:
+                            _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
+                            _out_ap = _heval_ap._run_hermes(_prompt_ap, model=st.session_state.get("tkual_ai_model", "ag/gemini-3.5-flash-extra-low"))
+                            st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
+                            with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
+                                st.markdown(_out_ap[:3000])
+                        except Exception as _e_ap:
+                            st.error(f"❌ Evaluasi AI gagal: {_e_ap}")
     else:
         st.info("Tidak ada paket ditemukan di Supabase.")
 
