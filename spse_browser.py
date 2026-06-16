@@ -56,6 +56,48 @@ def _run(coro, timeout=60):
     return future.result(timeout=timeout)
 
 
+
+
+# ============================================================
+# Auto-Refresh Daemon
+# ============================================================
+_refresh_event = threading.Event()
+_refresh_thread: threading.Thread | None = None
+
+def _refresh_worker(interval_menit: int):
+    import time
+    while not _refresh_event.is_set():
+        # Sleep per 5 detik supaya interupsi cepat
+        for _ in range(interval_menit * 60 // 5):
+            if _refresh_event.is_set():
+                return
+            time.sleep(5)
+            
+        if _refresh_event.is_set():
+            return
+            
+        if not _cek_cdp_aktif():
+            break
+            
+        try:
+            refresh_browser()
+        except Exception:
+            pass
+
+def mulai_auto_refresh(interval_menit: int = 10):
+    global _refresh_thread
+    if _refresh_thread and _refresh_thread.is_alive():
+        return
+        
+    _refresh_event.clear()
+    _refresh_thread = threading.Thread(target=_refresh_worker, args=(interval_menit,), daemon=True)
+    _refresh_thread.start()
+
+def stop_auto_refresh():
+    _refresh_event.set()
+    if _refresh_thread and _refresh_thread.is_alive():
+        _refresh_thread.join(timeout=1.0)
+
 # ============================================================
 # Session management
 # ============================================================
@@ -142,6 +184,7 @@ async def _tutup_async():
 
 def tutup_browser():
     """Tutup Chrome: via Playwright jika connect, fallback CDP Browser.close, lalu diskonek."""
+    stop_auto_refresh()
     global _pw, _context, _page, _cdp_tabs_cache, _cdp_tabs_cache_ts
     if _context:
         _run(_tutup_async())
@@ -223,8 +266,9 @@ def diskonek():
     _cdp_tabs_cache_ts = 0.0
 
 
-def tutup_browser():
+def _kill_browser():
     """Kill hanya proses Brave CDP (listen port 9222) + reset state."""
+    stop_auto_refresh()
     import subprocess
     diskonek()
     try:

@@ -598,6 +598,7 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 # Connect CDP setelah login berhasil
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                 st.session_state["spse_role"] = _login_role
+                spse_browser.mulai_auto_refresh()
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun()
             except Exception as e:
@@ -624,6 +625,7 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                     _rlog_box.info("\n".join(_retry_logs))
                     spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                     st.session_state["spse_role"] = _retry_role
+                    spse_browser.mulai_auto_refresh()
                     st.session_state.pop("login_failed", None)
                     st.session_state.pop("login_failed_role", None)
                     st.success(f"✅ Login berhasil sebagai {_retry_role}!")
