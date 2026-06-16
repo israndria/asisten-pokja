@@ -227,13 +227,9 @@ def refresh_browser():
         page_tabs = [t for t in tabs if t.get("type") == "page"]
         if not page_tabs:
             return False
-        # Activate tab pertama + kirim reload via CDP websocket — tidak mudah lewat requests murni
-        # Solusi: gunakan Playwright jika tersedia, fallback navigate ke URL yang sama
+        # Reload background — jangan activate (foreground takeover)
         tab = page_tabs[0]
-        tab_id = tab["id"]
         current_url = tab.get("url", "")
-        # Activate tab via CDP HTTP
-        _req.get(f"http://localhost:{CDP_PORT}/json/activate/{tab_id}", timeout=2)
         # Jika Playwright tersedia, pakai reload
         page = halaman_aktif()
         if page and not page.is_closed():

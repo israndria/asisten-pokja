@@ -1887,7 +1887,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if not _pl_rows_punya_folder:
             st.info("Belum ada paket dengan folder. Buat folder dulu di atas.")
         else:
-            import hermes_evaluator as _heval
+            import ai_evaluator as _heval
             _pr_selected = {}
             _pr_all = st.checkbox("✅ Pilih Semua", value=False, key="pr_chk_all")
             for _rpr in _pl_rows_punya_folder:
@@ -1897,8 +1897,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _pr_selected[_kpr] = st.checkbox(_lpr, value=_pr_all, key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_model = st.selectbox(
-                "Model Hermes",
-                ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                "Model Claude",
+                ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
                 key="pr_model",
             )
             _btn_pr = st.button(
@@ -3984,7 +3984,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
                     st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _ai_eval_model = st.selectbox(
-                        "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                        "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
                         key="pl8_ai_model",
                     )
                     _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8_do_ai_kual")
@@ -3995,7 +3995,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         disabled=not (_do_ai_kualifikasi or _do_ai_teknis),
                     )
                     if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis):
-                        import hermes_evaluator as _heval8
+                        import ai_evaluator as _heval8
                         _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
@@ -7100,7 +7100,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
                     st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _ai_eval_model_pk = st.selectbox(
-                        "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+                        "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
                         key="pl8pk_ai_model",
                     )
                     _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8pk_do_ai_kual")
@@ -7111,7 +7111,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         disabled=not (_do_ai_kualifikasi_pk or _do_ai_teknis_pk),
                     )
                     if _btn_ai_eval_pk and (_do_ai_kualifikasi_pk or _do_ai_teknis_pk):
-                        import hermes_evaluator as _heval8pk
+                        import ai_evaluator as _heval8pk
                         _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi_pk:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
@@ -10063,7 +10063,7 @@ with tab_kual:
         st.markdown("#### 🤖 Evaluasi AI (Hermes Agent) — Tender")
         st.caption("Hermes baca dokumen di folder paket Tender → output `.md`. Paralel per paket. Centang paket di Section 1 di atas.")
 
-        import hermes_evaluator as _heval_t
+        import ai_evaluator as _heval_t
 
         def _prompt_evaluasi_tender(folder_paket, nama_paket):
             return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
@@ -10080,7 +10080,7 @@ Langkah:
 Mulai sekarang."""
 
         _ai_eval_model_t = st.selectbox(
-            "Model", ["ag/gemini-3.5-flash-extra-low", "ag/gemini-3-flash-agent", "gc/gemini-3-flash-preview", "gc/gemini-3-pro-preview", "cc/claude-haiku-4-5-20251001"],
+            "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
             key="tkual_ai_model",
         )
         _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
@@ -10112,7 +10112,7 @@ Mulai sekarang."""
                 def _run_ait(job):
                     try:
                         _prompt = _prompt_evaluasi_tender(job["folder"], job["nama"])
-                        _out = _heval_t._run_hermes(_prompt, model=_ai_eval_model_t)
+                        _out = _heval_t._run_evaluator(_prompt, model=_ai_eval_model_t)
                         return {"nama": job["nama"], "status": "ok", "output": _out, "error": ""}
                     except Exception as _e:
                         return {"nama": job["nama"], "status": "error", "output": "", "error": str(_e)}
@@ -10317,11 +10317,11 @@ Mulai sekarang."""
                         st.caption(_gm)
             with _gp_c3:
                 if st.button("🤖 Eval AI", key=f"gab2_ai_{_gp['kode_tender']}", use_container_width=True):
-                    import hermes_evaluator as _heval_ap
+                    import ai_evaluator as _heval_ap
                     with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
                         try:
                             _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
-                            _out_ap = _heval_ap._run_hermes(_prompt_ap, model=st.session_state.get("tkual_ai_model", "ag/gemini-3.5-flash-extra-low"))
+                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=st.session_state.get("tkual_ai_model", "claude-haiku-4-5-20251001"))
                             st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
                             with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
                                 st.markdown(_out_ap[:3000])

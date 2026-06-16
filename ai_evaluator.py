@@ -1,9 +1,9 @@
 """
-hermes_evaluator.py — Trigger Hermes Agent untuk evaluasi dokumen Pengadaan Langsung (JKK & PK).
+ai_evaluator.py — Trigger Claude Code CLI untuk evaluasi dokumen Pengadaan Langsung (JKK & PK).
 
 Flow:
-  Streamlit tombol → generate prompt → subprocess hermes --oneshot
-  → Hermes baca protokol di folder paket → evaluasi → tulis .md
+  Streamlit tombol → generate prompt → subprocess claude --print
+  → Claude baca protokol di folder paket → evaluasi → tulis .md
   → stdout dikembalikan ke Streamlit
 
 Prompt = minimalis (kurir path + trigger).
@@ -11,17 +11,15 @@ Protokol lengkap ada di PROTOKOL_*.md dalam folder paket — AI baca sendiri.
 """
 
 import subprocess
-import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Path hermes CLI
-HERMES_BIN = shutil.which("hermes") or r"C:\Users\MSI\bin\hermes"
+# Path claude CLI
+CLAUDE_BIN = shutil.which("claude") or r"D:\nodejs\claude"
 
-# Model default untuk evaluasi — AG flash dulu, fallback chain di hermes config
-DEFAULT_MODEL  = "ag/gemini-3.5-flash-extra-low"
-FALLBACK_MODEL = "gc/gemini-3-flash-preview"
+# Model default untuk evaluasi
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
@@ -44,12 +42,12 @@ def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK") -> Path:
     return None
 
 
-def _run_hermes(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) -> str:
+def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) -> str:
     """
-    Jalankan hermes --oneshot secara sinkron.
+    Jalankan claude --print secara sinkron.
     Returns stdout string. Raise RuntimeError jika gagal.
     """
-    cmd = [HERMES_BIN, "--oneshot", prompt, "--model", model, "--yolo", "--cli"]
+    cmd = [CLAUDE_BIN, "--print", "--dangerously-skip-permissions", "--model", model, prompt]
     try:
         result = subprocess.run(
             cmd,
@@ -61,13 +59,10 @@ def _run_hermes(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) -> 
         )
         if result.returncode != 0:
             err = (result.stderr or "")[:500]
-            # Fallback ke GC model kalau AG exhausted
-            if "exhausted" in err.lower() or "quota" in err.lower() or "429" in err:
-                return _run_hermes(prompt, model=FALLBACK_MODEL, timeout=timeout)
-            raise RuntimeError(f"Hermes exit {result.returncode}: {err}")
+            raise RuntimeError(f"Claude CLI exit {result.returncode}: {err}")
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Hermes timeout ({timeout}s) — paket mungkin terlalu besar.")
+        raise RuntimeError(f"Claude CLI timeout ({timeout}s) — paket mungkin terlalu besar.")
 
 
 # ── PROMPT TEMPLATES ──────────────────────────────────────────────────────────
@@ -125,7 +120,7 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_pra_reviu(folder, nama_paket)
-        output = _run_hermes(prompt, model=model)
+        output = _run_evaluator(prompt, model=model)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
@@ -138,7 +133,7 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_evaluasi_kualifikasi(folder, nama_paket)
-        output = _run_hermes(prompt, model=model)
+        output = _run_evaluator(prompt, model=model)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
@@ -151,7 +146,7 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_evaluasi_teknis(folder, nama_paket)
-        output = _run_hermes(prompt, model=model)
+        output = _run_evaluator(prompt, model=model)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
