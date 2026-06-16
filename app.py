@@ -1881,10 +1881,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         else:
             import hermes_evaluator as _heval
             _pr_selected = {}
+            _pr_all = st.checkbox("✅ Pilih Semua", value=False, key="pr_chk_all")
             for _rpr in _pl_rows_punya_folder:
                 _kpr = _rpr["kode_paket"]
-                _lpr = f"{_rpr.get('nomor_urut','')}. {_rpr.get('nama_paket','?')}"
-                _pr_selected[_kpr] = st.checkbox(_lpr, value=False, key=f"pr_chk_{_kpr}")
+                _nomor_urut = _rpr.get('nomor_urut') or ''
+                _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
+                _pr_selected[_kpr] = st.checkbox(_lpr, value=_pr_all, key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_model = st.selectbox(
                 "Model Hermes",
