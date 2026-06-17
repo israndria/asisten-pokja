@@ -100,12 +100,24 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
 
     # Filter event yang judulnya mengandung nama_paket (case-insensitive)
     nama_lower = nama_paket.lower()
+    is_ulang = "ulang" in nama_lower
     paket_events = [e for e in events_found if nama_lower in e.get("summary", "").lower()]
 
-    # Sort berdasarkan waktu update terakhir secara descending,
-    # supaya kalau ada duplikat jadwal (yg lama di-delete/diubah tapi masih nyangkut
-    # karena V19 naruh event baru, maka yang paling fresh update-nya yg di-pick)
-    paket_events.sort(key=lambda x: x.get("updated", ""), reverse=True)
+    # Kalau paket ulang: prioritaskan event yang judulnya juga mengandung "ulang"
+    # Kalau paket biasa: singkirkan event yang judulnya mengandung "ulang"
+    if is_ulang:
+        ulang_events = [e for e in paket_events if "ulang" in e.get("summary", "").lower()]
+        if ulang_events:
+            paket_events = ulang_events
+    else:
+        non_ulang = [e for e in paket_events if "ulang" not in e.get("summary", "").lower()]
+        if non_ulang:
+            paket_events = non_ulang
+
+    # Sort berdasarkan start date descending (event terbaru = jadwal terkini)
+    def _sort_key(e):
+        return e.get("start", {}).get("date") or e.get("start", {}).get("dateTime", "")
+    paket_events.sort(key=_sort_key, reverse=True)
 
     for jenis_key, keyword in _TAHAP_KEYWORD.items():
         kw_lower = keyword.lower()

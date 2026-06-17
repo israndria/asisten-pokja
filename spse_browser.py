@@ -60,43 +60,45 @@ def _run(coro, timeout=60):
 
 # ============================================================
 # Auto-Refresh Daemon
+# Simpan state di dict global proses (bukan module-level) agar survive hot-reload Streamlit.
 # ============================================================
-_refresh_event = threading.Event()
-_refresh_thread: threading.Thread | None = None
+import builtins as _builtins
+if not hasattr(_builtins, "_spse_refresh_state"):
+    _builtins._spse_refresh_state = {"event": threading.Event(), "thread": None}
 
 def _refresh_worker(interval_menit: int):
     import time
-    while not _refresh_event.is_set():
-        # Sleep per 5 detik supaya interupsi cepat
+    state = _builtins._spse_refresh_state
+    while not state["event"].is_set():
         for _ in range(interval_menit * 60 // 5):
-            if _refresh_event.is_set():
+            if state["event"].is_set():
                 return
             time.sleep(5)
-            
-        if _refresh_event.is_set():
+        if state["event"].is_set():
             return
-            
         if not _cek_cdp_aktif():
             break
-            
         try:
             refresh_browser()
         except Exception:
             pass
 
 def mulai_auto_refresh(interval_menit: int = 10):
-    global _refresh_thread
-    if _refresh_thread and _refresh_thread.is_alive():
+    state = _builtins._spse_refresh_state
+    t = state.get("thread")
+    if t and t.is_alive():
         return
-        
-    _refresh_event.clear()
-    _refresh_thread = threading.Thread(target=_refresh_worker, args=(interval_menit,), daemon=True)
-    _refresh_thread.start()
+    state["event"].clear()
+    t = threading.Thread(target=_refresh_worker, args=(interval_menit,), daemon=True)
+    t.start()
+    state["thread"] = t
 
 def stop_auto_refresh():
-    _refresh_event.set()
-    if _refresh_thread and _refresh_thread.is_alive():
-        _refresh_thread.join(timeout=1.0)
+    state = _builtins._spse_refresh_state
+    state["event"].set()
+    t = state.get("thread")
+    if t and t.is_alive():
+        t.join(timeout=1.0)
 
 # ============================================================
 # Session management

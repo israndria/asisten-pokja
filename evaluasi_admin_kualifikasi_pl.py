@@ -105,6 +105,19 @@ def _scrape_form_evaluasi(id_nontender: str) -> dict:
         }""")
         await asyncio.sleep(0.5)
 
+        # Klik tab harga agar form harga ter-render (SPSE lazy-render per tab)
+        await page.evaluate("""async () => {
+            var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a, [data-toggle=tab]'));
+            var hargaTab = tabs.find(function(t) {
+                return t.innerText.toLowerCase().includes('harga') || (t.href && t.href.includes('harga'));
+            });
+            if (hargaTab) {
+                hargaTab.click();
+                await new Promise(function(r) { setTimeout(r, 500); });
+            }
+        }""")
+        await asyncio.sleep(0.5)
+
         return await page.evaluate("""() => {
             var result = {
                 token: "",
@@ -144,6 +157,8 @@ def _scrape_form_evaluasi(id_nontender: str) -> dict:
                     form.querySelectorAll("input[type='checkbox']").forEach(function(cb) {
                         if (cb.value) result.checklist_harga.push(cb.value);
                     });
+                    var hargaField = form.querySelector("input[name='hargaTerkoreksi']");
+                    if (hargaField) result.harga_terkoreksi = hargaField.value;
                 }
             });
             return result;
@@ -153,6 +168,15 @@ def _scrape_form_evaluasi(id_nontender: str) -> dict:
         with _quiet():
             return spse_browser._run(_fetch())
     except Exception as e:
+        # Retry sekali jika execution context hancur karena navigasi SPSE
+        if "Execution context" in str(e) or "context was destroyed" in str(e):
+            import time
+            time.sleep(3)
+            try:
+                with _quiet():
+                    return spse_browser._run(_fetch())
+            except Exception as e2:
+                return {"error": str(e2)}
         return {"error": str(e)}
 
 
@@ -253,6 +277,14 @@ def submit_evaluasi_lulus_peserta(
 
     if teknis:
         vals_tek = form_data.get("checklist_teknis", [])
+        if not vals_tek:
+            # SPSE gating: form teknis hanya muncul setelah admin+kual LULUS di server.
+            # Re-scrape halaman untuk ambil form teknis yang kini sudah ter-render.
+            _log("  Re-scrape form teknis (SPSE gating)...")
+            form_data2 = _scrape_form_evaluasi(id_nontender)
+            if "error" not in form_data2:
+                vals_tek = form_data2.get("checklist_teknis", [])
+                token = form_data2.get("token") or token
         if vals_tek:
             url_tek = f"{BASE}/evaluasinontender/{id_nontender}/checklist_teknis"
             fields_tek = {f"checklist[{i}]": v for i, v in enumerate(vals_tek)}
@@ -260,20 +292,32 @@ def submit_evaluasi_lulus_peserta(
             teknis_ok = res_tek["ok"]
             _log(f"  Teknis checklist: {res_tek['pesan']} ({'OK' if teknis_ok else 'GAGAL'})")
         else:
-            _log("  [skip] checklist_teknis kosong")
+            _log("  [skip] checklist_teknis kosong (tidak ada syarat teknis)")
             teknis_ok = True
 
     if harga:
         vals_hrg = form_data.get("checklist_harga", [])
+        harga_terkoreksi = form_data.get("harga_terkoreksi")
+        if not vals_hrg:
+            # SPSE gating: form harga hanya muncul setelah teknis LULUS di server.
+            # Re-scrape untuk ambil form harga.
+            _log("  Re-scrape form harga (SPSE gating)...")
+            form_data_hrg = _scrape_form_evaluasi(id_nontender)
+            if "error" not in form_data_hrg:
+                vals_hrg = form_data_hrg.get("checklist_harga", [])
+                harga_terkoreksi = form_data_hrg.get("harga_terkoreksi") or harga_terkoreksi
+                token = form_data_hrg.get("token") or token
         if vals_hrg:
             url_hrg = f"{BASE}/evaluasinontender/{id_nontender}/checklist_harga"
             fields_hrg = {f"checklist[{i}]": v for i, v in enumerate(vals_hrg)}
-            fields_hrg["lulus"] = "true"  # Radio button lulus
+            fields_hrg["lulus"] = "true"
+            if harga_terkoreksi:
+                fields_hrg["hargaTerkoreksi"] = harga_terkoreksi
             res_hrg = _post_checklist(url_hrg, token, fields_hrg, referer)
             harga_ok = res_hrg["ok"]
             _log(f"  Harga checklist: {res_hrg['pesan']} ({'OK' if harga_ok else 'GAGAL'})")
         else:
-            _log("  [skip] checklist_harga kosong")
+            _log("  [skip] checklist_harga kosong (tidak ada syarat harga)")
             harga_ok = True
 
     ok = (not admin or admin_ok) and \

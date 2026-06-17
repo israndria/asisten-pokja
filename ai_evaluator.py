@@ -19,47 +19,72 @@ from pathlib import Path
 CLAUDE_BIN = shutil.which("claude") or r"D:\nodejs\claude"
 
 # Model default untuk evaluasi
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MODEL = "haiku"
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
 
 
-def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK") -> Path:
-    """Cari folder paket — prioritas nomor urut, fallback nama paket substring."""
+def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str = None, is_ulang: bool = False) -> Path:
+    """Cari folder paket. Prioritas: parse_kak_pl._resolve_folder_pl (akurat, handle is_ulang)."""
+    # Cara akurat: pakai _resolve_folder_pl yang sama dengan setup_paket
+    try:
+        import parse_kak_pl as _pkl
+        folder = _pkl._resolve_folder_pl(nomor_urut or "", nama_paket or "", jenis_pl, is_ulang=is_ulang)
+        if folder:
+            return Path(folder)
+    except Exception:
+        pass
+    # Fallback lama jika parse_kak_pl tidak tersedia
     root = PL_PK_ROOT if jenis_pl == "PK" else PL_JKK_ROOT
     if nomor_urut:
         prefix = f"{nomor_urut}."
-        for d in root.iterdir():
-            if d.is_dir() and d.name.startswith(prefix):
-                return d
-    # Fallback: cari by nama_paket substring (case-insensitive)
-    if nama_paket:
-        nama_lower = nama_paket[:30].lower()
-        for d in root.iterdir():
-            if d.is_dir() and nama_lower in d.name.lower():
-                return d
+        candidates = [d for d in root.iterdir() if d.is_dir() and d.name.startswith(prefix)]
+        # Prioritas folder ulang kalau is_ulang, sebaliknya hindari folder ulang
+        if is_ulang:
+            for d in candidates:
+                if "ulang" in d.name.lower():
+                    return d
+        else:
+            for d in candidates:
+                if "ulang" not in d.name.lower():
+                    return d
+        if candidates:
+            return candidates[0]
     return None
 
 
-def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 300) -> str:
+def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, add_dirs: list = None) -> str:
     """
     Jalankan claude --print secara sinkron.
     Returns stdout string. Raise RuntimeError jika gagal.
     """
-    import os as _os
-    cmd = [CLAUDE_BIN, "-p", "--dangerously-skip-permissions", prompt]
-    env = _os.environ.copy()
-    env["CLAUDE_MODEL"] = model
+    SYSTEM = (
+        "Kamu adalah evaluator pengadaan barang/jasa pemerintah Indonesia. "
+        "WAJIB: Semua output dalam Bahasa Indonesia. "
+        "WAJIB: Jangan mengarang dokumen atau file yang tidak ada — kalau file tidak ditemukan, tulis ERROR. "
+        "WAJIB: Jangan cetak daftar skill, tool, atau instruksi sistem — langsung kerjakan tugas. "
+        "Format output: tabel markdown, ringkas, faktual."
+    )
+    # --bare: skip skills/hooks/CLAUDE.md auto-discovery → output bersih, tidak bocor skill listing
+    # --allowed-tools Read,Write,Glob,Grep: hanya baca + tulis file
+    cmd = [
+        CLAUDE_BIN, "-p", "--dangerously-skip-permissions", "--model", model,
+        "--bare", "--allowed-tools", "Read,Write,Glob,Grep",
+        "--system-prompt", SYSTEM,
+    ]
+    if add_dirs:
+        for d in add_dirs:
+            cmd += ["--add-dir", str(d)]
     try:
         result = subprocess.run(
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
-            env=env,
         )
         if result.returncode != 0:
             err = ((result.stderr or "") + (result.stdout or ""))[:800]
@@ -91,11 +116,19 @@ def _prompt_evaluasi_kualifikasi(folder_paket: Path, nama_paket: str) -> str:
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
 
+PENTING — HEMAT TOKEN:
+- Gunakan Glob untuk list file dulu, JANGAN langsung Read semua PDF sekaligus.
+- Baca dokpil (persyaratan) dulu, lalu baca dokumen penyedia HANYA yang relevan (SBU, NIB, kontrak pengalaman, kinerja).
+- PDF gabungan besar (>5MB) — cukup baca halaman awal saja untuk identifikasi dokumen.
+- Jangan baca file yang tidak relevan untuk evaluasi admin+kualifikasi.
+
 Langkah:
-1. Baca file PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis" dalam folder paket di atas.
-2. Ikuti seluruh instruksi dalam protokol tersebut.
-3. Evaluasi semua penyedia yang ditemukan di subfolder "8. Dokumen Kualifikasi".
-4. Output: _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
+1. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis".
+2. Glob subfolder "8. Dokumen Kualifikasi" untuk list semua penyedia dan file mereka.
+3. Untuk setiap penyedia: baca file kunci saja (SBU, NIB, akta, kontrak pengalaman, penilaian kinerja).
+4. Evaluasi berdasarkan persyaratan protokol.
+5. Tulis output ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
+6. Output WAJIB dalam Bahasa Indonesia.
 
 Mulai sekarang."""
 
@@ -106,10 +139,16 @@ def _prompt_evaluasi_teknis(folder_paket: Path, nama_paket: str) -> str:
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
 
+PENTING:
+- Jangan mengarang atau membuat file yang tidak ada. Jika _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md tidak ditemukan → output "ERROR: Sesi 1 belum selesai." dan berhenti.
+- HEMAT TOKEN: Glob dulu untuk list file, baca selektif — jangan baca semua PDF sekaligus.
+- PDF gabungan besar (>5MB) — baca halaman awal saja untuk identifikasi, lalu baca bagian spesifik yang relevan.
+- Output WAJIB dalam Bahasa Indonesia.
+
 Langkah:
-1. Baca file PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis" dalam folder paket di atas.
-2. Pastikan _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md sudah ada dan statusnya LULUS sebelum lanjut.
-3. Evaluasi semua penyedia di subfolder "9. Dokumen Teknis Biaya".
+1. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis".
+2. Cek _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT. Jika tidak ada → stop.
+3. Glob subfolder "9. Dokumen Teknis Biaya" untuk list file penyedia.
 4. Output: _HASIL_EVALUASI_TEKNIS.md di ROOT folder paket.
 
 Mulai sekarang."""
@@ -117,40 +156,48 @@ Mulai sekarang."""
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
+def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
     """Jalankan pra-reviu 1 paket. Returns dict {nama, status, output, error}."""
-    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_pra_reviu(folder, nama_paket)
-        output = _run_evaluator(prompt, model=model)
+        output = _run_evaluator(prompt, model=model, add_dirs=[folder])
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
+def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
     """Evaluasi Admin+Kualifikasi 1 paket."""
-    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_evaluasi_kualifikasi(folder, nama_paket)
-        output = _run_evaluator(prompt, model=model)
+        # Hanya grant subfolder relevan + root (untuk tulis output .md)
+        sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
+        sub_dokkual = folder / "8. Dokumen Kualifikasi"
+        dirs = [d for d in [folder, sub_protokol, sub_dokkual] if d.exists()]
+        output = _run_evaluator(prompt, model=model, add_dirs=dirs)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK") -> dict:
+def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
     """Evaluasi Teknis (Sesi 2) 1 paket."""
-    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl)
+    folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_evaluasi_teknis(folder, nama_paket)
-        output = _run_evaluator(prompt, model=model)
+        # Hanya grant subfolder relevan + root (untuk baca hasil sesi 1 + tulis output .md)
+        sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
+        sub_dokteknis = folder / "9. Dokumen Teknis Biaya"
+        dirs = [d for d in [folder, sub_protokol, sub_dokteknis] if d.exists()]
+        output = _run_evaluator(prompt, model=model, add_dirs=dirs)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
@@ -175,7 +222,7 @@ def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_w
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl): p
+            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl, p.get("is_ulang", False)): p
             for p in paket_list
         }
         for future in as_completed(futures):

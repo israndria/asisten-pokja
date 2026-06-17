@@ -57,9 +57,16 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
         except pywintypes.com_error as ce:
             return {"ok": False, "pesan": f"Macro IsiDataPLByKode gagal: {ce}"}
 
+        # Refresh sheet @ Evaluasi (tgl_pembukaan, nomor BA, dll) — 1 sesi COM
+        try:
+            xl.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
+            _log("@ Evaluasi ter-refresh.")
+        except pywintypes.com_error:
+            _log("[WARN] IsiEvaluasiPLStandalone tidak ditemukan — skip.")
+
         wb.Save()
-        _log("@ Master Data terisi.")
-        return {"ok": True, "pesan": "@ Master Data terisi otomatis"}
+        _log("@ Master Data + @ Evaluasi terisi.")
+        return {"ok": True, "pesan": "@ Master Data + @ Evaluasi terisi otomatis"}
     except pywintypes.com_error as ce:
         return {"ok": False, "pesan": f"COM error: {ce}"}
     except Exception as e:
@@ -173,6 +180,14 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
             md_res = {"ok": True, "pesan": "@ Master Data terisi otomatis"}
         except pywintypes.com_error as ce:
             md_res = {"ok": False, "pesan": f"Macro IsiDataPLByKode gagal: {ce}"}
+
+        # Refresh @ Evaluasi setelah Master Data terisi
+        if md_res["ok"]:
+            try:
+                xl.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
+                _log("@ Evaluasi ter-refresh.")
+            except pywintypes.com_error:
+                _log("[WARN] IsiEvaluasiPLStandalone tidak ditemukan — skip.")
 
         wb.Save()
         _log("Excel disimpan.")

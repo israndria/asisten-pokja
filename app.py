@@ -440,6 +440,11 @@ if not _spse_role:
                 _spse_role = _detected
     except Exception:
         pass
+# Pastikan auto-refresh thread tetap jalan selama sudah login
+if _spse_role:
+    import spse_browser as _sb_ar
+    _sb_ar.mulai_auto_refresh()
+
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PP = PL saja
@@ -1881,7 +1886,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
         st.divider()
         st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
-        st.caption("Hermes Agent membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
+        st.caption("Claude Code membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
 
         _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
         if not _pl_rows_punya_folder:
@@ -1908,7 +1913,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_model = st.selectbox(
                 "Model Claude",
-                ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+                ["haiku", "sonnet"],
                 key="pr_model",
             )
             _btn_pr = st.button(
@@ -3904,6 +3909,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _lcb7("--- Populate sheet Hasil Evaluasi ---")
                                     _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
                                     _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
+
+                                    # Refresh @ Master Data agar tgl_pembukaan benar
+                                    # (penting untuk paket ulang: kode_paket baru → tanggal baru dari Supabase)
+                                    if _hasil7.get("ok"):
+                                        _lcb7("--- Refresh @ Master Data ---")
+                                        try:
+                                            import isi_master_data_pl as _imd7
+                                            _xlsm7 = _he_pl._find_xlsm(_kpl7)
+                                            if _xlsm7:
+                                                _md7 = _imd7.isi_master_data_pl(_kpl7, _xlsm7, progress_cb=_lcb7)
+                                                _lcb7(f"{'[OK]' if _md7.get('ok') else '[WARN]'} {_md7['pesan']}")
+                                            else:
+                                                _lcb7("[WARN] File .xlsm tidak ditemukan untuk refresh @ Master Data")
+                                        except Exception as _e_md7:
+                                            _lcb7(f"[WARN] Refresh @ Master Data gagal: {_e_md7}")
+
                                     _ringkasan7.append({
                                         "nama"  : _nama7,
                                         "status": "ok" if _hasil7.get("ok") else "gagal",
@@ -3991,14 +4012,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
                     st.divider()
-                    st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
-                    st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    st.markdown("#### 🤖 Evaluasi AI (Claude Code)")
+                    st.caption("Claude Code baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _ai_eval_model = st.selectbox(
-                        "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+                        "Model", ["haiku", "sonnet"],
                         key="pl8_ai_model",
                     )
-                    _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8_do_ai_kual")
-                    _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=False, key="pl8_do_ai_teknis")
+                    _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8_do_ai_kual")
+                    _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8_do_ai_teknis")
                     _btn_ai_eval = st.button(
                         f"🤖 Jalankan Evaluasi AI — {_n_paket8} paket",
                         key="pl8_btn_ai_eval", use_container_width=True,
@@ -4006,7 +4027,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     )
                     if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis):
                         import ai_evaluator as _heval8
-                        _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
+                        _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
                             _res_kual = _heval8.evaluasi_bulk(_ai_jobs, jenis="kualifikasi", model=_ai_eval_model, max_workers=3)
@@ -7020,6 +7041,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _lcb7("--- Populate sheet Hasil Evaluasi ---")
                                     _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
                                     _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
+
+                                    # Refresh @ Master Data agar tgl_pembukaan benar
+                                    # (penting untuk paket ulang: kode_paket baru → tanggal baru dari Supabase)
+                                    if _hasil7.get("ok"):
+                                        _lcb7("--- Refresh @ Master Data ---")
+                                        try:
+                                            import isi_master_data_pl as _imd7
+                                            _xlsm7 = _he_pl._find_xlsm(_kpl7)
+                                            if _xlsm7:
+                                                _md7 = _imd7.isi_master_data_pl(_kpl7, _xlsm7, progress_cb=_lcb7)
+                                                _lcb7(f"{'[OK]' if _md7.get('ok') else '[WARN]'} {_md7['pesan']}")
+                                            else:
+                                                _lcb7("[WARN] File .xlsm tidak ditemukan untuk refresh @ Master Data")
+                                        except Exception as _e_md7:
+                                            _lcb7(f"[WARN] Refresh @ Master Data gagal: {_e_md7}")
+
                                     _ringkasan7.append({
                                         "nama"  : _nama7,
                                         "status": "ok" if _hasil7.get("ok") else "gagal",
@@ -7107,14 +7144,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
                     st.divider()
-                    st.markdown("#### 🤖 Evaluasi AI (Hermes Agent)")
-                    st.caption("Hermes baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    st.markdown("#### 🤖 Evaluasi AI (Claude Code)")
+                    st.caption("Claude Code baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _ai_eval_model_pk = st.selectbox(
-                        "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+                        "Model", ["haiku", "sonnet"],
                         key="pl8pk_ai_model",
                     )
-                    _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=False, key="pl8pk_do_ai_kual")
-                    _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=False, key="pl8pk_do_ai_teknis")
+                    _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8pk_do_ai_kual")
+                    _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8pk_do_ai_teknis")
                     _btn_ai_eval_pk = st.button(
                         f"🤖 Jalankan Evaluasi AI — {_n_paket8} paket",
                         key="pl8pk_btn_ai_eval", use_container_width=True,
@@ -7122,7 +7159,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     )
                     if _btn_ai_eval_pk and (_do_ai_kualifikasi_pk or _do_ai_teknis_pk):
                         import ai_evaluator as _heval8pk
-                        _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket","")} for r in _pl8_selected_rows]
+                        _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi_pk:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
                             _res_kual_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="kualifikasi", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK")
@@ -10070,8 +10107,8 @@ with tab_kual:
             _render_konflik_dashboard(trigger_sync_doktek=False)
 
         st.divider()
-        st.markdown("#### 🤖 Evaluasi AI (Hermes Agent) — Tender")
-        st.caption("Hermes baca dokumen di folder paket Tender → output `.md`. Paralel per paket. Centang paket di Section 1 di atas.")
+        st.markdown("#### 🤖 Evaluasi AI (Claude Code) — Tender")
+        st.caption("Claude Code baca dokumen di folder paket Tender → output `.md`. Paralel per paket. Centang paket di Section 1 di atas.")
 
         import ai_evaluator as _heval_t
 
@@ -10090,7 +10127,7 @@ Langkah:
 Mulai sekarang."""
 
         _ai_eval_model_t = st.selectbox(
-            "Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+            "Model", ["haiku", "sonnet"],
             key="tkual_ai_model",
         )
         _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
