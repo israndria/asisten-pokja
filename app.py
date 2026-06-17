@@ -1904,7 +1904,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _kpr = _rpr["kode_paket"]
                 _nomor_urut = _rpr.get('nomor_urut') or ''
                 _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
-                _pr_selected[_kpr] = st.checkbox(_lpr, value=st.session_state.get(f"pr_chk_{_kpr}", True), key=f"pr_chk_{_kpr}")
+                _pr_selected[_kpr] = st.checkbox(_lpr, key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_model = st.selectbox(
                 "Model Claude",
@@ -3822,7 +3822,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _kpl7 = _rpl7["kode_paket"]
                     _nomor7 = _rpl7.get("nomor_urut") or ""
                     _label7 = f"{_nomor7}. {_rpl7.get('nama_paket','?')}" if _nomor7 else _rpl7.get("nama_paket", "?") or "?"
-                    _chk7 = st.checkbox(_label7, value=st.session_state.get(f"pl7_chk_{_kpl7}", True), key=f"pl7_chk_{_kpl7}")
+                    _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
                     st.session_state["pl7_checked"][_kpl7] = _chk7
 
             with _pl7c2:
@@ -3968,7 +3968,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _kpl8 = _rpl8["kode_paket"]
                     _nomor8 = _rpl8.get("nomor_urut") or ""
                     _label8 = f"{_nomor8}. {_rpl8.get('nama_paket','?')}" if _nomor8 else _rpl8.get("nama_paket", "?") or "?"
-                    _chk8 = st.checkbox(_label8, value=st.session_state.get(f"pl8_chk_{_kpl8}", True), key=f"pl8_chk_{_kpl8}")
+                    _chk8 = st.checkbox(_label8, key=f"pl8_chk_{_kpl8}")
                     st.session_state["pl8_checked"][_kpl8] = _chk8
 
             with _pl8c2:
@@ -6938,7 +6938,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _kpl7 = _rpl7["kode_paket"]
                     _nomor7 = _rpl7.get("nomor_urut") or ""
                     _label7 = f"{_nomor7}. {_rpl7.get('nama_paket','?')}" if _nomor7 else _rpl7.get("nama_paket", "?") or "?"
-                    _chk7 = st.checkbox(_label7, value=st.session_state.get(f"pl7_chk_{_kpl7}", True), key=f"pl7_chk_{_kpl7}")
+                    _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
                     st.session_state["pl7_checked"][_kpl7] = _chk7
 
             with _pl7c2:
@@ -7084,7 +7084,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _kpl8 = _rpl8["kode_paket"]
                     _nomor8 = _rpl8.get("nomor_urut") or ""
                     _label8 = f"{_nomor8}. {_rpl8.get('nama_paket','?')}" if _nomor8 else _rpl8.get("nama_paket", "?") or "?"
-                    _chk8 = st.checkbox(_label8, value=st.session_state.get(f"pl8_chk_{_kpl8}", True), key=f"pl8_chk_{_kpl8}")
+                    _chk8 = st.checkbox(_label8, key=f"pl8_chk_{_kpl8}")
                     st.session_state["pl8_checked"][_kpl8] = _chk8
 
             with _pl8c2:
