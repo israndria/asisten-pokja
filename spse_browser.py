@@ -114,12 +114,28 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     global _pw, _context, _page
     if _pw is None:
         _pw = await async_playwright().start()
+    import os as _os
+    _downloads_dir = _os.path.join(_os.path.expanduser("~"), "Downloads")
     browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
     # Pakai context pertama (window Chrome yang sudah terbuka)
     if browser.contexts:
         _context = browser.contexts[0]
     else:
         _context = await browser.new_context()
+    # Set download behavior ke folder Downloads user via CDP session langsung
+    # (accept_downloads tidak bisa di-set ke existing context via Playwright API)
+    try:
+        pages = _context.pages
+        if pages:
+            cdp_session = await _context.new_cdp_session(pages[0])
+            await cdp_session.send("Browser.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": _downloads_dir,
+                "eventsEnabled": True,
+            })
+            await cdp_session.detach()
+    except Exception:
+        pass
     # Pakai tab yang sudah ada (tab pertama/aktif), jangan buka tab baru saat reconnect
     if _context.pages:
         _page = _context.pages[0]

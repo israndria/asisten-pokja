@@ -819,6 +819,11 @@ def download_dokumen_paket_pl(
                 try:
                     r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
                     r_dl.raise_for_status()
+                    ct = r_dl.headers.get("Content-Type", "")
+                    if "text/html" in ct:
+                        hasil["error"].append(f"{fname}: session expired (server return HTML)")
+                        log(f"    ❌ {fname}: session expired — login ulang")
+                        continue
                     cd = r_dl.headers.get("Content-Disposition", "")
                     m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
                     if m_cd:

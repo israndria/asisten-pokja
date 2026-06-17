@@ -911,6 +911,10 @@ def download_dokumen_paket(
                     try:
                         r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
                         r_dl.raise_for_status()
+                        if "text/html" in r_dl.headers.get("Content-Type", ""):
+                            with _hasil_lock:
+                                hasil["error"].append(f"{fname}: session expired (server return HTML)")
+                            return ("err", f"{fname}: session expired — login ulang")
                         # Nama file dari Content-Disposition jika ada
                         cd = r_dl.headers.get("Content-Disposition", "")
                         m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
@@ -1009,6 +1013,10 @@ def download_dokumen_paket(
                             try:
                                 r_spse = requests.get(url_spse, headers=hdrs, timeout=30, stream=True)
                                 r_spse.raise_for_status()
+                                if "text/html" in r_spse.headers.get("Content-Type", ""):
+                                    with _hasil_lock:
+                                        hasil["error"].append(f"{fname}: session expired (server return HTML)")
+                                    return ("err", f"{fname}: session expired — login ulang")
                                 cd = r_spse.headers.get("Content-Disposition", "")
                                 m_cd2 = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
                                 if m_cd2:

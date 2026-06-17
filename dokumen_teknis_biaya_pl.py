@@ -90,6 +90,8 @@ def _download_file(url: str, dest_path: str) -> dict:
         r = requests.get(url, headers=_headers(BASE + "/evaluasinontender"), timeout=60, stream=True)
         if r.status_code != 200:
             return {"ok": False, "pesan": f"HTTP {r.status_code}", "path": ""}
+        if "text/html" in r.headers.get("Content-Type", ""):
+            return {"ok": False, "pesan": "session expired (server return HTML) — login ulang", "path": ""}
 
         # Deteksi nama file dari Content-Disposition
         cd = r.headers.get("Content-Disposition", "")
