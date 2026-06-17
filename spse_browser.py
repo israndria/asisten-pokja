@@ -106,7 +106,86 @@ def stop_auto_refresh():
 
 CHROME_EXE = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "BraveSoftware", "Brave-Browser", "User Data")
+CHROME_PROFILE_DIR = "Profile 1"  # direktori profil israndria di dalam CHROME_PROFILE
 CDP_PORT = 9222
+
+# File/folder yang di-clone dari profil asli (tanpa cache)
+_CLONE_FILES = [
+    "Bookmarks", "Bookmarks.bak", "Preferences", "Secure Preferences",
+    "Favicons", "History", "Web Data", "Login Data", "Login Data-journal",
+    "Shortcuts", "Top Sites", "Visited Links",
+]
+_CLONE_DIRS = ["Extensions", "Local Extension Settings"]
+_CLONE_FLAG = ".profile_cloned"  # flag file di session_dir — ada = sudah pernah clone
+
+
+def clone_profil_ke_session(force: bool = False) -> tuple[bool, str]:
+    """Clone file penting dari profil Brave asli (israndria/Profile 1) ke BROWSER_SESSION_DIR.
+
+    Hanya clone sekali (cek flag). Pakai force=True untuk clone ulang (update bookmark dll).
+    Return: (ok, pesan)
+    """
+    import shutil
+    src_profile = os.path.join(CHROME_PROFILE, CHROME_PROFILE_DIR)
+    dst_session = BROWSER_SESSION_DIR
+    flag_path = os.path.join(dst_session, _CLONE_FLAG)
+
+    if not force and os.path.exists(flag_path):
+        return True, "Profil sudah di-clone sebelumnya."
+
+    if not os.path.isdir(src_profile):
+        return False, f"Profil sumber tidak ditemukan: {src_profile}"
+
+    # Brave harus tidak sedang pakai profile ini (cek lockfile)
+    lockfile = os.path.join(src_profile, "lockfile")
+    if os.path.exists(lockfile):
+        return False, (
+            "Profil Brave asli sedang dipakai (lockfile ada). "
+            "Tutup semua jendela Brave normal terlebih dahulu, lalu sinkronkan ulang."
+        )
+
+    os.makedirs(dst_session, exist_ok=True)
+
+    # Buat subfolder Default di dalam session_dir (Chromium butuh subfolder profil)
+    dst_profile = os.path.join(dst_session, "Default")
+    os.makedirs(dst_profile, exist_ok=True)
+
+    copied, skipped = 0, 0
+    for fname in _CLONE_FILES:
+        src = os.path.join(src_profile, fname)
+        dst = os.path.join(dst_profile, fname)
+        if os.path.exists(src):
+            try:
+                shutil.copy2(src, dst)
+                copied += 1
+            except Exception:
+                skipped += 1
+
+    for dname in _CLONE_DIRS:
+        src = os.path.join(src_profile, dname)
+        dst = os.path.join(dst_profile, dname)
+        if os.path.isdir(src):
+            try:
+                if os.path.exists(dst):
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
+                    "Cache", "cache", "Code Cache", "GPUCache", "ScriptCache",
+                    "*.log", "*.tmp",
+                ))
+                copied += 1
+            except Exception:
+                skipped += 1
+
+    # Tulis flag
+    try:
+        with open(flag_path, "w", encoding="utf-8") as _f:
+            import datetime
+            _f.write(datetime.datetime.now().isoformat())
+    except Exception:
+        pass
+
+    label = "diperbarui" if force else "di-clone"
+    return True, f"Profil berhasil {label}: {copied} item disalin, {skipped} dilewati."
 
 
 async def _connect_cdp_async(url: str = "", navigate: bool = True):
@@ -174,17 +253,20 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
 
 
 def launch_chrome_dengan_cdp():
-    """Launch Brave baru dengan remote-debugging-port + buka SPSE langsung (1 tab)."""
-    import subprocess, shutil
-    # Hapus session lama agar tidak restore tab
+    """Launch Brave baru dengan remote-debugging-port + buka SPSE langsung (1 tab).
+    Pakai profil clone dari israndria (Profile 1) — bookmark & setting terbawa.
+    Clone hanya dilakukan sekali; gunakan clone_profil_ke_session(force=True) untuk update.
+    """
+    import subprocess
     session_dir = BROWSER_SESSION_DIR
-    if os.path.exists(session_dir):
-        shutil.rmtree(session_dir, ignore_errors=True)
     os.makedirs(session_dir, exist_ok=True)
+    # Clone profil jika belum pernah (idempoten)
+    clone_profil_ke_session(force=False)
     subprocess.Popen([
         CHROME_EXE,
         f"--remote-debugging-port={CDP_PORT}",
         f"--user-data-dir={session_dir}",
+        "--profile-directory=Default",
         "--no-first-run",
         "--no-default-browser-check",
         SPSE_BASE_URL,

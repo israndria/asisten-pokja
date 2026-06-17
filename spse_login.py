@@ -62,7 +62,7 @@ def detect_login_role() -> str | None:
     try:
         # Cek CDP aktif dulu
         url = _sb.get_url()
-        if not url or "spse" not in url:
+        if not url:
             return None
         # Baca file last_role — ditulis oleh _login_async saat login berhasil
         _session_dir = Path(__file__).parent / ".browser_session"

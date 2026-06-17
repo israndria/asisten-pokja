@@ -538,14 +538,30 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 st.session_state.pop("login_failed_role", None)
                 st.rerun()
         else:
-            # Browser terhubung tapi URL bukan loginpass dan belum ada role
-            st.success("Browser terhubung")
+            # Browser terhubung tapi role belum terdeteksi — coba detect ulang otomatis
+            try:
+                import spse_login as _sl_redetect
+                _redetected = _sl_redetect.detect_login_role()
+                if _redetected:
+                    st.session_state["spse_role"] = _redetected
+                    st.rerun()
+            except Exception:
+                pass
+            st.warning("⚠️ Browser terhubung, role belum terdeteksi")
             st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("🔄 Refresh", use_container_width=True):
-                    spse_browser.refresh_browser()
-                    st.rerun()
+                if st.button("🔍 Deteksi Ulang", use_container_width=True):
+                    try:
+                        import spse_login as _sl_redetect2
+                        _r2 = _sl_redetect2.detect_login_role()
+                        if _r2:
+                            st.session_state["spse_role"] = _r2
+                            st.rerun()
+                        else:
+                            st.toast("Role tidak terdeteksi — coba login ulang", icon="⚠️")
+                    except Exception as _re_err:
+                        st.toast(f"Deteksi gagal: {_re_err}", icon="❌")
             with col2:
                 if st.button("❌ Tutup", use_container_width=True):
                     spse_browser.tutup_browser()
@@ -565,6 +581,29 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 
         st.divider()
         st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")
+
+        # Sinkronkan profil israndria ke session CDP
+        with st.expander("⚙️ Profil Brave (israndria)", expanded=False):
+            st.caption("Bookmark & setting dari profil israndria di-clone ke sesi CDP.\nHanya perlu dijalankan ulang jika ada perubahan bookmark/setting baru.")
+            _col_sync1, _col_sync2 = st.columns(2)
+            if _col_sync1.button("🔄 Sinkronkan Profil", use_container_width=True, key="btn_sync_profil"):
+                with st.spinner("Menyinkronkan profil..."):
+                    _sync_ok, _sync_msg = spse_browser.clone_profil_ke_session(force=True)
+                if _sync_ok:
+                    st.success(_sync_msg)
+                else:
+                    st.error(_sync_msg)
+            if _col_sync2.button("🗑️ Reset Profil", use_container_width=True, key="btn_reset_profil",
+                                  help="Hapus clone lama → clone ulang saat launch berikutnya"):
+                _flag = os.path.join(spse_browser.BROWSER_SESSION_DIR, spse_browser._CLONE_FLAG)
+                if os.path.exists(_flag):
+                    try:
+                        os.unlink(_flag)
+                        st.success("Flag clone dihapus — profil akan di-clone ulang saat launch.")
+                    except Exception as _fe:
+                        st.error(str(_fe))
+                else:
+                    st.info("Belum ada clone sebelumnya.")
 
         _login_role = st.radio(
             "Login sebagai",
@@ -3236,13 +3275,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _verif_rows = []
         try:
             _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi"
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl"
             ).order("kode_paket").execute().data or []
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
+
+        # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
+        _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -3292,14 +3334,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _ku = _br.get('kode_unik') or _br['kode_paket']
                     _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                     _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
+                    _hint_ulang = _pl_hint_ulang(_br)
                     if _sudah and _tgl_kirim:
                         try:
                             _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                         except Exception:
                             _tgl_fmt = _tgl_kirim[:10]
-                        _label = f"{_ku} — {_br['nama_paket'][:35]} ✅ {_tgl_fmt}"
+                        _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
                     else:
-                        _label = f"{_ku} — {_br['nama_paket'][:40]}"
+                        _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
                     _col = _bc1 if _bi % 2 == 0 else _bc2
                     _default_chk = _centang_semua or (not _sudah)
                     if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -3425,7 +3468,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 if _rf.get("ok"):
                     _root = _rf.get("pesan") or ""  # pesan = folder_paket root
                     if _root and _os8.path.isdir(_root):
-                        _dir = _root
+                        _sub = _os8.path.join(_root, "7. Berita Acara + Summary Non Tender")
+                        _os8.makedirs(_sub, exist_ok=True)
+                        _dir = _sub
             except Exception:
                 pass
             # 2) fallback: Asisten_Pokja_Downloads
@@ -6491,13 +6536,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _verif_rows = []
         try:
             _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi"
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl"
             ).order("kode_paket").execute().data or []
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
+
+        # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
+        _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -6547,14 +6595,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _ku = _br.get('kode_unik') or _br['kode_paket']
                     _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                     _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
+                    _hint_ulang = _pl_hint_ulang(_br)
                     if _sudah and _tgl_kirim:
                         try:
                             _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                         except Exception:
                             _tgl_fmt = _tgl_kirim[:10]
-                        _label = f"{_ku} — {_br['nama_paket'][:35]} ✅ {_tgl_fmt}"
+                        _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
                     else:
-                        _label = f"{_ku} — {_br['nama_paket'][:40]}"
+                        _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
                     _col = _bc1 if _bi % 2 == 0 else _bc2
                     _default_chk = _centang_semua or (not _sudah)
                     if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -6680,7 +6729,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 if _rf.get("ok"):
                     _root = _rf.get("pesan") or ""  # pesan = folder_paket root
                     if _root and _os8.path.isdir(_root):
-                        _dir = _root
+                        _sub = _os8.path.join(_root, "7. Berita Acara + Summary Non Tender")
+                        _os8.makedirs(_sub, exist_ok=True)
+                        _dir = _sub
             except Exception:
                 pass
             # 2) fallback: Asisten_Pokja_Downloads
