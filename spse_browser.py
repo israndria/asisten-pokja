@@ -129,7 +129,7 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
         if pages:
             cdp_session = await _context.new_cdp_session(pages[0])
             await cdp_session.send("Browser.setDownloadBehavior", {
-                "behavior": "allow",
+                "behavior": "allowAndName",
                 "downloadPath": _downloads_dir,
                 "eventsEnabled": True,
             })
