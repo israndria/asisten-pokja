@@ -1,4 +1,4 @@
-﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
+"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -1586,6 +1586,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
+            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=True, key="pl_cb_extract_teks")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -1755,6 +1756,26 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
+                                    # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
+                                    if _pl_extract_teks:
+                                        try:
+                                            import extract_teks_kualifikasi as _etk
+                                            _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
+                                            if _pl_os.path.isdir(_etk_folder):
+                                                _etk_res = _etk.extract_folder_kualifikasi(
+                                                    _etk_folder, progress_cb=lambda m: _pl_paket_log.append(f"  {m}"),
+                                                )
+                                                if _etk_res.get("ok"):
+                                                    _etk_n = len(_etk_res.get("penyedia", []))
+                                                    _etk_tok = _etk_res.get("total_token_estimasi", 0)
+                                                    _etk_skip = len(_etk_res.get("skipped_dedup", []))
+                                                    _pl_paket_log.append(f"📝 Extract teks: {_etk_n} penyedia, ~{_etk_tok} token, {_etk_skip} file dedup")
+                                                else:
+                                                    _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                                            else:
+                                                _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
+                                        except Exception as _etk_e:
+                                            _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -1791,12 +1812,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Serap Penyedia & Parse Dokumen")
-            st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
+            st.markdown("#### 4. Refresh / Re-Parse Dokumen")
+            st.caption(
+                "⚠️ **Sudah dijalankan otomatis saat Buat Folder** (jika checkbox Download dicentang). "
+                "Gunakan tombol ini **hanya** jika ada perubahan dokumen dari PPK atau ingin refresh ulang."
+            )
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
 
-            if st.button("🔄 Serap Penyedia & Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
+            if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_pl as _keng_pl_dl
@@ -4901,6 +4925,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
+            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=True, key="pl_cb_extract_teks_pk")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -5070,6 +5095,26 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
+                                    # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
+                                    if _pl_extract_teks:
+                                        try:
+                                            import extract_teks_kualifikasi as _etk
+                                            _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
+                                            if _pl_os.path.isdir(_etk_folder):
+                                                _etk_res = _etk.extract_folder_kualifikasi(
+                                                    _etk_folder, progress_cb=lambda m: _pl_paket_log.append(f"  {m}"),
+                                                )
+                                                if _etk_res.get("ok"):
+                                                    _etk_n = len(_etk_res.get("penyedia", []))
+                                                    _etk_tok = _etk_res.get("total_token_estimasi", 0)
+                                                    _etk_skip = len(_etk_res.get("skipped_dedup", []))
+                                                    _pl_paket_log.append(f"📝 Extract teks: {_etk_n} penyedia, ~{_etk_tok} token, {_etk_skip} file dedup")
+                                                else:
+                                                    _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                                            else:
+                                                _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
+                                        except Exception as _etk_e:
+                                            _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -5106,12 +5151,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled_pk")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Serap Penyedia & Parse Dokumen")
-            st.caption("Download ulang dokumen atau reset status folder untuk semua paket berfolder.")
+            st.markdown("#### 4. Refresh / Re-Parse Dokumen")
+            st.caption(
+                "⚠️ **Sudah dijalankan otomatis saat Buat Folder** (jika checkbox Download dicentang). "
+                "Gunakan tombol ini **hanya** jika ada perubahan dokumen dari PPK atau ingin refresh ulang."
+            )
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk_pk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update_pk")
 
-            if st.button("🔄 Serap Penyedia & Parse Dokumen", use_container_width=True, key="btn_update_data_folder_pk"):
+            if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_plpk as _keng_pl_dl

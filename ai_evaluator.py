@@ -116,19 +116,20 @@ def _prompt_evaluasi_kualifikasi(folder_paket: Path, nama_paket: str) -> str:
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
 
-PENTING — HEMAT TOKEN:
-- Gunakan Glob untuk list file dulu, JANGAN langsung Read semua PDF sekaligus.
-- Baca dokpil (persyaratan) dulu, lalu baca dokumen penyedia HANYA yang relevan (SBU, NIB, kontrak pengalaman, kinerja).
-- PDF gabungan besar (>5MB) — cukup baca halaman awal saja untuk identifikasi dokumen.
-- Jangan baca file yang tidak relevan untuk evaluasi admin+kualifikasi.
+⛔ ATURAN HEMAT TOKEN — WAJIB DIPATUHI:
+- Sumber data sudah di-EXTRACT ke teks (.txt) di subfolder "8. Dokumen Kualifikasi/_teks_ekstrak".
+- DILARANG Read PDF mentah > 1MB di "8. Dokumen Kualifikasi". PDF besar = boros token ekstrem. Baca .txt saja.
+- Tiap penyedia punya 1 file .txt. Di dalamnya: bagian "### SUMBER UTAMA (checklist SPSE) ###" = ringkasan resmi SPSE (NPWP, SBU, NIB, akta, manajerial, pengalaman) — ini SUMBER UTAMA evaluasi.
+- Bagian "### DOKUMEN PENDUKUNG ###" hanya untuk VERIFIKASI SILANG poin yang meragukan — JANGAN baca semua kalau checklist sudah cukup menjawab.
 
 Langkah:
-1. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis".
-2. Glob subfolder "8. Dokumen Kualifikasi" untuk list semua penyedia dan file mereka.
-3. Untuk setiap penyedia: baca file kunci saja (SBU, NIB, akta, kontrak pengalaman, penilaian kinerja).
-4. Evaluasi berdasarkan persyaratan protokol.
-5. Tulis output ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
-6. Output WAJIB dalam Bahasa Indonesia.
+1. Baca _INDEX.txt di "8. Dokumen Kualifikasi/_teks_ekstrak" → list penyedia + file .txt mereka.
+2. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis" → pahami persyaratan.
+3. Untuk tiap penyedia: Read file .txt-nya. Evaluasi dari bagian SUMBER UTAMA (checklist). Cek silang ke DOKUMEN PENDUKUNG hanya jika ada poin yang perlu konfirmasi.
+4. Tulis output ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
+5. Output WAJIB dalam Bahasa Indonesia.
+
+Catatan: jika subfolder "_teks_ekstrak" TIDAK ADA, baru fallback baca PDF di "8. Dokumen Kualifikasi" secara selektif (Glob dulu, baca checklist_kualifikasi*.pdf yang kecil dulu).
 
 Mulai sekarang."""
 
@@ -179,7 +180,8 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         # Hanya grant subfolder relevan + root (untuk tulis output .md)
         sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
         sub_dokkual = folder / "8. Dokumen Kualifikasi"
-        dirs = [d for d in [folder, sub_protokol, sub_dokkual] if d.exists()]
+        sub_teks = sub_dokkual / "_teks_ekstrak"  # teks hasil pre-extract (hemat token)
+        dirs = [d for d in [folder, sub_protokol, sub_dokkual, sub_teks] if d.exists()]
         output = _run_evaluator(prompt, model=model, add_dirs=dirs)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
