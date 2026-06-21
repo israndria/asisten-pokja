@@ -1,4 +1,4 @@
-"""Asisten Pokja — SPSE Automation (Streamlit)."""
+﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -1985,6 +1985,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pl_rows_kd = pl_engine.load_draft_pl()
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
             _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
+            _kd_selected = []
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
@@ -5246,6 +5247,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _pl_rows_kd = pl_engine.load_draft_pl()
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
             _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
+            _kd_selected = []
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
