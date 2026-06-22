@@ -3300,7 +3300,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _verif_rows = []
         try:
             _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl"
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
             ).order("kode_paket").execute().data or []
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
@@ -3330,84 +3330,111 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             else:
                 st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
 
-                # Waktu — date_input + time_input (pola Tab 3)
-                import datetime as _dtlb
-                _bwc1, _bwc2 = st.columns(2)
-                with _bwc1:
-                    st.caption("**Waktu Mulai**")
-                    _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
-                    _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
-                    st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
-                with _bwc2:
-                    st.caption("**Waktu Selesai**")
-                    _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
-                    _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
-                _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
-                _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
+                # Helper: paket dianggap selesai jika terkirim ATAU sudah di tahap akhir SPSE
+                _TAHAP_SELESAI = {"Penandatanganan Kontrak", "Paket Sudah Selesai"}
+                def _is_selesai(r):
+                    if r.get("status_undangan_verifikasi") == "terkirim":
+                        return True
+                    if r.get("tahap_spse") in _TAHAP_SELESAI:
+                        return True
+                    return False
 
-                # Checkbox list paket
-                _sudah_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") == "terkirim"]
-                _belum_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") != "terkirim"]
-                _ca, _cb = st.columns([4, 1])
-                _ca.markdown("**Pilih paket yang akan dikirim:**")
-                if _sudah_kirim:
-                    _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
-                _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
-                _batch_selected = []
-                _bc1, _bc2 = st.columns(2)
-                for _bi, _br in enumerate(_batch_eligible):
-                    _ku = _br.get('kode_unik') or _br['kode_paket']
-                    _tgl_kirim = _br.get("tgl_undangan_verifikasi")
-                    _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
-                    _hint_ulang = _pl_hint_ulang(_br)
-                    if _sudah and _tgl_kirim:
-                        try:
-                            _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
-                        except Exception:
-                            _tgl_fmt = _tgl_kirim[:10]
-                        _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
-                    else:
-                        _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
-                    _col = _bc1 if _bi % 2 == 0 else _bc2
-                    _default_chk = _centang_semua or (not _sudah)
-                    if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
-                        _batch_selected.append(_br)
+                _n_selesai = sum(1 for r in _batch_eligible if _is_selesai(r))
+                _n_belum = len(_batch_eligible) - _n_selesai
+                _sembunyikan_selesai = st.checkbox(
+                    f"Sembunyikan yang sudah selesai ({_n_selesai} paket)",
+                    value=True,
+                    key="tab7_sembunyikan_selesai"
+                )
+                if _sembunyikan_selesai:
+                    _batch_tampil = [r for r in _batch_eligible if not _is_selesai(r)]
+                else:
+                    _batch_tampil = _batch_eligible
 
-                st.markdown(f"**{len(_batch_selected)} paket dipilih**")
+                if not _batch_tampil:
+                    st.success("✅ Semua paket sudah selesai!")
+                else:
+                    # Waktu — date_input + time_input (pola Tab 3)
+                    import datetime as _dtlb
+                    _bwc1, _bwc2 = st.columns(2)
+                    with _bwc1:
+                        st.caption("**Waktu Mulai**")
+                        _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
+                        _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
+                        st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
+                    with _bwc2:
+                        st.caption("**Waktu Selesai**")
+                        _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
+                        _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
+                    _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
+                    _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
 
-                if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
-                    if not _batch_start or not _batch_end:
-                        st.error("Waktu mulai dan selesai wajib diisi.")
-                    else:
-                            import verifikasi_penyedia_pl as _vpl_batch
-                            _hasil_batch = []
-                            _prog = st.progress(0, text="Mengirim...")
-                            for _bi2, _bp2 in enumerate(_batch_selected):
-                                _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
-                                _res = _vpl_batch.kirim_verifikasi(
-                                    id_nontender=_bp2["id_nontender"],
-                                    waktu_start=_batch_start,
-                                    waktu_end=_batch_end,
-                                )
-                                _hasil_batch.append({
-                                    "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
-                                    "nama": _bp2["nama_paket"][:40],
-                                    "ok": _res["ok"],
-                                    "msg": _res["msg"],
-                                })
-                            _prog.empty()
+                    # Checkbox list paket
+                    _sudah_kirim = [r for r in _batch_tampil if r.get("status_undangan_verifikasi") == "terkirim"]
+                    _belum_kirim = [r for r in _batch_tampil if r.get("status_undangan_verifikasi") != "terkirim"]
+                    _ca, _cb = st.columns([4, 1])
+                    _ca.markdown("**Pilih paket yang akan dikirim:**")
+                    if _sudah_kirim:
+                        _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                    _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
+                    _batch_selected = []
+                    _bc1, _bc2 = st.columns(2)
+                    for _bi, _br in enumerate(_batch_tampil):
+                        _ku = _br.get('kode_unik') or _br['kode_paket']
+                        _tgl_kirim = _br.get("tgl_undangan_verifikasi")
+                        _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
+                        _kontrak = _br.get("tahap_spse") == "Penandatanganan Kontrak"
+                        _hint_ulang = _pl_hint_ulang(_br)
+                        if _sudah and _tgl_kirim:
+                            try:
+                                _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
+                            except Exception:
+                                _tgl_fmt = _tgl_kirim[:10]
+                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
+                        elif _kontrak:
+                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} 🔒 Kontrak"
+                        else:
+                            _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
+                        _col = _bc1 if _bi % 2 == 0 else _bc2
+                        _default_chk = _centang_semua or (not _sudah and not _kontrak)
+                        if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
+                            _batch_selected.append(_br)
 
-                            # Tampilkan hasil
-                            _ok_list = [h for h in _hasil_batch if h["ok"]]
-                            _fail_list = [h for h in _hasil_batch if not h["ok"]]
-                            if _ok_list:
-                                st.success(f"✅ Berhasil: {len(_ok_list)} paket")
-                                for h in _ok_list:
-                                    st.write(f"  ✅ {h['paket']} — {h['nama']}")
-                            if _fail_list:
-                                st.error(f"❌ Gagal: {len(_fail_list)} paket")
-                                for h in _fail_list:
-                                    st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
+                    st.markdown(f"**{len(_batch_selected)} paket dipilih**")
+
+                    if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
+                        if not _batch_start or not _batch_end:
+                            st.error("Waktu mulai dan selesai wajib diisi.")
+                        else:
+                                import verifikasi_penyedia_pl as _vpl_batch
+                                _hasil_batch = []
+                                _prog = st.progress(0, text="Mengirim...")
+                                for _bi2, _bp2 in enumerate(_batch_selected):
+                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
+                                    _res = _vpl_batch.kirim_verifikasi(
+                                        id_nontender=_bp2["id_nontender"],
+                                        waktu_start=_batch_start,
+                                        waktu_end=_batch_end,
+                                    )
+                                    _hasil_batch.append({
+                                        "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
+                                        "nama": _bp2["nama_paket"][:40],
+                                        "ok": _res["ok"],
+                                        "msg": _res["msg"],
+                                    })
+                                _prog.empty()
+
+                                # Tampilkan hasil
+                                _ok_list = [h for h in _hasil_batch if h["ok"]]
+                                _fail_list = [h for h in _hasil_batch if not h["ok"]]
+                                if _ok_list:
+                                    st.success(f"✅ Berhasil: {len(_ok_list)} paket")
+                                    for h in _ok_list:
+                                        st.write(f"  ✅ {h['paket']} — {h['nama']}")
+                                if _fail_list:
+                                    st.error(f"❌ Gagal: {len(_fail_list)} paket")
+                                    for h in _fail_list:
+                                        st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
     with _pl_tab8:
@@ -6586,7 +6613,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _verif_rows = []
         try:
             _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl"
+                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
             ).order("kode_paket").execute().data or []
         except Exception as _ev_err:
             st.error(f"Gagal load paket PL: {_ev_err}")
@@ -6616,84 +6643,111 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             else:
                 st.caption(f"{len(_batch_eligible)} paket tersedia (sudah ada peserta).")
 
-                # Waktu — date_input + time_input (pola Tab 3)
-                import datetime as _dtlb
-                _bwc1, _bwc2 = st.columns(2)
-                with _bwc1:
-                    st.caption("**Waktu Mulai**")
-                    _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
-                    _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
-                    st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
-                with _bwc2:
-                    st.caption("**Waktu Selesai**")
-                    _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
-                    _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
-                _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
-                _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
+                # Helper: paket dianggap selesai jika terkirim ATAU sudah di tahap akhir SPSE
+                _TAHAP_SELESAI = {"Penandatanganan Kontrak", "Paket Sudah Selesai"}
+                def _is_selesai(r):
+                    if r.get("status_undangan_verifikasi") == "terkirim":
+                        return True
+                    if r.get("tahap_spse") in _TAHAP_SELESAI:
+                        return True
+                    return False
 
-                # Checkbox list paket
-                _sudah_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") == "terkirim"]
-                _belum_kirim = [r for r in _batch_eligible if r.get("status_undangan_verifikasi") != "terkirim"]
-                _ca, _cb = st.columns([4, 1])
-                _ca.markdown("**Pilih paket yang akan dikirim:**")
-                if _sudah_kirim:
-                    _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
-                _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
-                _batch_selected = []
-                _bc1, _bc2 = st.columns(2)
-                for _bi, _br in enumerate(_batch_eligible):
-                    _ku = _br.get('kode_unik') or _br['kode_paket']
-                    _tgl_kirim = _br.get("tgl_undangan_verifikasi")
-                    _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
-                    _hint_ulang = _pl_hint_ulang(_br)
-                    if _sudah and _tgl_kirim:
-                        try:
-                            _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
-                        except Exception:
-                            _tgl_fmt = _tgl_kirim[:10]
-                        _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
-                    else:
-                        _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
-                    _col = _bc1 if _bi % 2 == 0 else _bc2
-                    _default_chk = _centang_semua or (not _sudah)
-                    if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
-                        _batch_selected.append(_br)
+                _n_selesai = sum(1 for r in _batch_eligible if _is_selesai(r))
+                _n_belum = len(_batch_eligible) - _n_selesai
+                _sembunyikan_selesai = st.checkbox(
+                    f"Sembunyikan yang sudah selesai ({_n_selesai} paket)",
+                    value=True,
+                    key="tab7_sembunyikan_selesai"
+                )
+                if _sembunyikan_selesai:
+                    _batch_tampil = [r for r in _batch_eligible if not _is_selesai(r)]
+                else:
+                    _batch_tampil = _batch_eligible
 
-                st.markdown(f"**{len(_batch_selected)} paket dipilih**")
+                if not _batch_tampil:
+                    st.success("✅ Semua paket sudah selesai!")
+                else:
+                    # Waktu — date_input + time_input (pola Tab 3)
+                    import datetime as _dtlb
+                    _bwc1, _bwc2 = st.columns(2)
+                    with _bwc1:
+                        st.caption("**Waktu Mulai**")
+                        _bv_tgl = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl")
+                        _bv_jam = st.time_input("Jam", value=_dtlb.time(9, 0), key="batch_verif_jam")
+                        st.markdown(f"**{_HARI_NAMA[_bv_tgl.weekday()]}, {_bv_tgl.day} {_BULAN_NAMA[_bv_tgl.month-1]} {_bv_tgl.year}**")
+                    with _bwc2:
+                        st.caption("**Waktu Selesai**")
+                        _bv_tgl_end = st.date_input("Tanggal", value=_dtlb.date.today(), format="DD/MM/YYYY", key="batch_verif_tgl_end")
+                        _bv_jam_end = st.time_input("Jam", value=_dtlb.time(15, 0), key="batch_verif_jam_end")
+                    _batch_start = f"{_bv_tgl.strftime('%d-%m-%Y')} {_bv_jam.strftime('%H:%M')}"
+                    _batch_end   = f"{_bv_tgl_end.strftime('%d-%m-%Y')} {_bv_jam_end.strftime('%H:%M')}"
 
-                if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
-                    if not _batch_start or not _batch_end:
-                        st.error("Waktu mulai dan selesai wajib diisi.")
-                    else:
-                            import verifikasi_penyedia_pl as _vpl_batch
-                            _hasil_batch = []
-                            _prog = st.progress(0, text="Mengirim...")
-                            for _bi2, _bp2 in enumerate(_batch_selected):
-                                _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
-                                _res = _vpl_batch.kirim_verifikasi(
-                                    id_nontender=_bp2["id_nontender"],
-                                    waktu_start=_batch_start,
-                                    waktu_end=_batch_end,
-                                )
-                                _hasil_batch.append({
-                                    "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
-                                    "nama": _bp2["nama_paket"][:40],
-                                    "ok": _res["ok"],
-                                    "msg": _res["msg"],
-                                })
-                            _prog.empty()
+                    # Checkbox list paket
+                    _sudah_kirim = [r for r in _batch_tampil if r.get("status_undangan_verifikasi") == "terkirim"]
+                    _belum_kirim = [r for r in _batch_tampil if r.get("status_undangan_verifikasi") != "terkirim"]
+                    _ca, _cb = st.columns([4, 1])
+                    _ca.markdown("**Pilih paket yang akan dikirim:**")
+                    if _sudah_kirim:
+                        _ca.caption(f"✅ {len(_sudah_kirim)} sudah terkirim | ⏳ {len(_belum_kirim)} belum")
+                    _centang_semua = _cb.checkbox("Centang Semua", value=False, key="batch_centang_semua")
+                    _batch_selected = []
+                    _bc1, _bc2 = st.columns(2)
+                    for _bi, _br in enumerate(_batch_tampil):
+                        _ku = _br.get('kode_unik') or _br['kode_paket']
+                        _tgl_kirim = _br.get("tgl_undangan_verifikasi")
+                        _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
+                        _kontrak = _br.get("tahap_spse") == "Penandatanganan Kontrak"
+                        _hint_ulang = _pl_hint_ulang(_br)
+                        if _sudah and _tgl_kirim:
+                            try:
+                                _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
+                            except Exception:
+                                _tgl_fmt = _tgl_kirim[:10]
+                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
+                        elif _kontrak:
+                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} 🔒 Kontrak"
+                        else:
+                            _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
+                        _col = _bc1 if _bi % 2 == 0 else _bc2
+                        _default_chk = _centang_semua or (not _sudah and not _kontrak)
+                        if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
+                            _batch_selected.append(_br)
 
-                            # Tampilkan hasil
-                            _ok_list = [h for h in _hasil_batch if h["ok"]]
-                            _fail_list = [h for h in _hasil_batch if not h["ok"]]
-                            if _ok_list:
-                                st.success(f"✅ Berhasil: {len(_ok_list)} paket")
-                                for h in _ok_list:
-                                    st.write(f"  ✅ {h['paket']} — {h['nama']}")
-                            if _fail_list:
-                                st.error(f"❌ Gagal: {len(_fail_list)} paket")
-                                for h in _fail_list:
-                                    st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
+                    st.markdown(f"**{len(_batch_selected)} paket dipilih**")
+
+                    if st.button("📨 Kirim Undangan Verifikasi", key="btn_batch_kirim_konfirm", type="primary", disabled=not _batch_selected):
+                        if not _batch_start or not _batch_end:
+                            st.error("Waktu mulai dan selesai wajib diisi.")
+                        else:
+                                import verifikasi_penyedia_pl as _vpl_batch
+                                _hasil_batch = []
+                                _prog = st.progress(0, text="Mengirim...")
+                                for _bi2, _bp2 in enumerate(_batch_selected):
+                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
+                                    _res = _vpl_batch.kirim_verifikasi(
+                                        id_nontender=_bp2["id_nontender"],
+                                        waktu_start=_batch_start,
+                                        waktu_end=_batch_end,
+                                    )
+                                    _hasil_batch.append({
+                                        "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
+                                        "nama": _bp2["nama_paket"][:40],
+                                        "ok": _res["ok"],
+                                        "msg": _res["msg"],
+                                    })
+                                _prog.empty()
+
+                                # Tampilkan hasil
+                                _ok_list = [h for h in _hasil_batch if h["ok"]]
+                                _fail_list = [h for h in _hasil_batch if not h["ok"]]
+                                if _ok_list:
+                                    st.success(f"✅ Berhasil: {len(_ok_list)} paket")
+                                    for h in _ok_list:
+                                        st.write(f"  ✅ {h['paket']} — {h['nama']}")
+                                if _fail_list:
+                                    st.error(f"❌ Gagal: {len(_fail_list)} paket")
+                                    for h in _fail_list:
+                                        st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
     with _pl_tab8:
