@@ -446,21 +446,28 @@ if _spse_role:
     _sb_ar.mulai_auto_refresh()
 
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi"]
-if _spse_role == "PP":
+# Gunakan spse_role (sudah login) atau selected_login_role (pilihan user, persisten)
+_effective_role = _spse_role or st.session_state.get("selected_login_role", None)
+if _effective_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PP = PL saja
-elif _spse_role == "POKJA":
+elif _effective_role == "POKJA":
     _MODE_OPTIONS = ["Tender"]          # POKJA = Tender saja
+elif _effective_role in ("PPK", None):
+    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PPK ikut PL dulu
+elif _effective_role == "E-Katalog":
+    _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
 else:
-    _MODE_OPTIONS = _ALL_MODES          # belum login → semua tampil
+    _MODE_OPTIONS = _ALL_MODES
 
 if "app_mode" not in st.session_state:
     st.session_state["app_mode"] = "Tender"
 
 _mode_col, _ = st.columns([2, 5])
 with _mode_col:
-    # Snap mode ke opsi valid (kalau habis ganti role)
+    # Snap mode ke opsi valid (kalau habis ganti role) — rerun agar konten ikut update
     if st.session_state["app_mode"] not in _MODE_OPTIONS:
         st.session_state["app_mode"] = _MODE_OPTIONS[0]
+        st.rerun()
     _selected_mode = st.radio(
         "Mode:",
         _MODE_OPTIONS,
@@ -605,49 +612,85 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 else:
                     st.info("Belum ada clone sebelumnya.")
 
+        def _on_login_role_change():
+            st.session_state["selected_login_role"] = st.session_state["sidebar_login_role"]
+
         _login_role = st.radio(
             "Login sebagai",
-            ["PP", "POKJA"],
+            ["PP", "POKJA", "PPK", "E-Katalog"],
             horizontal=True,
             key="sidebar_login_role",
+            on_change=_on_login_role_change,
         )
 
-        if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
-            try:
-                import spse_login as _spse_login
-                _login_logs: list[str] = []
+        if _login_role == "E-Katalog":
+            if st.button("🛒 Buka Tab Inaproc", type="secondary", use_container_width=True):
+                try:
+                    if not spse_browser._cek_cdp_aktif():
+                        spse_browser.launch_chrome_dengan_cdp()
+                        import time as _t; _t.sleep(3)
+                        spse_browser.buka_browser(navigate=False)
+                    spse_browser.buka_browser("https://katalog.inaproc.id/login", navigate=True)
+                    st.session_state["spse_role"] = "E-Katalog"
+                    st.session_state["ekatalog_browser_opened"] = True
+                    st.info("Silakan isi email & password di tab Brave, lalu klik 'Masuk'. Setelah berhasil login, klik tombol di bawah.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Gagal: {e}")
 
-                with st.spinner("Meluncurkan Brave SPSE..."):
-                    spse_browser.launch_chrome_dengan_cdp()
-                    # Tunggu CDP ready (max 15 detik)
-                    import time as _t
-                    for _i in range(15):
-                        _t.sleep(1)
-                        if spse_browser._cek_cdp_aktif():
-                            break
-                    # Init Playwright + connect CDP di loop spse_browser
-                    spse_browser.buka_browser(navigate=False)
+            if st.session_state.get("ekatalog_browser_opened"):
+                if st.button("✅ Sudah Login Inaproc", type="primary", use_container_width=True):
+                    try:
+                        _ek_path = r"D:\Dokumen\@ POKJA 2026\V19_Scheduler\WPy64-313110\V22_InaprocOrder"
+                        if _ek_path not in sys.path:
+                            sys.path.insert(0, _ek_path)
+                        from api_client import ambil_cookies_dari_chrome
+                        _cookies = ambil_cookies_dari_chrome()
+                        if _cookies:
+                            st.session_state["ekatalog_cookies"] = _cookies
+                            st.success("✅ Login Inaproc berhasil! Survei pasar siap.")
+                            st.rerun()
+                        else:
+                            st.warning("Cookies kosong — pastikan sudah login di katalog.inaproc.id")
+                    except Exception as e:
+                        st.error(f"Gagal ambil cookies: {e}")
+        else:
+            if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
+                try:
+                    import spse_login as _spse_login
+                    _login_logs: list[str] = []
 
-                _log_box = st.empty()
-                # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
-                def _log(msg: str):
-                    _login_logs.append(msg)
+                    with st.spinner("Meluncurkan Brave SPSE..."):
+                        spse_browser.launch_chrome_dengan_cdp()
+                        # Tunggu CDP ready (max 15 detik)
+                        import time as _t
+                        for _i in range(15):
+                            _t.sleep(1)
+                            if spse_browser._cek_cdp_aktif():
+                                break
+                        # Init Playwright + connect CDP di loop spse_browser
+                        spse_browser.buka_browser(navigate=False)
 
-                with st.spinner("Auto-login SPSE..."):
-                    _spse_login.login_spse(role=_login_role, log_fn=_log)
+                    _log_box = st.empty()
+                    # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
+                    def _log(msg: str):
+                        _login_logs.append(msg)
 
-                # Tampilkan log setelah selesai (di main thread)
-                _log_box.info("\n".join(_login_logs))
+                    with st.spinner("Auto-login SPSE..."):
+                        _spse_login.login_spse(role=_login_role, log_fn=_log)
 
-                # Connect CDP setelah login berhasil
-                spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                st.session_state["spse_role"] = _login_role
-                spse_browser.mulai_auto_refresh()
-                st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
-                st.rerun()
-            except Exception as e:
-                import traceback
-                st.session_state["login_failed"] = True
+                    # Tampilkan log setelah selesai (di main thread)
+                    _log_box.info("\n".join(_login_logs))
+
+                    # Connect CDP setelah login berhasil
+                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                    st.session_state["spse_role"] = _login_role
+                    spse_browser.mulai_auto_refresh()
+                    st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    st.session_state["login_failed"] = True
                 st.session_state["login_failed_role"] = _login_role
                 st.error(f"Gagal: {e}")
                 st.code(traceback.format_exc())
@@ -4255,6 +4298,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _rrb8(st, _ringkasan8)
 
     st.stop()  # Jangan render tab Tender jika mode PL
+
+if st.session_state["app_mode"] == "E-Katalog - Survei Pasar":
+    import ekatalog_engine
+    st.markdown("### 🛍️ E-Katalog — Survei Pasar Inaproc")
+    ekatalog_engine.render_survei_pasar()
+    st.stop()
 
 if st.session_state["app_mode"] == "PL - Konstruksi":
     # ============================================================
