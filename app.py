@@ -730,9 +730,9 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
                 except Exception as e:
                     import traceback
                     st.session_state["login_failed"] = True
-                st.session_state["login_failed_role"] = _login_role
-                st.error(f"Gagal: {e}")
-                st.code(traceback.format_exc())
+                    st.session_state["login_failed_role"] = _login_role
+                    st.error(f"Gagal: {e}")
+                    st.code(traceback.format_exc())
 
         # Tombol retry — muncul kalau login gagal & browser masih di loginpass
         if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
