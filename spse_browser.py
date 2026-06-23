@@ -252,6 +252,26 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
     return _run(_connect_cdp_async(url, navigate=navigate))
 
 
+async def _buka_tab_baru_async(url: str):
+    """Buka tab baru di Brave CDP (tidak overwrite tab aktif)."""
+    global _context
+    if _context is None:
+        await _connect_cdp_async(navigate=False)
+    page = await _context.new_page()
+    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    await page.wait_for_timeout(3000)  # tunggu JS/Cloudflare hydrate
+    return page
+
+
+def buka_tab_baru(url: str):
+    """Buka tab baru di Brave CDP untuk URL eksternal (misal inaproc).
+    Tidak overwrite tab SPSE yang sudah aktif.
+    """
+    if not _cek_cdp_aktif():
+        raise RuntimeError("Brave belum terbuka via CDP.")
+    return _run(_buka_tab_baru_async(url))
+
+
 def launch_chrome_dengan_cdp():
     """Launch Brave baru dengan remote-debugging-port + buka SPSE langsung (1 tab).
     Pakai profil clone dari israndria (Profile 1) — bookmark & setting terbawa.

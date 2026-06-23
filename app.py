@@ -624,36 +624,75 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
         )
 
         if _login_role == "E-Katalog":
-            if st.button("🛒 Buka Tab Inaproc", type="secondary", use_container_width=True):
-                try:
-                    if not spse_browser._cek_cdp_aktif():
-                        spse_browser.launch_chrome_dengan_cdp()
-                        import time as _t; _t.sleep(3)
-                        spse_browser.buka_browser(navigate=False)
-                    spse_browser.buka_browser("https://katalog.inaproc.id/login", navigate=True)
-                    st.session_state["spse_role"] = "E-Katalog"
-                    st.session_state["ekatalog_browser_opened"] = True
-                    st.info("Silakan isi email & password di tab Brave, lalu klik 'Masuk'. Setelah berhasil login, klik tombol di bawah.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Gagal: {e}")
+            import ekatalog_login as _ekl
 
-            if st.session_state.get("ekatalog_browser_opened"):
-                if st.button("✅ Sudah Login Inaproc", type="primary", use_container_width=True):
+            # Auto-load session dari file
+            if not st.session_state.get("ekatalog_cookies"):
+                _saved = _ekl.load_session()
+                if _saved:
+                    st.session_state["ekatalog_cookies"] = _saved
+                    st.session_state["spse_role"] = "E-Katalog"
+
+            _ek_logged_in = bool(st.session_state.get("ekatalog_cookies"))
+
+            if not _ek_logged_in:
+                if st.button("🚀 Launch & Login Inaproc", type="primary", use_container_width=True):
                     try:
-                        _ek_path = r"D:\Dokumen\@ POKJA 2026\V19_Scheduler\WPy64-313110\V22_InaprocOrder"
-                        if _ek_path not in sys.path:
-                            sys.path.insert(0, _ek_path)
-                        from api_client import ambil_cookies_dari_chrome
-                        _cookies = ambil_cookies_dari_chrome()
-                        if _cookies:
-                            st.session_state["ekatalog_cookies"] = _cookies
-                            st.success("✅ Login Inaproc berhasil! Survei pasar siap.")
+                        if not spse_browser._cek_cdp_aktif():
+                            spse_browser.launch_chrome_dengan_cdp()
+                            import time as _t2; _t2.sleep(3)
+                            spse_browser.buka_browser(navigate=False)
+                        with st.spinner("Membuka halaman login & mengisi email+password..."):
+                            _status = _ekl.buka_dan_isi_login()
+                        if _status == "ok":
+                            _cookies = _ekl.ambil_cookies_cdp()
+                            if _cookies:
+                                st.session_state["ekatalog_cookies"] = _cookies
+                                st.session_state["spse_role"] = "E-Katalog"
+                                _ekl.save_session(_cookies)
+                                st.success("✅ Login Inaproc berhasil! Session disimpan 8 jam.")
+                                st.rerun()
+                        elif _status == "captcha":
+                            st.session_state["ekatalog_need_captcha"] = True
                             st.rerun()
                         else:
-                            st.warning("Cookies kosong — pastikan sudah login di katalog.inaproc.id")
+                            st.error(f"Login gagal: {_status}")
                     except Exception as e:
-                        st.error(f"Gagal ambil cookies: {e}")
+                        st.error(f"Gagal: {e}")
+
+                if st.session_state.get("ekatalog_need_captcha"):
+                    st.warning("⚠️ Centang **'Saya bukan robot'** di tab Brave, lalu klik **Masuk**.")
+                    if st.button("✅ Sudah Login Inaproc", type="primary", use_container_width=True):
+                        try:
+                            _cookies = _ekl.ambil_cookies_cdp()
+                            if _cookies:
+                                st.session_state["ekatalog_cookies"] = _cookies
+                                st.session_state["spse_role"] = "E-Katalog"
+                                st.session_state.pop("ekatalog_need_captcha", None)
+                                _ekl.save_session(_cookies)
+                                st.success("✅ Login berhasil! Session disimpan 8 jam.")
+                                st.rerun()
+                            else:
+                                st.warning("Cookies kosong — pastikan sudah login di tab Brave.")
+                        except Exception as e:
+                            st.error(f"Gagal ambil cookies: {e}")
+            else:
+                st.success("✅ Inaproc aktif")
+                if st.button("🔄 Refresh Session", use_container_width=True):
+                    try:
+                        _cookies = _ekl.ambil_cookies_cdp()
+                        if _cookies:
+                            st.session_state["ekatalog_cookies"] = _cookies
+                            _ekl.save_session(_cookies)
+                            st.success("Session diperbarui.")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+                if st.button("🚪 Logout Inaproc", use_container_width=True):
+                    st.session_state.pop("ekatalog_cookies", None)
+                    st.session_state.pop("ekatalog_need_captcha", None)
+                    _ekl.clear_session()
+                    st.rerun()
         else:
             if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
                 try:
