@@ -303,8 +303,10 @@ st.set_page_config(
 # Baca dark mode preference dari session_state sebelum inject CSS
 _is_dark = st.session_state.get("toggle_dark_mode", True)
 
-if _is_dark:
-    st.markdown("""
+
+@st.cache_data(show_spinner=False)
+def _get_dark_css() -> str:
+    return """
 <style>
 /* VS Code Dark+ Theme */
 :root {
@@ -418,7 +420,30 @@ button p {
     color: #D4D4D4 !important;
 }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+
+@st.cache_data(show_spinner=False)
+def _get_light_css() -> str:
+    return """<style>
+.stApp { background-color: #ffffff !important; color: #1e1e1e !important; }
+[data-testid="stSidebar"] { background-color: #f3f3f3 !important; }
+[data-testid="stHeader"] { background-color: #ffffff !important; }
+.stTabs [data-baseweb="tab-list"] { background-color: #f3f3f3 !important; }
+.stTabs [data-baseweb="tab"] { color: #1e1e1e !important; }
+label, [data-testid="stWidgetLabel"] p, [data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li, [data-testid="stMarkdownContainer"] span,
+[data-baseweb="radio"] label, [data-baseweb="radio"] span { color: #1e1e1e !important; }
+[data-testid="stCaptionContainer"] p { color: #555555 !important; }
+input, textarea, [data-baseweb="input"] input { background-color: #ffffff !important; color: #1e1e1e !important; border-color: #cccccc !important; }
+[data-baseweb="select"] div, [data-baseweb="select"] span { background-color: #ffffff !important; color: #1e1e1e !important; }
+[data-testid="stExpander"] { background-color: #f3f3f3 !important; border-color: #dddddd !important; }
+[data-testid="stExpander"] summary p { color: #1e1e1e !important; }
+</style>"""
+
+
+if _is_dark:
+    st.markdown(_get_dark_css(), unsafe_allow_html=True)
 
 st.title("🤖 Asisten Pokja")
 st.caption("Otomasi SPSE — spse.tapinkab.go.id")
@@ -487,30 +512,14 @@ with st.sidebar:
     # ── Toggle Light/Dark Mode ──────────────────────────────────────────────
     _dark_mode = st.toggle("🌙 Dark Mode", value=True, key="toggle_dark_mode")
     if not _dark_mode:
-        st.markdown("""
-<style>
-.stApp { background-color: #ffffff !important; color: #1e1e1e !important; }
-[data-testid="stSidebar"] { background-color: #f3f3f3 !important; }
-[data-testid="stHeader"] { background-color: #ffffff !important; }
-.stTabs [data-baseweb="tab-list"] { background-color: #f3f3f3 !important; }
-.stTabs [data-baseweb="tab"] { color: #1e1e1e !important; }
-label, [data-testid="stWidgetLabel"] p, [data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li, [data-testid="stMarkdownContainer"] span,
-[data-baseweb="radio"] label, [data-baseweb="radio"] span { color: #1e1e1e !important; }
-[data-testid="stCaptionContainer"] p { color: #555555 !important; }
-input, textarea, [data-baseweb="input"] input { background-color: #ffffff !important; color: #1e1e1e !important; border-color: #cccccc !important; }
-[data-baseweb="select"] div, [data-baseweb="select"] span { background-color: #ffffff !important; color: #1e1e1e !important; }
-[data-testid="stExpander"] { background-color: #f3f3f3 !important; border-color: #dddddd !important; }
-[data-testid="stExpander"] summary p { color: #1e1e1e !important; }
-</style>
-""", unsafe_allow_html=True)
+        st.markdown(_get_light_css(), unsafe_allow_html=True)
     st.divider()
     st.header("Browser SPSE")
 
     # Auto-reconnect Playwright hanya saat dibutuhkan (lazy) — sidebar info pakai CDP HTTP saja
     # buka_browser() dipanggil oleh engine saat submit, bukan di sini setiap refresh
 
-    url_aktif = spse_browser.get_url()
+    url_aktif = spse_browser.get_url() if spse_browser._cek_cdp_aktif() else None
     if url_aktif:
         _role_label = st.session_state.get("spse_role", None)
         _at_loginpass = "loginpass" in url_aktif
@@ -799,26 +808,16 @@ _LIBUR_2026 = {
 _LIBUR_MAP = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in _LIBUR_2026.items()}
 
 # Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
-penjelasan_engine.start_scheduler()
+if not st.session_state.get("_scheduler_started"):
+    penjelasan_engine.start_scheduler()
+    st.session_state["_scheduler_started"] = True
 
 if st.session_state["app_mode"] == "PL - Konsultansi":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab0 = st.tabs([
-        "1️⃣ Draft Paket PL",
-        "2️⃣ Kirim Undangan DPP",
-        "3️⃣ Setup Paket",
-        "4️⃣ Buat Jadwal",
-        "5️⃣ Download Kualifikasi",
-        "6️⃣ Evaluasi & Teknis/Biaya",
-        "7️⃣ Kirim Verifikasi",
-        "8️⃣ Upload BA PL",
-        "9️⃣ Import DPA",
-    ])
-
-    # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
-    with _pl_tab0:
+    @st.fragment
+    def _render_tab_dpa():
         import dpa_engine as _dpa
 
         st.markdown("### 📄 Import DPA / RKA ke Database")
@@ -1389,6 +1388,23 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         elif _dpa_search_q and len(_dpa_search_q.strip()) < 2:
             st.caption("Ketik minimal 2 karakter.")
 
+
+
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab0 = st.tabs([
+        "1️⃣ Draft Paket PL",
+        "2️⃣ Kirim Undangan DPP",
+        "3️⃣ Setup Paket",
+        "4️⃣ Buat Jadwal",
+        "5️⃣ Download Kualifikasi",
+        "6️⃣ Evaluasi & Teknis/Biaya",
+        "7️⃣ Kirim Verifikasi",
+        "8️⃣ Upload BA PL",
+        "9️⃣ Import DPA",
+    ])
+
+    # ── Tab 0: Import DPA ─────────────────────────────────────────────────────
+    with _pl_tab0:
+        _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     with _pl_tab1:

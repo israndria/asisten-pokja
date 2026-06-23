@@ -36,6 +36,9 @@ def sanitasi_nama_folder(nama: str) -> str:
     return re.sub(r'[/\\:*?"<>|]', "-", nama).strip()
 
 
+import streamlit as st
+
+@st.cache_resource
 def sb():
     """Buat Supabase client. Baca env dari secret_supabase.env (V19 atau lokal)."""
     from supabase import create_client
