@@ -40,7 +40,7 @@ def _load_env() -> dict[str, str]:
     return result
 
 
-def _get_creds(role: Literal["PP", "POKJA"]) -> tuple[str, str]:
+def _get_creds(role: Literal["PP", "POKJA", "PPK"]) -> tuple[str, str]:
     """Return (username, password) untuk role PP atau POKJA."""
     env = _load_env()
     key_u = f"SPSE_USERNAME_{role}"
@@ -69,7 +69,7 @@ def detect_login_role() -> str | None:
         _role_file = _session_dir / "last_role.txt"
         if _role_file.exists():
             role = _role_file.read_text(encoding="utf-8").strip()
-            if role in ("PP", "POKJA"):
+            if role in ("PP", "POKJA", "PPK"):
                 return role
     except Exception:
         pass
@@ -222,7 +222,7 @@ _LOGIN_URL = "https://spse.inaproc.id/tapinkab/loginpass"
 _MAX_RETRY = 5
 
 
-async def _login_async(role: Literal["PP", "POKJA"], log_fn=None) -> bool:
+async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool:
     """
     Connect ke Brave CDP → buka halaman login → auto-login dengan OCR CAPTCHA.
     Return True jika berhasil, raise RuntimeError jika gagal semua retry.
@@ -514,13 +514,13 @@ async def _retry_captcha_async(password: str, log_fn=None) -> bool:
     raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} retry captcha.")
 
 
-def retry_captcha(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
+def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     _, password = _get_creds(role)
     return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
 
 
-def login_spse(role: Literal["PP", "POKJA"] = "PP", log_fn=None) -> bool:
+def login_spse(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """
     Entry point sinkronus untuk dipanggil dari Streamlit / app.py.
     role: 'PP' atau 'POKJA'
