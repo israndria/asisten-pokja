@@ -823,8 +823,53 @@ def _fmt_rp(angka_str: str) -> str:
 @st.fragment
 def _render_tab_dpa():
     import dpa_engine as _dpa
+    def _rp(v):
+        try: return f"Rp {int(v):,}".replace(",", ".")
+        except: return str(v) if v else "-"
+
     st.markdown("### 📄 Import DPA / RKA ke Database")
     st.caption("Upload PDF DPA/RKA SKPD — ekstrak semua sub kegiatan dan rincian belanja ke Supabase.")
+
+    # Ide 2: Cari dari Database (tanpa upload)
+    st.markdown("### 🗄️ Cari dari Database (tanpa upload)")
+    _sb_search = st.text_input("Ketik nama paket...", key="dpa_sb_search")
+
+    @st.cache_data(ttl=60)
+    def _search_sb_dpa_items(keyword: str):
+        from config import sb as _sb_factory
+        _sb = _sb_factory()
+        return _sb.table("dpa_item_belanja").select(
+            "nama_paket,uraian,spesifikasi,jumlah_sebelum,jumlah_sesudah,subkegiatan_id"
+        ).ilike("nama_paket", f"%{keyword}%").limit(100).execute().data
+
+    if st.button("🔍 Cari", key="btn_dpa_sb_search") and _sb_search.strip():
+        _res_rows = _search_sb_dpa_items(_sb_search.strip())
+        if _res_rows:
+            from collections import defaultdict
+            _grouped = defaultdict(list)
+            for _row in _res_rows:
+                _grouped[_row.get("nama_paket")].append(_row)
+
+            st.write(f"Ditemukan {len(_grouped)} paket:")
+            for _nama_paket, _items in _grouped.items():
+                _subkeg_id = _items[0].get("subkegiatan_id") or ""
+                _parts = _subkeg_id.split("|")
+                _subkeg_info = _parts[-1] if len(_parts) >= 3 else _subkeg_id
+
+                with st.expander(f"📦 **{_nama_paket or 'Tanpa Nama Paket'}**"):
+                    st.caption(f"Sub Kegiatan: {_subkeg_info}")
+                    _table_rows = []
+                    for _it in _items:
+                        _table_rows.append({
+                            "Uraian / Kategori Belanja": _it.get("uraian") or "-",
+                            "Spesifikasi": _it.get("spesifikasi") or "-",
+                            "Sebelum": _rp(_it.get("jumlah_sebelum")),
+                            "Sesudah": _rp(_it.get("jumlah_sesudah")),
+                        })
+                    st.table(_table_rows)
+        else:
+            st.info("Tidak ditemukan data di database.")
+    st.divider()
 
     _dpa_file = st.file_uploader(
         "Upload PDF DPA:",
@@ -867,6 +912,45 @@ def _render_tab_dpa():
                 "Jml Item": _item_count,
             })
         st.dataframe(_dpa_preview_data, use_container_width=True, hide_index=True)
+
+        # Ide 1: Cari Paket dari PDF Ini
+        st.divider()
+        st.markdown("### 🔍 Cari Paket dari PDF Ini")
+        _pdf_search_key = st.text_input("Ketik nama paket...", key="dpa_pdf_search")
+        if _pdf_search_key.strip():
+            _keyword = _pdf_search_key.strip().lower()
+            _matches = []
+            for _sk in _dpa_sk_list:
+                _last_rekening_uraian = "-"
+                for _it in _sk["items"]:
+                    if _it["tipe"] == "rekening":
+                        _last_rekening_uraian = _it["uraian"]
+                    elif _it["tipe"] == "item":
+                        _nama_paket = _it.get("nama_paket") or ""
+                        if _keyword in _nama_paket.lower():
+                            _matches.append({
+                                "nama_paket": _nama_paket,
+                                "sub_kode": _sk["subkegiatan_kode"],
+                                "sub_nama": _sk["subkegiatan_nama"],
+                                "jumlah_sebelum": _it.get("jumlah_sebelum"),
+                                "jumlah_sesudah": _it.get("jumlah_sesudah"),
+                                "spesifikasi": _it.get("spesifikasi"),
+                                "kategori": _last_rekening_uraian
+                            })
+
+            if _matches:
+                st.write(f"Ditemukan {len(_matches)} item paket:")
+                for _m in _matches:
+                    with st.expander(f"📦 **{_m['nama_paket']}**"):
+                        st.write(f"**Sub Kegiatan:** {_m['sub_kode']} - {_m['sub_nama']}")
+                        _col1, _col2 = st.columns(2)
+                        _col1.write(f"**Rincian Sebelum:** {_rp(_m['jumlah_sebelum'])}")
+                        _col2.write(f"**Rincian Sesudah:** {_rp(_m['jumlah_sesudah'])}")
+                        if _m["spesifikasi"]:
+                            st.write(f"**Spesifikasi:** {_m['spesifikasi']}")
+                        st.write(f"**Kategori Belanja:** {_m['kategori']}")
+            else:
+                st.info("Tidak ada paket matching dalam PDF ini.")
 
         st.divider()
         st.markdown("#### Simpan ke Supabase")
@@ -1089,6 +1173,37 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                             ("Nama PPK",        _det.get("nama_ppk", "-")),
                         ]
                         st.table([{"Field": k, "Nilai": v} for k, v in _info_rows if v and v != "-"])
+
+                        # Ide 3: Tampilkan info DPA di Tab 1 Info Paket PPK
+                        if _det:
+                            _dpa_key = f"ppk_dpa_{_ik}"
+                            if _dpa_key not in st.session_state:
+                                from config import sb as _sb_dpa
+                                _sb_inst = _sb_dpa()
+                                _dpa_rows = _sb_inst.table("dpa_item_belanja").select(
+                                    "nama_paket,uraian,spesifikasi,jumlah_sebelum,jumlah_sesudah,selisih,subkegiatan_id"
+                                ).ilike("nama_paket", f"%{_in[:40]}%").limit(20).execute().data
+                                st.session_state[_dpa_key] = _dpa_rows
+
+                            _dpa_rows = st.session_state.get(_dpa_key, [])
+                            if _dpa_rows:
+                                st.divider()
+                                st.markdown("**📊 Info DPA:**")
+                                _dpa_table_data = []
+                                for _it in _dpa_rows:
+                                    _subkeg_id = _it.get("subkegiatan_id") or ""
+                                    _parts = _subkeg_id.split("|")
+                                    _subkeg_code = _parts[-1] if len(_parts) >= 3 else _subkeg_id
+                                    _dpa_table_data.append({
+                                        "Uraian": _it.get("uraian") or "-",
+                                        "Spesifikasi": _it.get("spesifikasi") or "-",
+                                        "Sebelum": _rp(_it.get("jumlah_sebelum")),
+                                        "Sesudah": _rp(_it.get("jumlah_sesudah")),
+                                        "Sub Kegiatan": _subkeg_code
+                                    })
+                                st.table(_dpa_table_data)
+                            else:
+                                st.caption("Belum ada data DPA")
 
     with _ppk_tab3:
         _render_tab_dpa()

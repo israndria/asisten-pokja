@@ -25,10 +25,14 @@ _TESSDATA_PREFIX = r"D:\Tesseract OCR\tessdata"
 
 # ── Regex Patterns ────────────────────────────────────────────────────────────
 
+# Ganti semua (cid:N) sequence
+def _strip_cid(s: str) -> str:
+    return re.sub(r'\(cid:\d+\)', '', s).strip()
+
 # Separator toleran: ':', '+', '=', atau spasi langsung
 # Kode toleran: digit, huruf kapital (O/I sering OCR-error untuk 0/1), titik, koma, dash
 _RE_SUBKEG_HEADER = re.compile(
-    r"Sub\s+Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I
+    r"Sub\s+Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)(?:\s*[-–\s]\s*(.+))?", re.I
 )
 _RE_PROGRAM = re.compile(r"Program\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
 _RE_KEGIATAN = re.compile(r"Kegiatan\s*[:\+=\s]+([0-9A-Z,\.X]+(?:[-\.][0-9A-Z,\.X]+)*)\s*[-–]\s*(.+)", re.I)
@@ -52,6 +56,13 @@ _RE_ITEM_SPEK = re.compile(
 # Jumlah akhir sub kegiatan
 _RE_JUMLAH_SUBKEG = re.compile(
     r"Jumlah Anggaran Sub Kegiatan(?:\s+(?:Sebelum|Sesudah)\s*:)?\s*Rp?([\d\.]+,\d{2})"
+)
+
+# Regex baris koef Sebelum+Sesudah 1 baris
+_RE_KOEF_2COL = re.compile(
+    r"^([\d\s\.]+)\s+(\S+)\s+\S+\s+([\d\.]+,\d{2})\s+-\s+([\d\.]+,\d{2})"
+    r"\s+([\d\s\.]+)\s+\S+\s+\S+\s+([\d\.]+,\d{2})\s+-\s+([\d\.]+,\d{2})"
+    r"\s+(-?[\d\.]+,\d{2})\s*$"
 )
 
 
@@ -121,7 +132,8 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
         all_lines = []
         for page in pdf.pages:
             txt = page.extract_text() or ""
-            all_lines.extend(txt.splitlines())
+            for raw_line in txt.splitlines():
+                all_lines.append(_strip_cid(raw_line))
 
     # ── Ambil meta global dari halaman awal ──────────────────────────────────
     full_text = "\n".join(all_lines)
@@ -168,12 +180,22 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
         if line.startswith("Sub Kegiatan :") or line.startswith("Sub Kegiatan:"):
             m = _RE_SUBKEG_HEADER.match(line)
             if m:
+                kode_sk = m.group(1).strip()
+                # Jika sub kegiatan berkode sama sudah ada, kita update saja atau pertahankan
+                # Tujuannya agar kita tidak me-reset current_sk yang sedang diisi rinciannya jika ada header SK berulang di halaman berikutnya
+                if current_sk is not None and current_sk["subkegiatan_kode"] == kode_sk:
+                    # Header SK berulang di halaman rincian baru, pertahankan current_sk
+                    # Tapi jika ada nama SK di header baru, update nama jika sebelumnya kosong
+                    if m.group(2) and not current_sk["subkegiatan_nama"]:
+                        current_sk["subkegiatan_nama"] = _clean(m.group(2))
+                    i += 1
+                    continue
+
                 # Simpan sub kegiatan sebelumnya
                 if current_sk is not None:
                     result["subkegiatan"].append(current_sk)
 
-                kode_sk = m.group(1).strip()
-                nama_sk = _clean(m.group(2))
+                nama_sk = _clean(m.group(2)) if m.group(2) else ""
 
                 current_sk = {
                     "subkegiatan_kode": kode_sk,
@@ -285,7 +307,7 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
 
             # Baris kode rekening (level 1-7): "5 BELANJA..." "5.1.02..." dll
             m_rek = re.match(
-                r"^(5(?:\.\d+){0,6})\s+(.+?)\s+([\d\.]+,\d{2})\s+([\d\.]+,\d{2})\s+([\d\.]+,\d{2})\s*$",
+                r"^(5(?:\.\d+){0,6})\s+(.+?)\s+(-?[\d\.]+,\d{2})\s+(-?[\d\.]+,\d{2})\s+(-?[\d\.]+,\d{2})\s*$",
                 line
             )
             if m_rek:
@@ -360,6 +382,12 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             if line.startswith("[ # ]"):
                 raw_paket = _clean(line[5:].strip())
                 current_paket_nama = re.sub(r"\s+Rp[\d\.,]+\s*$", "", raw_paket).strip()
+                # Cek jika baris berikutnya berisi 3 nilai numeric rupiah (sebelum sesudah selisih)
+                if i + 1 < len(all_lines):
+                    next_line = all_lines[i+1].strip()
+                    m_next_vals = re.match(r"^([\d\.]+,\d{2})\s+([\d\.]+,\d{2})\s+(-?[\d\.]+,\d{2})\s*$", next_line)
+                    if m_next_vals:
+                        i += 1  # Skip baris nilai tersebut karena sudah dibaca
                 i += 1
                 continue
 
@@ -372,9 +400,12 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
 
             # Baris [ - ] nama item — simpan nama untuk baris koef berikutnya
             if line.startswith("[ - ]"):
-                current_item_nama = _clean(line[5:].strip())
-                # Hapus jumlah Rp di akhir jika ada (format: "[ - ] Nama Item Rp1.234,00")
-                current_item_nama = re.sub(r"\s+Rp[\d\.,]+\s*$", "", current_item_nama).strip()
+                raw = _clean(line[5:].strip())
+                m_3val = re.match(r"^(.+?)\s+([\d\.]+,\d{2})\s+([\d\.]+,\d{2})\s+(-?[\d\.]+,\d{2})\s*$", raw)
+                if m_3val:
+                    current_item_nama = _clean(m_3val.group(1))
+                else:
+                    current_item_nama = re.sub(r"\s+Rp[\d\.,]+\s*$", "", raw).strip()
                 i += 1
                 continue
 
@@ -383,6 +414,37 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                 r"^([\d\s\.]+)\s+(\S+)\s+\S+\s+Rp([\d\.]+,\d{2})\s+\d+%\s+Rp([\d\.]+,\d{2})\s*$",
                 line
             )
+            # Coba match format Sebelum+Sesudah 2 kolom
+            m_koef2 = _RE_KOEF_2COL.match(line)
+
+            if m_koef2 and current_sk is not None:
+                koef = m_koef2.group(1).strip()
+                satuan = m_koef2.group(2)
+                harga_seb = _parse_rp(m_koef2.group(3))
+                jumlah_seb = _parse_rp(m_koef2.group(4))
+                harga_ses = _parse_rp(m_koef2.group(6))
+                jumlah_ses = _parse_rp(m_koef2.group(7))
+                selisih = _parse_rp(m_koef2.group(8))
+                parent_kode = current_rekening["kode_rekening"] if current_rekening else None
+                current_sk["items"].append({
+                    "tipe": "item",
+                    "kode_rekening": parent_kode,
+                    "level": None,
+                    "uraian": current_item_nama or "—",
+                    "koefisien": koef,
+                    "satuan": satuan,
+                    "harga_sebelum": harga_seb,
+                    "jumlah_sebelum": jumlah_seb,
+                    "harga_sesudah": harga_ses,
+                    "jumlah_sesudah": jumlah_ses,
+                    "selisih": selisih,
+                    "spesifikasi": None,
+                    "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
+                    "nama_paket": current_paket_nama,
+                })
+                i += 1
+                continue
+
             if m_koef1 and current_sk is not None:
                 koef = m_koef1.group(1).strip()
                 satuan = m_koef1.group(2)
@@ -411,6 +473,45 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
             # Baris item spesifikasi: "NamaSpesifikasi : N Satuan Satuan harga - jumlah ..."
             # Contoh: "FotocopySpesifikasi : 647 Lembar Lembar 400,00 - 258.800,00 647 Lembar - 400,00 - 258.800,00 0,00"
             if "Spesifikasi" in line:
+                # Coba match format 2-kolom tanpa prefix nama item di depan "Spesifikasi"
+                # Contoh: "Spesifikasi : Perencanaan Bangunan Gedung Negara  500 1 Paket Pekerjaan 20.000.000,00 - 20.000.000,00 1 Paket Pekerjaan 20.000.000,00 - 20.000.000,00 0,00"
+                m_sp2c = re.match(
+                    r"^Spesifikasi\s*:\s*(.*?)\s+"
+                    r"(\d[\d\s]*)\s+(\S+)\s+\S+\s+([\d\.]+,\d{2})\s+-\s+([\d\.]+,\d{2})"   # koef_seb satuan harga jumlah
+                    r".*?([\d\.]+,\d{2})\s+-\s+([\d\.]+,\d{2})\s+(-?[\d\.]+,\d{2})\s*$",    # koef_ses harga jumlah selisih
+                    line
+                )
+                if m_sp2c:
+                    spek = _clean(m_sp2c.group(1))
+                    koef = _clean(m_sp2c.group(2))
+                    satuan = m_sp2c.group(3)
+                    harga_seb = _parse_rp(m_sp2c.group(4))
+                    jumlah_seb = _parse_rp(m_sp2c.group(5))
+                    harga_ses = _parse_rp(m_sp2c.group(6))
+                    jumlah_ses = _parse_rp(m_sp2c.group(7))
+                    selisih_item = _parse_rp(m_sp2c.group(8))
+
+                    parent_kode = current_rekening["kode_rekening"] if current_rekening else None
+                    current_sk["items"].append({
+                        "tipe": "item",
+                        "kode_rekening": parent_kode,
+                        "level": None,
+                        "uraian": current_item_nama or "—",
+                        "koefisien": koef,
+                        "satuan": satuan,
+                        "harga_sebelum": harga_seb,
+                        "jumlah_sebelum": jumlah_seb,
+                        "harga_sesudah": harga_ses,
+                        "jumlah_sesudah": jumlah_ses,
+                        "selisih": selisih_item,
+                        "spesifikasi": spek,
+                        "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
+                        "nama_paket": current_paket_nama,
+                    })
+                    current_item_nama = None
+                    i += 1
+                    continue
+
                 m_sp = re.match(
                     r"^(.+?)Spesifikasi\s*:\s*(.*?)\s+"
                     r"(\d[\d\s\.]*)\s+(\S+)\s+\S+\s+"       # koef_seb satuan satuan
@@ -462,6 +563,25 @@ def parse_dpa_pdf(file_bytes: bytes, nama_file: str = "") -> dict:
                         "sumber_dana_item": current_rekening["sumber_dana_item"] if current_rekening else None,
                         "nama_paket": current_paket_nama,
                     })
+                    i += 1
+                    continue
+
+            # Nama standalone fallback di dalam rincian
+            # Syarat: in_rincian = True, bukan regex/pola di atas, tidak mengandung rupiah, len < 80
+            # Skip baris pendek (< 10 char) tanpa angka (misal "Juta") agar tidak menimpa nama item
+            if (current_sk is not None
+                    and not line.startswith("Sub Kegiatan")
+                    and not line.startswith("[")
+                    and not line.startswith("Sumber Dana")
+                    and not re.match(r"^5\.", line)
+                    and not re.search(r"\d+,\d{2}", line)
+                    and len(line) < 80):
+                if len(line) < 10 and not any(c.isdigit() for c in line):
+                    i += 1
+                    continue
+                current_item_nama = line
+                i += 1
+                continue
 
         i += 1
 
