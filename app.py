@@ -471,40 +471,40 @@ if _spse_role:
     _sb_ar.mulai_auto_refresh()
 
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
-# Gunakan spse_role (sudah login) atau selected_login_role (pilihan user, persisten)
-_effective_role = _spse_role or st.session_state.get("selected_login_role", None)
-if _effective_role == "PP":
-    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PP = PL saja
-elif _effective_role == "POKJA":
-    _MODE_OPTIONS = ["Tender"]          # POKJA = Tender saja
-elif _effective_role == "PPK":
+if _spse_role == "PP":
+    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
+elif _spse_role == "POKJA":
+    _MODE_OPTIONS = ["Tender"]
+elif _spse_role == "PPK":
     _MODE_OPTIONS = ["PPK - Upload Dokumen"]
-elif _effective_role is None:
-    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]  # PPK/None default
-elif _effective_role == "E-Katalog":
+elif _spse_role == "E-Katalog":
     _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
 else:
     _MODE_OPTIONS = _ALL_MODES
 
-if "app_mode" not in st.session_state:
-    st.session_state["app_mode"] = "Tender"
-
-_mode_col, _ = st.columns([2, 5])
-with _mode_col:
-    # Snap mode ke opsi valid (kalau habis ganti role) — rerun agar konten ikut update
-    if st.session_state["app_mode"] not in _MODE_OPTIONS:
+if _spse_role:
+    if "app_mode" not in st.session_state:
         st.session_state["app_mode"] = _MODE_OPTIONS[0]
-        st.rerun()
-    _selected_mode = st.radio(
-        "Mode:",
-        _MODE_OPTIONS,
-        index=_MODE_OPTIONS.index(st.session_state["app_mode"]),
-        horizontal=True,
-        key="radio_app_mode",
-    )
-    st.session_state["app_mode"] = _selected_mode
 
-st.divider()
+    _mode_col, _ = st.columns([2, 5])
+    with _mode_col:
+        if st.session_state.get("app_mode") not in _MODE_OPTIONS:
+            st.session_state["app_mode"] = _MODE_OPTIONS[0]
+            st.rerun()
+        _selected_mode = st.radio(
+            "Mode:",
+            _MODE_OPTIONS,
+            index=_MODE_OPTIONS.index(st.session_state["app_mode"]),
+            horizontal=True,
+            key="radio_app_mode",
+        )
+        st.session_state["app_mode"] = _selected_mode
+
+    st.divider()
+else:
+    st.session_state.pop("app_mode", None)
+    st.info("🔐 Silakan login via sidebar untuk memulai.")
+    st.stop()
 
 # ============================================================
 # Sidebar — Browser Control
@@ -1109,7 +1109,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         return nama
 
     @st.cache_data(ttl=120)
-    def _load_paket_ppk():
+    def _load_paket_ppk(_role_key=None):
         return _ppk_up.fetch_paket_ppk()
 
     _ppk_tab1, _ppk_tab2, _ppk_tab3 = st.tabs([
@@ -1119,7 +1119,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
     ])
 
     with _ppk_tab1:
-        _info_list = _load_paket_ppk()
+        _info_list = _load_paket_ppk(_role_key=st.session_state.get("spse_role"))
 
         def _rp(v):
             try: return f"Rp {int(v):,}".replace(",", ".")
@@ -1321,6 +1321,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # MODE: PENGADAAN LANGSUNG (PL JKK & PL PK)
     # ============================================================
 
+    if st.session_state.get("spse_role") != "PP":
+        st.warning("⚠️ Browser belum login sebagai PP. Login via sidebar terlebih dahulu.")
+        st.stop()
 
     _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
         "1️⃣ Draft Paket PL",
@@ -4326,6 +4329,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ============================================================
     # MODE: PENGADAAN LANGSUNG — PEKERJAAN KONSTRUKSI (PL PK)
     # ============================================================
+
+    if st.session_state.get("spse_role") != "PP":
+        st.warning("⚠️ Browser belum login sebagai PP. Login via sidebar terlebih dahulu.")
+        st.stop()
+
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
     _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
