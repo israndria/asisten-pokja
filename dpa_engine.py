@@ -1330,3 +1330,65 @@ def flatten_to_rows(parsed: dict) -> list[dict]:
             row = {**sk_base, **item}
             rows.append(row)
     return rows
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MATCH NAMA PAKET SPSE → DPA
+# ════════════════════════════════════════════════════════════════════════
+# Nama paket di SPSE (PPK/PP) berupa jasa konsultansi, mis:
+#   "Belanja Jasa Konsultansi Perencanaan Arsitektur-... Pembuatan Pagar Pasar Rabu ..."
+# Sedangkan nama_paket di DPA berupa nama pekerjaan FISIK (UPPERCASE), mis:
+#   "PEMBUATAN PAGAR PASAR RABU DESA SUATO TATAKAN ..."
+# Penghubungnya = nama pekerjaan fisik yang ada di EKOR nama SPSE, dimulai dari
+# verb pekerjaan (Pembuatan/Pembangunan/dst). Match dilakukan setelah normalisasi.
+
+_DPA_VERB_FISIK = [
+    "Pembuatan", "Pembangunan", "Pemasangan", "Pengurugan", "Pengaspalan",
+    "Rehabilitasi", "Rehab", "Penyediaan", "Pengadaan", "Perbaikan",
+    "Renovasi", "Peningkatan", "Penataan", "Pengecatan",
+]
+
+
+def nama_fisik_dari_spse(nama: str) -> str:
+    """Potong prefix jasa konsultansi → ambil nama pekerjaan fisik (mulai dari verb paling kiri)."""
+    if not nama:
+        return ""
+    best = None
+    for v in _DPA_VERB_FISIK:
+        m = re.search(r"\b" + re.escape(v), nama, re.IGNORECASE)
+        if m and (best is None or m.start() < best):
+            best = m.start()
+    return nama[best:].strip() if best is not None else nama
+
+
+def _norm_dpa(x: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (x or "").lower())
+
+
+def cari_dpa_di_pool(nama_paket_spse: str, pool: list) -> list:
+    """Cari item DPA dari `pool` yang cocok dengan paket SPSE.
+
+    pool = list[dict] hasil select dpa_item_belanja (harus punya kolom 'nama_paket').
+    Return: subset pool yang nama_paket-nya cocok (semua item paket yg sama).
+    """
+    fisik = _norm_dpa(nama_fisik_dari_spse(nama_paket_spse))
+    if len(fisik) < 8:
+        return []
+    hasil = []
+    for row in pool:
+        dn = _norm_dpa(row.get("nama_paket"))
+        if len(dn) >= 8 and (dn in fisik or fisik in dn or dn[:25] in fisik):
+            hasil.append(row)
+    return hasil
+
+
+def load_pool_dpa(sb_client, limit: int = 2000) -> list:
+    """Ambil semua item DPA bernama (nama_paket NOT NULL) untuk dijadikan pool match."""
+    return (
+        sb_client.table("dpa_item_belanja")
+        .select("nama_paket,uraian,spesifikasi,jumlah_sebelum,jumlah_sesudah,selisih,subkegiatan_id")
+        .not_.is_("nama_paket", "null")
+        .limit(limit)
+        .execute()
+        .data
+    )

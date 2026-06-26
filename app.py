@@ -529,7 +529,14 @@ with st.sidebar:
         if _role_label:
             # Sudah login berhasil
             st.success("Browser terhubung")
-            st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+            _spse_home = SPSE_BASE_URL.rstrip("/") + "/home"
+            st.markdown(f"[🔗 {_spse_home}]({_spse_home})", unsafe_allow_html=False)
+            if st.button("↗️ Buka SPSE di Brave", use_container_width=True, key="btn_buka_spse_brave"):
+                try:
+                    spse_browser.buka_tab_baru(_spse_home)
+                    st.toast("Tab SPSE dibuka di Brave ✅", icon="✅")
+                except Exception as _e:
+                    st.error(str(_e))
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔄 Refresh", use_container_width=True):
@@ -542,6 +549,12 @@ with st.sidebar:
                     spse_browser.tutup_browser()
                     st.session_state.pop("spse_role", None)
                     st.session_state.pop("login_failed", None)
+                    # Bersihkan cache per-role (detail paket + pool DPA) agar tidak nempel saat ganti akun
+                    for _k in [k for k in list(st.session_state.keys())
+                               if k.startswith(("ppk_detail_", "ppk_dpa_", "pl_dpa_"))
+                               or k in ("ppk_dpa_pool", "pl_dpa_pool")]:
+                        st.session_state.pop(_k, None)
+                    st.cache_data.clear()
                     st.rerun()
             _role_emoji = "🏛️" if _role_label == "PP" else "👥" if _role_label == "POKJA" else "🌐"
             st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
@@ -1087,6 +1100,8 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         "Belanja ",
     ]
 
+    import dpa_engine as _dpa_match  # cari_dpa_di_pool / load_pool_dpa
+
     def _nama_singkat(nama: str) -> str:
         for pfx in _PPK_STRIP:
             if nama.startswith(pfx):
@@ -1176,19 +1191,23 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
                         # Ide 3: Tampilkan info DPA di Tab 1 Info Paket PPK
                         if _det:
+                            # Pool semua item DPA bernama (di-cache sekali per render).
+                            # Match nama paket SPSE → DPA via nama pekerjaan fisik (bukan prefix konsultansi).
+                            if "ppk_dpa_pool" not in st.session_state:
+                                from config import sb as _sb_dpa
+                                st.session_state["ppk_dpa_pool"] = _dpa_match.load_pool_dpa(_sb_dpa())
+
                             _dpa_key = f"ppk_dpa_{_ik}"
                             if _dpa_key not in st.session_state:
-                                from config import sb as _sb_dpa
-                                _sb_inst = _sb_dpa()
-                                _dpa_rows = _sb_inst.table("dpa_item_belanja").select(
-                                    "nama_paket,uraian,spesifikasi,jumlah_sebelum,jumlah_sesudah,selisih,subkegiatan_id"
-                                ).ilike("nama_paket", f"%{_in[:40]}%").limit(20).execute().data
-                                st.session_state[_dpa_key] = _dpa_rows
+                                st.session_state[_dpa_key] = _dpa_match.cari_dpa_di_pool(
+                                    _in, st.session_state["ppk_dpa_pool"]
+                                )
 
                             _dpa_rows = st.session_state.get(_dpa_key, [])
                             if _dpa_rows:
                                 st.divider()
-                                st.markdown("**📊 Info DPA:**")
+                                _dpa_nama = _dpa_rows[0].get("nama_paket") or "-"
+                                st.markdown(f"**📊 Info DPA** — _{_dpa_nama}_")
                                 _dpa_table_data = []
                                 for _it in _dpa_rows:
                                     _subkeg_id = _it.get("subkegiatan_id") or ""
@@ -1303,7 +1322,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ============================================================
 
 
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -1312,7 +1331,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "6️⃣ Evaluasi & Teknis/Biaya",
         "7️⃣ Kirim Verifikasi",
         "8️⃣ Upload BA PL",
+        "📄 Import DPA",
     ])
+
+    with _pl_tab9:
+        _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     with _pl_tab1:
@@ -1467,6 +1490,38 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 st.warning("⚠️ Belum ada peserta mendaftar")
                         if "non konstruksi" in _pr_metode_low:
                             st.warning("⚠️ Metode: Non Konstruksi — minta PPK ubah ke Konstruksi di SPSE.")
+
+                        # ── Info DPA (match nama pekerjaan fisik dari DPA yg sudah diimport di tab DPA) ──
+                        import dpa_engine as _dpa_pl
+                        if "pl_dpa_pool" not in st.session_state:
+                            try:
+                                from config import sb as _sb_dpa_pl
+                                st.session_state["pl_dpa_pool"] = _dpa_pl.load_pool_dpa(_sb_dpa_pl())
+                            except Exception:
+                                st.session_state["pl_dpa_pool"] = []
+                        _pl_dpa_key = f"pl_dpa_{_pr_kode}"
+                        if _pl_dpa_key not in st.session_state:
+                            st.session_state[_pl_dpa_key] = _dpa_pl.cari_dpa_di_pool(
+                                _pr_nama, st.session_state["pl_dpa_pool"]
+                            )
+                        _pl_dpa_rows = st.session_state.get(_pl_dpa_key, [])
+                        if _pl_dpa_rows:
+                            def _rp_pl(v):
+                                try: return f"Rp {int(v):,}".replace(",", ".")
+                                except: return str(v) if v else "-"
+                            _pl_dpa_nama = _pl_dpa_rows[0].get("nama_paket") or "-"
+                            with st.expander(f"📊 Info DPA — {_pl_dpa_nama[:40]}", expanded=False):
+                                _pl_dpa_tbl = []
+                                for _it in _pl_dpa_rows:
+                                    _sk = (_it.get("subkegiatan_id") or "").split("|")
+                                    _pl_dpa_tbl.append({
+                                        "Uraian": _it.get("uraian") or "-",
+                                        "Spesifikasi": _it.get("spesifikasi") or "-",
+                                        "Sebelum": _rp_pl(_it.get("jumlah_sebelum")),
+                                        "Sesudah": _rp_pl(_it.get("jumlah_sesudah")),
+                                        "Sub Kegiatan": _sk[-1] if len(_sk) >= 3 else (_it.get("subkegiatan_id") or "-"),
+                                    })
+                                st.table(_pl_dpa_tbl)
 
                         # Ubah Metode Pengadaan inline per paket
                         with st.container(border=True):
@@ -4273,7 +4328,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ============================================================
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8 = st.tabs([
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -4282,7 +4337,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         "6️⃣ Evaluasi & Teknis/Biaya",
         "7️⃣ Kirim Verifikasi",
         "8️⃣ Upload BA PL",
+        "📄 Import DPA",
     ])
+
+    with _pl_tab9:
+        _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
     with _pl_tab1:
@@ -4437,6 +4496,38 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 st.warning("⚠️ Belum ada peserta mendaftar")
                         if "non konstruksi" in _pr_metode_low:
                             st.warning("⚠️ Metode: Non Konstruksi — minta PPK ubah ke Konstruksi di SPSE.")
+
+                        # ── Info DPA (match nama pekerjaan fisik dari DPA yg sudah diimport di tab DPA) ──
+                        import dpa_engine as _dpa_pl
+                        if "pl_dpa_pool" not in st.session_state:
+                            try:
+                                from config import sb as _sb_dpa_pl
+                                st.session_state["pl_dpa_pool"] = _dpa_pl.load_pool_dpa(_sb_dpa_pl())
+                            except Exception:
+                                st.session_state["pl_dpa_pool"] = []
+                        _pl_dpa_key = f"pl_dpa_{_pr_kode}"
+                        if _pl_dpa_key not in st.session_state:
+                            st.session_state[_pl_dpa_key] = _dpa_pl.cari_dpa_di_pool(
+                                _pr_nama, st.session_state["pl_dpa_pool"]
+                            )
+                        _pl_dpa_rows = st.session_state.get(_pl_dpa_key, [])
+                        if _pl_dpa_rows:
+                            def _rp_pl(v):
+                                try: return f"Rp {int(v):,}".replace(",", ".")
+                                except: return str(v) if v else "-"
+                            _pl_dpa_nama = _pl_dpa_rows[0].get("nama_paket") or "-"
+                            with st.expander(f"📊 Info DPA — {_pl_dpa_nama[:40]}", expanded=False):
+                                _pl_dpa_tbl = []
+                                for _it in _pl_dpa_rows:
+                                    _sk = (_it.get("subkegiatan_id") or "").split("|")
+                                    _pl_dpa_tbl.append({
+                                        "Uraian": _it.get("uraian") or "-",
+                                        "Spesifikasi": _it.get("spesifikasi") or "-",
+                                        "Sebelum": _rp_pl(_it.get("jumlah_sebelum")),
+                                        "Sesudah": _rp_pl(_it.get("jumlah_sesudah")),
+                                        "Sub Kegiatan": _sk[-1] if len(_sk) >= 3 else (_it.get("subkegiatan_id") or "-"),
+                                    })
+                                st.table(_pl_dpa_tbl)
 
                         # Ubah Metode Pengadaan inline per paket
                         with st.container(border=True):

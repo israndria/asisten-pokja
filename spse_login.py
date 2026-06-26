@@ -266,11 +266,31 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
         }""")
         await page.wait_for_load_state("networkidle")
         await page.wait_for_timeout(500)
+        # Ganti akun cepat: session/cookie lama sering masih nempel di server → /home balas
+        # "Akses Ditolak". Paksa clear cookies lalu navigate ulang ke home agar bersih.
+        try:
+            if _sb._context is not None:
+                await _sb._context.clear_cookies()
+                _log("Cookie sesi lama dibersihkan.")
+        except Exception as _ce:
+            _log(f"(clear cookie dilewati: {_ce})")
+        await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(500)
 
     # Step 2: Klik tombol LOGIN via JS
     _log("Klik tombol Login...")
-    # Cek dulu #login ada — kalau tidak ada berarti halaman bukan home (akses ditolak / error)
+    # Cek dulu #login ada. Saat ganti akun cepat, kadang halaman masih "Akses Ditolak"
+    # (session lama belum benar-benar habis) → retry reload home beberapa kali.
     login_el = await page.query_selector("#login")
+    if not login_el:
+        for _retry in range(4):
+            _log(f"#login belum ada — reload home (percobaan {_retry+1}/4)...")
+            await page.wait_for_timeout(1500)
+            await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(500)
+            login_el = await page.query_selector("#login")
+            if login_el:
+                break
     if not login_el:
         # Screenshot untuk debug
         from pathlib import Path as _P
