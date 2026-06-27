@@ -89,10 +89,10 @@ def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
         return False, None, str(e)
 
 _SUBMIT_ENDPOINTS = {
-    "kak":     "spekppk",
-    "kontrak": "uploadsskk",
-    "uraian":  "uploaduraian",
-    "lainnya": "lainnyappk",
+    "kak":     "spekPpkSubmit",
+    "kontrak": "uploadSskkSubmit",
+    "uraian":  "uploadUraianSubmit",
+    "lainnya": "lainnyaPpkSubmit",
 }
 
 _DELETE_ENDPOINTS = {
