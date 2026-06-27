@@ -291,14 +291,14 @@ def upload_dokumen(
         formData.append('input[uploadSignedUrlReq][0][isPublic]', 'false');
         formData.append('isArchieve', 'true');
 
-        const r2 = await fetch('/' + lpse + '/getSignedUrl', {{
+        const r2 = await fetch('/' + lpse + '/paketnontender/' + kode + '/getSignedUrl', {{
             method: 'POST', credentials: 'include', body: formData
         }});
         if (!r2.ok) return {{ok: false, error: 'getSignedUrl HTTP ' + r2.status}};
         const res2 = await r2.json();
         const fileId = res2?.result?.data?.fileId;
         const signedUrl = res2?.result?.data?.signedUrl;
-        const path = res2?.path;
+        const path = res2?.result?.data?.path || res2?.path;
         if (!fileId || !signedUrl || !path) return {{ok: false, error: 'getSignedUrl data tidak lengkap: ' + JSON.stringify(res2)}};
 
         const r3 = await fetch(signedUrl, {{
@@ -312,7 +312,9 @@ def upload_dokumen(
             const r4 = await fetch('/' + lpse + '/uploadCheckStatus', {{
                 method: 'POST', credentials: 'include', body: fd4
             }});
-            const d4 = await r4.json();
+            let d4 = null;
+            try {{ d4 = await r4.json(); }} catch(e) {{ break; }}  // parse error = lanjut
+            if (!d4 || d4?.errors === null) break;  // null errors = sukses
             if (d4?.errors) return {{ok: false, error: 'checkStatus error: ' + JSON.stringify(d4.errors)}};
             const st = d4?.data?.status;
             if (!st || st === 'UPLOAD_SUCCESS') break;
