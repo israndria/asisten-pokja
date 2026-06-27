@@ -474,6 +474,195 @@ if _spse_role:
 # Sidebar — Browser Control
 # ============================================================
 
+@st.fragment
+def _sidebar_login_form():
+    st.info("Brave SPSE belum terhubung")
+
+    if st.button("🌐 Hubungkan ke Brave SPSE", type="primary", use_container_width=True):
+        try:
+            with st.spinner("Menghubungkan..."):
+                spse_browser.buka_browser(SPSE_BASE_URL)
+            st.success("Terhubung!")
+            st.rerun(scope="app")
+        except RuntimeError as e:
+            st.error(str(e))
+
+    st.divider()
+    st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")
+
+    # Sinkronkan profil israndria ke session CDP
+    with st.expander("⚙️ Profil Brave (israndria)", expanded=False):
+        st.caption("Bookmark & setting dari profil israndria di-clone ke sesi CDP.\nHanya perlu dijalankan ulang jika ada perubahan bookmark/setting baru.")
+        _col_sync1, _col_sync2 = st.columns(2)
+        if _col_sync1.button("🔄 Sinkronkan Profil", use_container_width=True, key="btn_sync_profil"):
+            with st.spinner("Menyinkronkan profil..."):
+                _sync_ok, _sync_msg = spse_browser.clone_profil_ke_session(force=True)
+            if _sync_ok:
+                st.success(_sync_msg)
+            else:
+                st.error(_sync_msg)
+        if _col_sync2.button("🗑️ Reset Profil", use_container_width=True, key="btn_reset_profil",
+                              help="Hapus clone lama → clone ulang saat launch berikutnya"):
+            _flag = os.path.join(spse_browser.BROWSER_SESSION_DIR, spse_browser._CLONE_FLAG)
+            if os.path.exists(_flag):
+                try:
+                    os.unlink(_flag)
+                    st.success("Flag clone dihapus — profil akan di-clone ulang saat launch.")
+                except Exception as _fe:
+                    st.error(str(_fe))
+            else:
+                st.info("Belum ada clone sebelumnya.")
+
+    def _on_login_role_change():
+        st.session_state["selected_login_role"] = st.session_state["sidebar_login_role"]
+
+    _login_role = st.radio(
+        "Login sebagai",
+        ["PP", "POKJA", "PPK", "E-Katalog"],
+        horizontal=True,
+        key="sidebar_login_role",
+        on_change=_on_login_role_change,
+    )
+
+    if _login_role == "E-Katalog":
+        import ekatalog_login as _ekl
+
+        # Auto-load session dari file
+        if not st.session_state.get("ekatalog_cookies"):
+            _saved = _ekl.load_session()
+            if _saved:
+                st.session_state["ekatalog_cookies"] = _saved
+                st.session_state["spse_role"] = "E-Katalog"
+
+        _ek_logged_in = bool(st.session_state.get("ekatalog_cookies"))
+
+        if not _ek_logged_in:
+            if st.button("🚀 Launch & Login Inaproc", type="primary", use_container_width=True):
+                try:
+                    if not spse_browser._cek_cdp_aktif():
+                        spse_browser.launch_chrome_dengan_cdp()
+                        import time as _t2; _t2.sleep(3)
+                        spse_browser.buka_browser(navigate=False)
+                    with st.spinner("Membuka halaman login & mengisi email+password..."):
+                        _status = _ekl.buka_dan_isi_login()
+                    if _status == "ok":
+                        _cookies = _ekl.ambil_cookies_cdp()
+                        if _cookies:
+                            st.session_state["ekatalog_cookies"] = _cookies
+                            st.session_state["spse_role"] = "E-Katalog"
+                            _ekl.save_session(_cookies)
+                            st.success("✅ Login Inaproc berhasil! Session disimpan 8 jam.")
+                            st.rerun(scope="app")
+                    elif _status == "captcha":
+                        st.session_state["ekatalog_need_captcha"] = True
+                        st.rerun(scope="app")
+                    else:
+                        st.error(f"Login gagal: {_status}")
+                except Exception as e:
+                    st.error(f"Gagal: {e}")
+
+            if st.session_state.get("ekatalog_need_captcha"):
+                st.warning("⚠️ Centang **'Saya bukan robot'** di tab Brave, lalu klik **Masuk**.")
+                if st.button("✅ Sudah Login Inaproc", type="primary", use_container_width=True):
+                    try:
+                        _cookies = _ekl.ambil_cookies_cdp()
+                        if _cookies:
+                            st.session_state["ekatalog_cookies"] = _cookies
+                            st.session_state["spse_role"] = "E-Katalog"
+                            st.session_state.pop("ekatalog_need_captcha", None)
+                            _ekl.save_session(_cookies)
+                            st.success("✅ Login berhasil! Session disimpan 8 jam.")
+                            st.rerun(scope="app")
+                        else:
+                            st.warning("Cookies kosong — pastikan sudah login di tab Brave.")
+                    except Exception as e:
+                        st.error(f"Gagal ambil cookies: {e}")
+        else:
+            st.success("✅ Inaproc aktif")
+            if st.button("🔄 Refresh Session", use_container_width=True):
+                try:
+                    _cookies = _ekl.ambil_cookies_cdp()
+                    if _cookies:
+                        st.session_state["ekatalog_cookies"] = _cookies
+                        _ekl.save_session(_cookies)
+                        st.success("Session diperbarui.")
+                        st.rerun(scope="app")
+                except Exception as e:
+                    st.error(str(e))
+            if st.button("🚪 Logout Inaproc", use_container_width=True):
+                st.session_state.pop("ekatalog_cookies", None)
+                st.session_state.pop("ekatalog_need_captcha", None)
+                _ekl.clear_session()
+                st.rerun(scope="app")
+    else:
+        if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
+            try:
+                import spse_login as _spse_login
+                _login_logs: list[str] = []
+
+                with st.spinner("Meluncurkan Brave SPSE..."):
+                    spse_browser.launch_chrome_dengan_cdp()
+                    # Tunggu CDP ready (max 15 detik)
+                    import time as _t
+                    for _i in range(15):
+                        _t.sleep(1)
+                        if spse_browser._cek_cdp_aktif():
+                            break
+                    # Init Playwright + connect CDP di loop spse_browser
+                    spse_browser.buka_browser(navigate=False)
+
+                _log_box = st.empty()
+                # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
+                def _log(msg: str):
+                    _login_logs.append(msg)
+
+                with st.spinner("Auto-login SPSE..."):
+                    _spse_login.login_spse(role=_login_role, log_fn=_log)
+
+                # Tampilkan log setelah selesai (di main thread)
+                _log_box.info("\n".join(_login_logs))
+
+                # Connect CDP setelah login berhasil
+                spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                st.session_state["spse_role"] = _login_role
+                spse_browser.mulai_auto_refresh()
+                st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
+                st.rerun(scope="app")
+            except Exception as e:
+                import traceback
+                st.session_state["login_failed"] = True
+                st.session_state["login_failed_role"] = _login_role
+                st.error(f"Gagal: {e}")
+                st.code(traceback.format_exc())
+
+    # Tombol retry — muncul kalau login gagal & browser masih di loginpass
+    if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
+        _retry_role = st.session_state.get("login_failed_role", "PP")
+        if st.button("🔄 Coba Lagi (captcha only)", type="primary", use_container_width=True):
+            try:
+                import spse_login as _spse_login
+                _retry_logs: list[str] = []
+                _rlog_box = st.empty()
+                def _rlog(msg: str):
+                    _retry_logs.append(msg)
+
+                with st.spinner("Retry captcha..."):
+                    _spse_login.retry_captcha(role=_retry_role, log_fn=_rlog)
+
+                _rlog_box.info("\n".join(_retry_logs))
+                spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                st.session_state["spse_role"] = _retry_role
+                spse_browser.mulai_auto_refresh()
+                st.session_state.pop("login_failed", None)
+                st.session_state.pop("login_failed_role", None)
+                st.success(f"✅ Login berhasil sebagai {_retry_role}!")
+                st.rerun(scope="app")
+            except Exception as e2:
+                import traceback
+                st.error(f"Retry gagal: {e2}")
+                st.code(traceback.format_exc())
+
+
 with st.sidebar:
     # ── Toggle Light/Dark Mode ──────────────────────────────────────────────
     _dark_mode = st.toggle("🌙 Dark Mode", value=True, key="toggle_dark_mode")
@@ -563,191 +752,7 @@ with st.sidebar:
                     st.session_state.pop("login_failed", None)
                     st.rerun()
     else:
-        st.info("Brave SPSE belum terhubung")
-
-        if st.button("🌐 Hubungkan ke Brave SPSE", type="primary", use_container_width=True):
-            try:
-                with st.spinner("Menghubungkan..."):
-                    spse_browser.buka_browser(SPSE_BASE_URL)
-                st.success("Terhubung!")
-                st.rerun()
-            except RuntimeError as e:
-                st.error(str(e))
-
-        st.divider()
-        st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")
-
-        # Sinkronkan profil israndria ke session CDP
-        with st.expander("⚙️ Profil Brave (israndria)", expanded=False):
-            st.caption("Bookmark & setting dari profil israndria di-clone ke sesi CDP.\nHanya perlu dijalankan ulang jika ada perubahan bookmark/setting baru.")
-            _col_sync1, _col_sync2 = st.columns(2)
-            if _col_sync1.button("🔄 Sinkronkan Profil", use_container_width=True, key="btn_sync_profil"):
-                with st.spinner("Menyinkronkan profil..."):
-                    _sync_ok, _sync_msg = spse_browser.clone_profil_ke_session(force=True)
-                if _sync_ok:
-                    st.success(_sync_msg)
-                else:
-                    st.error(_sync_msg)
-            if _col_sync2.button("🗑️ Reset Profil", use_container_width=True, key="btn_reset_profil",
-                                  help="Hapus clone lama → clone ulang saat launch berikutnya"):
-                _flag = os.path.join(spse_browser.BROWSER_SESSION_DIR, spse_browser._CLONE_FLAG)
-                if os.path.exists(_flag):
-                    try:
-                        os.unlink(_flag)
-                        st.success("Flag clone dihapus — profil akan di-clone ulang saat launch.")
-                    except Exception as _fe:
-                        st.error(str(_fe))
-                else:
-                    st.info("Belum ada clone sebelumnya.")
-
-        def _on_login_role_change():
-            st.session_state["selected_login_role"] = st.session_state["sidebar_login_role"]
-
-        _login_role = st.radio(
-            "Login sebagai",
-            ["PP", "POKJA", "PPK", "E-Katalog"],
-            horizontal=True,
-            key="sidebar_login_role",
-            on_change=_on_login_role_change,
-        )
-
-        if _login_role == "E-Katalog":
-            import ekatalog_login as _ekl
-
-            # Auto-load session dari file
-            if not st.session_state.get("ekatalog_cookies"):
-                _saved = _ekl.load_session()
-                if _saved:
-                    st.session_state["ekatalog_cookies"] = _saved
-                    st.session_state["spse_role"] = "E-Katalog"
-
-            _ek_logged_in = bool(st.session_state.get("ekatalog_cookies"))
-
-            if not _ek_logged_in:
-                if st.button("🚀 Launch & Login Inaproc", type="primary", use_container_width=True):
-                    try:
-                        if not spse_browser._cek_cdp_aktif():
-                            spse_browser.launch_chrome_dengan_cdp()
-                            import time as _t2; _t2.sleep(3)
-                            spse_browser.buka_browser(navigate=False)
-                        with st.spinner("Membuka halaman login & mengisi email+password..."):
-                            _status = _ekl.buka_dan_isi_login()
-                        if _status == "ok":
-                            _cookies = _ekl.ambil_cookies_cdp()
-                            if _cookies:
-                                st.session_state["ekatalog_cookies"] = _cookies
-                                st.session_state["spse_role"] = "E-Katalog"
-                                _ekl.save_session(_cookies)
-                                st.success("✅ Login Inaproc berhasil! Session disimpan 8 jam.")
-                                st.rerun()
-                        elif _status == "captcha":
-                            st.session_state["ekatalog_need_captcha"] = True
-                            st.rerun()
-                        else:
-                            st.error(f"Login gagal: {_status}")
-                    except Exception as e:
-                        st.error(f"Gagal: {e}")
-
-                if st.session_state.get("ekatalog_need_captcha"):
-                    st.warning("⚠️ Centang **'Saya bukan robot'** di tab Brave, lalu klik **Masuk**.")
-                    if st.button("✅ Sudah Login Inaproc", type="primary", use_container_width=True):
-                        try:
-                            _cookies = _ekl.ambil_cookies_cdp()
-                            if _cookies:
-                                st.session_state["ekatalog_cookies"] = _cookies
-                                st.session_state["spse_role"] = "E-Katalog"
-                                st.session_state.pop("ekatalog_need_captcha", None)
-                                _ekl.save_session(_cookies)
-                                st.success("✅ Login berhasil! Session disimpan 8 jam.")
-                                st.rerun()
-                            else:
-                                st.warning("Cookies kosong — pastikan sudah login di tab Brave.")
-                        except Exception as e:
-                            st.error(f"Gagal ambil cookies: {e}")
-            else:
-                st.success("✅ Inaproc aktif")
-                if st.button("🔄 Refresh Session", use_container_width=True):
-                    try:
-                        _cookies = _ekl.ambil_cookies_cdp()
-                        if _cookies:
-                            st.session_state["ekatalog_cookies"] = _cookies
-                            _ekl.save_session(_cookies)
-                            st.success("Session diperbarui.")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
-                if st.button("🚪 Logout Inaproc", use_container_width=True):
-                    st.session_state.pop("ekatalog_cookies", None)
-                    st.session_state.pop("ekatalog_need_captcha", None)
-                    _ekl.clear_session()
-                    st.rerun()
-        else:
-            if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
-                try:
-                    import spse_login as _spse_login
-                    _login_logs: list[str] = []
-
-                    with st.spinner("Meluncurkan Brave SPSE..."):
-                        spse_browser.launch_chrome_dengan_cdp()
-                        # Tunggu CDP ready (max 15 detik)
-                        import time as _t
-                        for _i in range(15):
-                            _t.sleep(1)
-                            if spse_browser._cek_cdp_aktif():
-                                break
-                        # Init Playwright + connect CDP di loop spse_browser
-                        spse_browser.buka_browser(navigate=False)
-
-                    _log_box = st.empty()
-                    # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
-                    def _log(msg: str):
-                        _login_logs.append(msg)
-
-                    with st.spinner("Auto-login SPSE..."):
-                        _spse_login.login_spse(role=_login_role, log_fn=_log)
-
-                    # Tampilkan log setelah selesai (di main thread)
-                    _log_box.info("\n".join(_login_logs))
-
-                    # Connect CDP setelah login berhasil
-                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                    st.session_state["spse_role"] = _login_role
-                    spse_browser.mulai_auto_refresh()
-                    st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
-                    st.rerun()
-                except Exception as e:
-                    import traceback
-                    st.session_state["login_failed"] = True
-                    st.session_state["login_failed_role"] = _login_role
-                    st.error(f"Gagal: {e}")
-                    st.code(traceback.format_exc())
-
-        # Tombol retry — muncul kalau login gagal & browser masih di loginpass
-        if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
-            _retry_role = st.session_state.get("login_failed_role", "PP")
-            if st.button("🔄 Coba Lagi (captcha only)", type="primary", use_container_width=True):
-                try:
-                    import spse_login as _spse_login
-                    _retry_logs: list[str] = []
-                    _rlog_box = st.empty()
-                    def _rlog(msg: str):
-                        _retry_logs.append(msg)
-
-                    with st.spinner("Retry captcha..."):
-                        _spse_login.retry_captcha(role=_retry_role, log_fn=_rlog)
-
-                    _rlog_box.info("\n".join(_retry_logs))
-                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                    st.session_state["spse_role"] = _retry_role
-                    spse_browser.mulai_auto_refresh()
-                    st.session_state.pop("login_failed", None)
-                    st.session_state.pop("login_failed_role", None)
-                    st.success(f"✅ Login berhasil sebagai {_retry_role}!")
-                    st.rerun()
-                except Exception as e2:
-                    import traceback
-                    st.error(f"Retry gagal: {e2}")
-                    st.code(traceback.format_exc())
+        _sidebar_login_form()
 
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
 if _spse_role == "PP":
