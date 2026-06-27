@@ -470,42 +470,6 @@ if _spse_role:
     import spse_browser as _sb_ar
     _sb_ar.mulai_auto_refresh()
 
-_ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
-if _spse_role == "PP":
-    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
-elif _spse_role == "POKJA":
-    _MODE_OPTIONS = ["Tender"]
-elif _spse_role == "PPK":
-    _MODE_OPTIONS = ["PPK - Upload Dokumen"]
-elif _spse_role == "E-Katalog":
-    _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
-else:
-    _MODE_OPTIONS = _ALL_MODES
-
-if _spse_role:
-    if "app_mode" not in st.session_state:
-        st.session_state["app_mode"] = _MODE_OPTIONS[0]
-
-    _mode_col, _ = st.columns([2, 5])
-    with _mode_col:
-        if st.session_state.get("app_mode") not in _MODE_OPTIONS:
-            st.session_state["app_mode"] = _MODE_OPTIONS[0]
-            st.rerun()
-        _selected_mode = st.radio(
-            "Mode:",
-            _MODE_OPTIONS,
-            index=_MODE_OPTIONS.index(st.session_state["app_mode"]),
-            horizontal=True,
-            key="radio_app_mode",
-        )
-        st.session_state["app_mode"] = _selected_mode
-
-    st.divider()
-else:
-    st.session_state.pop("app_mode", None)
-    st.info("🔐 Silakan login via sidebar untuk memulai.")
-    st.stop()
-
 # ============================================================
 # Sidebar — Browser Control
 # ============================================================
@@ -784,6 +748,42 @@ with st.sidebar:
                     import traceback
                     st.error(f"Retry gagal: {e2}")
                     st.code(traceback.format_exc())
+
+_ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
+if _spse_role == "PP":
+    _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
+elif _spse_role == "POKJA":
+    _MODE_OPTIONS = ["Tender"]
+elif _spse_role == "PPK":
+    _MODE_OPTIONS = ["PPK - Upload Dokumen"]
+elif _spse_role == "E-Katalog":
+    _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
+else:
+    _MODE_OPTIONS = _ALL_MODES
+
+if _spse_role:
+    if "app_mode" not in st.session_state:
+        st.session_state["app_mode"] = _MODE_OPTIONS[0]
+
+    _mode_col, _ = st.columns([2, 5])
+    with _mode_col:
+        if st.session_state.get("app_mode") not in _MODE_OPTIONS:
+            st.session_state["app_mode"] = _MODE_OPTIONS[0]
+            st.rerun()
+        _selected_mode = st.radio(
+            "Mode:",
+            _MODE_OPTIONS,
+            index=_MODE_OPTIONS.index(st.session_state["app_mode"]),
+            horizontal=True,
+            key="radio_app_mode",
+        )
+        st.session_state["app_mode"] = _selected_mode
+
+    st.divider()
+else:
+    st.session_state.pop("app_mode", None)
+    st.info("🔐 Silakan login via sidebar untuk memulai.")
+    st.stop()
 
 # ============================================================
 # Tabs
