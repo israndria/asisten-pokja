@@ -445,13 +445,13 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
 PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
 
 FILE_PREFIX_MAP = {
-    "1.":  "kak",      # KAK / Spesifikasi
+    "1.":  "kak",      # KAK / Spesifikasi Teknis
+    "9.":  "kak",      # List Personil (masuk KAK)
     "2.":  "uraian",   # Uraian Singkat
-    "3.":  "lainnya",  # SPPBJ
-    "4.":  "lainnya",  # SPMK
+    "3.":  "kontrak",  # SPPBJ (masuk Rancangan Kontrak)
+    "4.":  "kontrak",  # SPMK (masuk Rancangan Kontrak)
     "5.":  "kontrak",  # Rancangan Kontrak (SPK)
-    "6.":  "lainnya",  # SUK
-    "9.":  "lainnya",  # List Personil
+    "6.":  "kontrak",  # SUK (masuk Rancangan Kontrak)
     "11.": "lainnya",  # Diskresi / Informasi Lainnya
     # 7. HPS, 8. ND, 10. Survey — tidak diupload
 }
