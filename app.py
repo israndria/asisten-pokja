@@ -1316,18 +1316,21 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                     st.markdown(f"- `{_pf['nama']}` → **{_JENIS_LABEL.get(_pf['jenis'], _pf['jenis'])}**")
                                 st.caption(f"{len(_preview)} file akan diupload")
                                 if st.button(f"⬆️ Upload {len(_preview)} file ke SPSE", key=f"btn_folder_{_kode}", type="primary"):
-                                    with st.status("Mengupload dari folder...", expanded=True) as _fsts:
-                                        def _flog(msg): _fsts.write(msg)
-                                        _fres = _ppk_up.upload_dari_folder(
-                                            kode_paket=_kode,
-                                            folder_path=_selected_folder,
-                                            log_fn=_flog,
-                                        )
-                                        if _fres.get("total_err", 0) == 0:
-                                            _fsts.update(label=f"✅ {_fres['total_ok']} file berhasil diupload!", state="complete")
-                                            st.toast(f"✅ {_fres['total_ok']} file diupload", icon="✅")
-                                        else:
-                                            _fsts.update(label=f"⚠️ {_fres['total_ok']} berhasil, {_fres['total_err']} gagal", state="error")
+                                    _flog_box = st.container(border=True)
+                                    _flog_lines = []
+                                    def _flog(msg):
+                                        _flog_lines.append(msg)
+                                        _flog_box.write(msg)
+                                    _fres = _ppk_up.upload_dari_folder(
+                                        kode_paket=_kode,
+                                        folder_path=_selected_folder,
+                                        log_fn=_flog,
+                                    )
+                                    if _fres.get("total_err", 0) == 0:
+                                        st.success(f"✅ {_fres['total_ok']} file berhasil diupload!")
+                                        st.toast(f"✅ {_fres['total_ok']} file diupload", icon="✅")
+                                    else:
+                                        st.warning(f"⚠️ {_fres['total_ok']} berhasil, {_fres['total_err']} gagal")
                             else:
                                 st.info("Tidak ada file yang cocok di folder ini (KAK/Uraian/Kontrak/Diskresi).")
 

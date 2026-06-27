@@ -11,12 +11,88 @@ import spse_browser
 from config import SPSE_BASE_URL
 
 BASE_URL = SPSE_BASE_URL.rstrip("/")
+_LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
+
+
+_CDP_RUNNER = None  # path ke script helper
+
+def _get_cdp_runner() -> str:
+    """Buat/kembalikan path script CDP runner."""
+    import os, tempfile
+    global _CDP_RUNNER
+    if _CDP_RUNNER and os.path.exists(_CDP_RUNNER):
+        return _CDP_RUNNER
+    script = r"""
+import sys, json
+from playwright.sync_api import sync_playwright
+
+js = sys.stdin.read()
+with sync_playwright() as pw:
+    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+    ctx = browser.contexts[0]
+    pages = ctx.pages
+    page = None
+    for p in pages:
+        if "paketnontender" in p.url and "spse.inaproc.id" in p.url:
+            page = p; break
+    if page is None:
+        for p in pages:
+            if "spse.inaproc.id" in p.url:
+                page = p; break
+    if page is None and pages:
+        page = pages[0]
+    if page is None:
+        print(json.dumps({"ok": False, "error": "Tidak ada tab aktif"}))
+        sys.exit(0)
+    try:
+        result = page.evaluate(js)
+        print(json.dumps({"ok": True, "value": result}))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+"""
+    fd, path = tempfile.mkstemp(suffix="_cdp_runner.py", prefix="pokja_")
+    import os
+    os.write(fd, script.encode())
+    os.close(fd)
+    _CDP_RUNNER = path
+    return path
+
+
+def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
+    """
+    Jalankan JS di tab SPSE via subprocess Playwright (process-isolated, thread-safe).
+    Return (ok, result_value, error_msg).
+    """
+    import subprocess, sys, os
+
+    python = sys.executable
+    runner = _get_cdp_runner()
+
+    try:
+        proc = subprocess.run(
+            [python, runner],
+            input=js.encode(),
+            capture_output=True,
+            timeout=timeout + 10,
+        )
+        stdout = proc.stdout.decode(errors="replace").strip()
+        if not stdout:
+            stderr = proc.stderr.decode(errors="replace")[:300]
+            return False, None, f"CDP runner no output: {stderr}"
+        resp = json.loads(stdout)
+        if resp.get("ok"):
+            return True, resp.get("value"), ""
+        return False, None, resp.get("error", "unknown")
+    except subprocess.TimeoutExpired:
+        return False, None, f"CDP runner timeout ({timeout}s)"
+    except Exception as e:
+        return False, None, str(e)
 
 _SUBMIT_ENDPOINTS = {
-    "kak":     "spekPpkSubmit",
-    "kontrak": "uploadSskkSubmit",
-    "uraian":  "uploadUraianSubmit",
-    "lainnya": "lainnyaPpkSubmit",
+    "kak":     "spekppk",
+    "kontrak": "uploadsskk",
+    "uraian":  "uploaduraian",
+    "lainnya": "lainnyappk",
 }
 
 _DELETE_ENDPOINTS = {
@@ -42,30 +118,28 @@ def get_cookies_from_browser() -> str:
 
 def fetch_paket_ppk() -> list[dict]:
     """
-    Ambil daftar paket non-tender PPK dari SPSE.
-    Endpoint: GET /dt/paketppknontender (DataTables, tidak butuh token).
-    row[0]=kode_paket, row[1]=nama_paket, row[2]=status/tahapan.
+    Ambil daftar paket non-tender PPK via CDP WebSocket.
+    Cookie HttpOnly tidak bisa diakses Python — fetch dari dalam browser.
     """
-    cookie_str = get_cookies_from_browser()
-    if not cookie_str:
-        return []
-
     import time as _time
-    url = f"{BASE_URL}/dt/paketppknontender"
-    params = {"draw": "1", "start": "0", "length": "200", "_": str(int(_time.time() * 1000))}
-    headers = {**_headers(), "Cookie": cookie_str}
-
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=15)
-        r.raise_for_status()
-        rows = r.json().get("data", [])
-    except Exception:
+    ts = int(_time.time() * 1000)
+    js = f"""
+    (async () => {{
+        const r = await fetch('/{_LPSE}/dt/paketppknontender?draw=1&start=0&length=200&_={ts}',
+                              {{credentials:'include'}});
+        if (!r.ok) return [];
+        const j = await r.json();
+        return (j.data || []).map(row => ({{
+            kode_paket: String(row[0]),
+            nama_paket: String(row[1]),
+            status:     String(row[2]),
+        }}));
+    }})()
+    """
+    ok, val, err = _cdp_eval(js, timeout=20)
+    if not ok:
         return []
-
-    return [
-        {"kode_paket": str(row[0]), "nama_paket": str(row[1]), "status": str(row[2])}
-        for row in rows
-    ]
+    return val or []
 
 def fetch_detail_paket(kode_paket: str) -> dict:
     """
@@ -178,129 +252,94 @@ def upload_dokumen(
     log_fn=None
 ) -> dict:
     """
-    5 langkah upload dokumen PPK ke SPSE:
-    1. GET /otorisasiDataPaketPlUpload?id={kode_paket}
-    2. POST /getSignedUrl
-    3. PUT {signedUrl}
-    4. POST /uploadCheckStatus
-    5. POST /dokumennontender/{kode_paket}/{submit_endpoint}
+    Upload dokumen PPK via CDP page.evaluate (5 langkah).
+    Cookie PPK ber-flag HttpOnly — seluruh flow dijalankan dari dalam browser.
+    File bytes dikirim sebagai base64, di-decode di browser lalu di-upload.
     """
+    import base64
+
     def _log(msg):
         if log_fn:
             log_fn(msg)
 
-    cookie_str = get_cookies_from_browser()
-    if not cookie_str:
-        return {"ok": False, "error": "Cookie SPSE tidak ditemukan. Pastikan browser terhubung dan login."}
+    sub_endpoint = _SUBMIT_ENDPOINTS.get(jenis)
+    if not sub_endpoint:
+        return {"ok": False, "error": f"Jenis '{jenis}' tidak dikenal."}
 
-    headers = {**_headers(), "Cookie": cookie_str}
+    _log(f"Langkah 1-5: Upload via browser (CDP)...")
+    b64 = base64.b64encode(file_bytes).decode()
 
-    # Step 1: Otorisasi
-    try:
-        _log("Langkah 1: Memeriksa otorisasi paket...")
-        auth_url = f"{BASE_URL}/otorisasiDataPaketPlUpload?id={kode_paket}"
-        r1 = requests.get(auth_url, headers=headers, timeout=15)
-        _log(f"Status otorisasi: {r1.status_code}")
-    except Exception as e:
-        return {"ok": False, "error": f"Langkah 1 otorisasi gagal: {e}"}
+    js = f"""
+    (async () => {{
+        const lpse = "{_LPSE}";
+        const kode = "{kode_paket}";
+        const mime = "{mime_type}";
+        const fname = "{file_name}";
+        const subEndpoint = "{sub_endpoint}";
+        const b64 = "{b64}";
 
-    # Step 2: getSignedUrl
-    try:
-        _log("Langkah 2: Meminta Signed URL upload...")
-        url_sig = f"{BASE_URL}/getSignedUrl"
+        const binaryStr = atob(b64);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
-        # Format payload JSON
-        payload = {
-            "input": {
-                "uploadSignedUrlReq": [{
-                    "contentType": mime_type,
-                    "identifier": "",
-                    "fileName": file_name,
-                    "isPublic": False
-                }]
-            },
-            "isArchieve": True
-        }
+        await fetch('/' + lpse + '/otorisasiDataPaketPlUpload?id=' + kode, {{credentials:'include'}});
 
-        headers_json = {**headers, "Content-Type": "application/json"}
-        r2 = requests.post(url_sig, json=payload, headers=headers_json, timeout=15)
-        r2.raise_for_status()
+        const formData = new FormData();
+        formData.append('input[uploadSignedUrlReq][0][contentType]', mime);
+        formData.append('input[uploadSignedUrlReq][0][identifier]', '');
+        formData.append('input[uploadSignedUrlReq][0][fileName]', fname);
+        formData.append('input[uploadSignedUrlReq][0][isPublic]', 'false');
+        formData.append('isArchieve', 'true');
 
-        res_data = r2.json()
-        result_inner = res_data.get("result", {}).get("data", {})
-        file_id = result_inner.get("fileId")
-        signed_url = result_inner.get("signedUrl")
-        path = res_data.get("path")
+        const r2 = await fetch('/' + lpse + '/getSignedUrl', {{
+            method: 'POST', credentials: 'include', body: formData
+        }});
+        if (!r2.ok) return {{ok: false, error: 'getSignedUrl HTTP ' + r2.status}};
+        const res2 = await r2.json();
+        const fileId = res2?.result?.data?.fileId;
+        const signedUrl = res2?.result?.data?.signedUrl;
+        const path = res2?.path;
+        if (!fileId || !signedUrl || !path) return {{ok: false, error: 'getSignedUrl data tidak lengkap: ' + JSON.stringify(res2)}};
 
-        if not signed_url or not file_id or not path:
-            return {"ok": False, "error": f"Signed URL data tidak lengkap: {res_data}"}
+        const r3 = await fetch(signedUrl, {{
+            method: 'PUT', headers: {{'Content-Type': mime}}, body: bytes
+        }});
+        if (!r3.ok) return {{ok: false, error: 'PUT storage HTTP ' + r3.status}};
 
-        _log("Signed URL berhasil diperoleh.")
-    except Exception as e:
-        return {"ok": False, "error": f"Langkah 2 (getSignedUrl) gagal: {e}"}
+        for (let i = 0; i < 5; i++) {{
+            const fd4 = new FormData();
+            fd4.append('input', fileId);
+            const r4 = await fetch('/' + lpse + '/uploadCheckStatus', {{
+                method: 'POST', credentials: 'include', body: fd4
+            }});
+            const d4 = await r4.json();
+            if (d4?.errors) return {{ok: false, error: 'checkStatus error: ' + JSON.stringify(d4.errors)}};
+            const st = d4?.data?.status;
+            if (!st || st === 'UPLOAD_SUCCESS') break;
+            if (st === 'UPLOAD_FAILED') return {{ok: false, error: 'Upload dinyatakan gagal server'}};
+            await new Promise(r => setTimeout(r, 2000));
+        }}
 
-    # Step 3: PUT ke GCS/S3
-    try:
-        _log("Langkah 3: Mengunggah file ke storage...")
-        r3 = requests.put(
-            signed_url,
-            data=file_bytes,
-            headers={"Content-Type": mime_type},
-            timeout=60
-        )
-        r3.raise_for_status()
-        _log("File berhasil diunggah.")
-    except Exception as e:
-        return {"ok": False, "error": f"Langkah 3 (upload storage) gagal: {e}"}
+        const fd5 = new FormData();
+        fd5.append('id', kode);
+        fd5.append('path', path);
+        fd5.append('fileId', fileId);
+        const r5 = await fetch('/' + lpse + '/dokumennontender/' + kode + '/' + subEndpoint, {{
+            method: 'POST', credentials: 'include', body: fd5
+        }});
+        if (!r5.ok) return {{ok: false, error: 'submit HTTP ' + r5.status}};
 
-    # Step 4: Check Status
-    try:
-        _log("Langkah 4: Memverifikasi status upload...")
-        status_url = f"{BASE_URL}/uploadCheckStatus"
-
-        import time as _time
-        for attempt in range(5):
-            r4 = requests.post(
-                status_url,
-                data={"input": file_id},
-                headers=headers,
-                timeout=10
-            )
-            status_data = r4.json()
-            if status_data.get("errors"):
-                return {"ok": False, "error": f"Verifikasi upload error: {status_data.get('errors')}"}
-
-            st = (status_data.get("data") or {}).get("status", "UPLOAD_SUCCESS")
-            if st == "UPLOAD_SUCCESS" or status_data.get("data") is None:
-                break
-            if st == "UPLOAD_FAILED":
-                return {"ok": False, "error": "Upload dinyatakan gagal oleh server."}
-            _time.sleep(2)
-        _log("Verifikasi selesai.")
-    except Exception as e:
-        return {"ok": False, "error": f"Langkah 4 (uploadCheckStatus) gagal: {e}"}
-
-    # Step 5: Submit ke DB SPSE
-    try:
-        _log("Langkah 5: Menyimpan dokumen ke SPSE...")
-        sub_endpoint = _SUBMIT_ENDPOINTS.get(jenis)
-        if not sub_endpoint:
-            return {"ok": False, "error": f"Jenis dokumen '{jenis}' tidak dikenal."}
-
-        submit_url = f"{BASE_URL}/dokumennontender/{kode_paket}/{sub_endpoint}"
-
-        submit_payload = {
-            "id": int(kode_paket),
-            "path": path,
-            "fileId": file_id
-        }
-
-        r5 = requests.post(submit_url, json=submit_payload, headers={**headers, "Content-Type": "application/json"}, timeout=15)
-        r5.raise_for_status()
-        _log("Dokumen berhasil disimpan ke SPSE!")
-        return {"ok": True, "path": path, "fileId": file_id}
-    except Exception as e:
-        return {"ok": False, "error": f"Langkah 5 (submit) gagal: {e}"}
+        return {{ok: true, path, fileId}};
+    }})()
+    """
+    ok, result, err = _cdp_eval(js, timeout=120)
+    if not ok:
+        return {"ok": False, "error": err}
+    if result and result.get("ok"):
+        _log(f"✅ {file_name} berhasil diupload")
+    else:
+        _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
+    return result or {"ok": False, "error": err}
 
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
     """
@@ -404,10 +443,15 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
 PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
 
 FILE_PREFIX_MAP = {
-    "1.":  "kak",
-    "2.":  "uraian",
-    "5.":  "kontrak",
-    "11.": "lainnya",
+    "1.":  "kak",      # KAK / Spesifikasi
+    "2.":  "uraian",   # Uraian Singkat
+    "3.":  "lainnya",  # SPPBJ
+    "4.":  "lainnya",  # SPMK
+    "5.":  "kontrak",  # Rancangan Kontrak (SPK)
+    "6.":  "lainnya",  # SUK
+    "9.":  "lainnya",  # List Personil
+    "11.": "lainnya",  # Diskresi / Informasi Lainnya
+    # 7. HPS, 8. ND, 10. Survey — tidak diupload
 }
 
 def scan_folder(folder_path: str) -> list[dict]:
