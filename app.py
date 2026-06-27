@@ -1267,6 +1267,70 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 st.caption(f"[{_status}] {_kode} — {_nama}")
                 st.divider()
 
+                # ── Upload dari Folder ──────────────────────────────────────
+                _subfolder_list = _ppk_up.list_subfolder_ppk()
+                _auto_match     = _ppk_up.auto_match_folder(_nama, _subfolder_list)
+
+                if st.checkbox("📁 Upload dari Folder", key=f"chk_folder_{_kode}"):
+                    with st.container(border=True):
+                        # 2 cara input folder
+                        _input_mode = st.radio(
+                            "Cara pilih folder:",
+                            ["📂 Pilih dari daftar", "⌨️ Ketik path manual"],
+                            horizontal=True,
+                            key=f"foldermode_{_kode}",
+                        )
+
+                        _selected_folder = None
+                        if _input_mode == "📂 Pilih dari daftar":
+                            _folder_options = ["(pilih folder...)"] + _subfolder_list
+                            _default_idx = 0
+                            if _auto_match and _auto_match in _subfolder_list:
+                                _default_idx = _subfolder_list.index(_auto_match) + 1
+                                st.caption(f"💡 Auto-match: **{_auto_match}**")
+                            _sel = st.selectbox(
+                                "Folder paket:",
+                                _folder_options,
+                                index=_default_idx,
+                                key=f"foldersel_{_kode}",
+                            )
+                            if _sel != "(pilih folder...)":
+                                _selected_folder = os.path.join(_ppk_up.PPK_PL_BASE, _sel)
+                        else:
+                            _path_input = st.text_input(
+                                "Path folder:",
+                                value=(_auto_match and os.path.join(_ppk_up.PPK_PL_BASE, _auto_match)) or _ppk_up.PPK_PL_BASE,
+                                key=f"folderpath_{_kode}",
+                            )
+                            if _path_input and os.path.isdir(_path_input):
+                                _selected_folder = _path_input
+                            elif _path_input:
+                                st.warning("⚠️ Path tidak valid atau bukan folder.")
+
+                        if _selected_folder:
+                            _preview = _ppk_up.scan_folder(_selected_folder)
+                            if _preview:
+                                _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya"}
+                                st.markdown("**Preview file yang akan diupload:**")
+                                for _pf in _preview:
+                                    st.markdown(f"- `{_pf['nama']}` → **{_JENIS_LABEL.get(_pf['jenis'], _pf['jenis'])}**")
+                                st.caption(f"{len(_preview)} file akan diupload")
+                                if st.button(f"⬆️ Upload {len(_preview)} file ke SPSE", key=f"btn_folder_{_kode}", type="primary"):
+                                    with st.status("Mengupload dari folder...", expanded=True) as _fsts:
+                                        def _flog(msg): _fsts.write(msg)
+                                        _fres = _ppk_up.upload_dari_folder(
+                                            kode_paket=_kode,
+                                            folder_path=_selected_folder,
+                                            log_fn=_flog,
+                                        )
+                                        if _fres.get("total_err", 0) == 0:
+                                            _fsts.update(label=f"✅ {_fres['total_ok']} file berhasil diupload!", state="complete")
+                                            st.toast(f"✅ {_fres['total_ok']} file diupload", icon="✅")
+                                        else:
+                                            _fsts.update(label=f"⚠️ {_fres['total_ok']} berhasil, {_fres['total_err']} gagal", state="error")
+                            else:
+                                st.info("Tidak ada file yang cocok di folder ini (KAK/Uraian/Kontrak/Diskresi).")
+
                 # 4 tab per paket
                 _tab_labels = [f"{s['icon']} {s['label']}{' *' if s['required'] else ''}" for s in _UPLOAD_SECTIONS]
                 _tabs = st.tabs(_tab_labels)

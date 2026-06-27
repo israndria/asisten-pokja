@@ -400,3 +400,137 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
         return r.status_code in (200, 302)
     except Exception:
         return False
+
+PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
+
+FILE_PREFIX_MAP = {
+    "1.":  "kak",
+    "2.":  "uraian",
+    "5.":  "kontrak",
+    "11.": "lainnya",
+}
+
+def scan_folder(folder_path: str) -> list[dict]:
+    """
+    Scan folder → return list file yang akan diupload.
+    [{"path": str, "nama": str, "jenis": str, "mime": str}]
+    Skip file yang prefixnya tidak ada di FILE_PREFIX_MAP.
+    """
+    import os, mimetypes
+    hasil = []
+    if not os.path.isdir(folder_path):
+        return []
+    for fname in sorted(os.listdir(folder_path)):
+        fpath = os.path.join(folder_path, fname)
+        if not os.path.isfile(fpath):
+            continue
+        jenis = None
+        for prefix, j in FILE_PREFIX_MAP.items():
+            if fname.startswith(prefix + " ") or fname == prefix.rstrip(".") + ".pdf":
+                jenis = j
+                break
+        if not jenis:
+            continue
+        mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        hasil.append({"path": fpath, "nama": fname, "jenis": jenis, "mime": mime})
+    return hasil
+
+
+def list_subfolder_ppk() -> list[str]:
+    """
+    List subfolder di PPK_PL_BASE yang bukan _* atau .*
+    Return sorted list nama folder.
+    """
+    import os
+    if not os.path.isdir(PPK_PL_BASE):
+        return []
+    return sorted([
+        d for d in os.listdir(PPK_PL_BASE)
+        if os.path.isdir(os.path.join(PPK_PL_BASE, d))
+        and not d.startswith('_') and not d.startswith('.')
+    ])
+
+
+def auto_match_folder(nama_paket_spse: str, subfolder_list: list[str]) -> str | None:
+    """
+    Fuzzy match nama paket SPSE ke subfolder PPK PL.
+    Return nama subfolder yang paling cocok, atau None.
+    """
+    import re
+    from difflib import SequenceMatcher
+
+    STRIP_PREFIXES = [
+        'Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur Lainnya ',
+        'Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur ',
+        'Belanja Jasa Konsultansi Perencanaan Rekayasa-Jasa Desain Rekayasa untuk Konstruksi ',
+        'Belanja Jasa Konsultansi Perencanaan ',
+        'Belanja Jasa Konsultansi ',
+        'Belanja Jasa ',
+    ]
+
+    def _strip(nama):
+        for pfx in STRIP_PREFIXES:
+            if nama.startswith(pfx):
+                return nama[len(pfx):]
+        return nama
+
+    def _strip_num(folder):
+        return re.sub(r'^\d+\.\s*', '', folder)
+
+    target = _strip(nama_paket_spse).lower().strip()
+    best, best_score = None, 0.0
+    for folder in subfolder_list:
+        candidate = _strip_num(folder).lower().strip()
+        # substring check dulu
+        if target in candidate or candidate in target:
+            return folder
+        score = SequenceMatcher(None, target, candidate).ratio()
+        if score > best_score:
+            best_score = score
+            best = folder
+    return best if best_score > 0.65 else None
+
+
+def upload_dari_folder(
+    kode_paket: str,
+    folder_path: str,
+    log_fn=None,
+) -> dict:
+    """
+    Upload semua file yang cocok dari folder ke SPSE.
+    Return {"results": [{"jenis", "nama", "ok", "error"}], "total_ok": int, "total_err": int}
+    """
+    def _log(msg):
+        if log_fn: log_fn(msg)
+
+    files = scan_folder(folder_path)
+    if not files:
+        return {"results": [], "total_ok": 0, "total_err": 0, "error": "Tidak ada file yang cocok di folder ini."}
+
+    results = []
+    for f in files:
+        _log(f"⬆️ Upload [{f['jenis']}] {f['nama']}...")
+        try:
+            with open(f["path"], "rb") as fh:
+                file_bytes = fh.read()
+            res = upload_dokumen(
+                kode_paket=kode_paket,
+                jenis=f["jenis"],
+                file_bytes=file_bytes,
+                file_name=f["nama"],
+                mime_type=f["mime"],
+                log_fn=log_fn,
+            )
+            ok = res.get("ok", False)
+            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": ok, "error": res.get("error", "")})
+            if ok:
+                _log(f"  ✅ {f['nama']} berhasil")
+            else:
+                _log(f"  ❌ {f['nama']} gagal: {res.get('error')}")
+        except Exception as e:
+            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": False, "error": str(e)})
+            _log(f"  ❌ Exception: {e}")
+
+    total_ok  = sum(1 for r in results if r["ok"])
+    total_err = sum(1 for r in results if not r["ok"])
+    return {"results": results, "total_ok": total_ok, "total_err": total_err}
