@@ -343,104 +343,69 @@ def upload_dokumen(
         _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
     return result or {"ok": False, "error": err}
 
+_LIST_ENDPOINTS = {
+    "kak":     "spekppk",
+    "kontrak": "uploadsskk",
+    "uraian":  "uploaduraian",
+    "lainnya": "lainnyappk",
+}
+
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
     """
-    Mengambil daftar dokumen persiapan pengadaan terunggah.
+    Ambil daftar dokumen terunggah via CDP (cookie HttpOnly).
+    Parse tabel HTML — versi dari atribut `versi` pada link .removeDok.
     """
-    cookie_str = get_cookies_from_browser()
-    if not cookie_str:
-        return []
-
-    # Map list endpoints
-    list_endpoints = {
-        "kak": "spekppk",
-        "kontrak": "docsskk",
-        "uraian": "uraianppk",
-        "lainnya": "lainnyappk",
-    }
-
-    endpoint = list_endpoints.get(jenis)
+    endpoint = _LIST_ENDPOINTS.get(jenis)
     if not endpoint:
         return []
 
-    url = f"{BASE_URL}/dokumennontender/{kode_paket}/{endpoint}"
-    headers = {**_headers(), "Cookie": cookie_str}
+    js = f"""
+    (async () => {{
+        const r = await fetch('/{_LPSE}/dokumennontender/{kode_paket}/{endpoint}',
+                              {{credentials:'include'}});
+        if (!r.ok) return [];
+        const txt = await r.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(txt, 'text/html');
+        const rows = doc.querySelectorAll('table tbody tr');
+        const result = [];
+        rows.forEach(tr => {{
+            const a = tr.querySelector('td a');
+            if (!a) return;
+            const removeDok = tr.querySelector('.removeDok');
+            const versi = removeDok ? parseInt(removeDok.getAttribute('versi') || '0') : 0;
+            result.push({{
+                nama_file: a.textContent.trim(),
+                url_dl: a.href || '',
+                versi: versi,
+            }});
+        }});
+        return result;
+    }})()
+    """
+    ok, val, _ = _cdp_eval(js, timeout=15)
+    return val or []
 
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 404:
-            # Kembalikan list kosong jika endpoint 404 (misal belum di-discover)
-            return []
-        r.raise_for_status()
-    except Exception:
-        return []
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    tbl = soup.find("table")
-    if not tbl:
-        return []
-
-    hasil = []
-    # SPSE standard table rows
-    for tr in tbl.select("tbody tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 2:
-            continue
-
-        a = tds[0].find("a")
-        if not a:
-            continue
-
-        nama_file = a.get_text(strip=True)
-        url_dl = a.get("href", "")
-        if url_dl.startswith("/"):
-            url_dl = f"https://spse.inaproc.id{url_dl}"
-
-        # Parse version dari link hapus jika ada, atau default ke 0
-        versi = 0
-        btn_hapus = tr.find("button", onclick=True)
-        if btn_hapus:
-            onclick_text = btn_hapus.get("onclick", "")
-            match = re.search(r"\d+", onclick_text)
-            if match:
-                versi = int(match.group())
-        else:
-            # Cari dari input / action parameter
-            for inp in tr.find_all("input", {"name": "versi"}):
-                val = inp.get("value", "")
-                if val.isdigit():
-                    versi = int(val)
-                    break
-
-        hasil.append({
-            "nama_file": nama_file,
-            "url_dl": url_dl,
-            "versi": versi
-        })
-
-    return hasil
 
 def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None) -> bool:
     """
-    Menghapus dokumen dari SPSE
+    Hapus dokumen via CDP (cookie HttpOnly).
     """
-    cookie_str = get_cookies_from_browser()
-    if not cookie_str:
-        return False
-
     del_endpoint = _DELETE_ENDPOINTS.get(jenis)
     if not del_endpoint:
         return False
 
-    url = f"{BASE_URL}/dokumennontender/{kode_paket}/{del_endpoint}"
-    headers = {**_headers(), "Cookie": cookie_str}
-
-    try:
-        # Kirim versi file yang akan dihapus
-        r = requests.post(url, data={"versi": versi}, headers=headers, timeout=15)
-        return r.status_code in (200, 302)
-    except Exception:
-        return False
+    js = f"""
+    (async () => {{
+        const fd = new FormData();
+        fd.append('versi', '{versi}');
+        const r = await fetch('/{_LPSE}/dokumennontender/{kode_paket}/{del_endpoint}',
+                              {{method:'POST', credentials:'include', body:fd}});
+        return r.ok || r.status === 302;
+    }})()
+    """
+    ok, val, _ = _cdp_eval(js, timeout=15)
+    return bool(ok and val)
 
 PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
 
