@@ -1265,6 +1265,25 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
             with st.expander(_exp_label, expanded=False):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
+
+                # ── Hapus Semua ─────────────────────────────────────────────
+                _hcol1, _hcol2 = st.columns([5, 1])
+                if _hcol2.button("🗑️ Hapus Semua", key=f"hapus_semua_{_kode}",
+                                 help="Hapus semua dokumen yang sudah terupload di paket ini"):
+                    _total_hapus = 0
+                    _total_err   = 0
+                    for _sec in _UPLOAD_SECTIONS:
+                        for _doc in _ppk_up.list_dokumen(_kode, _sec["key"]):
+                            if _ppk_up.hapus_dokumen(_kode, _sec["key"], _doc["versi"]):
+                                _total_hapus += 1
+                            else:
+                                _total_err += 1
+                    if _total_err == 0:
+                        st.toast(f"✅ {_total_hapus} dokumen dihapus", icon="🗑️")
+                    else:
+                        st.warning(f"⚠️ {_total_hapus} dihapus, {_total_err} gagal")
+                    st.rerun()
+
                 st.divider()
 
                 # ── Upload dari Folder ──────────────────────────────────────
