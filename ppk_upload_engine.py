@@ -343,11 +343,120 @@ def upload_dokumen(
         _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
     return result or {"ok": False, "error": err}
 
+def upload_nota_dinas(kode_paket: str, file_bytes: bytes, file_name: str, mime_type: str, log_fn=None) -> dict:
+    """
+    Upload Nota Dinas via GCS flow + submit ke uploadAttachment step=1.
+    """
+    import base64
+
+    def _log(msg):
+        if log_fn: log_fn(msg)
+
+    _log(f"Langkah 1-5: Upload ND via browser (CDP)...")
+    b64 = base64.b64encode(file_bytes).decode()
+
+    js = f"""
+    (async () => {{
+        const lpse = "{_LPSE}";
+        const kode = "{kode_paket}";
+        const mime = "{mime_type}";
+        const fname = "{file_name}";
+        const b64 = "{b64}";
+
+        const binaryStr = atob(b64);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        await fetch('/' + lpse + '/otorisasiDataPaketPlUpload?id=' + kode, {{credentials:'include'}});
+
+        const formData = new FormData();
+        formData.append('input[uploadSignedUrlReq][0][contentType]', mime);
+        formData.append('input[uploadSignedUrlReq][0][identifier]', '');
+        formData.append('input[uploadSignedUrlReq][0][fileName]', fname);
+        formData.append('input[uploadSignedUrlReq][0][isPublic]', 'false');
+        formData.append('isArchieve', 'true');
+
+        const r2 = await fetch('/' + lpse + '/paketnontender/' + kode + '/getSignedUrl', {{
+            method: 'POST', credentials: 'include', body: formData
+        }});
+        if (!r2.ok) return {{ok: false, error: 'getSignedUrl HTTP ' + r2.status}};
+        const res2 = await r2.json();
+        const fileId = res2?.result?.data?.fileId;
+        const signedUrl = res2?.result?.data?.signedUrl;
+        const path = res2?.result?.data?.path || res2?.path;
+        if (!fileId || !signedUrl || !path) return {{ok: false, error: 'getSignedUrl data tidak lengkap: ' + JSON.stringify(res2)}};
+
+        const r3 = await fetch(signedUrl, {{
+            method: 'PUT', headers: {{'Content-Type': mime}}, body: bytes
+        }});
+        if (!r3.ok) return {{ok: false, error: 'PUT storage HTTP ' + r3.status}};
+
+        for (let i = 0; i < 5; i++) {{
+            const fd4 = new FormData();
+            fd4.append('input', fileId);
+            const r4 = await fetch('/' + lpse + '/uploadCheckStatus', {{
+                method: 'POST', credentials: 'include', body: fd4
+            }});
+            let d4 = null;
+            try {{ d4 = await r4.json(); }} catch(e) {{ break; }}
+            if (!d4 || d4?.errors === null) break;
+            if (d4?.errors) return {{ok: false, error: 'checkStatus error: ' + JSON.stringify(d4.errors)}};
+            const st = d4?.data?.status;
+            if (!st || st === 'UPLOAD_SUCCESS') break;
+            if (st === 'UPLOAD_FAILED') return {{ok: false, error: 'Upload dinyatakan gagal server'}};
+            await new Promise(r => setTimeout(r, 2000));
+        }}
+
+        const fd5 = new FormData();
+        fd5.append('id', kode);
+        fd5.append('step', '1');
+        fd5.append('path', path);
+        fd5.append('fileId', fileId);
+        const r5 = await fetch('/' + lpse + '/paketnontender/' + kode + '/uploadAttachment', {{
+            method: 'POST', credentials: 'include', body: fd5
+        }});
+        if (!r5.ok) return {{ok: false, error: 'submit HTTP ' + r5.status}};
+
+        return {{ok: true, path, fileId}};
+    }})()
+    """
+    ok, result, err = _cdp_eval(js, timeout=120)
+    if not ok:
+        return {"ok": False, "error": err}
+    if result and result.get("ok"):
+        _log(f"✅ {file_name} berhasil diupload")
+    else:
+        _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
+    return result or {"ok": False, "error": err}
+
+def kirim_email_pp(kode_paket: str, path: str, file_id: str, log_fn=None) -> bool:
+    """
+    Kirim email pemberitahuan ke PP_ISRANDRIA (pp_id=74177) setelah ND terupload.
+    """
+    js = f"""
+    (async () => {{
+        const fd = new FormData();
+        fd.append('id', '{kode_paket}');
+        fd.append('pp_id', '74177');
+        fd.append('path', '{path}');
+        fd.append('fileId', '{file_id}');
+        const r = await fetch('/{_LPSE}/paketnontender/{kode_paket}/submitrekirimpesanpp?pp_id=74177', {{
+            method: 'POST', credentials: 'include', body: fd, redirect: 'manual'
+        }});
+        return {{status: r.status}};
+    }})()
+    """
+    ok, val, _ = _cdp_eval(js, timeout=20)
+    if not ok or not val: return False
+    st = val.get("status")
+    return st in (0, 200, 302)
+
 _LIST_ENDPOINTS = {
     "kak":     "spekppk",
     "kontrak": "uploadsskk",
     "uraian":  "uploaduraian",
     "lainnya": "lainnyappk",
+    "nd":      "notadinasppk",
 }
 
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
@@ -417,8 +526,9 @@ FILE_PREFIX_MAP = {
     "4.":  "kontrak",  # SPMK (masuk Rancangan Kontrak)
     "5.":  "kontrak",  # Rancangan Kontrak (SPK)
     "6.":  "kontrak",  # SUK (masuk Rancangan Kontrak)
+    "8.":  "nd",       # Nota Dinas PPK
     "11.": "lainnya",  # Diskresi / Informasi Lainnya
-    # 7. HPS, 8. ND, 10. Survey — tidak diupload
+    # 7. HPS, 10. Survey — tidak diupload
 }
 
 def scan_folder(folder_path: str) -> list[dict]:
@@ -519,19 +629,32 @@ def upload_dari_folder(
         return {"results": [], "total_ok": 0, "total_err": 0, "error": "Tidak ada file yang cocok di folder ini."}
 
     results = []
+    nd_result = None
     for f in files:
         _log(f"⬆️ Upload [{f['jenis']}] {f['nama']}...")
         try:
             with open(f["path"], "rb") as fh:
                 file_bytes = fh.read()
-            res = upload_dokumen(
-                kode_paket=kode_paket,
-                jenis=f["jenis"],
-                file_bytes=file_bytes,
-                file_name=f["nama"],
-                mime_type=f["mime"],
-                log_fn=log_fn,
-            )
+
+            if f["jenis"] == "nd":
+                res = upload_nota_dinas(
+                    kode_paket=kode_paket,
+                    file_bytes=file_bytes,
+                    file_name=f["nama"],
+                    mime_type=f["mime"],
+                    log_fn=log_fn,
+                )
+                if res.get("ok"):
+                    nd_result = res
+            else:
+                res = upload_dokumen(
+                    kode_paket=kode_paket,
+                    jenis=f["jenis"],
+                    file_bytes=file_bytes,
+                    file_name=f["nama"],
+                    mime_type=f["mime"],
+                    log_fn=log_fn,
+                )
             ok = res.get("ok", False)
             results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": ok, "error": res.get("error", "")})
             if ok:
@@ -541,6 +664,14 @@ def upload_dari_folder(
         except Exception as e:
             results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": False, "error": str(e)})
             _log(f"  ❌ Exception: {e}")
+
+    if nd_result:
+        _log("📧 Kirim email pemberitahuan ke PP...")
+        email_ok = kirim_email_pp(kode_paket, nd_result["path"], nd_result["fileId"], log_fn)
+        if email_ok:
+            _log("✅ Email ke PP berhasil dikirim")
+        else:
+            _log("⚠️ Email ke PP gagal — upload ND ok tapi email gagal")
 
     total_ok  = sum(1 for r in results if r["ok"])
     total_err = sum(1 for r in results if not r["ok"])

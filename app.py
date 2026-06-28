@@ -1253,6 +1253,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             {"key": "kontrak", "label": "Rancangan Kontrak",    "icon": "📋", "accept": ["pdf"], "required": True},
             {"key": "uraian",  "label": "Uraian Singkat",       "icon": "📝", "accept": ["pdf"], "required": True},
             {"key": "lainnya", "label": "Informasi Lainnya",    "icon": "ℹ️", "accept": ["txt","doc","docx","xls","xlsx","pdf","gif","jpeg","jpg","png","zip","rar","rtf"], "required": False},
+            {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
 
         # ── Semua paket tampil sekaligus ─────────────────────────────────────────
@@ -1273,6 +1274,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     _total_hapus = 0
                     _total_err   = 0
                     for _sec in _UPLOAD_SECTIONS:
+                        if _sec["key"] == "nd": continue # endpoint hapus/list nd belum dipetakan
                         for _doc in _ppk_up.list_dokumen(_kode, _sec["key"]):
                             if _ppk_up.hapus_dokumen(_kode, _sec["key"], _doc["versi"]):
                                 _total_hapus += 1
@@ -1329,7 +1331,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                         if _selected_folder:
                             _preview = _ppk_up.scan_folder(_selected_folder)
                             if _preview:
-                                _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya"}
+                                _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}
                                 st.markdown("**Preview file yang akan diupload:**")
                                 for _pf in _preview:
                                     st.markdown(f"- `{_pf['nama']}` → **{_JENIS_LABEL.get(_pf['jenis'], _pf['jenis'])}**")
@@ -1359,9 +1361,15 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
                 for _tab, _sec in zip(_tabs, _UPLOAD_SECTIONS):
                     with _tab:
+                        if _sec["key"] == "nd":
+                            st.info("ℹ️ Dokumen Nota Dinas PPK yang terupload tidak ditampilkan di list ini karena perbedaan endpoint. Cek langsung di SPSE jika ingin melihat daftarnya.")
                         # Dokumen existing
                         try:
-                            _existing = _ppk_up.list_dokumen(_kode, _sec["key"])
+                            if _sec["key"] != "nd":
+                                _existing = _ppk_up.list_dokumen(_kode, _sec["key"])
+                            else:
+                                _existing = []
+
                             if _existing:
                                 for _doc in _existing:
                                     _dc1, _dc2 = st.columns([5, 1])
