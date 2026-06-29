@@ -462,6 +462,94 @@ _LIST_ENDPOINTS = {
     "nd":      "notadinasppk",
 }
 
+def list_semua_dokumen(kode_paket: str) -> dict[str, list[dict]]:
+    """
+    Shortcut ke list_bulk_semua_paket untuk satu paket.
+    """
+    result = list_bulk_semua_paket([kode_paket])
+    return result.get(kode_paket, {})
+
+
+def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict]]]:
+    """
+    Ambil dokumen semua jenis untuk N paket sekaligus dalam 1 subprocess Playwright.
+    N×4 tab dibuka paralel (asyncio). Return {kode_paket: {jenis: [docs]}}.
+    Jauh lebih cepat dari N × list_semua_dokumen() karena subprocess hanya spawn 1x.
+    """
+    import subprocess, sys, json as _json, tempfile, os
+
+    endpoints = {k: v for k, v in _LIST_ENDPOINTS.items() if k != "nd"}
+    lpse = _LPSE
+
+    script = f"""
+import asyncio, json
+from playwright.async_api import async_playwright
+
+lpse = {_json.dumps(lpse)}
+kode_list = {_json.dumps(kode_list)}
+endpoints = {_json.dumps(endpoints)}
+
+PARSE_JS = '''() => {{
+    const rows = document.querySelectorAll("#files tbody tr");
+    const out = [];
+    rows.forEach(tr => {{
+        const a = tr.querySelector("td a");
+        const rem = tr.querySelector(".removeDok");
+        const versi = rem ? parseInt(rem.getAttribute("versi") ?? "0") : 0;
+        if (a && a.textContent.trim()) {{
+            out.push({{nama_file: a.textContent.trim(), url_dl: a.href || "", versi: versi}});
+        }}
+    }});
+    return out;
+}}'''
+
+async def fetch_one(ctx, kode, jenis, ep):
+    page = await ctx.new_page()
+    try:
+        url = f"https://spse.inaproc.id/{{lpse}}/dokumennontender/{{kode}}/{{ep}}"
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        # tbody diisi jQuery hanya setelah upload di sesi yang sama — tidak perlu tunggu
+        return kode, jenis, await page.evaluate(PARSE_JS)
+    except Exception:
+        return kode, jenis, []
+    finally:
+        await page.close()
+
+async def main():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
+        ctx = browser.contexts[0]
+        tasks = [
+            fetch_one(ctx, kode, jenis, ep)
+            for kode in kode_list
+            for jenis, ep in endpoints.items()
+        ]
+        results = await asyncio.gather(*tasks)
+    out = {{}}
+    for kode, jenis, docs in results:
+        out.setdefault(kode, {{}})[jenis] = docs
+    return out
+
+result = asyncio.run(main())
+print(json.dumps({{"ok": True, "value": result}}))
+"""
+    fd, path = tempfile.mkstemp(suffix="_list_bulk.py", prefix="pokja_")
+    os.write(fd, script.encode())
+    os.close(fd)
+    try:
+        proc = subprocess.run([sys.executable, path], capture_output=True, timeout=120)
+        stdout = proc.stdout.decode(errors="replace").strip()
+        if stdout:
+            resp = _json.loads(stdout)
+            if resp.get("ok"):
+                return resp.get("value") or {}
+        return {}
+    except Exception:
+        return {}
+    finally:
+        os.unlink(path)
+
+
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
     """
     Ambil daftar dokumen terunggah via Playwright goto (tabel diisi JS, bukan SSR).
@@ -578,7 +666,7 @@ def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
         for jenis in jenis_list:
             docs = list_dokumen(kode_paket, jenis)
             for doc in docs:
-                if doc.get("versi"):
+                if doc.get("versi") is not None:
                     to_delete.append({"jenis": jenis, "versi": doc["versi"]})
 
     if not to_delete:

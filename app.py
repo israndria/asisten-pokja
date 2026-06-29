@@ -1236,6 +1236,10 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         _ppk_col1, _ppk_col2 = st.columns([3, 1])
         _ppk_col1.markdown("## 📤 Upload Dokumen Persiapan Pengadaan")
         if _ppk_col2.button("🔄 Refresh", key="btn_refresh_paket_ppk", use_container_width=True):
+            # Hapus semua cache bulk + cache paket PPK
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("ppk_versi_") or _k.startswith("ppk_bulk"):
+                    del st.session_state[_k]
             st.cache_data.clear()
             st.rerun()
 
@@ -1256,6 +1260,18 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
 
+        # ── Bulk load dokumen semua paket (1 subprocess, N×4 tab paralel) ────────
+        _all_kodes = [p["kode_paket"] for p in _paket_list]
+        _bulk_loaded_key = f"ppk_bulk_loaded_{'_'.join(_all_kodes)}"
+        if _bulk_loaded_key not in st.session_state:
+            with st.spinner(f"Memuat daftar dokumen {len(_paket_list)} paket..."):
+                _bulk_all = _ppk_up.list_bulk_semua_paket(_all_kodes)
+            for _kode_b, _jenis_map in _bulk_all.items():
+                for _jenis_b, _docs_b in _jenis_map.items():
+                    st.session_state[f"ppk_versi_{_kode_b}_{_jenis_b}"] = _docs_b
+                st.session_state[f"ppk_bulk_{_kode_b}"] = True
+            st.session_state[_bulk_loaded_key] = True
+
         # ── Semua paket tampil sekaligus ─────────────────────────────────────────
         for _pi, _pk in enumerate(_paket_list, start=1):
             _kode = _pk["kode_paket"]
@@ -1267,6 +1283,14 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             with st.expander(_exp_label, expanded=False):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
 
+                # ── Bulk load dokumen existing (1 subprocess, 4 endpoint) ───
+                _bulk_key = f"ppk_bulk_{_kode}"
+                if _bulk_key not in st.session_state:
+                    _bulk = _ppk_up.list_semua_dokumen(_kode)
+                    for _jenis_b, _docs_b in _bulk.items():
+                        st.session_state[f"ppk_versi_{_kode}_{_jenis_b}"] = _docs_b
+                    st.session_state[_bulk_key] = True
+
                 # ── Hapus Semua ─────────────────────────────────────────────
                 _hcol1, _hcol2 = st.columns([5, 1])
                 if _hcol2.button("🗑️ Hapus Semua", key=f"hapus_semua_{_kode}",
@@ -1277,7 +1301,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                         if _sec2["key"] == "nd": continue
                         _vk2 = f"ppk_versi_{_kode}_{_sec2['key']}"
                         for _d in st.session_state.get(_vk2, []):
-                            if _d.get("versi"):
+                            if _d.get("versi") is not None:
                                 _to_del.setdefault(_sec2["key"], []).append(_d["versi"])
                     if _to_del:
                         # Ada versi di session → hapus langsung
@@ -1288,10 +1312,11 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     _total_hapus = _hasil_hapus.get("dihapus", 0)
                     _total_err   = _hasil_hapus.get("gagal", 0)
                     if _total_err == 0:
-                        # Bersihkan session state
+                        # Bersihkan session state agar re-fetch saat render ulang
                         for _sec2 in _UPLOAD_SECTIONS:
                             _vk2 = f"ppk_versi_{_kode}_{_sec2['key']}"
                             if _vk2 in st.session_state: del st.session_state[_vk2]
+                        if _bulk_key in st.session_state: del st.session_state[_bulk_key]
                         st.toast(f"✅ {_total_hapus} dokumen dihapus", icon="🗑️")
                     else:
                         st.warning(f"⚠️ {_total_hapus} dihapus, {_total_err} gagal")
@@ -1386,7 +1411,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                             if _sec["key"] != "nd":
                                 # Pakai session_state dulu (versi tersimpan saat upload)
                                 _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
-                                _existing = st.session_state.get(_vkey) or _ppk_up.list_dokumen(_kode, _sec["key"])
+                                if _vkey not in st.session_state:
+                                    st.session_state[_vkey] = _ppk_up.list_dokumen(_kode, _sec["key"])
+                                _existing = st.session_state[_vkey]
                             else:
                                 _existing = []
 
