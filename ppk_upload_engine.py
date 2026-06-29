@@ -15,14 +15,16 @@ _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
 
 
 _CDP_RUNNER = None  # path ke script helper
+_CDP_RUNNER_LOCK = __import__("threading").Lock()
 
 def _get_cdp_runner() -> str:
-    """Buat/kembalikan path script CDP runner."""
+    """Buat/kembalikan path script CDP runner (thread-safe)."""
     import os, tempfile
     global _CDP_RUNNER
-    if _CDP_RUNNER and os.path.exists(_CDP_RUNNER):
-        return _CDP_RUNNER
-    script = r"""
+    with _CDP_RUNNER_LOCK:
+        if _CDP_RUNNER and os.path.exists(_CDP_RUNNER):
+            return _CDP_RUNNER
+        script = r"""
 import sys, json
 from playwright.sync_api import sync_playwright
 
@@ -50,12 +52,11 @@ with sync_playwright() as pw:
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e)}))
 """
-    fd, path = tempfile.mkstemp(suffix="_cdp_runner.py", prefix="pokja_")
-    import os
-    os.write(fd, script.encode())
-    os.close(fd)
-    _CDP_RUNNER = path
-    return path
+        fd, path = tempfile.mkstemp(suffix="_cdp_runner.py", prefix="pokja_")
+        os.write(fd, script.encode())
+        os.close(fd)
+        _CDP_RUNNER = path
+        return path
 
 
 def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
@@ -319,7 +320,7 @@ def upload_dokumen(
             const st = d4?.data?.status;
             if (!st || st === 'UPLOAD_SUCCESS') break;
             if (st === 'UPLOAD_FAILED') return {{ok: false, error: 'Upload dinyatakan gagal server'}};
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 300));
         }}
 
         const fd5 = new FormData();
@@ -330,8 +331,10 @@ def upload_dokumen(
             method: 'POST', credentials: 'include', body: fd5
         }});
         if (!r5.ok) return {{ok: false, error: 'submit HTTP ' + r5.status}};
-
-        return {{ok: true, path, fileId}};
+        let res5 = null;
+        try {{ res5 = await r5.clone().json(); }} catch(e) {{}}
+        const versi = res5?.files?.[0]?.versi ?? null;
+        return {{ok: true, path, fileId, versi}};
     }})()
     """
     ok, result, err = _cdp_eval(js, timeout=120)
@@ -404,7 +407,7 @@ def upload_nota_dinas(kode_paket: str, file_bytes: bytes, file_name: str, mime_t
             const st = d4?.data?.status;
             if (!st || st === 'UPLOAD_SUCCESS') break;
             if (st === 'UPLOAD_FAILED') return {{ok: false, error: 'Upload dinyatakan gagal server'}};
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 300));
         }}
 
         const fd5 = new FormData();
@@ -461,39 +464,78 @@ _LIST_ENDPOINTS = {
 
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
     """
-    Ambil daftar dokumen terunggah via CDP (cookie HttpOnly).
-    Parse tabel HTML — versi dari atribut `versi` pada link .removeDok.
+    Ambil daftar dokumen terunggah via Playwright goto (tabel diisi JS, bukan SSR).
+    Navigate ke endpoint, tunggu #files tbody terisi, parse .removeDok.
     """
     endpoint = _LIST_ENDPOINTS.get(jenis)
     if not endpoint:
         return []
 
-    js = f"""
-    (async () => {{
-        const r = await fetch('/{_LPSE}/dokumennontender/{kode_paket}/{endpoint}',
-                              {{credentials:'include'}});
-        if (!r.ok) return [];
-        const txt = await r.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(txt, 'text/html');
-        const rows = doc.querySelectorAll('table tbody tr');
-        const result = [];
-        rows.forEach(tr => {{
-            const a = tr.querySelector('td a');
-            if (!a) return;
-            const removeDok = tr.querySelector('.removeDok');
-            const versi = removeDok ? parseInt(removeDok.getAttribute('versi') || '0') : 0;
-            result.push({{
-                nama_file: a.textContent.trim(),
-                url_dl: a.href || '',
-                versi: versi,
+    url = f"https://spse.inaproc.id/{_LPSE}/dokumennontender/{kode_paket}/{endpoint}"
+    import subprocess, sys, json as _json, tempfile, os
+
+    script = f"""
+import sys, json
+from playwright.sync_api import sync_playwright
+
+url = {_json.dumps(url)}
+with sync_playwright() as pw:
+    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+    ctx = browser.contexts[0]
+    # Buka halaman baru agar tidak ganggu tab user
+    page = ctx.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        # Tunggu jQuery populate #files tbody (via uploadFlow successData)
+        # Max 8 detik; kalau tidak ada row, kembalikan []
+        try:
+            page.wait_for_function(
+                "() => document.querySelectorAll('#files tbody tr td').length > 0",
+                timeout=8000
+            )
+        except Exception:
+            pass  # timeout = tidak ada file
+        result = page.evaluate('''() => {{
+            const rows = document.querySelectorAll("#files tbody tr");
+            const out = [];
+            rows.forEach(tr => {{
+                const a = tr.querySelector("td a");
+                const rem = tr.querySelector(".removeDok");
+                const versi = rem ? parseInt(rem.getAttribute("versi") || "0") : 0;
+                if (a && a.textContent.trim()) {{
+                    out.push({{
+                        nama_file: a.textContent.trim(),
+                        url_dl: a.href || "",
+                        versi: versi,
+                    }});
+                }}
             }});
-        }});
-        return result;
-    }})()
-    """
-    ok, val, _ = _cdp_eval(js, timeout=15)
-    return val or []
+            return out;
+        }}''')
+        print(json.dumps({{"ok": True, "value": result}}))
+    except Exception as e:
+        print(json.dumps({{"ok": False, "error": str(e)}}))
+    finally:
+        page.close()
+"""
+    fd, path = tempfile.mkstemp(suffix="_list_dok.py", prefix="pokja_")
+    os.write(fd, script.encode())
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            [sys.executable, path],
+            capture_output=True, timeout=30
+        )
+        stdout = proc.stdout.decode(errors="replace").strip()
+        if stdout:
+            resp = json.loads(stdout)
+            if resp.get("ok"):
+                return resp.get("value") or []
+        return []
+    except Exception:
+        return []
+    finally:
+        os.unlink(path)
 
 
 def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None) -> bool:
@@ -515,6 +557,63 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
     """
     ok, val, _ = _cdp_eval(js, timeout=15)
     return bool(ok and val)
+
+
+def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
+    """
+    Hapus semua dokumen (kak/kontrak/uraian/lainnya).
+    versi_map: {jenis: [versi, ...]} dari session_state (lebih cepat).
+    Kalau tidak ada, fallback ke list_dokumen (Playwright goto).
+    Return {"dihapus": N, "gagal": N}.
+    """
+    jenis_list = [k for k in _LIST_ENDPOINTS if k != "nd"]
+
+    # Kumpulkan semua (jenis, versi) yang perlu dihapus
+    to_delete = []
+    if versi_map:
+        for jenis, versis in versi_map.items():
+            for v in versis:
+                to_delete.append({"jenis": jenis, "versi": v})
+    else:
+        for jenis in jenis_list:
+            docs = list_dokumen(kode_paket, jenis)
+            for doc in docs:
+                if doc.get("versi"):
+                    to_delete.append({"jenis": jenis, "versi": doc["versi"]})
+
+    if not to_delete:
+        return {"dihapus": 0, "gagal": 0}
+
+    # Hapus semua dalam 1 CDP call (paralel di browser)
+    import json as _json
+    del_ep = _DELETE_ENDPOINTS
+    lpse   = _LPSE
+
+    js = f"""
+    (async () => {{
+        const lpse = "{lpse}";
+        const kode = "{kode_paket}";
+        const toDelete = {_json.dumps(to_delete)};
+        const deleteEp = {_json.dumps(del_ep)};
+        let dihapus = 0, gagal = 0;
+        await Promise.all(toDelete.map(async ({{jenis, versi}}) => {{
+            const ep = deleteEp[jenis];
+            if (!ep) {{ gagal++; return; }}
+            const fd = new FormData();
+            fd.append('versi', String(versi));
+            const r = await fetch(`/${{lpse}}/dokumennontender/${{kode}}/${{ep}}`,
+                                  {{method:'POST', credentials:'include', body:fd}});
+            if (r.ok || r.status === 302) dihapus++;
+            else gagal++;
+        }}));
+        return {{dihapus, gagal}};
+    }})()
+    """
+    ok, val, err = _cdp_eval(js, timeout=30)
+    if not ok or not val:
+        return {"dihapus": 0, "gagal": len(to_delete)}
+    return val
+
 
 PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
 
@@ -628,42 +727,69 @@ def upload_dari_folder(
     if not files:
         return {"results": [], "total_ok": 0, "total_err": 0, "error": "Tidak ada file yang cocok di folder ini."}
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    nd_files = [f for f in files if f["jenis"] == "nd"]
+    non_nd_files = [f for f in files if f["jenis"] != "nd"]
+
     results = []
     nd_result = None
-    for f in files:
-        _log(f"⬆️ Upload [{f['jenis']}] {f['nama']}...")
+
+    def _upload_one(f):
+        # log_fn TIDAK dipanggil dari sini (Streamlit tidak thread-safe)
+        # — kumpulkan log di result, flush di main thread
+        logs = []
         try:
             with open(f["path"], "rb") as fh:
                 file_bytes = fh.read()
-
-            if f["jenis"] == "nd":
-                res = upload_nota_dinas(
-                    kode_paket=kode_paket,
-                    file_bytes=file_bytes,
-                    file_name=f["nama"],
-                    mime_type=f["mime"],
-                    log_fn=log_fn,
-                )
-                if res.get("ok"):
-                    nd_result = res
-            else:
-                res = upload_dokumen(
-                    kode_paket=kode_paket,
-                    jenis=f["jenis"],
-                    file_bytes=file_bytes,
-                    file_name=f["nama"],
-                    mime_type=f["mime"],
-                    log_fn=log_fn,
-                )
+            logs.append(f"⬆️ Upload [{f['jenis']}] {f['nama']}...")
+            res = upload_dokumen(
+                kode_paket=kode_paket,
+                jenis=f["jenis"],
+                file_bytes=file_bytes,
+                file_name=f["nama"],
+                mime_type=f["mime"],
+                log_fn=None,  # no Streamlit call in thread
+            )
             ok = res.get("ok", False)
-            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": ok, "error": res.get("error", "")})
+            logs.append(f"  {'✅' if ok else '❌'} {f['nama']} {'berhasil' if ok else 'gagal: ' + res.get('error','')}")
+            return {"jenis": f["jenis"], "nama": f["nama"], "ok": ok, "error": res.get("error", ""), "versi": res.get("versi"), "_logs": logs}
+        except Exception as e:
+            logs.append(f"  ❌ Exception: {e}")
+            return {"jenis": f["jenis"], "nama": f["nama"], "ok": False, "error": str(e), "versi": None, "_logs": logs}
+
+    # Upload non-ND paralel, max 3 worker
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {ex.submit(_upload_one, f): f for f in non_nd_files}
+        for fut in as_completed(futures):
+            r = fut.result()
+            for msg in r.pop("_logs", []):
+                _log(msg)  # flush log di main thread (aman untuk Streamlit)
+            results.append(r)
+
+    # Upload ND setelah non-ND selesai
+    for f in nd_files:
+        try:
+            with open(f["path"], "rb") as fh:
+                file_bytes = fh.read()
+            _log(f"⬆️ Upload [nd] {f['nama']}...")
+            res = upload_nota_dinas(
+                kode_paket=kode_paket,
+                file_bytes=file_bytes,
+                file_name=f["nama"],
+                mime_type=f["mime"],
+                log_fn=log_fn,
+            )
+            ok = res.get("ok", False)
             if ok:
+                nd_result = res
                 _log(f"  ✅ {f['nama']} berhasil")
             else:
                 _log(f"  ❌ {f['nama']} gagal: {res.get('error')}")
+            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": ok, "error": res.get("error", ""), "versi": res.get("versi")})
         except Exception as e:
-            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": False, "error": str(e)})
             _log(f"  ❌ Exception: {e}")
+            results.append({"jenis": f["jenis"], "nama": f["nama"], "ok": False, "error": str(e), "versi": None})
 
     if nd_result:
         _log("📧 Kirim email pemberitahuan ke PP...")
@@ -673,6 +799,6 @@ def upload_dari_folder(
         else:
             _log("⚠️ Email ke PP gagal — upload ND ok tapi email gagal")
 
-    total_ok  = sum(1 for r in results if r["ok"])
-    total_err = sum(1 for r in results if not r["ok"])
+    total_ok = sum(1 for r in results if r["ok"])
+    total_err = len(results) - total_ok
     return {"results": results, "total_ok": total_ok, "total_err": total_err}

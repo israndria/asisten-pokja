@@ -1271,16 +1271,27 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 _hcol1, _hcol2 = st.columns([5, 1])
                 if _hcol2.button("🗑️ Hapus Semua", key=f"hapus_semua_{_kode}",
                                  help="Hapus semua dokumen yang sudah terupload di paket ini"):
-                    _total_hapus = 0
-                    _total_err   = 0
-                    for _sec in _UPLOAD_SECTIONS:
-                        if _sec["key"] == "nd": continue # endpoint hapus/list nd belum dipetakan
-                        for _doc in _ppk_up.list_dokumen(_kode, _sec["key"]):
-                            if _ppk_up.hapus_dokumen(_kode, _sec["key"], _doc["versi"]):
-                                _total_hapus += 1
-                            else:
-                                _total_err += 1
+                    # Kumpulkan versi dari session_state per jenis
+                    _to_del = {}
+                    for _sec2 in _UPLOAD_SECTIONS:
+                        if _sec2["key"] == "nd": continue
+                        _vk2 = f"ppk_versi_{_kode}_{_sec2['key']}"
+                        for _d in st.session_state.get(_vk2, []):
+                            if _d.get("versi"):
+                                _to_del.setdefault(_sec2["key"], []).append(_d["versi"])
+                    if _to_del:
+                        # Ada versi di session → hapus langsung
+                        _hasil_hapus = _ppk_up.hapus_semua_dokumen(_kode, versi_map=_to_del)
+                    else:
+                        # Tidak ada di session → fallback ke Playwright list
+                        _hasil_hapus = _ppk_up.hapus_semua_dokumen(_kode)
+                    _total_hapus = _hasil_hapus.get("dihapus", 0)
+                    _total_err   = _hasil_hapus.get("gagal", 0)
                     if _total_err == 0:
+                        # Bersihkan session state
+                        for _sec2 in _UPLOAD_SECTIONS:
+                            _vk2 = f"ppk_versi_{_kode}_{_sec2['key']}"
+                            if _vk2 in st.session_state: del st.session_state[_vk2]
                         st.toast(f"✅ {_total_hapus} dokumen dihapus", icon="🗑️")
                     else:
                         st.warning(f"⚠️ {_total_hapus} dihapus, {_total_err} gagal")
@@ -1347,6 +1358,13 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                         folder_path=_selected_folder,
                                         log_fn=_flog,
                                     )
+                                    # Simpan versi hasil upload ke session_state
+                                    for _fr in _fres.get("results", []):
+                                        if _fr.get("ok") and _fr.get("versi") and _fr.get("jenis") != "nd":
+                                            _fvk = f"ppk_versi_{_kode}_{_fr['jenis']}"
+                                            _fvl = st.session_state.get(_fvk, [])
+                                            _fvl.append({"nama_file": _fr["nama"], "versi": _fr["versi"]})
+                                            st.session_state[_fvk] = _fvl
                                     if _fres.get("total_err", 0) == 0:
                                         st.success(f"✅ {_fres['total_ok']} file berhasil diupload!")
                                         st.toast(f"✅ {_fres['total_ok']} file diupload", icon="✅")
@@ -1366,7 +1384,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                         # Dokumen existing
                         try:
                             if _sec["key"] != "nd":
-                                _existing = _ppk_up.list_dokumen(_kode, _sec["key"])
+                                # Pakai session_state dulu (versi tersimpan saat upload)
+                                _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
+                                _existing = st.session_state.get(_vkey) or _ppk_up.list_dokumen(_kode, _sec["key"])
                             else:
                                 _existing = []
 
@@ -1376,6 +1396,10 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                     _dc1.markdown(f"📎 `{_doc['nama_file']}`")
                                     if _dc2.button("🗑️", key=f"del_{_kode}_{_sec['key']}_{_doc['versi']}", help="Hapus"):
                                         if _ppk_up.hapus_dokumen(_kode, _sec["key"], _doc["versi"]):
+                                            # Hapus dari session_state
+                                            _vk3 = f"ppk_versi_{_kode}_{_sec['key']}"
+                                            _vl3 = st.session_state.get(_vk3, [])
+                                            st.session_state[_vk3] = [d for d in _vl3 if d.get("versi") != _doc["versi"]]
                                             st.toast("✅ Dihapus", icon="✅")
                                             st.rerun()
                                         else:
@@ -1408,6 +1432,11 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                     if _res.get("ok"):
                                         _sts.update(label="✅ Berhasil!", state="complete")
                                         st.toast(f"✅ {_up.name} diupload", icon="✅")
+                                        # Simpan versi untuk hapus nanti
+                                        _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
+                                        _vlist = st.session_state.get(_vkey, [])
+                                        _vlist.append({"nama_file": _up.name, "versi": _res.get("versi")})
+                                        st.session_state[_vkey] = _vlist
                                         st.rerun()
                                     else:
                                         _sts.update(label="❌ Gagal", state="error")
