@@ -1139,29 +1139,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         else:
             # Auto-load detail yang belum ada di session_state
             _missing = [p for p in _info_list if f"ppk_detail_{p['kode_paket']}" not in st.session_state]
-            if _missing:
-                _hcol1, _hcol2 = st.columns([3, 2])
-                _hcol1.markdown("## ℹ️ Info Paket PPK")
-                with _hcol2:
-                    with st.status(f"Memuat {len(_missing)} paket...", expanded=False) as _st:
-                        # Pre-fetch cookie di main thread agar worker thread tidak race init WS
-                        import spse_browser as _sb_pre
-                        _sb_pre.get_spse_cookies()
-                        from concurrent.futures import ThreadPoolExecutor, as_completed
-                        with ThreadPoolExecutor(max_workers=4) as _ex:
-                            _futs = {_ex.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p for p in _missing}
-                            _done = 0
-                            for _fut in as_completed(_futs, timeout=120):
-                                _done += 1
-                                _p = _futs[_fut]
-                                _st.update(label=f"[{_done}/{len(_missing)}] selesai...")
-                                try:
-                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = _fut.result()
-                                except Exception:
-                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = {}
-                        _st.update(label=f"✅ {len(_missing)} paket dimuat", state="complete")
-            else:
-                st.markdown("## ℹ️ Info Paket PPK")
+            st.markdown("## ℹ️ Info Paket PPK")
 
             _n_loaded = sum(1 for p in _info_list if ("ppk_detail_" + p["kode_paket"]) in st.session_state)
             st.caption(f"{len(_info_list)} paket · {_n_loaded} detail tersedia")
@@ -1183,7 +1161,10 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     st.code(_in, language=None)
 
                     if not _det:
-                        st.caption("⏳ Detail belum termuat.")
+                        if st.button("Muat Detail", key=f"load_det_{_ik}"):
+                            st.session_state[_det_key] = _ppk_up.fetch_detail_paket(_ik)
+                            st.rerun()
+                        st.caption("⏳ Klik untuk muat detail paket.")
                     else:
                         if _det.get("_error_step1") or _det.get("_error_step2"):
                             st.warning(f"Partial error: {_det.get('_error_step1','')} {_det.get('_error_step2','')}")
