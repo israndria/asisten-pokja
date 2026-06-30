@@ -577,23 +577,13 @@ def parse_personil_dari_hps(items_or_md) -> list[dict]:
         m_th = re.search(r"(\d+)\s*tahun", jenis, re.IGNORECASE)
         pengalaman = f"{m_th.group(1)} Tahun" if m_th else "1 Tahun"
 
-        # Ambil teks mentah di dalam kurung (...) — tidak dinormalisasi
-        m_ket = re.search(r"\((.+)\)", jenis)
-        sertifikat = m_ket.group(1).strip() if m_ket else ""
-
-        vol = it.get("vol") or 0
-        try:
-            jumlah_orang = int(round(float(vol)))
-        except (ValueError, TypeError):
-            jumlah_orang = 1
-        if jumlah_orang < 1:
-            jumlah_orang = 1
+        sertifikat = _extract_sertifikat_dari_jabatan(jenis)
 
         hasil.append({
             "jabatan": jabatan,
             "pengalaman": pengalaman,
             "sertifikat": sertifikat,
-            "jumlah_orang": jumlah_orang,
+            "jumlah_orang": 1,
         })
         if len(hasil) >= 3:
             break
