@@ -1144,11 +1144,14 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 _hcol1.markdown("## ℹ️ Info Paket PPK")
                 with _hcol2:
                     with st.status(f"Memuat {len(_missing)} paket...", expanded=False) as _st:
+                        # Pre-fetch cookie di main thread agar worker thread tidak race init WS
+                        import spse_browser as _sb_pre
+                        _sb_pre.get_spse_cookies()
                         from concurrent.futures import ThreadPoolExecutor, as_completed
                         with ThreadPoolExecutor(max_workers=4) as _ex:
                             _futs = {_ex.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p for p in _missing}
                             _done = 0
-                            for _fut in as_completed(_futs):
+                            for _fut in as_completed(_futs, timeout=120):
                                 _done += 1
                                 _p = _futs[_fut]
                                 _st.update(label=f"[{_done}/{len(_missing)}] selesai...")

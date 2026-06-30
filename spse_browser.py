@@ -1257,35 +1257,44 @@ def get_spse_cookies() -> str:
             except Exception:
                 pass
 
-        # Fallback: ambil cookie via CDP WebSocket per-tab (tidak butuh connect_over_cdp)
+        # Fallback: ambil cookie via CDP WebSocket per-tab di thread terpisah
         try:
-            import asyncio as _aio, json as _json2, urllib.request as _ur2
+            import asyncio as _aio, json as _json2, urllib.request as _ur2, threading as _thr
             tabs = _json2.loads(_ur2.urlopen(f"http://localhost:{CDP_PORT}/json", timeout=3).read())
             tab = next(
                 (t for t in tabs if "spse.inaproc.id" in t.get("url", "") and t.get("type") == "page"),
                 None
             )
             if tab and tab.get("webSocketDebuggerUrl"):
-                async def _get_cookies_ws():
-                    import websockets as _ws
-                    async with _ws.connect(tab["webSocketDebuggerUrl"], open_timeout=5) as ws:
-                        await ws.send(_json2.dumps({"id": 1, "method": "Network.getAllCookies", "params": {}}))
-                        while True:
-                            msg = _json2.loads(await _aio.wait_for(ws.recv(), timeout=10))
-                            if msg.get("id") == 1:
-                                return msg.get("result", {}).get("cookies", [])
+                _ws_url = tab["webSocketDebuggerUrl"]
+                _cookie_result = [None]
 
-                loop = _aio.new_event_loop()
-                try:
-                    cookies = loop.run_until_complete(_get_cookies_ws())
-                finally:
-                    loop.close()
-                spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
-                result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
-                if result:
-                    _cookie_cache = result
-                    _cookie_cache_ts = now
-                    return result
+                def _fetch_cookies_thread():
+                    async def _inner():
+                        import websockets as _ws
+                        async with _ws.connect(_ws_url, open_timeout=5) as ws:
+                            await ws.send(_json2.dumps({"id": 1, "method": "Network.getAllCookies", "params": {}}))
+                            while True:
+                                msg = _json2.loads(await _aio.wait_for(ws.recv(), timeout=10))
+                                if msg.get("id") == 1:
+                                    return msg.get("result", {}).get("cookies", [])
+                    lp = _aio.new_event_loop()
+                    _aio.set_event_loop(lp)
+                    try:
+                        _cookie_result[0] = lp.run_until_complete(_inner())
+                    finally:
+                        lp.close()
+
+                t = _thr.Thread(target=_fetch_cookies_thread, daemon=True)
+                t.start()
+                t.join(timeout=15)
+                if _cookie_result[0] is not None:
+                    spse = [c for c in _cookie_result[0] if "inaproc" in c.get("domain", "")]
+                    result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+                    if result:
+                        _cookie_cache = result
+                        _cookie_cache_ts = now
+                        return result
         except Exception:
             pass
 
