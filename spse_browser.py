@@ -197,7 +197,18 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
         _pw = await async_playwright().start()
     import os as _os
     _downloads_dir = _os.path.join(_os.path.expanduser("~"), "Downloads")
-    browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
+    try:
+        browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
+    except Exception:
+        # _pw stale (context lama dari sesi sebelumnya) — reset dan coba ulang
+        try:
+            await _pw.stop()
+        except Exception:
+            pass
+        _pw = await async_playwright().start()
+        _context = None
+        _page = None
+        browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
     # Pakai context pertama (window Chrome yang sudah terbuka)
     if browser.contexts:
         _context = browser.contexts[0]
