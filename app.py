@@ -1133,6 +1133,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         if not _info_list:
             st.markdown("## ℹ️ Info Paket PPK")
             st.warning("Tidak ada paket ditemukan. Pastikan login PPK aktif di browser.")
+            if st.button("🔄 Refresh Paket", key="ppk_refresh_empty"):
+                _load_paket_ppk.clear()
+                st.rerun()
         else:
             # Auto-load detail yang belum ada di session_state
             _missing = [p for p in _info_list if f"ppk_detail_{p['kode_paket']}" not in st.session_state]

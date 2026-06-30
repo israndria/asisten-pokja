@@ -24,35 +24,56 @@ class _NoCmdWindowPopen(_OrigPopen):
 _subprocess.Popen = _NoCmdWindowPopen
 
 # ============================================================
-# Event loop di thread terpisah (agar tidak konflik dengan Streamlit)
+# Event loop + CDP state — semua di builtins agar survive Streamlit hot-reload
 # ============================================================
 
-_loop: asyncio.AbstractEventLoop | None = None
-_loop_thread: threading.Thread | None = None
-_pw = None
-_context: BrowserContext | None = None
-_page: Page | None = None
+import builtins as _builtins_sb
+if not hasattr(_builtins_sb, "_spse_cdp_state"):
+    _builtins_sb._spse_cdp_state = {"pw": None, "context": None, "page": None}
+if not hasattr(_builtins_sb, "_spse_loop_state"):
+    _builtins_sb._spse_loop_state = {"loop": None, "thread": None}
+
+def _get_pw():      return _builtins_sb._spse_cdp_state["pw"]
+def _set_pw(v):     _builtins_sb._spse_cdp_state["pw"] = v
+def _get_ctx():     return _builtins_sb._spse_cdp_state["context"]
+def _set_ctx(v):    _builtins_sb._spse_cdp_state["context"] = v
+def _get_page():    return _builtins_sb._spse_cdp_state["page"]
+def _set_page(v):   _builtins_sb._spse_cdp_state["page"] = v
+
+def _get_loop():    return _builtins_sb._spse_loop_state["loop"]
+def _set_loop(v):   _builtins_sb._spse_loop_state["loop"] = v
+def _get_loop_thread(): return _builtins_sb._spse_loop_state["thread"]
+def _set_loop_thread(v): _builtins_sb._spse_loop_state["thread"] = v
+
+# Module-level aliases (stale setelah hot-reload, tapi dibutuhkan agar tidak NameError di kode lama)
+_loop = None
+_loop_thread = None
 
 
 def _start_loop():
-    global _loop
-    _loop = asyncio.ProactorEventLoop()  # Windows: wajib ProactorEventLoop untuk subprocess
-    asyncio.set_event_loop(_loop)
-    _loop.run_forever()
+    lp = asyncio.ProactorEventLoop()  # Windows: wajib ProactorEventLoop untuk subprocess
+    asyncio.set_event_loop(lp)
+    _set_loop(lp)
+    lp.run_forever()
 
 
 def _ensure_loop():
-    global _loop, _loop_thread
-    if _loop is None or not _loop.is_running():
-        _loop_thread = threading.Thread(target=_start_loop, daemon=True)
-        _loop_thread.start()
+    lp = _get_loop()
+    if lp is None or not lp.is_running():
+        # Loop mati → pw terikat loop lama, harus reset semua state CDP
+        _set_pw(None)
+        _set_ctx(None)
+        _set_page(None)
+        t = threading.Thread(target=_start_loop, daemon=True)
+        _set_loop_thread(t)
+        t.start()
         import time; time.sleep(0.3)
 
 
 def _run(coro, timeout=60):
     """Jalankan coroutine di background loop, tunggu hasilnya."""
     _ensure_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    future = asyncio.run_coroutine_threadsafe(coro, _get_loop())
     return future.result(timeout=timeout)
 
 
@@ -192,34 +213,33 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     """Connect ke Chrome yang sudah jalan via CDP.
     Jika navigate=False, hanya connect tanpa membuka tab baru (cepat, untuk auto-reconnect).
     """
-    global _pw, _context, _page
-    if _pw is None:
-        _pw = await async_playwright().start()
+    if _get_pw() is None:
+        _set_pw(await async_playwright().start())
     import os as _os
     _downloads_dir = _os.path.join(_os.path.expanduser("~"), "Downloads")
     try:
-        browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
+        browser = await _get_pw().chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
     except Exception:
         # _pw stale (context lama dari sesi sebelumnya) — reset dan coba ulang
         try:
-            await _pw.stop()
+            await _get_pw().stop()
         except Exception:
             pass
-        _pw = await async_playwright().start()
-        _context = None
-        _page = None
-        browser = await _pw.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
+        _set_pw(await async_playwright().start())
+        _set_ctx(None)
+        _set_page(None)
+        browser = await _get_pw().chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
     # Pakai context pertama (window Chrome yang sudah terbuka)
     if browser.contexts:
-        _context = browser.contexts[0]
+        _set_ctx(browser.contexts[0])
     else:
-        _context = await browser.new_context()
+        _set_ctx(await browser.new_context())
     # Set download behavior ke folder Downloads user via CDP session langsung
     # (accept_downloads tidak bisa di-set ke existing context via Playwright API)
     try:
-        pages = _context.pages
+        pages = _get_ctx().pages
         if pages:
-            cdp_session = await _context.new_cdp_session(pages[0])
+            cdp_session = await _get_ctx().new_cdp_session(pages[0])
             await cdp_session.send("Browser.setDownloadBehavior", {
                 "behavior": "allowAndName",
                 "downloadPath": _downloads_dir,
@@ -229,13 +249,13 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     except Exception:
         pass
     # Pakai tab yang sudah ada (tab pertama/aktif), jangan buka tab baru saat reconnect
-    if _context.pages:
-        _page = _context.pages[0]
+    if _get_ctx().pages:
+        _set_page(_get_ctx().pages[0])
     else:
-        _page = await _context.new_page()
+        _set_page(await _get_ctx().new_page())
     if navigate and url:
-        await _page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    return _page
+        await _get_page().goto(url, wait_until="domcontentloaded", timeout=30000)
+    return _get_page()
 
 
 def _cek_cdp_aktif() -> bool:
@@ -265,10 +285,9 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
 
 async def _buka_tab_baru_async(url: str):
     """Buka tab baru di Brave CDP (tidak overwrite tab aktif)."""
-    global _context
-    if _context is None:
+    if _get_ctx() is None:
         await _connect_cdp_async(navigate=False)
-    page = await _context.new_page()
+    page = await _get_ctx().new_page()
     await page.goto(url, wait_until="domcontentloaded", timeout=20000)
     await page.wait_for_timeout(3000)  # tunggu JS/Cloudflare hydrate
     return page
@@ -305,19 +324,20 @@ def launch_chrome_dengan_cdp():
 
 
 async def _tutup_async():
-    global _pw, _context, _page
-    if _context:
-        await _context.close()
-    if _pw:
-        await _pw.stop()
-    _pw = _context = _page = None
+    if _get_ctx():
+        await _get_ctx().close()
+    if _get_pw():
+        await _get_pw().stop()
+    _set_pw(None)
+    _set_ctx(None)
+    _set_page(None)
 
 
 def tutup_browser():
     """Tutup Chrome: via Playwright jika connect, fallback CDP Browser.close, lalu diskonek."""
     stop_auto_refresh()
-    global _pw, _context, _page, _cdp_tabs_cache, _cdp_tabs_cache_ts
-    if _context:
+    global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    if _get_ctx():
         _run(_tutup_async())
     else:
         # Fallback: kirim CDP command Browser.close langsung via HTTP
@@ -336,7 +356,9 @@ def tutup_browser():
         except Exception:
             pass
     # Selalu reset state
-    _pw = _context = _page = None
+    _set_pw(None)
+    _set_ctx(None)
+    _set_page(None)
     _cdp_tabs_cache = []
     _cdp_tabs_cache_ts = 0.0
     # Hapus last_role saat browser ditutup
@@ -387,8 +409,10 @@ def refresh_browser():
 
 def diskonek():
     """Reset koneksi Playwright tanpa menutup browser. Berguna jika CDP sudah ditutup manual."""
-    global _pw, _context, _page, _cdp_tabs_cache, _cdp_tabs_cache_ts
-    _pw = _context = _page = None
+    global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    _set_pw(None)
+    _set_ctx(None)
+    _set_page(None)
     _cdp_tabs_cache = []
     _cdp_tabs_cache_ts = 0.0
 
@@ -427,14 +451,13 @@ async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base
     Navigasi ke /metode via Playwright, pilih kategori + radio, accept confirm dialog, klik Simpan.
     Return: "OK" jika sukses, pesan error jika gagal.
     """
-    global _context
-    if _context is None:
+    if _get_ctx() is None:
         # Panggil async version langsung — buka_browser() sync akan deadlock di sini
         await _connect_cdp_async(navigate=False)
-    if _context is None:
+    if _get_ctx() is None:
         return "CDP tidak tersambung"
 
-    page = await _context.new_page()
+    page = await _get_ctx().new_page()
     try:
         # Auto-accept dialog (confirm/alert) — asyncio.ensure_future agar tidak deadlock
         page.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
@@ -485,13 +508,12 @@ async def _update_ijin_sbu_async(kode_paket: str, ijin_idx: int, klas_baru: str,
     Dipakai karena server SPSE block update ijin existing via requests POST (nilai di-revert).
     Return "OK" jika sukses, pesan error jika gagal.
     """
-    global _context
-    if _context is None:
+    if _get_ctx() is None:
         await _connect_cdp_async(navigate=False)
-    if _context is None:
+    if _get_ctx() is None:
         return "CDP tidak tersambung"
 
-    page = await _context.new_page()
+    page = await _get_ctx().new_page()
     try:
         url_ldk = f"{base_url}dokumennontender/{kode_paket}/ldk"
         await page.goto(url_ldk, wait_until="domcontentloaded", timeout=20000)
@@ -553,13 +575,12 @@ async def _pilih_penyedia_async(kode_paket: str, npwp: str, base_url: str, nama_
     Strategi 1: goto URL dengan ?search=true&npwp=XX.XXX.XXX.X-XXX.XXX (SPSE auto-trigger search).
     Strategi 2: search manual by nama (kata signifikan pertama), lalu filter NPWP 16-digit di hasil.
     """
-    global _context
-    if _context is None:
+    if _get_ctx() is None:
         await _connect_cdp_async(navigate=False)
-    if _context is None:
+    if _get_ctx() is None:
         return {"ok": False, "pesan": "CDP tidak tersambung"}
 
-    page = await _context.new_page()
+    page = await _get_ctx().new_page()
     try:
         npwp_fmt = _format_npwp_15(npwp)
         # Digits NPWP 16: strip non-digit dari raw input, pad ke 16
@@ -872,12 +893,11 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
 
 
 def halaman_aktif() -> Page | None:
-    global _page
-    if _page and not _page.is_closed():
-        return _page
-    if _context and _context.pages:
-        _page = _context.pages[-1]
-        return _page
+    if _get_page() and not _get_page().is_closed():
+        return _get_page()
+    if _get_ctx() and _get_ctx().pages:
+        _set_page(_get_ctx().pages[-1])
+        return _get_page()
     return None
 
 
@@ -918,20 +938,19 @@ def daftar_tab() -> list[dict]:
 
 def pilih_tab(index: int):
     """Set halaman aktif ke tab berdasarkan index (berdasarkan CDP tab list)."""
-    global _page
-    if not _context:
+    if not _get_ctx():
         return
     tabs = _cdp_tabs()
     if 0 <= index < len(tabs):
         target_url = tabs[index].get("url", "")
         if target_url:
-            matched = next((p for p in _context.pages if p.url == target_url), None)
+            matched = next((p for p in _get_ctx().pages if p.url == target_url), None)
             if matched:
-                _page = matched
+                _set_page(matched)
                 return
     # fallback ke index Playwright
-    if 0 <= index < len(_context.pages):
-        _page = _context.pages[index]
+    if 0 <= index < len(_get_ctx().pages):
+        _set_page(_get_ctx().pages[index])
 
 
 def get_url() -> str:
@@ -1225,17 +1244,17 @@ def get_spse_cookies() -> str:
         if _cookie_cache and (now - _cookie_cache_ts) < _COOKIE_CACHE_TTL:
             return _cookie_cache
 
-        if _context is None:
+        if _get_ctx() is None:
             try:
                 buka_browser(navigate=False)
             except Exception:
                 return ""
 
-        if _context is None:
+        if _get_ctx() is None:
             return ""
 
         try:
-            cookies = _run(_context.cookies(), timeout=10)
+            cookies = _run(_get_ctx().cookies(), timeout=10)
             spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
             result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
             if result:
@@ -1244,3 +1263,4 @@ def get_spse_cookies() -> str:
             return result
         except Exception:
             return _cookie_cache  # kembalikan cache lama jika gagal
+

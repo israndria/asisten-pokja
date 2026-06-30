@@ -15,37 +15,75 @@ _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
 
 
 _cdp_eval_lock = __import__("threading").Lock()
+_CDP_PORT = 9222
 
 
 def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
     """
-    Jalankan JS di tab SPSE via spse_browser._context (in-process, shared CDP connection).
-    Pakai lock agar thread-safe (Streamlit multi-thread). Eksekusi via async _run().
+    Jalankan JS di tab SPSE via pure WebSocket CDP (tanpa Playwright connect_over_cdp).
+    Cari tab SPSE dari /json endpoint, connect langsung ke tab WS, eval JS.
     Return (ok, result_value, error_msg).
     """
+    import asyncio, json as _json
+
+    async def _run_ws():
+        import websockets
+        # Ambil daftar tab dari CDP HTTP
+        import urllib.request as _ur
+        try:
+            tabs = _json.loads(_ur.urlopen(f"http://localhost:{_CDP_PORT}/json", timeout=3).read())
+        except Exception as e:
+            raise RuntimeError(f"CDP HTTP tidak aktif: {e}")
+
+        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        if not page_tabs:
+            raise RuntimeError("Tidak ada tab page di CDP")
+
+        # Pilih tab SPSE paketnontender, fallback tab SPSE lain
+        tab = next(
+            (t for t in page_tabs if "paketnontender" in t.get("url", "") and "spse.inaproc.id" in t.get("url", "")),
+            next((t for t in page_tabs if "spse.inaproc.id" in t.get("url", "")), page_tabs[0])
+        )
+        ws_url = tab.get("webSocketDebuggerUrl", "")
+        if not ws_url:
+            raise RuntimeError(f"Tab tidak punya webSocketDebuggerUrl: {tab.get('url')}")
+
+        async with websockets.connect(ws_url, open_timeout=5) as ws:
+            cmd = _json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+                "expression": js, "returnByValue": True, "awaitPromise": True
+            }})
+            await ws.send(cmd)
+            while True:
+                msg = _json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
+                if msg.get("id") == 1:
+                    break
+        res = msg.get("result", {})
+        exc = res.get("exceptionDetails")
+        if exc:
+            raise RuntimeError(exc.get("text", "JS exception"))
+        return res.get("result", {}).get("value")
+
     with _cdp_eval_lock:
         try:
-            ctx = spse_browser._context
-            if ctx is None:
-                return False, None, "CDP context tidak aktif — pastikan login PPK di browser"
-
-            pages = ctx.pages
-            page = None
-            for p in pages:
-                if "paketnontender" in p.url and "spse.inaproc.id" in p.url:
-                    page = p; break
-            if page is None:
-                for p in pages:
-                    if "spse.inaproc.id" in p.url:
-                        page = p; break
-            if page is None and pages:
-                page = pages[0]
-            if page is None:
-                return False, None, "Tidak ada tab aktif di CDP"
-
-            # page.evaluate() adalah async — jalankan via _run()
-            result = spse_browser._run(page.evaluate(js), timeout=timeout)
-            return True, result, ""
+            import threading
+            result_holder = [None, None]  # [value, exception]
+            def _in_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result_holder[0] = loop.run_until_complete(_run_ws())
+                except Exception as e:
+                    result_holder[1] = e
+                finally:
+                    loop.close()
+            t = threading.Thread(target=_in_thread, daemon=True)
+            t.start()
+            t.join(timeout=timeout + 5)
+            if t.is_alive():
+                return False, None, "CDP eval timeout"
+            if result_holder[1]:
+                raise result_holder[1]
+            return True, result_holder[0], ""
         except Exception as e:
             return False, None, str(e)
 
