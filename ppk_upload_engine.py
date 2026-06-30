@@ -14,80 +14,40 @@ BASE_URL = SPSE_BASE_URL.rstrip("/")
 _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
 
 
-_CDP_RUNNER = None  # path ke script helper
-_CDP_RUNNER_LOCK = __import__("threading").Lock()
-
-def _get_cdp_runner() -> str:
-    """Buat/kembalikan path script CDP runner (thread-safe)."""
-    import os, tempfile
-    global _CDP_RUNNER
-    with _CDP_RUNNER_LOCK:
-        if _CDP_RUNNER and os.path.exists(_CDP_RUNNER):
-            return _CDP_RUNNER
-        script = r"""
-import sys, json
-from playwright.sync_api import sync_playwright
-
-js = sys.stdin.read()
-with sync_playwright() as pw:
-    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
-    ctx = browser.contexts[0]
-    pages = ctx.pages
-    page = None
-    for p in pages:
-        if "paketnontender" in p.url and "spse.inaproc.id" in p.url:
-            page = p; break
-    if page is None:
-        for p in pages:
-            if "spse.inaproc.id" in p.url:
-                page = p; break
-    if page is None and pages:
-        page = pages[0]
-    if page is None:
-        print(json.dumps({"ok": False, "error": "Tidak ada tab aktif"}))
-        sys.exit(0)
-    try:
-        result = page.evaluate(js)
-        print(json.dumps({"ok": True, "value": result}))
-    except Exception as e:
-        print(json.dumps({"ok": False, "error": str(e)}))
-"""
-        fd, path = tempfile.mkstemp(suffix="_cdp_runner.py", prefix="pokja_")
-        os.write(fd, script.encode())
-        os.close(fd)
-        _CDP_RUNNER = path
-        return path
+_cdp_eval_lock = __import__("threading").Lock()
 
 
 def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
     """
-    Jalankan JS di tab SPSE via subprocess Playwright (process-isolated, thread-safe).
+    Jalankan JS di tab SPSE via spse_browser._context (in-process, shared CDP connection).
+    Pakai lock agar thread-safe (Streamlit multi-thread). Eksekusi via async _run().
     Return (ok, result_value, error_msg).
     """
-    import subprocess, sys, os
+    with _cdp_eval_lock:
+        try:
+            ctx = spse_browser._context
+            if ctx is None:
+                return False, None, "CDP context tidak aktif — pastikan login PPK di browser"
 
-    python = sys.executable
-    runner = _get_cdp_runner()
+            pages = ctx.pages
+            page = None
+            for p in pages:
+                if "paketnontender" in p.url and "spse.inaproc.id" in p.url:
+                    page = p; break
+            if page is None:
+                for p in pages:
+                    if "spse.inaproc.id" in p.url:
+                        page = p; break
+            if page is None and pages:
+                page = pages[0]
+            if page is None:
+                return False, None, "Tidak ada tab aktif di CDP"
 
-    try:
-        proc = subprocess.run(
-            [python, runner],
-            input=js.encode(),
-            capture_output=True,
-            timeout=timeout + 10,
-        )
-        stdout = proc.stdout.decode(errors="replace").strip()
-        if not stdout:
-            stderr = proc.stderr.decode(errors="replace")[:300]
-            return False, None, f"CDP runner no output: {stderr}"
-        resp = json.loads(stdout)
-        if resp.get("ok"):
-            return True, resp.get("value"), ""
-        return False, None, resp.get("error", "unknown")
-    except subprocess.TimeoutExpired:
-        return False, None, f"CDP runner timeout ({timeout}s)"
-    except Exception as e:
-        return False, None, str(e)
+            # page.evaluate() adalah async — jalankan via _run()
+            result = spse_browser._run(page.evaluate(js), timeout=timeout)
+            return True, result, ""
+        except Exception as e:
+            return False, None, str(e)
 
 _SUBMIT_ENDPOINTS = {
     "kak":     "spekPpkSubmit",
