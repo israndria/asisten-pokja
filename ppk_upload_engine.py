@@ -432,9 +432,37 @@ def upload_nota_dinas(kode_paket: str, file_bytes: bytes, file_name: str, mime_t
         _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
     return result or {"ok": False, "error": err}
 
+def pilih_pp(kode_paket: str, pp_id: str = "74177", log_fn=None) -> bool:
+    """
+    Step 3 SPSE: pilih PP via simpanpartthree (wajib sebelum submitrekirimpesanpp).
+    Ambil authenticityToken dari halaman edit?step=3, lalu POST simpanpartthree.
+    """
+    js = f"""
+    (async () => {{
+        const tokenResp = await fetch('/{_LPSE}/paketnontender/{kode_paket}/edit?step=3', {{credentials:'include'}});
+        const html = await tokenResp.text();
+        const tokenMatch = html.match(/authenticityToken[^>]*value="([^"]+)"/);
+        const token = tokenMatch ? tokenMatch[1] : '';
+        const fd = new FormData();
+        fd.append('authenticityToken', token);
+        fd.append('step', '3');
+        fd.append('pp_id', '{pp_id}');
+        const r = await fetch('/{_LPSE}/paketnontender/{kode_paket}/simpanpartthree', {{
+            method: 'POST', credentials: 'include', body: fd, redirect: 'manual'
+        }});
+        return {{status: r.status, token_found: !!token}};
+    }})()
+    """
+    ok, val, _ = _cdp_eval(js, timeout=20)
+    if not ok or not val:
+        return False
+    return val.get("status") in (0, 200, 302)
+
+
 def kirim_email_pp(kode_paket: str, path: str, file_id: str, log_fn=None) -> bool:
     """
     Kirim email pemberitahuan ke PP_ISRANDRIA (pp_id=74177) setelah ND terupload.
+    Wajib panggil pilih_pp() dulu sebelum fungsi ini.
     """
     js = f"""
     (async () => {{
@@ -785,17 +813,25 @@ def auto_match_folder(nama_paket_spse: str, subfolder_list: list[str]) -> str | 
     def _strip_num(folder):
         return re.sub(r'^\d+\.\s*', '', folder)
 
+    def _folder_num(folder):
+        m = re.match(r'^(\d+)\.', folder)
+        return int(m.group(1)) if m else 0
+
     target = _strip(nama_paket_spse).lower().strip()
-    best, best_score = None, 0.0
+    best, best_score, best_num = None, 0.0, -1
     for folder in subfolder_list:
         candidate = _strip_num(folder).lower().strip()
-        # substring check dulu
+        # substring → score 1.0, tapi tetap bandingkan semua (jangan early return)
         if target in candidate or candidate in target:
-            return folder
-        score = SequenceMatcher(None, target, candidate).ratio()
-        if score > best_score:
+            score = 1.0
+        else:
+            score = SequenceMatcher(None, target, candidate).ratio()
+        fnum = _folder_num(folder)
+        # ambil score tertinggi; tie-break: nomor folder terbesar (versi terbaru)
+        if score > best_score or (score == best_score and fnum > best_num):
             best_score = score
             best = folder
+            best_num = fnum
     return best if best_score > 0.65 else None
 
 
@@ -855,7 +891,13 @@ def upload_dari_folder(
                 _log(msg)  # flush log di main thread (aman untuk Streamlit)
             results.append(r)
 
-    # Upload ND setelah non-ND selesai
+    # Pilih PP (step 3) sebelum upload ND
+    _log("🔗 Pilih PP (step 3)...")
+    pp_ok = pilih_pp(kode_paket, log_fn=log_fn)
+    if not pp_ok:
+        _log("⚠️ Pilih PP gagal — lanjut upload ND tapi email mungkin gagal")
+
+    # Upload ND setelah PP dipilih
     for f in nd_files:
         try:
             with open(f["path"], "rb") as fh:
