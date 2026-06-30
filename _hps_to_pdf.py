@@ -90,7 +90,6 @@ th {{ background: #2c5f9e; color: white; font-size: 7pt; }}
 </style>
 </head>
 <body>
-<h3>Harga Perkiraan Sendiri (HPS)</h3>
 <table class="info">
 {info_rows}
 </table>
