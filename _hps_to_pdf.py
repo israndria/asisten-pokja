@@ -66,7 +66,7 @@ def md_to_pdf(md_path: str, nama_paket: str = None, total_hps: float = None, nil
     for i, line in enumerate(table_lines):
         if not line.strip():
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")][:6]  # buang Total SPSE, Total Hitung, Selisih OK
+        cells = [c.strip() for c in line.strip().strip("|").split("|")][:5]  # buang Pajak%, Total SPSE, Total Hitung, Selisih OK
         tag = "th" if i == 0 else "td"
         cells_html = "".join(
             f'<{tag} style="padding:3px 6px;border:1px solid #999;{"font-weight:bold;" if re.match(r"^\*\*.+\*\*$", c) else ""}">'
@@ -81,10 +81,10 @@ def md_to_pdf(md_path: str, nama_paket: str = None, total_hps: float = None, nil
 <head>
 <meta charset="utf-8">
 <style>
-body {{ font-family: Arial, sans-serif; font-size: 7.5pt; margin: 10px; }}
+body {{ font-family: Arial, sans-serif; font-size: 7.5pt; margin: 6px; }}
 h3 {{ font-size: 9pt; margin-bottom: 6px; color: #1a3a6b; }}
 table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; }}
-th, td {{ border: 1px solid #999; padding: 3px 5px; vertical-align: top; word-break: break-word; }}
+th, td {{ border: 1px solid #999; padding: 3px 5px; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; white-space: normal; }}
 th {{ background: #2c5f9e; color: white; font-size: 7pt; }}
 .info td {{ background: #f5f8ff; border-color: #ccd; font-size: 7.5pt; }}
 </style>
@@ -95,12 +95,11 @@ th {{ background: #2c5f9e; color: white; font-size: 7pt; }}
 </table>
 <table>
 <colgroup>
-<col style="width:3%">
-<col style="width:57%">
-<col style="width:8%">
-<col style="width:5%">
-<col style="width:14%">
-<col style="width:7%">
+<col style="width:4%">
+<col style="width:62%">
+<col style="width:10%">
+<col style="width:6%">
+<col style="width:18%">
 </colgroup>
 {"".join(rows_html)}
 </table>
