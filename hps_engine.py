@@ -542,7 +542,16 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     # Auto-generate PDF tabel BoQ (tanpa header ringkasan)
     try:
         from _hps_to_pdf import md_to_pdf
-        md_to_pdf(md_path)
+        # Ambil nilai_pagu dari Supabase (best-effort)
+        _nilai_pagu = None
+        try:
+            from config import sb as _sb
+            _row = _sb().table("draft_paket_pl").select("nilai_pagu").eq("kode_paket", kode_paket).maybe_single().execute()
+            if _row and _row.data:
+                _nilai_pagu = _row.data.get("nilai_pagu")
+        except Exception:
+            pass
+        md_to_pdf(md_path, nama_paket=nama_paket, total_hps=total_bulat, nilai_pagu=_nilai_pagu)
     except Exception:
         pass  # best-effort, jangan block HPS flow
 

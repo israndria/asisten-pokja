@@ -7,12 +7,18 @@ import sys
 import re
 import fitz
 
-def md_to_pdf(md_path: str) -> str:
+def _rp(n) -> str:
+    try:
+        return f"Rp {int(round(float(n))):,}".replace(",", ".")
+    except Exception:
+        return str(n)
+
+
+def md_to_pdf(md_path: str, nama_paket: str = None, total_hps: float = None, nilai_pagu: float = None) -> str:
     with open(md_path, encoding="utf-8") as f:
         content = f.read()
 
     # Ambil hanya bagian tabel BoQ — mulai dari baris header tabel
-    # Header tabel = baris yang mengandung "No | Jenis B/J"
     lines = content.splitlines()
     start = None
     for i, line in enumerate(lines):
@@ -27,16 +33,33 @@ def md_to_pdf(md_path: str) -> str:
     # Buang baris separator markdown (---|---|...)
     table_lines = [l for l in table_lines if not re.match(r'^[\s\-|]+$', l)]
 
-    # Parse nama paket dari path untuk judul PDF
+    # Fallback nama paket dari path jika tidak di-pass
     import os
-    folder = os.path.basename(os.path.dirname(md_path))
-    # Ambil nama setelah "PLJKK - " atau "PLPK - "
-    m = re.search(r'PL(?:JKK|PK)\s*-\s*(.+)', folder)
-    nama_paket = m.group(1).strip() if m else folder
+    if not nama_paket:
+        folder = os.path.basename(os.path.dirname(md_path))
+        m = re.search(r'PL(?:JKK|PK)\s*-\s*(.+)', folder)
+        nama_paket = m.group(1).strip() if m else folder
 
-    # Build HTML
+    # Fallback total_hps dari MD jika tidak di-pass
+    if total_hps is None:
+        for line in lines:
+            m = re.search(r'Total Nilai Bulat\*\*.*?Rp\s*([\d.]+)', line)
+            if m:
+                try:
+                    total_hps = float(m.group(1).replace(".", ""))
+                except Exception:
+                    pass
+                break
+
     def escape(s):
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Info paket: nama + nilai pagu + HPS
+    info_rows = f'<tr><td colspan="2"><b>Nama Paket</b></td><td colspan="4">{escape(nama_paket)}</td></tr>'
+    if nilai_pagu is not None:
+        info_rows += f'<tr><td colspan="2"><b>Nilai Pagu</b></td><td colspan="4">{_rp(nilai_pagu)}</td></tr>'
+    if total_hps is not None:
+        info_rows += f'<tr><td colspan="2"><b>Nilai HPS</b></td><td colspan="4">{_rp(total_hps)}</td></tr>'
 
     # Parse tabel dari markdown pipe format
     rows_html = []
@@ -59,14 +82,18 @@ def md_to_pdf(md_path: str) -> str:
 <meta charset="utf-8">
 <style>
 body {{ font-family: Arial, sans-serif; font-size: 7.5pt; margin: 10px; }}
-h3 {{ font-size: 9pt; margin-bottom: 6px; }}
-table {{ border-collapse: collapse; width: 100%; }}
+h3 {{ font-size: 9pt; margin-bottom: 6px; color: #1a3a6b; }}
+table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; }}
 th, td {{ border: 1px solid #999; padding: 3px 5px; vertical-align: top; word-break: break-word; }}
 th {{ background: #2c5f9e; color: white; font-size: 7pt; }}
+.info td {{ background: #f5f8ff; border-color: #ccd; font-size: 7.5pt; }}
 </style>
 </head>
 <body>
-<h3>Tabel BoQ HPS — {escape(nama_paket)}</h3>
+<h3>Harga Perkiraan Sendiri (HPS)</h3>
+<table class="info">
+{info_rows}
+</table>
 <table>
 {"".join(rows_html)}
 </table>
