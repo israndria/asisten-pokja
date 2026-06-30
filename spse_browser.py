@@ -1278,7 +1278,7 @@ def get_spse_cookies() -> str:
                                 msg = _json2.loads(await _aio.wait_for(ws.recv(), timeout=10))
                                 if msg.get("id") == 1:
                                     return msg.get("result", {}).get("cookies", [])
-                    lp = _aio.new_event_loop()
+                    lp = _aio.ProactorEventLoop()  # Windows: wajib Proactor untuk WS
                     _aio.set_event_loop(lp)
                     try:
                         _cookie_result[0] = lp.run_until_complete(_inner())

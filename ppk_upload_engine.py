@@ -68,7 +68,7 @@ def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
             import threading
             result_holder = [None, None]  # [value, exception]
             def _in_thread():
-                loop = asyncio.new_event_loop()
+                loop = asyncio.ProactorEventLoop()  # Windows: wajib Proactor untuk WS
                 asyncio.set_event_loop(loop)
                 try:
                     result_holder[0] = loop.run_until_complete(_run_ws())
