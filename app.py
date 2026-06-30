@@ -1668,7 +1668,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 try: return f"Rp {int(v):,}".replace(",", ".")
                                 except: return str(v) if v else "-"
                             _pl_dpa_nama = _pl_dpa_rows[0].get("nama_paket") or "-"
-                            with st.expander(f"📊 Info DPA — {_pl_dpa_nama[:40]}", expanded=False):
+                            # Expander tidak bisa nested — pakai checkbox toggle
+                            if st.checkbox(f"📊 Info DPA — {_pl_dpa_nama[:40]}", key=f"pl_dpa_show_{_pr_kode}"):
                                 _pl_dpa_tbl = []
                                 for _it in _pl_dpa_rows:
                                     _sk = (_it.get("subkegiatan_id") or "").split("|")
@@ -4679,7 +4680,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 try: return f"Rp {int(v):,}".replace(",", ".")
                                 except: return str(v) if v else "-"
                             _pl_dpa_nama = _pl_dpa_rows[0].get("nama_paket") or "-"
-                            with st.expander(f"📊 Info DPA — {_pl_dpa_nama[:40]}", expanded=False):
+                            # Expander tidak bisa nested — pakai checkbox toggle
+                            if st.checkbox(f"📊 Info DPA — {_pl_dpa_nama[:40]}", key=f"pl_dpa_show_{_pr_kode}"):
                                 _pl_dpa_tbl = []
                                 for _it in _pl_dpa_rows:
                                     _sk = (_it.get("subkegiatan_id") or "").split("|")
