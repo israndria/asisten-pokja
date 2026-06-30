@@ -796,6 +796,7 @@ def download_dokumen_paket_pl(
     progress_cb=None,
     cookie_str: str = "",
     skip_merge: bool = False,
+    force_clean: bool = False,
 ) -> dict:
     """
     Download dokumen dari endpoint non-tender PP ke folder_tujuan:
@@ -807,11 +808,13 @@ def download_dokumen_paket_pl(
 
     skip_merge=True: lewati gabung PDF (Excel COM tidak thread-safe untuk paralel).
                      Merge dilakukan sequential setelah pool selesai via gabung_draft_pl().
+    force_clean=True: hapus semua file di dalam SUBFOLDER_DOK_PPK sebelum download.
 
     Return: {"ok": [...], "error": [...]}
     """
     import requests
     import urllib.parse
+    import glob as _glob
     from bs4 import BeautifulSoup
     import spse_browser
 
@@ -821,6 +824,15 @@ def download_dokumen_paket_pl(
 
     os.makedirs(folder_tujuan, exist_ok=True)
     hasil = {"ok": [], "error": []}
+
+    if force_clean:
+        for sub_name in SUBFOLDER_DOK_PPK.values():
+            sub_path = os.path.join(folder_tujuan, sub_name)
+            if os.path.isdir(sub_path):
+                for f in os.listdir(sub_path):
+                    fp = os.path.join(sub_path, f)
+                    if os.path.isfile(fp):
+                        os.remove(fp)
 
     if not cookie_str:
         cookie_str = spse_browser.get_spse_cookies()

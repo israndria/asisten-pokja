@@ -2084,7 +2084,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _db_dl_logs = []
                                 def _db_dl_cb(msg, _log=_db_dl_logs):
                                     _log.append(msg)
-                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
+                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb, force_clean=True)
                                 _dl_bulk_ok += 1
                                 _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
                                 # Parse KAK setelah download
@@ -5102,7 +5102,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _db_dl_logs = []
                                 def _db_dl_cb(msg, _log=_db_dl_logs):
                                     _log.append(msg)
-                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb)
+                                _db_dl_res = pl_engine.download_dokumen_paket_pl(_db_kp, _db_root, _db_dl_cb, force_clean=True)
                                 _dl_bulk_ok += 1
                                 _dl_bulk_line.write(f"✅ [{_db_i+1}] {_db_nama} — {len(_db_dl_res.get('ok',[]))} file")
                                 # Parse KAK setelah download
