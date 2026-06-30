@@ -1144,10 +1144,18 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 _hcol1.markdown("## ℹ️ Info Paket PPK")
                 with _hcol2:
                     with st.status(f"Memuat {len(_missing)} paket...", expanded=False) as _st:
-                        for _idx, _ip2 in enumerate(_missing):
-                            _ik2 = _ip2["kode_paket"]
-                            _st.update(label=f"[{_idx+1}/{len(_missing)}] {_nama_singkat(_ip2['nama_paket'])[:50]}...")
-                            st.session_state[f"ppk_detail_{_ik2}"] = _ppk_up.fetch_detail_paket(_ik2)
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
+                        with ThreadPoolExecutor(max_workers=4) as _ex:
+                            _futs = {_ex.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p for p in _missing}
+                            _done = 0
+                            for _fut in as_completed(_futs):
+                                _done += 1
+                                _p = _futs[_fut]
+                                _st.update(label=f"[{_done}/{len(_missing)}] selesai...")
+                                try:
+                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = _fut.result()
+                                except Exception:
+                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = {}
                         _st.update(label=f"✅ {len(_missing)} paket dimuat", state="complete")
             else:
                 st.markdown("## ℹ️ Info Paket PPK")

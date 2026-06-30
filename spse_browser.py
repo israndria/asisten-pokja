@@ -1244,23 +1244,50 @@ def get_spse_cookies() -> str:
         if _cookie_cache and (now - _cookie_cache_ts) < _COOKIE_CACHE_TTL:
             return _cookie_cache
 
-        if _get_ctx() is None:
+        # Coba via Playwright context dulu
+        if _get_ctx() is not None:
             try:
-                buka_browser(navigate=False)
+                cookies = _run(_get_ctx().cookies(), timeout=10)
+                spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
+                result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+                if result:
+                    _cookie_cache = result
+                    _cookie_cache_ts = now
+                    return result
             except Exception:
-                return ""
+                pass
 
-        if _get_ctx() is None:
-            return ""
-
+        # Fallback: ambil cookie via CDP WebSocket per-tab (tidak butuh connect_over_cdp)
         try:
-            cookies = _run(_get_ctx().cookies(), timeout=10)
-            spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
-            result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
-            if result:
-                _cookie_cache = result
-                _cookie_cache_ts = now
-            return result
+            import asyncio as _aio, json as _json2, urllib.request as _ur2
+            tabs = _json2.loads(_ur2.urlopen(f"http://localhost:{CDP_PORT}/json", timeout=3).read())
+            tab = next(
+                (t for t in tabs if "spse.inaproc.id" in t.get("url", "") and t.get("type") == "page"),
+                None
+            )
+            if tab and tab.get("webSocketDebuggerUrl"):
+                async def _get_cookies_ws():
+                    import websockets as _ws
+                    async with _ws.connect(tab["webSocketDebuggerUrl"], open_timeout=5) as ws:
+                        await ws.send(_json2.dumps({"id": 1, "method": "Network.getAllCookies", "params": {}}))
+                        while True:
+                            msg = _json2.loads(await _aio.wait_for(ws.recv(), timeout=10))
+                            if msg.get("id") == 1:
+                                return msg.get("result", {}).get("cookies", [])
+
+                loop = _aio.new_event_loop()
+                try:
+                    cookies = loop.run_until_complete(_get_cookies_ws())
+                finally:
+                    loop.close()
+                spse = [c for c in cookies if "inaproc" in c.get("domain", "")]
+                result = "; ".join(f'{c["name"]}={c["value"]}' for c in spse)
+                if result:
+                    _cookie_cache = result
+                    _cookie_cache_ts = now
+                    return result
         except Exception:
-            return _cookie_cache  # kembalikan cache lama jika gagal
+            pass
+
+        return _cookie_cache  # kembalikan cache lama jika semua gagal
 
