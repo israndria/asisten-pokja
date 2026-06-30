@@ -40,15 +40,15 @@ def _get_active_spse_page():
     import spse_browser as _sb
     if not _sb._cek_cdp_aktif():
         return None, "Chrome CDP tidak aktif — buka 'Buka Chrome SPSE.bat' dulu"
-    if _sb._context is None:
+    if _sb._get_ctx() is None:
         try:
             _sb.buka_browser(navigate=False)
         except Exception as e:
             return None, str(e)
-    if _sb._context is None:
+    if _sb._get_ctx() is None:
         return None, "CDP tidak tersambung"
 
-    pages = _sb._context.pages
+    pages = _sb._get_ctx().pages
     # Pilih tab yang sedang di SPSE
     spse_page = next((p for p in pages if _SPSE_BASE in p.url), None)
     if spse_page is None and pages:

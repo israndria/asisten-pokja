@@ -238,9 +238,9 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
     _log(f"Menghubungkan ke Brave CDP (port {_sb.CDP_PORT})...")
 
     # Reuse page dari spse_browser (sudah di-init via buka_browser sebelum login)
-    if _sb._page is None:
+    if _sb._get_page() is None:
         raise RuntimeError("spse_browser belum di-init — panggil buka_browser() dulu.")
-    page = _sb._page
+    page = _sb._get_page()
 
     # Step 1: Home SPSE — navigate fresh, tunggu sampai networkidle (Bootstrap JS siap)
     from config import SPSE_BASE_URL
@@ -269,8 +269,8 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
         # Ganti akun cepat: session/cookie lama sering masih nempel di server → /home balas
         # "Akses Ditolak". Paksa clear cookies lalu navigate ulang ke home agar bersih.
         try:
-            if _sb._context is not None:
-                await _sb._context.clear_cookies()
+            if _sb._get_ctx() is not None:
+                await _sb._get_ctx().clear_cookies()
                 _log("Cookie sesi lama dibersihkan.")
         except Exception as _ce:
             _log(f"(clear cookie dilewati: {_ce})")
@@ -473,7 +473,7 @@ async def _retry_captcha_async(password: str, log_fn=None) -> bool:
         if log_fn:
             log_fn(msg)
 
-    page = _sb._page
+    page = _sb._get_page()
     if page is None:
         raise RuntimeError("Browser belum terhubung.")
 

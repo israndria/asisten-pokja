@@ -52,13 +52,13 @@ def get_token_dari_spse(kode_tender: str, progress_cb=None) -> dict:
 
         # Cari tab yang sudah terbuka, atau buka baru
         page = next(
-            (p for p in spse_browser._context.pages if kode_tender in p.url),
+            (p for p in spse_browser._get_ctx().pages if kode_tender in p.url),
             None,
         )
 
         if page is None:
             _log(f"Membuka halaman {target_url}...")
-            page = spse_browser._context.new_page()
+            page = spse_browser._get_ctx().new_page()
             spse_browser._run(page.goto(target_url, wait_until="domcontentloaded", timeout=30000))
             time.sleep(2)
 
