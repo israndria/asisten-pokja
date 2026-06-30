@@ -94,6 +94,14 @@ th {{ background: #2c5f9e; color: white; font-size: 7pt; }}
 {info_rows}
 </table>
 <table>
+<colgroup>
+<col style="width:3%">
+<col style="width:57%">
+<col style="width:8%">
+<col style="width:5%">
+<col style="width:14%">
+<col style="width:7%">
+</colgroup>
 {"".join(rows_html)}
 </table>
 </body>
