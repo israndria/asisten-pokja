@@ -1780,12 +1780,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _pl_ok_b = _pl_fail_b = 0
                         for _nm_b in _pl_sel_ubah_bulk:
                             _kd_b = _pl_opsi_ubah_bulk[_nm_b]
-                            if pl_engine.ubah_metode_pl_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b):
+                            _hasil_b = spse_browser.ubah_metode_via_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b)
+                            if _hasil_b == "OK":
                                 _pl_ok_b += 1
                                 st.write(f"✅ {_nm_b[:45]}")
                             else:
                                 _pl_fail_b += 1
-                                st.write(f"❌ {_nm_b[:45]}")
+                                st.write(f"❌ {_nm_b[:45]} — `{_hasil_b}`")
                         st.success(f"Selesai: {_pl_ok_b} OK, {_pl_fail_b} GAGAL.")
 
         with _pl_col_kanan:
@@ -4792,12 +4793,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _pl_ok_b = _pl_fail_b = 0
                         for _nm_b in _pl_sel_ubah_bulk:
                             _kd_b = _pl_opsi_ubah_bulk[_nm_b]
-                            if pl_engine.ubah_metode_pl_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b):
+                            _hasil_b = spse_browser.ubah_metode_via_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b)
+                            if _hasil_b == "OK":
                                 _pl_ok_b += 1
                                 st.write(f"✅ {_nm_b[:45]}")
                             else:
                                 _pl_fail_b += 1
-                                st.write(f"❌ {_nm_b[:45]}")
+                                st.write(f"❌ {_nm_b[:45]} — `{_hasil_b}`")
                         st.success(f"Selesai: {_pl_ok_b} OK, {_pl_fail_b} GAGAL.")
 
         with _pl_col_kanan:

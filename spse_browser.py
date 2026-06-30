@@ -429,7 +429,8 @@ async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base
     """
     global _context
     if _context is None:
-        buka_browser(navigate=False)
+        # Panggil async version langsung — buka_browser() sync akan deadlock di sini
+        await _connect_cdp_async(navigate=False)
     if _context is None:
         return "CDP tidak tersambung"
 
@@ -444,10 +445,14 @@ async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base
         # Pilih kategori dari dropdown + dispatch change event
         await page.select_option("select[name='kategoriId']", str(kategori_id))
         await page.dispatch_event("select[name='kategoriId']", "change")
-        await page.wait_for_timeout(1000)  # tunggu JS update radio list
+        # Tunggu radio muncul (JS render), max 5s
+        radio_selector = f"input[name='pilih'][value='{pilih}']"
+        try:
+            await page.wait_for_selector(radio_selector, timeout=5000)
+        except Exception:
+            return f"Radio pilih={pilih} tidak muncul setelah kategoriId={kategori_id} dipilih"
 
         # Klik radio pilih + dispatch change event
-        radio_selector = f"input[name='pilih'][value='{pilih}']"
         await page.check(radio_selector)
         await page.dispatch_event(radio_selector, "change")
         await page.wait_for_timeout(500)
@@ -482,7 +487,7 @@ async def _update_ijin_sbu_async(kode_paket: str, ijin_idx: int, klas_baru: str,
     """
     global _context
     if _context is None:
-        buka_browser(navigate=False)
+        await _connect_cdp_async(navigate=False)
     if _context is None:
         return "CDP tidak tersambung"
 
