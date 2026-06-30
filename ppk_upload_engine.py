@@ -434,29 +434,28 @@ def upload_nota_dinas(kode_paket: str, file_bytes: bytes, file_name: str, mime_t
 
 def pilih_pp(kode_paket: str, pp_id: str = "74177", log_fn=None) -> bool:
     """
-    Step 3 SPSE: pilih PP via simpanpartthree (wajib sebelum submitrekirimpesanpp).
-    Ambil authenticityToken dari halaman edit?step=3, lalu POST simpanpartthree.
+    Step 3 SPSE: pilih PP via /pilihpp -> submit_pp.
+    Ambil token dari halaman /pilihpp, POST ke /submit_pp dengan field ppId (bukan pp_id).
     """
     js = f"""
     (async () => {{
-        const tokenResp = await fetch('/{_LPSE}/paketnontender/{kode_paket}/edit?step=3', {{credentials:'include'}});
+        const tokenResp = await fetch('/{_LPSE}/paketnontender/{kode_paket}/pilihpp', {{credentials:'include'}});
         const html = await tokenResp.text();
         const tokenMatch = html.match(/authenticityToken[^>]*value="([^"]+)"/);
         const token = tokenMatch ? tokenMatch[1] : '';
         const fd = new FormData();
         fd.append('authenticityToken', token);
-        fd.append('step', '3');
-        fd.append('pp_id', '{pp_id}');
-        const r = await fetch('/{_LPSE}/paketnontender/{kode_paket}/simpanpartthree', {{
-            method: 'POST', credentials: 'include', body: fd, redirect: 'manual'
+        fd.append('ppId', '{pp_id}');
+        const r = await fetch('/{_LPSE}/paketnontender/{kode_paket}/submit_pp', {{
+            method: 'POST', credentials: 'include', body: fd
         }});
-        return {{status: r.status, token_found: !!token}};
+        return {{status: r.status, ok: r.ok, url: r.url}};
     }})()
     """
     ok, val, _ = _cdp_eval(js, timeout=20)
     if not ok or not val:
         return False
-    return val.get("status") in (0, 200, 302)
+    return val.get("ok") is True or val.get("status") in (200, 302)
 
 
 def kirim_email_pp(kode_paket: str, path: str, file_id: str, log_fn=None) -> bool:
