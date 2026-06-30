@@ -539,6 +539,13 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
+    # Auto-generate PDF tabel BoQ (tanpa header ringkasan)
+    try:
+        from _hps_to_pdf import md_to_pdf
+        md_to_pdf(md_path)
+    except Exception:
+        pass  # best-effort, jangan block HPS flow
+
     # Auto re-parse personil dari HPS yang baru ditulis → update Supabase langsung
     # Ini memastikan sertifikat selalu up-to-date tanpa perlu klik Refresh manual
     try:
