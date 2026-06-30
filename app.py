@@ -1818,15 +1818,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ]
 
             # Plan: pre-compute nama folder per paket
+            # Deteksi nomor tertinggi yang sudah ada di masing-masing output_base
+            _pl_no_offset = {
+                _PL_DIR_JKK: pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
+                _PL_DIR_PK:  pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
+            }
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
                 _bj0   = (_br0.get("jenis_pl") or "JKK").upper()
                 _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
-                _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
-                _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
+                # Nomor = offset (folder tertinggi di disk) + urutan paket ini
+                _bno0  = _pl_no_offset[_bout_base0] + _bi0
+                _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
+                _bnm_folder0 = pl_engine.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
@@ -2010,7 +2017,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
-                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
+                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")
                         except _pl_sp.TimeoutExpired:
                             _pl_fail += 1
                             _pl_paket_log.append("❌ Timeout buat folder")
@@ -4831,15 +4838,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ]
 
             # Plan: pre-compute nama folder per paket
+            _pl_no_offset = {
+                _PL_DIR_JKK: pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
+                _PL_DIR_PK:  pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
+            }
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
                 _bj0   = (_br0.get("jenis_pl") or "PK").upper()
                 _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
-                _bno0  = _pl_no_dari_nama(_bnm0, _bi0)
-                _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
+                _bno0  = _pl_no_offset[_bout_base0] + _bi0
+                _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
+                _bnm_folder0 = pl_engine.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
@@ -5023,7 +5035,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
-                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode} {_pl_r2.stderr[:200]}")
+                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")
                         except _pl_sp.TimeoutExpired:
                             _pl_fail += 1
                             _pl_paket_log.append("❌ Timeout buat folder")

@@ -113,6 +113,64 @@ def nama_folder_dengan_suffix_ulang(
     return f"{nama}{_SUFFIX_ULANG.rstrip(')')}{n})"
 
 
+def nomor_folder_tertinggi(output_base: str) -> int:
+    """Scan folder di output_base, ambil nomor terbesar dari prefix 'N. PLJKK/PLPK ...'."""
+    import os as _os, re as _re
+    maks = 0
+    if not _os.path.isdir(output_base):
+        return maks
+    for nama in _os.listdir(output_base):
+        if _os.path.isdir(_os.path.join(output_base, nama)):
+            m = _re.match(r'^(\d+)\.', nama)
+            if m:
+                maks = max(maks, int(m.group(1)))
+    return maks
+
+
+def truncate_nama_folder(output_base: str, nama_folder: str, max_path: int = 247) -> str:
+    """
+    Potong nama_folder agar semua path di dalamnya (subfolder + file Excel) ≤ max_path.
+    Constraint terberat: file Excel = output_base/folder/0. BAPLJKK - {suffix}.xlsm
+    di mana suffix = bagian nama_folder setelah prefix "N. PLJKK - ".
+    Formula: len(base) + 1 + len(folder) + 1 + 14 + len(suffix) + 6 ≤ max_path
+    suffix ≈ folder - len_prefix → 2*folder terlibat → pakai max_nama = (max_path - konstanta) / 2.
+    max_path=247 — threshold WinError 206 aktual di sistem ini.
+    """
+    import os as _os, re as _re
+    # Hitung panjang prefix nomor folder (e.g. "16. PLJKK - " = 12, "999. PLJKK - " = 15)
+    _m = _re.match(r'^(\d+\.\s+PL(?:JKK|PK)\s+-\s+)', nama_folder)
+    _prefix_len = len(_m.group(1)) if _m else 12  # fallback 12
+    # Formula: len(base)+1 + len(folder)+1 + len("0. BAPLJKK - ")+len(suffix)+len(".xlsm")
+    #        = len(base)+1 + folder+1 + 14 + (folder-prefix_len) + 6
+    #        = len(base) + 2 + 2*folder + 20 - prefix_len
+    # Agar ≤ max_path: 2*folder ≤ max_path - len(base) - 2 - 20 + prefix_len
+    _base_len = len(output_base)
+    max_nama = (max_path - _base_len - 2 - 20 + _prefix_len) // 2
+
+    if len(nama_folder) <= max_nama:
+        return nama_folder
+
+    # Pisahkan suffix ulang agar tidak terpotong
+    suffix = ""
+    _sfx_ulang = " (PL - Ulang"
+    if _sfx_ulang in nama_folder:
+        idx = nama_folder.index(_sfx_ulang)
+        suffix = nama_folder[idx:]
+        nama_folder = nama_folder[:idx]
+
+    # Sisakan ruang untuk suffix
+    batas = max_nama - len(suffix)
+    if batas <= 0:
+        return (nama_folder[:max_nama]).rstrip()
+
+    # Potong di batas kata
+    terpotong = nama_folder[:batas].rstrip()
+    if len(nama_folder) > batas and " " in terpotong:
+        terpotong = terpotong.rsplit(" ", 1)[0]
+
+    return terpotong + suffix
+
+
 def simpan_paket_pl(data: dict) -> dict:
     """
     Upsert satu paket PL ke draft_paket_pl.
