@@ -2262,7 +2262,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
-                            value=st.session_state.get(_kd_key, bool(_rr.get("is_ulang") or _pl_paket_ulang(_rr))),
+                            value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
                     with _col_tgl:
@@ -5228,7 +5228,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
-                            value=st.session_state.get(_kd_key, bool(_rr.get("is_ulang") or _pl_paket_ulang(_rr))),
+                            value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
                     with _col_tgl:
