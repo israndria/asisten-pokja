@@ -200,14 +200,11 @@ def cari_nd_di_folder(folder: str) -> str | None:
 
 
 def parse_nd_penyedia(pdf_path: str) -> dict:
-    """Parse 8. ND.pdf — ekstrak nama_penyedia + npwp_penyedia.
+    """Parse ND/Nota Dinas PDF — ekstrak nama_penyedia + npwp_penyedia.
 
-    Format yang dicari:
-        Nama Calon Penyedia   :   CV. Nono The Sains
-        Nomor NPWP
-        :
-        0826618548735000
-    (NPWP bisa di baris terpisah atau inline setelah label)
+    Mendukung dua format:
+      Format A (baru): "Nama Calon Penyedia : CV. ..."  + "Nomor NPWP : 082..."
+      Format B (lama): "Nama Perusahaan : CV. ..."      + "NPWP Perusahaan : 72.112..."
     """
     teks = _text_dari_pdf(pdf_path)
     if not teks:
@@ -215,16 +212,25 @@ def parse_nd_penyedia(pdf_path: str) -> dict:
 
     out = {"nama_penyedia": "", "npwp_penyedia": ""}
 
-    # Nama Calon Penyedia : CV. ...
+    # Nama: coba "Nama Calon Penyedia" dulu, fallback "Nama Perusahaan"
     m_nama = re.search(r"Nama\s+Calon\s+Penyedia\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
+    if not m_nama:
+        m_nama = re.search(r"Nama\s+Perusahaan\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
     if m_nama:
         out["nama_penyedia"] = m_nama.group(1).strip()
 
-    # NPWP: bisa inline "Nomor NPWP : 082..." atau baris pisah "Nomor NPWP\n:\n082..."
+    # NPWP: coba "Nomor NPWP" (inline/baris pisah), fallback "NPWP Perusahaan"
+    # Format angka dengan/tanpa titik-strip: 72.112.192.9-731.000 atau 0826618548735000
+    _npwp_pat = r"[\d.\-]{10,25}"
     m_npwp = re.search(
-        r"Nomor\s+NPWP\s*[:\n\r]+\s*([0-9]{10,16})",
+        r"Nomor\s+NPWP\s*[:\n\r]+\s*(" + _npwp_pat + r")",
         teks, re.IGNORECASE | re.DOTALL,
     )
+    if not m_npwp:
+        m_npwp = re.search(
+            r"NPWP\s+Perusahaan\s*:\s*(" + _npwp_pat + r")",
+            teks, re.IGNORECASE,
+        )
     if m_npwp:
         out["npwp_penyedia"] = re.sub(r"[.\-\s]", "", m_npwp.group(1)).strip()
 
@@ -858,7 +864,7 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK", is_ulang=p.get("is_ulang", False))
             if not folder:
                 not_found += 1
-                log(prog, f"  - {kode}: folder paket tidak ditemukan")
+                log(prog, f"  - {kode}: folder tidak ditemukan (nomor_urut kosong + nama ambigu — isi nomor_urut di Tab 3)")
                 continue
 
             personil = []
