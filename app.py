@@ -1274,19 +1274,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
 
-        # ── Bulk load dokumen semua paket (1 subprocess, N×4 tab paralel) ────────
-        _all_kodes = [p["kode_paket"] for p in _paket_list]
-        _bulk_loaded_key = f"ppk_bulk_loaded_{'_'.join(_all_kodes)}"
-        if _bulk_loaded_key not in st.session_state:
-            with st.spinner(f"Memuat daftar dokumen {len(_paket_list)} paket..."):
-                _bulk_all = _ppk_up.list_bulk_semua_paket(_all_kodes)
-            for _kode_b, _jenis_map in _bulk_all.items():
-                for _jenis_b, _docs_b in _jenis_map.items():
-                    st.session_state[f"ppk_versi_{_kode_b}_{_jenis_b}"] = _docs_b
-                st.session_state[f"ppk_bulk_{_kode_b}"] = True
-            st.session_state[_bulk_loaded_key] = True
-
-        # ── Semua paket tampil sekaligus ─────────────────────────────────────────
+        # ── Semua paket tampil sekaligus (dokumen dimuat lazy per paket) ───────────
         for _pi, _pk in enumerate(_paket_list, start=1):
             _kode = _pk["kode_paket"]
             _nama = _pk["nama_paket"]

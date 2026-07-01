@@ -489,90 +489,85 @@ _LIST_ENDPOINTS = {
 
 def list_semua_dokumen(kode_paket: str) -> dict[str, list[dict]]:
     """
-    Shortcut ke list_bulk_semua_paket untuk satu paket.
+    Ambil dokumen semua jenis via cdp_eval + fetch() + DOMParser.
+    Tidak membuka tab baru — fetch dari tab SPSE yang sudah aktif.
     """
-    result = list_bulk_semua_paket([kode_paket])
-    return result.get(kode_paket, {})
+    import json as _json
+    endpoints = {k: v for k, v in _LIST_ENDPOINTS.items() if k != "nd"}
+    lpse = _LPSE
+    js = f"""
+(async () => {{
+  const lpse = {_json.dumps(lpse)};
+  const kode = {_json.dumps(kode_paket)};
+  const endpoints = {_json.dumps(endpoints)};
+  const results = {{}};
+  await Promise.all(Object.entries(endpoints).map(async ([jenis, ep]) => {{
+    try {{
+      const r = await fetch('/' + lpse + '/dokumennontender/' + kode + '/' + ep, {{credentials: 'include'}});
+      const html = await r.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const rows = doc.querySelectorAll('#files tbody tr');
+      const docs = [];
+      rows.forEach(tr => {{
+        const a = tr.querySelector('td a');
+        const rem = tr.querySelector('.removeDok');
+        const versi = rem ? parseInt(rem.getAttribute('versi') || '0') : 0;
+        if (a && a.textContent.trim()) {{
+          docs.push({{nama_file: a.textContent.trim(), url_dl: a.href || '', versi: versi}});
+        }}
+      }});
+      results[jenis] = docs;
+    }} catch(e) {{ results[jenis] = []; }}
+  }}));
+  return results;
+}})()
+"""
+    ok, val, _ = _cdp_eval(js, timeout=20)
+    return val if ok and isinstance(val, dict) else {}
 
 
 def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict]]]:
     """
-    Ambil dokumen semua jenis untuk N paket sekaligus dalam 1 subprocess Playwright.
-    N×4 tab dibuka paralel (asyncio). Return {kode_paket: {jenis: [docs]}}.
-    Jauh lebih cepat dari N × list_semua_dokumen() karena subprocess hanya spawn 1x.
+    Ambil dokumen semua jenis untuk N paket via cdp_eval + fetch() paralel.
+    Tidak membuka tab baru — semua fetch dari tab SPSE yang sudah aktif.
     """
-    import subprocess, sys, json as _json, tempfile, os
-
+    import json as _json
     endpoints = {k: v for k, v in _LIST_ENDPOINTS.items() if k != "nd"}
     lpse = _LPSE
-
-    script = f"""
-import asyncio, json
-from playwright.async_api import async_playwright
-
-lpse = {_json.dumps(lpse)}
-kode_list = {_json.dumps(kode_list)}
-endpoints = {_json.dumps(endpoints)}
-
-PARSE_JS = '''() => {{
-    const rows = document.querySelectorAll("#files tbody tr");
-    const out = [];
-    rows.forEach(tr => {{
-        const a = tr.querySelector("td a");
-        const rem = tr.querySelector(".removeDok");
-        const versi = rem ? parseInt(rem.getAttribute("versi") ?? "0") : 0;
-        if (a && a.textContent.trim()) {{
-            out.push({{nama_file: a.textContent.trim(), url_dl: a.href || "", versi: versi}});
-        }}
-    }});
-    return out;
-}}'''
-
-async def fetch_one(ctx, kode, jenis, ep):
-    page = await ctx.new_page()
-    try:
-        url = f"https://spse.inaproc.id/{{lpse}}/dokumennontender/{{kode}}/{{ep}}"
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        # tbody diisi jQuery hanya setelah upload di sesi yang sama — tidak perlu tunggu
-        return kode, jenis, await page.evaluate(PARSE_JS)
-    except Exception:
-        return kode, jenis, []
-    finally:
-        await page.close()
-
-async def main():
-    async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
-        ctx = browser.contexts[0]
-        tasks = [
-            fetch_one(ctx, kode, jenis, ep)
-            for kode in kode_list
-            for jenis, ep in endpoints.items()
-        ]
-        results = await asyncio.gather(*tasks)
-    out = {{}}
-    for kode, jenis, docs in results:
-        out.setdefault(kode, {{}})[jenis] = docs
-    return out
-
-result = asyncio.run(main())
-print(json.dumps({{"ok": True, "value": result}}))
+    js = f"""
+(async () => {{
+  const lpse = {_json.dumps(lpse)};
+  const kode_list = {_json.dumps(kode_list)};
+  const endpoints = {_json.dumps(endpoints)};
+  const out = {{}};
+  await Promise.all(kode_list.map(async kode => {{
+    out[kode] = {{}};
+    await Promise.all(Object.entries(endpoints).map(async ([jenis, ep]) => {{
+      try {{
+        const r = await fetch('/' + lpse + '/dokumennontender/' + kode + '/' + ep, {{credentials: 'include'}});
+        const html = await r.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const rows = doc.querySelectorAll('#files tbody tr');
+        const docs = [];
+        rows.forEach(tr => {{
+          const a = tr.querySelector('td a');
+          const rem = tr.querySelector('.removeDok');
+          const versi = rem ? parseInt(rem.getAttribute('versi') || '0') : 0;
+          if (a && a.textContent.trim()) {{
+            docs.push({{nama_file: a.textContent.trim(), url_dl: a.href || '', versi: versi}});
+          }}
+        }});
+        out[kode][jenis] = docs;
+      }} catch(e) {{ out[kode][jenis] = []; }}
+    }}));
+  }}));
+  return out;
+}})()
 """
-    fd, path = tempfile.mkstemp(suffix="_list_bulk.py", prefix="pokja_")
-    os.write(fd, script.encode())
-    os.close(fd)
-    try:
-        proc = subprocess.run([sys.executable, path], capture_output=True, timeout=120)
-        stdout = proc.stdout.decode(errors="replace").strip()
-        if stdout:
-            resp = _json.loads(stdout)
-            if resp.get("ok"):
-                return resp.get("value") or {}
-        return {}
-    except Exception:
-        return {}
-    finally:
-        os.unlink(path)
+    ok, val, _ = _cdp_eval(js, timeout=30)
+    return val if ok and isinstance(val, dict) else {}
 
 
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
