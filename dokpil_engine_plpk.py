@@ -190,9 +190,7 @@ def build_izin_usaha_jkk(sbu_baru: str, sbu_lama: str) -> list[dict]:
                 "(untuk Badan Usaha yang memiliki SBU KBLI 2020); "
                 "b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum terverifikasi, "
                 "peserta menyampaikan NIB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS "
-                "yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi; atau "
-                "c) Memiliki Nomor Induk Berusaha (NIB) dan SBU yang masih berlaku "
-                "(untuk Badan Usaha yang memiliki SBU KBLI 2017)"
+                "yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi"
             ),
         },
         {
