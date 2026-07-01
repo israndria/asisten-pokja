@@ -446,60 +446,58 @@ def _kill_browser():
         pass
 
 
-async def _ubah_metode_async(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
-    """
-    Navigasi ke /metode via Playwright, pilih kategori + radio, accept confirm dialog, klik Simpan.
-    Return: "OK" jika sukses, pesan error jika gagal.
-    """
-    if _get_ctx() is None:
-        # Panggil async version langsung — buka_browser() sync akan deadlock di sini
-        await _connect_cdp_async(navigate=False)
-    if _get_ctx() is None:
-        return "CDP tidak tersambung"
-
-    page = await _get_ctx().new_page()
-    try:
-        # Auto-accept dialog (confirm/alert) — asyncio.ensure_future agar tidak deadlock
-        page.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
-
-        url_metode = f"{base_url}nontender/{kode_paket}/metode"
-        await page.goto(url_metode, wait_until="domcontentloaded", timeout=20000)
-
-        # Pilih kategori dari dropdown + dispatch change event
-        await page.select_option("select[name='kategoriId']", str(kategori_id))
-        await page.dispatch_event("select[name='kategoriId']", "change")
-        # Tunggu radio muncul (JS render), max 5s
-        radio_selector = f"input[name='pilih'][value='{pilih}']"
-        try:
-            await page.wait_for_selector(radio_selector, timeout=5000)
-        except Exception:
-            return f"Radio pilih={pilih} tidak muncul setelah kategoriId={kategori_id} dipilih"
-
-        # Klik radio pilih + dispatch change event
-        await page.check(radio_selector)
-        await page.dispatch_event(radio_selector, "change")
-        await page.wait_for_timeout(500)
-
-        # Klik Simpan → trigger confirm() → auto-accept → form submit
-        await page.click("button[name='simpan']")
-        await page.wait_for_timeout(4000)
-
-        # Verifikasi redirect ke /edit (sukses)
-        if "/edit" in page.url:
-            return "OK"
-        return f"Gagal redirect, posisi URL: {page.url}"
-    except Exception as e:
-        return f"Error: {e}"
-    finally:
-        await page.close()
-
-
 def ubah_metode_via_playwright(kode_paket: str, kategori_id: int, pilih: int, base_url: str) -> str:
     """
-    Ubah metode pengadaan via Playwright CDP (handle JS confirm dialog).
+    Ubah metode pengadaan via cdp_eval fetch POST (bypass Playwright new_page + confirm dialog).
+    GET /metode → ambil authenticityToken → POST /metodesubmit → verifikasi opaqueredirect.
     Return "OK" jika sukses, pesan error jika gagal.
     """
-    return _run(_ubah_metode_async(kode_paket, kategori_id, pilih, base_url), timeout=45)
+    import json as _json
+    from ppk_upload_engine import _cdp_eval
+
+    lpse = base_url.rstrip("/").rsplit("/", 1)[-1]
+    js = f"""
+(async () => {{
+  const lpse = {_json.dumps(lpse)};
+  const kode = {_json.dumps(kode_paket)};
+  const kategoriId = {_json.dumps(str(kategori_id))};
+  const pilih = {_json.dumps(str(pilih))};
+
+  // GET /metode untuk ambil authenticityToken
+  const rGet = await fetch('/' + lpse + '/nontender/' + kode + '/metode', {{credentials: 'include'}});
+  const html = await rGet.text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const token = doc.querySelector('input[name=authenticityToken]')?.value || '';
+  if (!token) return {{ok: false, msg: 'authenticityToken tidak ditemukan'}};
+
+  // POST /metodesubmit — redirect: manual agar tidak throw
+  const body = new URLSearchParams();
+  body.append('authenticityToken', token);
+  body.append('kategoriId', kategoriId);
+  body.append('pilih', pilih);
+
+  const rPost = await fetch('/' + lpse + '/nontender/' + kode + '/metodesubmit', {{
+    method: 'POST',
+    credentials: 'include',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: body.toString(),
+    redirect: 'manual'
+  }});
+
+  // opaqueredirect (type=opaqueredirect, status=0) = 302 → sukses
+  if (rPost.type === 'opaqueredirect' || rPost.status === 0 || rPost.status === 302 || rPost.status === 200) {{
+    return {{ok: true, msg: 'OK'}};
+  }}
+  return {{ok: false, msg: 'POST status ' + rPost.status + ' type ' + rPost.type}};
+}})()
+"""
+    ok, val, err = _cdp_eval(js, timeout=20)
+    if not ok:
+        return f"CDP error: {err}"
+    if isinstance(val, dict) and val.get("ok"):
+        return "OK"
+    msg = val.get("msg", "unknown") if isinstance(val, dict) else str(val)
+    return f"Gagal: {msg}"
 
 
 async def _update_ijin_sbu_async(kode_paket: str, ijin_idx: int, klas_baru: str, base_url: str) -> str:
