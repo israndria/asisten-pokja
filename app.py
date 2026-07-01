@@ -1482,19 +1482,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.warning("⚠️ Browser belum login sebagai PP. Login via sidebar terlebih dahulu.")
         st.stop()
 
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9, _pl_tab10 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
-        "4️⃣ Buat Jadwal",
-        "5️⃣ Download Kualifikasi",
-        "6️⃣ Evaluasi & Teknis/Biaya",
-        "7️⃣ Kirim Verifikasi",
-        "8️⃣ Upload BA PL",
+        "4️⃣ Pilih Penyedia & Umumkan",
+        "5️⃣ Buat Jadwal",
+        "6️⃣ Download Kualifikasi",
+        "7️⃣ Evaluasi & Teknis/Biaya",
+        "8️⃣ Kirim Verifikasi",
+        "9️⃣ Upload BA PL",
         "📄 Import DPA",
     ])
 
-    with _pl_tab9:
+    with _pl_tab10:
         _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
@@ -2543,7 +2544,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab4:
+    with _pl_tab5:
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -3382,7 +3383,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
 
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
-    with _pl_tab3:
+    with _pl_tab4:
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -3429,7 +3430,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
 
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    with _pl_tab3:
+    with _pl_tab4:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -3556,7 +3557,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
-    with _pl_tab7:
+    with _pl_tab8:
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -3702,7 +3703,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    with _pl_tab8:
+    with _pl_tab9:
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -4138,7 +4139,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.info(f"Tidak ada file `BA_PLJKK_*.pdf` ditemukan. Paket yang di-scan: {_ba_nama_paket_aktif or '(kosong)'}.")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    with _pl_tab5:
+    with _pl_tab6:
         _ke_pl = _ke_pl_jkk  # alias — sudah di-import top-level
         _he_pl = _he_pl_jkk
 
@@ -4305,7 +4306,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    with _pl_tab6:
+    with _pl_tab7:
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
@@ -4538,19 +4539,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9 = st.tabs([
+    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9, _pl_tab10 = st.tabs([
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
-        "4️⃣ Buat Jadwal",
-        "5️⃣ Download Kualifikasi",
-        "6️⃣ Evaluasi & Teknis/Biaya",
-        "7️⃣ Kirim Verifikasi",
-        "8️⃣ Upload BA PL",
+        "4️⃣ Pilih Penyedia & Umumkan",
+        "5️⃣ Buat Jadwal",
+        "6️⃣ Download Kualifikasi",
+        "7️⃣ Evaluasi & Teknis/Biaya",
+        "8️⃣ Kirim Verifikasi",
+        "9️⃣ Upload BA PL",
         "📄 Import DPA",
     ])
 
-    with _pl_tab9:
+    with _pl_tab10:
         _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
@@ -5545,7 +5547,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab4:
+    with _pl_tab5:
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -6384,7 +6386,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
 
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
-    with _pl_tab3:
+    with _pl_tab4:
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -6431,7 +6433,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
 
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    with _pl_tab3:
+    with _pl_tab4:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -6558,7 +6560,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
-    with _pl_tab7:
+    with _pl_tab8:
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -6704,7 +6706,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    with _pl_tab8:
+    with _pl_tab9:
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -7017,7 +7019,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    with _pl_tab5:
+    with _pl_tab6:
         _ke_pl = _ke_pl_pk   # alias — sudah di-import top-level
         _he_pl = _he_pl_pk
 
@@ -7184,7 +7186,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    with _pl_tab6:
+    with _pl_tab7:
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
