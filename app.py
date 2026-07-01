@@ -3382,54 +3382,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
 
 
-    # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
-    with _pl_tab4:
-        st.divider()
-        st.markdown("### 📢 Umumkan Paket Non Tender")
-        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
-        if not _paket_berfolder_umum:
-            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
-        else:
-            _umum_col1, _umum_col2 = st.columns(2)
-            with _umum_col1:
-                if st.button("✅ Semua", key="umum_sel_all_jkk", use_container_width=True):
-                    for _r in _paket_berfolder_umum:
-                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
-                    st.rerun()
-            with _umum_col2:
-                if st.button("⬜ Kosong", key="umum_sel_none_jkk", use_container_width=True):
-                    for _r in _paket_berfolder_umum:
-                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
-                    st.rerun()
-            _pilih_umum = []
-            for _r in _paket_berfolder_umum:
-                _umum_key = f"umum_chk_{_r['kode_paket']}"
-                _umum_chk = st.checkbox(
-                    f"{_r['nama_paket'][:70]}",
-                    value=st.session_state.get(_umum_key, True),
-                    key=_umum_key,
-                )
-                if _umum_chk:
-                    _pilih_umum.append(_r["kode_paket"])
-            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_jkk", disabled=not _pilih_umum):
-                try:
-                    import spse_browser as _spse_br_umum
-                    _spse_br_umum.buka_browser(navigate=False)
-                    _cookie_umum = _spse_br_umum.get_spse_cookies()
-                except Exception as _e_br_umum:
-                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum}")
-                    _cookie_umum = None
-                if _cookie_umum:
-                    for _kp_umum in _pilih_umum:
-                        _nm_umum = next((r["nama_paket"] for r in _paket_berfolder_umum if r["kode_paket"] == _kp_umum), _kp_umum)
-                        _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
-                        if _ru["ok"]:
-                            st.success(f"✅ {_nm_umum[:60]} — {_ru['pesan']}")
-                        else:
-                            st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
-
-    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     with _pl_tab4:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
@@ -3557,6 +3509,54 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
+    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
+    # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
+    with _pl_tab4:
+        st.divider()
+        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
+        _paket_berfolder_umum = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        if not _paket_berfolder_umum:
+            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        else:
+            _umum_col1, _umum_col2 = st.columns(2)
+            with _umum_col1:
+                if st.button("✅ Semua", key="umum_sel_all_jkk", use_container_width=True):
+                    for _r in _paket_berfolder_umum:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
+                    st.rerun()
+            with _umum_col2:
+                if st.button("⬜ Kosong", key="umum_sel_none_jkk", use_container_width=True):
+                    for _r in _paket_berfolder_umum:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
+                    st.rerun()
+            _pilih_umum = []
+            for _r in _paket_berfolder_umum:
+                _umum_key = f"umum_chk_{_r['kode_paket']}"
+                _umum_chk = st.checkbox(
+                    f"{_r['nama_paket'][:70]}",
+                    value=st.session_state.get(_umum_key, True),
+                    key=_umum_key,
+                )
+                if _umum_chk:
+                    _pilih_umum.append(_r["kode_paket"])
+            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_jkk", disabled=not _pilih_umum):
+                try:
+                    import spse_browser as _spse_br_umum
+                    _spse_br_umum.buka_browser(navigate=False)
+                    _cookie_umum = _spse_br_umum.get_spse_cookies()
+                except Exception as _e_br_umum:
+                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum}")
+                    _cookie_umum = None
+                if _cookie_umum:
+                    for _kp_umum in _pilih_umum:
+                        _nm_umum = next((r["nama_paket"] for r in _paket_berfolder_umum if r["kode_paket"] == _kp_umum), _kp_umum)
+                        _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
+                        if _ru["ok"]:
+                            st.success(f"✅ {_nm_umum[:60]} — {_ru['pesan']}")
+                        else:
+                            st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
+
     with _pl_tab8:
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
@@ -6385,54 +6385,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
 
 
-    # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
-    with _pl_tab4:
-        st.divider()
-        st.markdown("### 📢 Umumkan Paket Non Tender")
-        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum_pk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
-        if not _paket_berfolder_umum_pk:
-            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
-        else:
-            _umum_col1_pk, _umum_col2_pk = st.columns(2)
-            with _umum_col1_pk:
-                if st.button("✅ Semua", key="umum_sel_all_pk", use_container_width=True):
-                    for _r in _paket_berfolder_umum_pk:
-                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
-                    st.rerun()
-            with _umum_col2_pk:
-                if st.button("⬜ Kosong", key="umum_sel_none_pk", use_container_width=True):
-                    for _r in _paket_berfolder_umum_pk:
-                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
-                    st.rerun()
-            _pilih_umum_pk = []
-            for _r in _paket_berfolder_umum_pk:
-                _umum_key_pk = f"umum_chk_{_r['kode_paket']}"
-                _umum_chk_pk = st.checkbox(
-                    f"{_r['nama_paket'][:70]}",
-                    value=st.session_state.get(_umum_key_pk, True),
-                    key=_umum_key_pk,
-                )
-                if _umum_chk_pk:
-                    _pilih_umum_pk.append(_r["kode_paket"])
-            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_pk", disabled=not _pilih_umum_pk):
-                try:
-                    import spse_browser as _spse_br_umum_pk
-                    _spse_br_umum_pk.buka_browser(navigate=False)
-                    _cookie_umum_pk = _spse_br_umum_pk.get_spse_cookies()
-                except Exception as _e_br_umum_pk:
-                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum_pk}")
-                    _cookie_umum_pk = None
-                if _cookie_umum_pk:
-                    for _kp_umum_pk in _pilih_umum_pk:
-                        _nm_umum_pk = next((r["nama_paket"] for r in _paket_berfolder_umum_pk if r["kode_paket"] == _kp_umum_pk), _kp_umum_pk)
-                        _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
-                        if _ru_pk["ok"]:
-                            st.success(f"✅ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
-                        else:
-                            st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
-
-    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     with _pl_tab4:
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
@@ -6560,6 +6512,54 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
+    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
+    # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
+    with _pl_tab4:
+        st.divider()
+        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
+        _paket_berfolder_umum_pk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        if not _paket_berfolder_umum_pk:
+            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        else:
+            _umum_col1_pk, _umum_col2_pk = st.columns(2)
+            with _umum_col1_pk:
+                if st.button("✅ Semua", key="umum_sel_all_pk", use_container_width=True):
+                    for _r in _paket_berfolder_umum_pk:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
+                    st.rerun()
+            with _umum_col2_pk:
+                if st.button("⬜ Kosong", key="umum_sel_none_pk", use_container_width=True):
+                    for _r in _paket_berfolder_umum_pk:
+                        st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
+                    st.rerun()
+            _pilih_umum_pk = []
+            for _r in _paket_berfolder_umum_pk:
+                _umum_key_pk = f"umum_chk_{_r['kode_paket']}"
+                _umum_chk_pk = st.checkbox(
+                    f"{_r['nama_paket'][:70]}",
+                    value=st.session_state.get(_umum_key_pk, True),
+                    key=_umum_key_pk,
+                )
+                if _umum_chk_pk:
+                    _pilih_umum_pk.append(_r["kode_paket"])
+            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_pk", disabled=not _pilih_umum_pk):
+                try:
+                    import spse_browser as _spse_br_umum_pk
+                    _spse_br_umum_pk.buka_browser(navigate=False)
+                    _cookie_umum_pk = _spse_br_umum_pk.get_spse_cookies()
+                except Exception as _e_br_umum_pk:
+                    st.error(f"Browser SPSE tidak terhubung: {_e_br_umum_pk}")
+                    _cookie_umum_pk = None
+                if _cookie_umum_pk:
+                    for _kp_umum_pk in _pilih_umum_pk:
+                        _nm_umum_pk = next((r["nama_paket"] for r in _paket_berfolder_umum_pk if r["kode_paket"] == _kp_umum_pk), _kp_umum_pk)
+                        _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
+                        if _ru_pk["ok"]:
+                            st.success(f"✅ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+                        else:
+                            st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+
     with _pl_tab8:
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
