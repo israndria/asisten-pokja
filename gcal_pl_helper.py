@@ -89,12 +89,12 @@ def check_gcal_token() -> bool:
             client_secret=token_data.get("client_secret"),
             scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/calendar"]),
         )
-        if creds.valid:
-            return True
-        if creds.expired and creds.refresh_token:
+        if creds.refresh_token:
             creds.refresh(Request())
             with open(TOKEN_PATH, "w") as f:
                 f.write(creds.to_json())
+            return True
+        if creds.valid:
             return True
     except Exception:
         pass

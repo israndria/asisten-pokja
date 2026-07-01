@@ -2668,6 +2668,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     label_visibility="collapsed",
                                 )
 
+                import gcal_pl_helper as _gcalpl_g
+                _gcal_ok = _gcalpl_g.check_gcal_token()
+
                 st.divider()
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
@@ -2675,7 +2678,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0,
+                    disabled=len(_pljd_selected) == 0 or not _gcal_ok,
                     key="pljd_submit_btn",
                 )
 
@@ -2787,6 +2790,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
         import gcal_pl_helper as _gcalpl_tc
+        _sync_gcal_pl_btn = False
         if not _gcalpl_tc.check_gcal_token():
             st.warning("🔐 Token Google Calendar tidak valid atau expired.")
             if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_jkk", type="primary", use_container_width=True):
@@ -5708,6 +5712,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     label_visibility="collapsed",
                                 )
 
+                import gcal_pl_helper as _gcalpl_gpk
+                _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
+
                 st.divider()
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
@@ -5715,7 +5722,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0,
+                    disabled=len(_pljd_selected) == 0 or not _gcal_ok_pk,
                     key="pljd_submit_btn",
                 )
 
@@ -5827,6 +5834,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
         st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
         import gcal_pl_helper as _gcalpl_tc
+        _sync_gcal_pl_btn = False
         if not _gcalpl_tc.check_gcal_token():
             st.warning("🔐 Token Google Calendar tidak valid atau expired.")
             if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_pk", type="primary", use_container_width=True):
