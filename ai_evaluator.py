@@ -30,7 +30,7 @@ def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str =
     # Cara akurat: pakai _resolve_folder_pl yang sama dengan setup_paket
     try:
         import parse_kak_pl as _pkl
-        folder = _pkl._resolve_folder_pl(nomor_urut or "", nama_paket or "", jenis_pl, is_ulang=is_ulang)
+        folder, _ = _pkl._resolve_folder_pl(nomor_urut or "", nama_paket or "", jenis_pl, is_ulang=is_ulang)
         if folder:
             return Path(folder)
     except Exception:

@@ -158,7 +158,7 @@ def resolve_folder_paket_pl(kode_paket: str, buat_subfolder: bool = True) -> dic
 
         row = r.data
         import parse_kak_pl as _pkl
-        folder_paket = _pkl._resolve_folder_pl(
+        folder_paket, _ = _pkl._resolve_folder_pl(
             row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "PK"),
             is_ulang=row.get("is_ulang", False)
         )

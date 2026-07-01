@@ -1901,6 +1901,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             if _pl_r2.returncode == 0:
                                 _pl_ok += 1
                                 _pl_paket_log.append("✅ Folder dibuat")
+                                # Auto-simpan nomor_urut ke Supabase saat folder dibuat
+                                try:
+                                    import re as _re_nu
+                                    _m_nu = _re_nu.match(r'^\d+\.', _pl_nf)
+                                    _pl_nomor_auto = _m_nu.group(1) if _m_nu else ""
+                                    if _pl_nomor_auto and _pl_kp_b:
+                                        import config as _pl_cfg
+                                        _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
+                                        _pl_paket_log.append(f"🔢 nomor_urut={_pl_nomor_auto} tersimpan")
+                                except Exception as _nu_e:
+                                    _pl_paket_log.append(f"⚠ nomor_urut: {_nu_e}")
                                 # Copy file evaluator AI ke folder paket
                                 try:
                                     import shutil as _pl_shutil
@@ -4982,6 +4993,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             if _pl_r2.returncode == 0:
                                 _pl_ok += 1
                                 _pl_paket_log.append("✅ Folder dibuat")
+                                # Auto-simpan nomor_urut ke Supabase saat folder dibuat
+                                try:
+                                    import re as _re_nu
+                                    _m_nu = _re_nu.match(r'^\d+\.', _pl_nf)
+                                    _pl_nomor_auto = _m_nu.group(1) if _m_nu else ""
+                                    if _pl_nomor_auto and _pl_kp_b:
+                                        import config as _pl_cfg
+                                        _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
+                                        _pl_paket_log.append(f"🔢 nomor_urut={_pl_nomor_auto} tersimpan")
+                                except Exception as _nu_e:
+                                    _pl_paket_log.append(f"⚠ nomor_urut: {_nu_e}")
                                 # Copy file evaluator AI ke folder paket
                                 try:
                                     import shutil as _pl_shutil

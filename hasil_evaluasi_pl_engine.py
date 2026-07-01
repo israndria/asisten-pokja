@@ -86,7 +86,7 @@ def _find_xlsm(kode_paket: str) -> str:
 
         import parse_kak_pl as _pkl
         row = r.data
-        folder_paket = _pkl._resolve_folder_pl(
+        folder_paket, _ = _pkl._resolve_folder_pl(
             row.get("nomor_urut", ""), row.get("nama_paket", ""), row.get("jenis_pl", "JKK"),
             is_ulang=row.get("is_ulang", False)
         )

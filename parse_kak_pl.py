@@ -772,37 +772,62 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
     return result
 
 
-def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: bool = False) -> str | None:
+def _nomor_dari_folder(folder_basename: str) -> str:
+    """Ekstrak nomor urut dari nama folder, misal '16. PLJKK - ...' → '16'."""
+    import re as _re
+    m = _re.match(r'^(\d+)\.', folder_basename.strip())
+    return m.group(1) if m else ""
+
+
+def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: bool = False) -> tuple[str | None, str]:
     """Cari folder paket PL di OUTPUT_DIR_PL_{JKK|PK}.
 
-    Pola: '{nomor}. PL{jenis} - {nama_clean}'.
-    Fallback: scan folder yg endswith nama_clean.
+    Return: (path_folder | None, nomor_urut_dari_folder)
+    nomor_urut_dari_folder terisi jika folder ditemukan via scan (bukan dari arg).
+    Caller bisa pakai ini untuk auto-update nomor_urut ke Supabase.
     """
     from config import OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK, sanitasi_nama_folder
 
     jenis = (jenis_pl or "JKK").upper()
     root = OUTPUT_DIR_PL_JKK if jenis == "JKK" else OUTPUT_DIR_PL_PK
     if not os.path.isdir(root):
-        return None
+        return None, ""
 
     nama_clean = sanitasi_nama_folder(nama_paket or "")
     nomor = nomor_urut or ""
-
     nama_lower = nama_clean.lower()
 
+    def _ret(full):
+        return full, _nomor_dari_folder(os.path.basename(full))
+
     if is_ulang:
-        # Coba exact match dengan nomor dulu
         if nomor:
             folder_ulang_name = f"{nomor}. PL{jenis} - {nama_clean} (PL - Ulang)"
             folder_ulang = os.path.join(root, folder_ulang_name)
             if os.path.isdir(folder_ulang):
-                return folder_ulang
+                return _ret(folder_ulang)
 
     folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
         if not is_ulang:
-            return candidate
+            return _ret(candidate)
+
+    # Prioritas 0.5: match by nomor prefix saja (kalau nomor ada)
+    if nomor:
+        prefix = f"{nomor}. pl{jenis}".lower()
+        for f in os.listdir(root):
+            full = os.path.join(root, f)
+            if not os.path.isdir(full):
+                continue
+            fl = f.lower()
+            ulang_in_f = "(pl - ulang)" in fl or "(pl-ulang)" in fl
+            if is_ulang and not ulang_in_f:
+                continue
+            if not is_ulang and ulang_in_f:
+                continue
+            if fl.startswith(prefix):
+                return _ret(full)
 
     best = None
     best_score = 0
@@ -819,19 +844,18 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: boo
         # Prioritas 1: exact suffix nama (case-insensitive)
         suffix_ulang = nama_lower + " (pl - ulang)"
         if is_ulang and fl.rstrip().endswith(suffix_ulang):
-            return full
+            return _ret(full)
         if not is_ulang and fl.endswith(nama_lower):
-            return full
+            return _ret(full)
         # Prioritas 2: word-set match — semua kata nama ada di folder
-        # Gunakan nama lengkap termasuk angka (mis "paket 1") agar tidak salah ke "paket 10"
         words = set(nama_lower.split())
         folder_words = set(fl.split())
-        # Skor: jumlah kata cocok, tapi harus semua kata nama ada
         common = words & folder_words
         if len(common) == len(words) and len(common) > best_score:
             best_score = len(common)
             best = full
-    return best
+            continue
+    return _ret(best) if best else (None, "")
 
 
 def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
@@ -846,10 +870,13 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             progress_cb(p, m)
 
     log(0.05, "Fetch daftar paket PL dari Supabase...")
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3,is_ulang").execute().data or []
+    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3,is_ulang,tahap_spse,status").execute().data or []
     if kode_paket_filter:
         rows = [r for r in rows if r["kode_paket"] == kode_paket_filter]
-    log(0.10, f"Total {len(rows)} paket")
+    _SELESAI_KW = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
+    rows_aktif = [r for r in rows if not any(k in (r.get("tahap_spse") or r.get("status") or "").lower() for k in _SELESAI_KW)]
+    log(0.10, f"Total {len(rows)} paket, {len(rows_aktif)} aktif (skip {len(rows)-len(rows_aktif)} selesai)")
+    rows = rows_aktif
 
     updated = 0
     not_found = 0
@@ -861,11 +888,18 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
         kode = p["kode_paket"]
         nama = p["nama_paket"] or ""
         try:
-            folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK", is_ulang=p.get("is_ulang", False))
+            folder, nomor_dari_folder = _resolve_folder_pl(p.get("nomor_urut"), nama, p.get("jenis_pl") or "JKK", is_ulang=p.get("is_ulang", False))
             if not folder:
                 not_found += 1
-                log(prog, f"  - {kode}: folder tidak ditemukan (nomor_urut kosong + nama ambigu — isi nomor_urut di Tab 3)")
+                log(prog, f"  - {kode}: folder tidak ditemukan")
                 continue
+            # Auto-update nomor_urut ke Supabase jika sebelumnya NULL
+            if not p.get("nomor_urut") and nomor_dari_folder:
+                try:
+                    _sb().table("draft_paket_pl").update({"nomor_urut": nomor_dari_folder}).eq("kode_paket", kode).execute()
+                    log(prog, f"  🔢 {kode}: nomor_urut auto-set → {nomor_dari_folder}")
+                except Exception:
+                    pass
 
             personil = []
 
