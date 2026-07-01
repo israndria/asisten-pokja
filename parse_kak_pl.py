@@ -181,6 +181,56 @@ def cari_draft_pl_di_folder(folder: str) -> str | None:
     return None
 
 
+def cari_nd_di_folder(folder: str) -> str | None:
+    """Cari 8. ND.pdf di subfolder '4. Informasi Lainnya' dalam folder paket."""
+    if not os.path.isdir(folder):
+        return None
+    subfolder = os.path.join(folder, "4. Informasi Lainnya")
+    if not os.path.isdir(subfolder):
+        return None
+    for f in os.listdir(subfolder):
+        if f.lower() == "8. nd.pdf":
+            return os.path.join(subfolder, f)
+    # fallback: file apapun yang mengandung "nd" dan berakhiran .pdf
+    for f in os.listdir(subfolder):
+        fl = f.lower()
+        if fl.endswith(".pdf") and ("nd" in fl or "nota" in fl):
+            return os.path.join(subfolder, f)
+    return None
+
+
+def parse_nd_penyedia(pdf_path: str) -> dict:
+    """Parse 8. ND.pdf — ekstrak nama_penyedia + npwp_penyedia.
+
+    Format yang dicari:
+        Nama Calon Penyedia   :   CV. Nono The Sains
+        Nomor NPWP
+        :
+        0826618548735000
+    (NPWP bisa di baris terpisah atau inline setelah label)
+    """
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return {}
+
+    out = {"nama_penyedia": "", "npwp_penyedia": ""}
+
+    # Nama Calon Penyedia : CV. ...
+    m_nama = re.search(r"Nama\s+Calon\s+Penyedia\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
+    if m_nama:
+        out["nama_penyedia"] = m_nama.group(1).strip()
+
+    # NPWP: bisa inline "Nomor NPWP : 082..." atau baris pisah "Nomor NPWP\n:\n082..."
+    m_npwp = re.search(
+        r"Nomor\s+NPWP\s*[:\n\r]+\s*([0-9]{10,16})",
+        teks, re.IGNORECASE | re.DOTALL,
+    )
+    if m_npwp:
+        out["npwp_penyedia"] = re.sub(r"[.\-\s]", "", m_npwp.group(1)).strip()
+
+    return out
+
+
 def parse_draft_pl(pdf_path: str) -> dict:
     """Parse Draft_PL PDF — ekstrak nama_penyedia, npwp_penyedia, nomor_rekomendasi,
     tgl_rekomendasi, nomor_nota_dinas dari halaman SURAT REKOMENDASI + NOTA DINAS.
@@ -811,18 +861,31 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
                 log(prog, f"  - {kode}: folder paket tidak ditemukan")
                 continue
 
-            pdf = cari_draft_pl_di_folder(folder)
-            if not pdf:
-                not_found += 1
-                log(prog, f"  - {kode}: Draft_PL PDF tidak ditemukan di {os.path.basename(folder)}")
-                continue
+            personil = []
 
-            data = parse_draft_pl(pdf)
+            nd_pdf = cari_nd_di_folder(folder)
+            if nd_pdf:
+                data = parse_nd_penyedia(nd_pdf)
+                log(prog, f"  📄 {kode}: parse ND.pdf → nama={data.get('nama_penyedia','')[:20]}")
+                # We still need to parse sub_kegiatan from Draft_PL if it exists
+                pdf = cari_draft_pl_di_folder(folder)
+                if pdf:
+                    sub_keg = parse_sub_kegiatan_dari_draft_pl(pdf)
+                    if sub_keg:
+                        data["sub_kegiatan"] = sub_keg
+            else:
+                pdf = cari_draft_pl_di_folder(folder)
+                if not pdf:
+                    not_found += 1
+                    log(prog, f"  - {kode}: ND.pdf + Draft_PL tidak ditemukan di {os.path.basename(folder)}")
+                    continue
+                data = parse_draft_pl(pdf)
+                log(prog, f"  📄 {kode}: parse Draft_PL → nama={data.get('nama_penyedia','')[:20]}")
 
-            # Sub Kegiatan dari Draft_PL
-            sub_keg = parse_sub_kegiatan_dari_draft_pl(pdf)
-            if sub_keg:
-                data["sub_kegiatan"] = sub_keg
+                # Sub Kegiatan dari Draft_PL
+                sub_keg = parse_sub_kegiatan_dari_draft_pl(pdf)
+                if sub_keg:
+                    data["sub_kegiatan"] = sub_keg
 
             # Personil 3-layer
             personil = ekstrak_personil_3layer(
@@ -843,8 +906,7 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             updated += 1
             pn = update.get("nama_penyedia", "")[:25]
             sk = update.get("sub_kegiatan", "")[:30]
-            np = len(personil)
-            log(prog, f"  OK {kode}: penyedia={pn} sub_keg={bool(sk)} personil={np}")
+            log(prog, f"  OK {kode}: penyedia={pn} sub_keg={bool(sk)} personil={len(personil)}")
         except Exception as e:
             errors.append(f"{kode}: {e}")
 

@@ -2007,6 +2007,19 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                                 _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
                                         except Exception as _etk_e:
                                             _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                                else:
+                                    # Auto-serap penyedia dari 4. Informasi Lainnya/8. ND.pdf (jika folder ada dan tidak didownload barusan)
+                                    if _pl_os.path.isdir(_pl_target_b):
+                                        try:
+                                            import parse_kak_pl as _pkpl_nd
+                                            _nd_res = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
+                                            if _nd_res.get("updated", 0) > 0:
+                                                _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                            else:
+                                                _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
+                                        except Exception as _nd_e:
+                                            _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
+
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -3390,11 +3403,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
-        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_jkk", help="Parse ulang Draft_PL PDF di folder paket → update nama & NPWP penyedia di Supabase"):
-            with st.spinner("Parsing Draft_PL PDF semua paket..."):
-                import parse_kak_pl as _pkpl_ref_jkk
-                _ref_res_jkk = _pkpl_ref_jkk.serap_penyedia_pl()
-            st.success(f"✅ Selesai: {_ref_res_jkk.get('updated',0)} diperbarui, {_ref_res_jkk.get('not_found',0)} folder/PDF tidak ditemukan, {len(_ref_res_jkk.get('errors',[]))} error")
+        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_jkk", help="Parse ulang 4. Informasi Lainnya/8. ND.pdf (fallback Draft_PL) → update nama & NPWP penyedia di Supabase"):
+            _ref_bar_jkk = st.progress(0.0, text="Memulai...")
+            _ref_log_jkk = st.empty()
+            import parse_kak_pl as _pkpl_ref_jkk
+            def _ref_cb_jkk(p, m):
+                _ref_bar_jkk.progress(min(float(p), 1.0), text=m[:120])
+                _ref_log_jkk.caption(m)
+            _ref_res_jkk = _pkpl_ref_jkk.serap_penyedia_pl(progress_cb=_ref_cb_jkk)
+            _ref_bar_jkk.progress(1.0, text="Selesai")
+            st.success(f"✅ {_ref_res_jkk.get('updated',0)} diperbarui, {_ref_res_jkk.get('not_found',0)} tidak ditemukan, {len(_ref_res_jkk.get('errors',[]))} error")
+            if _ref_res_jkk.get("errors"):
+                st.warning("\n".join(_ref_res_jkk["errors"][:5]))
             st.rerun()
         _pp_rows = pl_engine.load_draft_pl()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
@@ -5068,6 +5088,19 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                                 _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
                                         except Exception as _etk_e:
                                             _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                                else:
+                                    # Auto-serap penyedia dari 4. Informasi Lainnya/8. ND.pdf (jika folder ada dan tidak didownload barusan)
+                                    if _pl_os.path.isdir(_pl_target_b):
+                                        try:
+                                            import parse_kak_pl as _pkpl_nd
+                                            _nd_res = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
+                                            if _nd_res.get("updated", 0) > 0:
+                                                _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                            else:
+                                                _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
+                                        except Exception as _nd_e:
+                                            _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
+
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -6399,11 +6432,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
-        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_pk", help="Parse ulang Draft_PL PDF di folder paket → update nama & NPWP penyedia di Supabase"):
-            with st.spinner("Parsing Draft_PL PDF semua paket..."):
-                import parse_kak_pl as _pkpl_ref_pk
-                _ref_res_pk = _pkpl_ref_pk.serap_penyedia_pl()
-            st.success(f"✅ Selesai: {_ref_res_pk.get('updated',0)} diperbarui, {_ref_res_pk.get('not_found',0)} folder/PDF tidak ditemukan, {len(_ref_res_pk.get('errors',[]))} error")
+        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_pk", help="Parse ulang 4. Informasi Lainnya/8. ND.pdf (fallback Draft_PL) → update nama & NPWP penyedia di Supabase"):
+            _ref_bar_pk = st.progress(0.0, text="Memulai...")
+            _ref_log_pk = st.empty()
+            import parse_kak_pl as _pkpl_ref_pk
+            def _ref_cb_pk(p, m):
+                _ref_bar_pk.progress(min(float(p), 1.0), text=m[:120])
+                _ref_log_pk.caption(m)
+            _ref_res_pk = _pkpl_ref_pk.serap_penyedia_pl(progress_cb=_ref_cb_pk)
+            _ref_bar_pk.progress(1.0, text="Selesai")
+            st.success(f"✅ {_ref_res_pk.get('updated',0)} diperbarui, {_ref_res_pk.get('not_found',0)} tidak ditemukan, {len(_ref_res_pk.get('errors',[]))} error")
+            if _ref_res_pk.get("errors"):
+                st.warning("\n".join(_ref_res_pk["errors"][:5]))
             st.rerun()
         _pp_rows = pl_engine.load_draft_pl()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
