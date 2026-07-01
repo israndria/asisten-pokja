@@ -3086,9 +3086,35 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
-                        st.caption("ℹ️ Mode custom — setiap paket pakai SBU dari Supabase masing-masing.")
-                        _sbu_baru_global = None
-                        _sbu_lama_global = None
+                        st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
+                        _sbu_baru_global = st.text_input(
+                            "SBU Baru (teks bebas)",
+                            key="plsp_custom_sbu_baru",
+                            placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
+                        ) or None
+                        _sbu_lama_global = st.text_input(
+                            "SBU Lama (teks bebas, opsional)",
+                            key="plsp_custom_sbu_lama",
+                            placeholder="Kosongkan jika tidak dipersyaratkan",
+                        ) or None
+                        if st.button(
+                            f"💾 Simpan SBU Custom ke {len(_plsp_selected)} paket",
+                            key="plsp_save_sbu_custom_btn", use_container_width=True,
+                            disabled=not _sbu_baru_global,
+                        ):
+                            from config import sb as _sb_factory_c
+                            _client_c = _sb_factory_c()
+                            _ok_c = 0
+                            for _p in _plsp_selected:
+                                try:
+                                    _client_c.table("draft_paket_pl").update({
+                                        "sbu_baru": _sbu_baru_global or "",
+                                        "sbu_lama": _sbu_lama_global or "",
+                                    }).eq("kode_paket", _p["kode_paket"]).execute()
+                                    _ok_c += 1
+                                except Exception as _e:
+                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                            st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
 
                     st.divider()
 
@@ -6062,9 +6088,35 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
-                        st.caption("ℹ️ Mode custom — setiap paket pakai SBU dari Supabase masing-masing.")
-                        _sbu_baru_global = None
-                        _sbu_lama_global = None
+                        st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
+                        _sbu_baru_global = st.text_input(
+                            "SBU Baru (teks bebas)",
+                            key="pk_custom_sbu_baru",
+                            placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
+                        ) or None
+                        _sbu_lama_global = st.text_input(
+                            "SBU Lama (teks bebas, opsional)",
+                            key="pk_custom_sbu_lama",
+                            placeholder="Kosongkan jika tidak dipersyaratkan",
+                        ) or None
+                        if st.button(
+                            f"💾 Simpan SBU Custom ke {len(_plsp_selected)} paket",
+                            key="pk_save_sbu_custom_btn", use_container_width=True,
+                            disabled=not _sbu_baru_global,
+                        ):
+                            from config import sb as _sb_factory_ck
+                            _client_c = _sb_factory_ck()
+                            _ok_c = 0
+                            for _p in _plsp_selected:
+                                try:
+                                    _client_c.table("draft_paket_pl").update({
+                                        "sbu_baru": _sbu_baru_global or "",
+                                        "sbu_lama": _sbu_lama_global or "",
+                                    }).eq("kode_paket", _p["kode_paket"]).execute()
+                                    _ok_c += 1
+                                except Exception as _e:
+                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                            st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
 
                     st.divider()
 
