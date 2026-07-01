@@ -1,4 +1,4 @@
-"""Asisten Pokja — SPSE Automation (Streamlit)."""
+﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -3390,6 +3390,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
+        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_jkk", help="Parse ulang Draft_PL PDF di folder paket → update nama & NPWP penyedia di Supabase"):
+            with st.spinner("Parsing Draft_PL PDF semua paket..."):
+                import parse_kak_pl as _pkpl_ref_jkk
+                _ref_res_jkk = _pkpl_ref_jkk.serap_penyedia_pl()
+            st.success(f"✅ Selesai: {_ref_res_jkk.get('updated',0)} diperbarui, {_ref_res_jkk.get('not_found',0)} folder/PDF tidak ditemukan, {len(_ref_res_jkk.get('errors',[]))} error")
+            st.rerun()
         _pp_rows = pl_engine.load_draft_pl()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
@@ -6393,6 +6399,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
+        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_pk", help="Parse ulang Draft_PL PDF di folder paket → update nama & NPWP penyedia di Supabase"):
+            with st.spinner("Parsing Draft_PL PDF semua paket..."):
+                import parse_kak_pl as _pkpl_ref_pk
+                _ref_res_pk = _pkpl_ref_pk.serap_penyedia_pl()
+            st.success(f"✅ Selesai: {_ref_res_pk.get('updated',0)} diperbarui, {_ref_res_pk.get('not_found',0)} folder/PDF tidak ditemukan, {len(_ref_res_pk.get('errors',[]))} error")
+            st.rerun()
         _pp_rows = pl_engine.load_draft_pl()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
