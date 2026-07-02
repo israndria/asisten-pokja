@@ -426,6 +426,36 @@ def _parse_nama_ppk_dari_view(html: str) -> str:
     return ""
 
 
+def _scrape_viewdraftpl(kode_paket: str, headers: dict, base_url: str) -> dict:
+    """Scrape sumber_anggaran + lokasi dari /nontender/{kode}/viewdraftpl."""
+    import requests
+    from bs4 import BeautifulSoup
+    result = {"sumber_anggaran": "", "lokasi": ""}
+    _SUMBER_VALID = {"APBD", "APBN", "DAK", "BLU", "BLUD", "APBD Provinsi"}
+    try:
+        r = requests.get(f"{base_url}nontender/{kode_paket}/viewdraftpl",
+                         headers=headers, timeout=15)
+        if r.status_code != 200:
+            return result
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tr in soup.find_all("tr"):
+            tds = tr.find_all(["td", "th"])
+            if not tds:
+                continue
+            label = tds[0].get_text(strip=True)
+            if label == "Lokasi Pekerjaan" and len(tds) >= 2:
+                result["lokasi"] = tds[1].get_text(strip=True)
+        # Sumber dana: cari cell yang nilainya tepat salah satu _SUMBER_VALID
+        for td in soup.find_all(["td", "th"]):
+            txt = td.get_text(strip=True)
+            if txt in _SUMBER_VALID:
+                result["sumber_anggaran"] = txt
+                break
+    except Exception:
+        pass
+    return result
+
+
 def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     """
     Scrape daftar paket non-tender dari SPSE /dt/paketpp,
@@ -538,6 +568,9 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         except Exception:
             pass
 
+        # 2c. Fetch sumber_anggaran + lokasi dari viewdraftpl
+        viewdraft = _scrape_viewdraftpl(kode_paket, headers, base_url)
+
         # 3. Deteksi jenis PL (dari metode, fallback nama)
         jenis_pl = _derive_jenis_pl_dari_metode(metode_pengadaan, nama_paket)
 
@@ -558,6 +591,10 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
         if nama_ppk:
             data["nama_ppk"] = nama_ppk
+        if viewdraft.get("sumber_anggaran"):
+            data["sumber_anggaran"] = viewdraft["sumber_anggaran"]
+        if viewdraft.get("lokasi"):
+            data["lokasi"] = viewdraft["lokasi"]
 
         try:
             _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()
