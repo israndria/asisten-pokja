@@ -678,6 +678,14 @@ with st.sidebar:
     if url_aktif:
         _role_label = st.session_state.get("spse_role", None)
         _at_loginpass = "loginpass" in url_aktif
+        # URL root /tapinkab/ atau /tapinkab (tanpa path lain) = halaman setelah logout
+        _base = SPSE_BASE_URL.rstrip("/")
+        _at_logout_root = url_aktif.rstrip("/") == _base
+
+        # Deteksi logout paksa: Brave masih jalan tapi halaman sudah kembali ke login/root
+        if _role_label and (_at_loginpass or _at_logout_root):
+            st.session_state.pop("spse_role", None)
+            _role_label = None
 
         if _role_label:
             # Sudah login berhasil
@@ -698,7 +706,9 @@ with st.sidebar:
                         st.toast("⚠️ Reload gagal — CDP tidak responsif", icon="⚠️")
                     st.rerun()
             with col2:
-                if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Kill Brave CDP → kembali ke form login"):
+                if st.button("❌ Tutup & Ganti Akun", use_container_width=True, help="Logout SPSE → tutup Brave → kembali ke form login"):
+                    import spse_login as _sl_logout
+                    _sl_logout.logout_spse()
                     spse_browser.tutup_browser()
                     st.session_state.pop("spse_role", None)
                     st.session_state.pop("login_failed", None)
@@ -752,8 +762,12 @@ with st.sidebar:
                     st.session_state.pop("login_failed", None)
                     st.rerun()
     else:
+        # CDP tidak aktif — browser tutup/belum dibuka; bersihkan session role
+        if st.session_state.get("spse_role"):
+            st.session_state.pop("spse_role", None)
         _sidebar_login_form()
 
+_spse_role = st.session_state.get("spse_role", None)  # re-sync setelah sidebar logic
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]

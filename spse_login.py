@@ -64,6 +64,11 @@ def detect_login_role() -> str | None:
         url = _sb.get_url()
         if not url:
             return None
+        # URL root /tapinkab/ atau /tapinkab = halaman setelah logout → belum login
+        from config import SPSE_BASE_URL
+        _base = SPSE_BASE_URL.rstrip("/")
+        if url.rstrip("/") == _base or "loginpass" in url:
+            return None
         # Baca file last_role — ditulis oleh _login_async saat login berhasil
         _session_dir = Path(__file__).parent / ".browser_session"
         _role_file = _session_dir / "last_role.txt"
@@ -538,6 +543,43 @@ def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bo
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     _, password = _get_creds(role)
     return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
+
+
+def logout_spse(log_fn=None) -> bool:
+    """POST ke /logout SPSE via requests + cookie CDP. 302 = sukses."""
+    import requests as _req
+    import spse_browser as _sb
+
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    if not _sb._cek_cdp_aktif():
+        _log("CDP tidak aktif — skip logout.")
+        return False
+    try:
+        cookie_str = _sb.get_spse_cookies()
+        from config import SPSE_BASE_URL
+        r = _req.post(
+            f"{SPSE_BASE_URL}logout",
+            headers={
+                "Cookie": cookie_str,
+                "User-Agent": "Mozilla/5.0",
+                "Referer": f"{SPSE_BASE_URL}home",
+                "Content-Length": "0",
+            },
+            data={},
+            allow_redirects=False,
+            timeout=10,
+        )
+        if r.status_code in (302, 200):
+            _log("Logout SPSE berhasil.")
+            return True
+        _log(f"Logout SPSE status {r.status_code} — mungkin sudah logout.")
+        return True
+    except Exception as e:
+        _log(f"Logout gagal: {e}")
+        return False
 
 
 def login_spse(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
