@@ -415,6 +415,17 @@ def _copy_data_dari_paket_lama(
         return False
 
 
+def _parse_nama_ppk_dari_view(html: str) -> str:
+    """Parse nama PPK dari halaman view /nontender/{kode}."""
+    from bs4 import BeautifulSoup as _BS
+    soup = _BS(html, "html.parser")
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all(["td", "th"])
+        if len(tds) >= 2 and tds[0].get_text(strip=True) == "PPK":
+            return tds[1].get_text(strip=True)
+    return ""
+
+
 def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     """
     Scrape daftar paket non-tender dari SPSE /dt/paketpp,
@@ -516,6 +527,17 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         except Exception as e:
             errors.append(f"{kode_paket}: gagal fetch edit — {e}")
 
+        # 2b. Fetch nama PPK dari halaman view
+        nama_ppk = ""
+        try:
+            r_view = requests.get(
+                f"{base_url}nontender/{kode_paket}",
+                headers=headers, timeout=15,
+            )
+            nama_ppk = _parse_nama_ppk_dari_view(r_view.text)
+        except Exception:
+            pass
+
         # 3. Deteksi jenis PL (dari metode, fallback nama)
         jenis_pl = _derive_jenis_pl_dari_metode(metode_pengadaan, nama_paket)
 
@@ -533,6 +555,9 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "tahap_spse":        tahap_map.get(kode_paket),  # None jika belum ada tahapan
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
+
+        if nama_ppk:
+            data["nama_ppk"] = nama_ppk
 
         try:
             _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()

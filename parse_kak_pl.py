@@ -25,7 +25,7 @@ def _text_dari_pdf(pdf_path: str) -> str:
 
 
 def _extract_nama_ppk(teks: str) -> str:
-    m = re.search(r"NAMA PPK\s*:\s*(.+)", teks)
+    m = re.search(r"NAMA PPK\s*:\s*(.+)", teks, re.IGNORECASE)
     if m:
         return m.group(1).strip()
     return ""
@@ -123,6 +123,18 @@ def _extract_lokasi(teks: str) -> str:
     return "Kabupaten Tapin"
 
 
+def _extract_sub_kegiatan_dari_kak(teks: str) -> str:
+    """Extract Sub Kegiatan dari KAK PDF (header halaman cover KAK)."""
+    # KAK tulis: "SUB KEGITAN\nPENYEDIAAN SARANA..." (typo: KEGITAN bukan KEGIATAN)
+    m = re.search(
+        r"SUB\s+KEGITA?N\s*\n(.+?)(?=\n[A-Z]{3,}|\nPEKERJAAN|\Z)",
+        teks, re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+    return ""
+
+
 def parse_kak(pdf_path: str) -> dict:
     """
     Parse KAK PDF, kembalikan dict field.
@@ -137,6 +149,7 @@ def parse_kak(pdf_path: str) -> dict:
         "jangka_waktu": _extract_jangka_waktu(teks),
         "jabatan_k3":   _extract_jabatan_k3(teks),
         "lokasi":       _extract_lokasi(teks),
+        "sub_kegiatan": _extract_sub_kegiatan_dari_kak(teks),
     }
 
 
@@ -453,6 +466,19 @@ def _extract_sertifikat_dari_jabatan(jabatan_str: str) -> str:
     # Pattern 0 (prioritas): Ahli K3 Konstruksi (jenjang 7)
     if re.search(r"\bAhli\s+K3\b", s, re.IGNORECASE):
         return "SKA Ahli K3 Konstruksi"
+
+    # Pattern 0.5: "SKK/SKA Ahli Muda Teknik Bangunan Gedung" — level SEBELUM nama bidang
+    # Berbeda dari Pattern 1 di mana level di akhir
+    m05 = re.search(
+        r"\bSK[AK]\b\s+(?:Ahli\s+)?(Muda|Madya|Utama)\s+([\w\s/]+?)(?:\(|,|\)|$)",
+        s, re.IGNORECASE,
+    )
+    if m05:
+        level = m05.group(1).strip().title()
+        bidang = re.sub(r"\s+", " ", m05.group(2)).strip().rstrip("/").strip()
+        bidang = re.sub(r"\s+Ahli$", "", bidang, flags=re.IGNORECASE).strip()
+        if bidang:
+            return f"SKA {bidang} - Ahli {level}"
 
     # Pattern 1: SKA/SKK + bidang + level Muda/Madya/Utama
     # Toleransi separator koma (format HPS: "SKK Jembatan/Jalan Ahli Muda").
