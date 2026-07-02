@@ -451,9 +451,8 @@ def _scrape_viewdraftpl(kode_paket: str, headers: dict, base_url: str) -> dict:
             if txt in _SUMBER_VALID:
                 result["sumber_anggaran"] = txt
                 break
-    except Exception as e:
-        import traceback
-        result["_error"] = traceback.format_exc()
+    except Exception:
+        pass
     return result
 
 
@@ -571,10 +570,6 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
         # 2c. Fetch sumber_anggaran + lokasi dari viewdraftpl
         viewdraft = _scrape_viewdraftpl(kode_paket, headers, base_url)
-        if viewdraft.get("_error"):
-            log(f"  [viewdraftpl] {kode_paket} ERROR: {viewdraft['_error'][:200]}")
-        else:
-            log(f"  [viewdraftpl] {kode_paket}: sumber={viewdraft.get('sumber_anggaran')!r}, lokasi={viewdraft.get('lokasi')!r}")
 
         # 3. Deteksi jenis PL (dari metode, fallback nama)
         jenis_pl = _derive_jenis_pl_dari_metode(metode_pengadaan, nama_paket)
