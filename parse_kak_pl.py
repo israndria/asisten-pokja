@@ -651,9 +651,7 @@ def parse_personil_dari_hps(items_or_md) -> list[dict]:
         if _is_petugas_jenjang_rendah(jenis):
             continue
 
-        # jabatan = teks sebelum '(' pertama
-        m_jab = re.match(r"^(.+?)\s*\(", jenis)
-        jabatan = m_jab.group(1).strip() if m_jab else jenis
+        jabatan = jenis
 
         # pengalaman = 'N tahun' di mana saja
         m_th = re.search(r"(\d+)\s*tahun", jenis, re.IGNORECASE)
