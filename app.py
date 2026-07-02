@@ -1566,6 +1566,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             with st.expander("Detail Error SPSE"):
                                 for _e in _pl_hasil["errors"]:
                                     st.error(_e)
+                        with st.expander("📋 Log lengkap serap"):
+                            st.text("\n".join(_pl_logs))
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = pl_engine.load_draft_pl()
                         if not _pl_show_done:
@@ -4664,6 +4666,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             with st.expander("Detail Error SPSE"):
                                 for _e in _pl_hasil["errors"]:
                                     st.error(_e)
+                        with st.expander("📋 Log lengkap serap"):
+                            st.text("\n".join(_pl_logs))
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = pl_engine.load_draft_pl()
                         if not _pl_show_done:
