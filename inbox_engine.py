@@ -1213,42 +1213,56 @@ def gabung_pdf(output_path: str, file_list: list, progress_cb=None) -> str:
     return _gabung_pdf_draft(output_path, file_list, progress_cb)
 
 
-def _office_to_pdf_com(src_path: str, dst_pdf: str):
-    """Konversi file Office ke PDF via COM (Word atau Excel)."""
+def _office_to_pdf_com(src_path: str, dst_pdf: str, timeout: int = 30):
+    """Konversi file Office ke PDF via COM (Word atau Excel). Timeout default 30s."""
     import pythoncom
     import win32com.client
+    import threading
+
     ext = os.path.splitext(src_path)[1].lower()
     src_abs = os.path.abspath(src_path)
     dst_abs = os.path.abspath(dst_pdf)
+    error_box = [None]
 
-    pythoncom.CoInitialize()
-    try:
-        if ext in (".docx", ".doc"):
-            app = win32com.client.DispatchEx("Word.Application")
-            app.Visible = False
-            app.DisplayAlerts = False
-            try:
-                doc = app.Documents.Open(src_abs)
-                doc.SaveAs(dst_abs, FileFormat=17)  # wdFormatPDF=17
-                doc.Close(False)
-            finally:
-                app.Quit()
-        elif ext in (".xlsx", ".xls"):
-            app = win32com.client.DispatchEx("Excel.Application")
-            app.Visible = False
-            app.DisplayAlerts = False
-            app.AskToUpdateLinks = False
-            app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable — nonaktifkan macro
-            try:
-                wb = app.Workbooks.Open(
-                    src_abs,
-                    UpdateLinks=0,
-                    ReadOnly=True,
-                    IgnoreReadOnlyRecommended=True,
-                )
-                wb.ExportAsFixedFormat(0, dst_abs)  # xlTypePDF=0
-                wb.Close(False)
-            finally:
-                app.Quit()
-    finally:
-        pythoncom.CoUninitialize()
+    def _run():
+        pythoncom.CoInitialize()
+        try:
+            if ext in (".docx", ".doc"):
+                app = win32com.client.DispatchEx("Word.Application")
+                app.Visible = False
+                app.DisplayAlerts = False
+                try:
+                    doc = app.Documents.Open(src_abs)
+                    doc.SaveAs(dst_abs, FileFormat=17)  # wdFormatPDF=17
+                    doc.Close(False)
+                finally:
+                    app.Quit()
+            elif ext in (".xlsx", ".xls"):
+                app = win32com.client.DispatchEx("Excel.Application")
+                app.Visible = False
+                app.DisplayAlerts = False
+                app.AskToUpdateLinks = False
+                app.AutomationSecurity = 3
+                try:
+                    wb = app.Workbooks.Open(
+                        src_abs,
+                        UpdateLinks=0,
+                        ReadOnly=True,
+                        IgnoreReadOnlyRecommended=True,
+                    )
+                    wb.ExportAsFixedFormat(0, dst_abs)  # xlTypePDF=0
+                    wb.Close(False)
+                finally:
+                    app.Quit()
+        except Exception as e:
+            error_box[0] = e
+        finally:
+            pythoncom.CoUninitialize()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise TimeoutError(f"COM timeout {timeout}s: {os.path.basename(src_path)}")
+    if error_box[0]:
+        raise error_box[0]
