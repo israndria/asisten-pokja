@@ -1,0 +1,14 @@
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"       # Biru terang tapi tidak mencolok
+backgroundColor = "#0d1117"    # GitHub dark background
+secondaryBackgroundColor = "#161b22" # GitHub secondary background
+textColor = "#c9d1d9"          # Off-white teks, nyaman di mata
+font = "sans serif"
+
+[server]
+runOnSave = false
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
