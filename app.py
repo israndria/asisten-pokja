@@ -2018,12 +2018,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     if _pl_extract_teks:
                                         try:
                                             import extract_teks_kualifikasi as _etk
+                                            import threading as _etk_th
                                             _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
                                             if _pl_os.path.isdir(_etk_folder):
-                                                _etk_res = _etk.extract_folder_kualifikasi(
-                                                    _etk_folder, progress_cb=lambda m: _pl_paket_log.append(f"  {m}"),
-                                                )
-                                                if _etk_res.get("ok"):
+                                                _etk_result_box = [None]
+                                                def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
+                                                    try:
+                                                        _etk_result_box[0] = _etk.extract_folder_kualifikasi(
+                                                            _f, progress_cb=lambda m: _log.append(f"  {m}"),
+                                                        )
+                                                    except Exception as _ex:
+                                                        _etk_result_box[0] = {"ok": False, "error": str(_ex)}
+                                                _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
+                                                _etk_t.start()
+                                                _etk_t.join(timeout=120)
+                                                if _etk_t.is_alive():
+                                                    _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                                elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
+                                                    _etk_res = _etk_result_box[0]
                                                     _etk_n = len(_etk_res.get("penyedia", []))
                                                     _etk_tok = _etk_res.get("total_token_estimasi", 0)
                                                     _etk_skip = len(_etk_res.get("skipped_dedup", []))
@@ -5116,12 +5128,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     if _pl_extract_teks:
                                         try:
                                             import extract_teks_kualifikasi as _etk
+                                            import threading as _etk_th
                                             _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
                                             if _pl_os.path.isdir(_etk_folder):
-                                                _etk_res = _etk.extract_folder_kualifikasi(
-                                                    _etk_folder, progress_cb=lambda m: _pl_paket_log.append(f"  {m}"),
-                                                )
-                                                if _etk_res.get("ok"):
+                                                _etk_result_box = [None]
+                                                def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
+                                                    try:
+                                                        _etk_result_box[0] = _etk.extract_folder_kualifikasi(
+                                                            _f, progress_cb=lambda m: _log.append(f"  {m}"),
+                                                        )
+                                                    except Exception as _ex:
+                                                        _etk_result_box[0] = {"ok": False, "error": str(_ex)}
+                                                _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
+                                                _etk_t.start()
+                                                _etk_t.join(timeout=120)
+                                                if _etk_t.is_alive():
+                                                    _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                                elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
+                                                    _etk_res = _etk_result_box[0]
                                                     _etk_n = len(_etk_res.get("penyedia", []))
                                                     _etk_tok = _etk_res.get("total_token_estimasi", 0)
                                                     _etk_skip = len(_etk_res.get("skipped_dedup", []))
