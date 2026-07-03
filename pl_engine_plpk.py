@@ -578,6 +578,30 @@ def download_dokumen_paket_pl(
                 return candidate
             n += 1
 
+    def _fix_customhostname_url(url):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.hostname != "customhostname":
+            return url, hdrs
+        path = parsed.path if parsed.path.startswith("/lpse-prod-data/") else "/lpse-prod-data" + parsed.path
+        fixed = urllib.parse.urlunsplit((parsed.scheme, "storage.googleapis.com", path, parsed.query, parsed.fragment))
+        fixed_hdrs = {k: v for k, v in hdrs.items() if k.lower() not in ("cookie", "host")}
+        log("    ↪ customhostname → storage.googleapis.com/lpse-prod-data")
+        return fixed, fixed_hdrs
+
+    def _get_download_response(url):
+        current = url
+        for _ in range(5):
+            current, req_hdrs = _fix_customhostname_url(current)
+            resp = requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                return resp
+            loc = resp.headers.get("Location")
+            if not loc:
+                return resp
+            current = urllib.parse.urljoin(current, loc)
+        current, req_hdrs = _fix_customhostname_url(current)
+        return requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
         try:
@@ -607,7 +631,7 @@ def download_dokumen_paket_pl(
             log(f"  📂 {label}: {len(links)} file")
             for url_dl, fname in links:
                 try:
-                    r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
+                    r_dl = _get_download_response(url_dl)
                     r_dl.raise_for_status()
                     cd = r_dl.headers.get("Content-Disposition", "")
                     m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
