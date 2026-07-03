@@ -894,9 +894,11 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             progress_cb(p, m)
 
     log(0.05, "Fetch daftar paket PL dari Supabase...")
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3,is_ulang,tahap_spse,status").execute().data or []
+    _cols = "kode_paket,nama_paket,nomor_urut,jenis_pl,jabatan_teknis,jabatan_k3,is_ulang,tahap_spse,status"
+    _q = _sb().table("draft_paket_pl").select(_cols)
     if kode_paket_filter:
-        rows = [r for r in rows if r["kode_paket"] == kode_paket_filter]
+        _q = _q.eq("kode_paket", kode_paket_filter)  # hindari fetch full table saat filter tunggal (paralel bulk)
+    rows = _q.execute().data or []
     _SELESAI_KW = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
     rows_aktif = [r for r in rows if not any(k in (r.get("tahap_spse") or r.get("status") or "").lower() for k in _SELESAI_KW)]
     log(0.10, f"Total {len(rows)} paket, {len(rows_aktif)} aktif (skip {len(rows)-len(rows_aktif)} selesai)")

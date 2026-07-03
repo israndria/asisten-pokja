@@ -262,6 +262,182 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     return logs
 
 
+def _pl_proses_io_satu_paket(item, cookie_str, cfg):
+    """Fase I/O murni per paket PL (thread-safe, TANPA st.* dan TANPA COM).
+
+    Dipanggil di ThreadPoolExecutor untuk paralel antar-paket. COM (merge PDF,
+    Excel Master Data) + OCR extract teks dilakukan SERIAL di main thread setelah
+    pool selesai (lihat return['files_ok'] + flag 'ok').
+
+    cfg dict berisi: py, script, no_win, pokja_root (semua string/int dari scope tab).
+    Return dict: {kode, nama_folder, out_base, jenis_pl, target, ok, log[], files_ok[]}.
+    """
+    import os as _o
+    import re as _re
+    import shutil as _sh
+    import subprocess as _sp
+    import parse_kak_pl as _pkpl
+    import hps_engine as _hps_eng
+
+    nama_folder = item["nama_folder"]
+    kode = item["kode_paket"]
+    out_base = item["out_base"]
+    jenis_pl = item["jenis_pl"]
+    target = _o.path.join(out_base, nama_folder)
+    res = {"kode": kode, "nama_folder": nama_folder, "out_base": out_base,
+           "jenis_pl": jenis_pl, "target": target, "ok": False, "log": [], "files_ok": []}
+    log = res["log"].append
+
+    def _emit(msg):
+        q = cfg.get("event_q")
+        if q:
+            q.put(f"{nama_folder[:55]} — {msg}")
+
+    def _call_timeout(fn, timeout_s, timeout_value):
+        import threading as _th
+        box = [timeout_value]
+        def _run():
+            try:
+                box[0] = fn()
+            except Exception as _ex:
+                box[0] = {"ok": False, "error": str(_ex)}
+        t = _th.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout_s)
+        return timeout_value if t.is_alive() else box[0]
+
+    try:
+        _emit("🚀 START worker")
+        # 1. Buat folder fisik via subprocess setup_paket_baru.py
+        r2 = _sp.run(
+            [cfg["py"], cfg["script"], "--mode", "pl", "--output-dir", out_base, nama_folder],
+            capture_output=True, text=True, timeout=120, creationflags=cfg["no_win"],
+        )
+        if r2.returncode != 0:
+            log(f"❌ Gagal buat folder: rc={r2.returncode}\nout_base={out_base!r}\nfolder={nama_folder!r}\n{r2.stderr}")
+            _emit("❌ gagal buat folder")
+            return res
+        log("✅ Folder dibuat")
+        _emit("📁 folder dibuat")
+
+        # Auto-simpan nomor_urut ke Supabase
+        try:
+            _m_nu = _re.match(r'^\d+', nama_folder)
+            _nomor_auto = _m_nu.group(0) if _m_nu else ""
+            if _nomor_auto and kode:
+                import config as _cfg
+                _cfg.sb().table("draft_paket_pl").update({"nomor_urut": _nomor_auto}).eq("kode_paket", kode).execute()
+                log(f"🔢 nomor_urut={_nomor_auto} tersimpan")
+        except Exception as _nu_e:
+            log(f"⚠ nomor_urut: {_nu_e}")
+
+        # 2. Copy file evaluator AI
+        try:
+            _eval_root = _o.path.join(cfg["pokja_root"], "_SOP Evaluator")
+            _prareviu = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
+            if jenis_pl == "JKK":
+                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md", "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md"]
+            elif jenis_pl == "PK":
+                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_PL_PK.md"]
+            else:
+                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md"]
+            _copied = []
+            _ppk_dir = _o.path.join(target, "0. Draft Dokumen PPK")
+            _o.makedirs(_ppk_dir, exist_ok=True)
+            for _ef in _prareviu:
+                _src = _o.path.join(_eval_root, _ef)
+                if _o.path.isfile(_src):
+                    _sh.copy2(_src, _o.path.join(_ppk_dir, _ef)); _copied.append(_ef)
+            _eval_dir = _o.path.join(target, "5. Evaluator Kualifikasi & Teknis")
+            _o.makedirs(_eval_dir, exist_ok=True)
+            for _ef in _eval_base:
+                _src = _o.path.join(_eval_root, _ef)
+                if _o.path.isfile(_src):
+                    _sh.copy2(_src, _o.path.join(_eval_dir, _ef)); _copied.append(_ef)
+            log(f"📄 Evaluator: {len(_copied)} file disalin (0.+5.)" if _copied else "⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+        except Exception as _ev_e:
+            log(f"⚠ Evaluator copy: {_ev_e}")
+
+        # tandai folder dibuat
+        try:
+            pl_engine.tandai_folder_dibuat(kode)
+        except Exception as _e_upd:
+            log(f"⚠ tandai_folder_dibuat: {_e_upd}")
+
+        if cfg["dl_dokumen"] and kode:
+            # 3. Download dokumen SPSE (cookie di-pass, merge ditunda → serial pasca-pool)
+            if not cookie_str:
+                log("❌ Download error: Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
+            else:
+                try:
+                    _emit("⬇️ mulai download")
+                    _dl = pl_engine.download_dokumen_paket_pl(
+                        kode, target, cookie_str=cookie_str, skip_merge=True,
+                    )
+                    res["files_ok"] = _dl.get("ok", [])
+                    log(f"📎 Download: ✅{len(_dl.get('ok', []))} file")
+                    _emit(f"✅ download {len(_dl.get('ok', []))} file")
+                    for _e in _dl.get("error", []):
+                        log(f"  ❌ {_e}")
+                except Exception as _dl_e:
+                    log(f"❌ Download error: {_dl_e}")
+            # 4. Parse KAK
+            try:
+                _kak_p = _pkpl.cari_kak_di_folder(target)
+                if _kak_p:
+                    _kak_u = {k: v for k, v in _pkpl.parse_kak(_kak_p).items() if v}
+                    if _kak_u:
+                        pl_engine.simpan_paket_pl({"kode_paket": kode, **_kak_u})
+                        log(f"📋 KAK: {','.join(_kak_u.keys())}")
+            except Exception as _kak_e:
+                log(f"⚠ KAK parse: {_kak_e}")
+            # 5. Serap penyedia (pdfplumber bisa hang → jaga timeout 60s seperti flow lama)
+            _sp_res = _call_timeout(
+                lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
+                60,
+                {"ok": False, "timeout": True},
+            ) or {}
+            if _sp_res.get("timeout"):
+                log("⚠ Serap penyedia: timeout 60s, dilewati")
+            else:
+                log(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui" if _sp_res.get("updated", 0) > 0 else "👤 Penyedia: tidak ada data baru")
+        else:
+            # Auto-serap dari ND.pdf jika folder ada & tidak download
+            if _o.path.isdir(target):
+                _nd_res = _call_timeout(
+                    lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
+                    60,
+                    {"ok": False, "timeout": True},
+                ) or {}
+                if _nd_res.get("timeout"):
+                    log("⚠ Serap penyedia ND: timeout 60s, dilewati")
+                else:
+                    log(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui" if _nd_res.get("updated", 0) > 0 else "👤 Penyedia (ND): tidak ada data baru")
+
+        # 6. Scrape HPS + tulis _HPS_.md (tanpa COM)
+        try:
+            _xlsm = _cari_xlsm_pl(target)
+            _hps = _hps_eng.scrape_hps_pl(kode)
+            if _hps and _hps.get("items") and _xlsm:
+                _hps_eng._tulis_hps_ke_md(kode, _xlsm, _hps)
+                log(f"📄 HPS.md: {len(_hps['items'])} item")
+                _emit(f"📄 HPS {len(_hps['items'])} item")
+            else:
+                log("⚠ HPS.md: tidak ada item HPS")
+        except Exception as _hps_e:
+            log(f"⚠ HPS.md: {_hps_e}")
+
+        res["ok"] = True
+        _emit("🏁 selesai I/O")
+    except _sp.TimeoutExpired:
+        log("❌ Timeout buat folder")
+    except Exception as _e_x:
+        import traceback as _tb
+        log(f"❌ EXC {type(_e_x).__name__}: {_e_x}")
+        log(_tb.format_exc()[-300:])
+    return res
+
+
 def _proses_excel_paket_tender(target_dir, kode_tender):
     """COM: IsiDataByKodeTender → isi @ Master Data Excel Tender saat create folder.
 
@@ -1903,227 +2079,107 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}
-                    for _pl_i, _pl_bp_item in enumerate(_pl_terpilih_plan):
-                        _pl_bp.progress((_pl_i + 1) / len(_pl_terpilih_plan))
-                        _pl_nf = _pl_bp_item["nama_folder"]
-                        _pl_kp_b = _pl_bp_item["kode_paket"]
-                        _pl_out_b = _pl_bp_item["out_base"]
-                        _pl_target_b = _pl_os.path.join(_pl_out_b, _pl_nf)
-                        _pl_bulk_status.update(label=f"[{_pl_i+1}/{len(_pl_terpilih_plan)}] {_pl_nf[:60]}")
-                        _pl_paket_log = []
-                        try:
-                            _pl_r2 = _pl_sp.run(
-                                [_PL_PY, _PL_SCRIPT, "--mode", "pl", "--output-dir", _pl_out_b, _pl_nf],
-                                capture_output=True, text=True, timeout=120,
-                                creationflags=_PL_NO_WIN,
-                            )
-                            if _pl_r2.returncode == 0:
-                                _pl_ok += 1
-                                _pl_paket_log.append("✅ Folder dibuat")
-                                # Auto-simpan nomor_urut ke Supabase saat folder dibuat
-                                try:
-                                    import re as _re_nu
-                                    _m_nu = _re_nu.match(r'^\d+', _pl_nf)
-                                    _pl_nomor_auto = _m_nu.group(0) if _m_nu else ""
-                                    if _pl_nomor_auto and _pl_kp_b:
-                                        import config as _pl_cfg
-                                        _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
-                                        _pl_paket_log.append(f"🔢 nomor_urut={_pl_nomor_auto} tersimpan")
-                                except Exception as _nu_e:
-                                    _pl_paket_log.append(f"⚠ nomor_urut: {_nu_e}")
-                                # Copy file evaluator AI ke folder paket
-                                try:
-                                    import shutil as _pl_shutil
-                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
-                                    # File pra-reviu → 0. Draft Dokumen PPK
-                                    _pl_prareviu_files = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
-                                    # File evaluasi pasca-reviu → 5. SOP Evaluator
-                                    if _pl_bp_item["jenis_pl"] == "JKK":
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
-                                        ]
-                                    elif _pl_bp_item["jenis_pl"] == "PK":
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_PK.md",
-                                        ]
-                                    else:
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
-                                        ]
-                                    _pl_eval_copied = []
-                                    # Copy pra-reviu → 0. Draft Dokumen PPK
-                                    _pl_draft_ppk_dir = _pl_os.path.join(_pl_target_b, "0. Draft Dokumen PPK")
-                                    _pl_os.makedirs(_pl_draft_ppk_dir, exist_ok=True)
-                                    for _ef in _pl_prareviu_files:
-                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
-                                        if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
-                                            _pl_eval_copied.append(_ef)
-                                    # Copy evaluasi → 5. SOP Evaluator
-                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. Evaluator Kualifikasi & Teknis")
-                                    _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
-                                    for _ef in _pl_eval_files_base:
-                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
-                                        if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
-                                            _pl_eval_copied.append(_ef)
-                                    if _pl_eval_copied:
-                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin (0.+5.)")
-                                    else:
-                                        _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
-                                except Exception as _pl_eval_e:
-                                    _pl_paket_log.append(f"⚠ Evaluator copy: {_pl_eval_e}")
-                                try:
-                                    pl_engine.tandai_folder_dibuat(_pl_kp_b)
-                                except Exception as _pl_e_upd:
-                                    _pl_paket_log.append(f"⚠ tandai_folder_dibuat: {_pl_e_upd}")
-                                if _pl_dl_dokumen and _pl_kp_b:
-                                    def _pl_bulk_cb(msg, _log=_pl_paket_log):
-                                        _log.append(msg)
-                                        _pl_bulk_status_line.code("\n".join(_log[-10:]))
-                                    try:
-                                        _pl_dl_hasil = pl_engine.download_dokumen_paket_pl(
-                                            _pl_kp_b, _pl_target_b, progress_cb=_pl_bulk_cb,
-                                        )
-                                        _pl_paket_log.append(
-                                            f"📎 Download: ✅{len(_pl_dl_hasil['ok'])} file"
-                                            + (f" | Draft: {_pl_os.path.basename(_pl_dl_hasil['draft_pdf'])}" if _pl_dl_hasil.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
-                                        )
-                                        for _pl_e in _pl_dl_hasil.get("error", []):
-                                            _pl_paket_log.append(f"  ❌ {_pl_e}")
-                                    except Exception as _pl_dl_e:
-                                        _pl_paket_log.append(f"❌ Download error: {_pl_dl_e}")
-                                    try:
-                                        _pl_kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target_b)
-                                        if _pl_kak_p:
-                                            _pl_kak_d = parse_kak_pl.parse_kak(_pl_kak_p)
-                                            _pl_kak_u = {k: v for k, v in _pl_kak_d.items() if v}
-                                            if _pl_kak_u:
-                                                pl_engine.simpan_paket_pl({"kode_paket": _pl_kp_b, **_pl_kak_u})
-                                                _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
-                                    except Exception as _pl_kak_e:
-                                        _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
-                                    # Serap Penyedia otomatis setelah download
-                                    try:
-                                        import parse_kak_pl as _pkpl_sp
-                                        import threading as _sp_th
-                                        _sp_result_box = [None]
-                                        def _sp_run(_k=_pl_kp_b, _log=_pl_paket_log):
-                                            try:
-                                                _sp_result_box[0] = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_k)
-                                            except Exception as _ex:
-                                                _sp_result_box[0] = {"ok": False, "error": str(_ex)}
-                                        _sp_t = _sp_th.Thread(target=_sp_run, daemon=True)
-                                        _sp_t.start()
-                                        _sp_t.join(timeout=60)
-                                        if _sp_t.is_alive():
-                                            _pl_paket_log.append("⚠ Serap penyedia: timeout 60s, dilewati")
-                                        else:
-                                            _sp_res = _sp_result_box[0] or {}
-                                            if _sp_res.get("updated", 0) > 0:
-                                                _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
-                                            else:
-                                                _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
-                                    except Exception as _sp_e:
-                                        _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
-                                    # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
-                                    if _pl_extract_teks:
-                                        try:
-                                            import extract_teks_kualifikasi as _etk
-                                            import threading as _etk_th
-                                            _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
-                                            if _pl_os.path.isdir(_etk_folder):
-                                                _etk_result_box = [None]
-                                                def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
-                                                    try:
-                                                        _etk_result_box[0] = _etk.extract_folder_kualifikasi(
-                                                            _f, progress_cb=lambda m: _log.append(f"  {m}"),
-                                                        )
-                                                    except Exception as _ex:
-                                                        _etk_result_box[0] = {"ok": False, "error": str(_ex)}
-                                                _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
-                                                _etk_t.start()
-                                                _etk_t.join(timeout=120)
-                                                if _etk_t.is_alive():
-                                                    _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
-                                                elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
-                                                    _etk_res = _etk_result_box[0]
-                                                    _etk_n = len(_etk_res.get("penyedia", []))
-                                                    _etk_tok = _etk_res.get("total_token_estimasi", 0)
-                                                    _etk_skip = len(_etk_res.get("skipped_dedup", []))
-                                                    _pl_paket_log.append(f"📝 Extract teks: {_etk_n} penyedia, ~{_etk_tok} token, {_etk_skip} file dedup")
-                                                else:
-                                                    _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
-                                            else:
-                                                _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
-                                        except Exception as _etk_e:
-                                            _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
-                                else:
-                                    # Auto-serap penyedia dari 4. Informasi Lainnya/8. ND.pdf (jika folder ada dan tidak didownload barusan)
-                                    if _pl_os.path.isdir(_pl_target_b):
-                                        try:
-                                            import parse_kak_pl as _pkpl_nd
-                                            import threading as _nd_th
-                                            _nd_result_box = [None]
-                                            def _nd_run(_k=_pl_kp_b):
-                                                try:
-                                                    _nd_result_box[0] = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_k)
-                                                except Exception as _ex:
-                                                    _nd_result_box[0] = {"ok": False, "error": str(_ex)}
-                                            _nd_t = _nd_th.Thread(target=_nd_run, daemon=True)
-                                            _nd_t.start()
-                                            _nd_t.join(timeout=60)
-                                            if _nd_t.is_alive():
-                                                _pl_paket_log.append("⚠ Serap penyedia ND: timeout 60s, dilewati")
-                                            else:
-                                                _nd_res = _nd_result_box[0] or {}
-                                                if _nd_res.get("updated", 0) > 0:
-                                                    _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
-                                                else:
-                                                    _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
-                                        except Exception as _nd_e:
-                                            _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
-
-                                # Scrape HPS + tulis _HPS_.md (tanpa COM, selalu jalan)
-                                try:
-                                    import hps_engine as _hps_eng_b
-                                    _xlsm_b = _cari_xlsm_pl(_pl_target_b)
-                                    _hps_b = _hps_eng_b.scrape_hps_pl(_pl_kp_b)
-                                    if _hps_b and _hps_b.get("items") and _xlsm_b:
-                                        _hps_eng_b._tulis_hps_ke_md(_pl_kp_b, _xlsm_b, _hps_b)
-                                        _pl_paket_log.append(f"📄 HPS.md: {len(_hps_b['items'])} item")
-                                    else:
-                                        _pl_paket_log.append("⚠ HPS.md: tidak ada item HPS")
-                                except Exception as _hps_md_e:
-                                    _pl_paket_log.append(f"⚠ HPS.md: {_hps_md_e}")
-
-                                # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
-                                if _pl_isi_excel:
-                                    _excel_logs = _proses_excel_paket_pl(
-                                        _pl_target_b, _pl_kp_b,
-                                        _pl_bp_item["jenis_pl"], _pl_rt_refresh,
-                                        _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
-                                    )
-                                    for _el in _excel_logs:
-                                        _icon = "📊" if _el.startswith("HPS:") else (
-                                                "📝" if _el.startswith("Master Data") else (
-                                                "🔄" if _el.startswith("Refresh") else "⚠"))
-                                        _pl_paket_log.append(f"{_icon} {_el}")
-                            else:
-                                _pl_fail += 1
-                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")
-                        except _pl_sp.TimeoutExpired:
+                    # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
+                    import queue as _pl_queue
+                    _pl_event_q = _pl_queue.Queue()
+                    _pl_live_events = []
+                    _pl_cfg_io = {
+                        "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
+                        "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
+                        "event_q": _pl_event_q,
+                    }
+                    try:
+                        import spse_browser as _pl_sb_io
+                        _pl_cookie = _pl_sb_io.get_spse_cookies()  # ambil 1× untuk semua paket
+                    except Exception as _ck_e:
+                        _pl_cookie = ""
+                    _pl_io_hasil = []
+                    _pl_done_ct = 0
+                    _pl_n_total = len(_pl_terpilih_plan)
+                    with ThreadPoolExecutor(max_workers=4) as _pl_ex:
+                        from concurrent.futures import wait as _pl_wait, FIRST_COMPLETED as _PL_FIRST_COMPLETED
+                        _pl_pending = {
+                            _pl_ex.submit(_pl_proses_io_satu_paket, _it, _pl_cookie, _pl_cfg_io)
+                            for _it in _pl_terpilih_plan
+                        }
+                        while _pl_pending:
+                            _pl_done, _pl_pending = _pl_wait(_pl_pending, timeout=0.5, return_when=_PL_FIRST_COMPLETED)
+                            while not _pl_event_q.empty():
+                                _pl_live_events.append(_pl_event_q.get())
+                                _pl_live_events = _pl_live_events[-12:]
+                            if _pl_live_events:
+                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                            for _pl_fut in _pl_done:
+                                _pl_res = _pl_fut.result()
+                                _pl_io_hasil.append(_pl_res)
+                                _pl_done_ct += 1
+                                _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
+                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]}")
+                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]}")
+                                _pl_live_events = _pl_live_events[-12:]
+                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                    # ── FASE 2: serial (COM/merge/OCR) di main thread ──
+                    for _pl_res in _pl_io_hasil:
+                        _pl_nf = _pl_res["nama_folder"]
+                        _pl_kp_b = _pl_res["kode"]
+                        _pl_target_b = _pl_res["target"]
+                        _pl_paket_log = _pl_res["log"]
+                        if not _pl_res["ok"]:
                             _pl_fail += 1
-                            _pl_paket_log.append("❌ Timeout buat folder")
-                        except Exception as _pl_e_x:
-                            _pl_fail += 1
-                            import traceback as _pl_tb
-                            _pl_paket_log.append(f"❌ EXC {type(_pl_e_x).__name__}: {_pl_e_x}")
-                            _pl_paket_log.append(_pl_tb.format_exc()[-300:])
+                            _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
+                            continue
+                        _pl_ok += 1
+                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]}")
+                        # Merge PDF draft (COM tidak thread-safe → serial)
+                        if _pl_res.get("files_ok"):
+                            try:
+                                _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
+                                if _pl_merged:
+                                    _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
+                            except Exception as _mg_e:
+                                _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
+                        # Extract teks kualifikasi (OCR berat → serial dgn timeout)
+                        if _pl_extract_teks and _pl_dl_dokumen:
+                            try:
+                                import extract_teks_kualifikasi as _etk
+                                import threading as _etk_th
+                                _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
+                                if _pl_os.path.isdir(_etk_folder):
+                                    _etk_result_box = [None]
+                                    def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
+                                        try:
+                                            _etk_result_box[0] = _etk.extract_folder_kualifikasi(
+                                                _f, progress_cb=lambda m: _log.append(f"  {m}"),
+                                            )
+                                        except Exception as _ex:
+                                            _etk_result_box[0] = {"ok": False, "error": str(_ex)}
+                                    _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
+                                    _etk_t.start()
+                                    _etk_t.join(timeout=120)
+                                    if _etk_t.is_alive():
+                                        _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                    elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
+                                        _etk_res = _etk_result_box[0]
+                                        _pl_paket_log.append(f"📝 Extract teks: {len(_etk_res.get('penyedia', []))} penyedia, ~{_etk_res.get('total_token_estimasi', 0)} token")
+                                    else:
+                                        _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                            except Exception as _etk_e:
+                                _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                        # Refresh + HPS + Master Data: COM Excel (serial)
+                        if _pl_isi_excel:
+                            try:
+                                _excel_logs = _proses_excel_paket_pl(
+                                    _pl_target_b, _pl_kp_b,
+                                    _pl_res["jenis_pl"], _pl_rt_refresh,
+                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                )
+                                for _el in _excel_logs:
+                                    _icon = "📊" if _el.startswith("HPS:") else (
+                                            "📝" if _el.startswith("Master Data") else (
+                                            "🔄" if _el.startswith("Refresh") else "⚠"))
+                                    _pl_paket_log.append(f"{_icon} {_el}")
+                            except Exception as _xl_e:
+                                _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_bulk_status_line.empty()
                     _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
@@ -5054,227 +5110,107 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}
-                    for _pl_i, _pl_bp_item in enumerate(_pl_terpilih_plan):
-                        _pl_bp.progress((_pl_i + 1) / len(_pl_terpilih_plan))
-                        _pl_nf = _pl_bp_item["nama_folder"]
-                        _pl_kp_b = _pl_bp_item["kode_paket"]
-                        _pl_out_b = _pl_bp_item["out_base"]
-                        _pl_target_b = _pl_os.path.join(_pl_out_b, _pl_nf)
-                        _pl_bulk_status.update(label=f"[{_pl_i+1}/{len(_pl_terpilih_plan)}] {_pl_nf[:60]}")
-                        _pl_paket_log = []
-                        try:
-                            _pl_r2 = _pl_sp.run(
-                                [_PL_PY, _PL_SCRIPT, "--mode", "pl", "--output-dir", _pl_out_b, _pl_nf],
-                                capture_output=True, text=True, timeout=120,
-                                creationflags=_PL_NO_WIN,
-                            )
-                            if _pl_r2.returncode == 0:
-                                _pl_ok += 1
-                                _pl_paket_log.append("✅ Folder dibuat")
-                                # Auto-simpan nomor_urut ke Supabase saat folder dibuat
-                                try:
-                                    import re as _re_nu
-                                    _m_nu = _re_nu.match(r'^\d+', _pl_nf)
-                                    _pl_nomor_auto = _m_nu.group(0) if _m_nu else ""
-                                    if _pl_nomor_auto and _pl_kp_b:
-                                        import config as _pl_cfg
-                                        _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
-                                        _pl_paket_log.append(f"🔢 nomor_urut={_pl_nomor_auto} tersimpan")
-                                except Exception as _nu_e:
-                                    _pl_paket_log.append(f"⚠ nomor_urut: {_nu_e}")
-                                # Copy file evaluator AI ke folder paket
-                                try:
-                                    import shutil as _pl_shutil
-                                    _pl_eval_root = _pl_os.path.join(_PL_POKJA_ROOT, "_SOP Evaluator")
-                                    # File pra-reviu → 0. Draft Dokumen PPK
-                                    _pl_prareviu_files = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
-                                    # File evaluasi pasca-reviu → 5. SOP Evaluator
-                                    if _pl_bp_item["jenis_pl"] == "JKK":
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
-                                        ]
-                                    elif _pl_bp_item["jenis_pl"] == "PK":
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_PL_PK.md",
-                                        ]
-                                    else:
-                                        _pl_eval_files_base = [
-                                            "PROTOKOL_EVALUASI_AI.md",
-                                            "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
-                                        ]
-                                    _pl_eval_copied = []
-                                    # Copy pra-reviu → 0. Draft Dokumen PPK
-                                    _pl_draft_ppk_dir = _pl_os.path.join(_pl_target_b, "0. Draft Dokumen PPK")
-                                    _pl_os.makedirs(_pl_draft_ppk_dir, exist_ok=True)
-                                    for _ef in _pl_prareviu_files:
-                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
-                                        if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_draft_ppk_dir, _ef))
-                                            _pl_eval_copied.append(_ef)
-                                    # Copy evaluasi → 5. SOP Evaluator
-                                    _pl_eval_dir = _pl_os.path.join(_pl_target_b, "5. Evaluator Kualifikasi & Teknis")
-                                    _pl_os.makedirs(_pl_eval_dir, exist_ok=True)
-                                    for _ef in _pl_eval_files_base:
-                                        _pl_ef_src = _pl_os.path.join(_pl_eval_root, _ef)
-                                        if _pl_os.path.isfile(_pl_ef_src):
-                                            _pl_shutil.copy2(_pl_ef_src, _pl_os.path.join(_pl_eval_dir, _ef))
-                                            _pl_eval_copied.append(_ef)
-                                    if _pl_eval_copied:
-                                        _pl_paket_log.append(f"📄 Evaluator: {len(_pl_eval_copied)} file disalin (0.+5.)")
-                                    else:
-                                        _pl_paket_log.append("⚠ Evaluator: tidak ada file ditemukan di root POKJA")
-                                except Exception as _pl_eval_e:
-                                    _pl_paket_log.append(f"⚠ Evaluator copy: {_pl_eval_e}")
-                                try:
-                                    pl_engine.tandai_folder_dibuat(_pl_kp_b)
-                                except Exception as _pl_e_upd:
-                                    _pl_paket_log.append(f"⚠ tandai_folder_dibuat: {_pl_e_upd}")
-                                if _pl_dl_dokumen and _pl_kp_b:
-                                    def _pl_bulk_cb(msg, _log=_pl_paket_log):
-                                        _log.append(msg)
-                                        _pl_bulk_status_line.code("\n".join(_log[-10:]))
-                                    try:
-                                        _pl_dl_hasil = pl_engine.download_dokumen_paket_pl(
-                                            _pl_kp_b, _pl_target_b, progress_cb=_pl_bulk_cb,
-                                        )
-                                        _pl_paket_log.append(
-                                            f"📎 Download: ✅{len(_pl_dl_hasil['ok'])} file"
-                                            + (f" | Draft: {_pl_os.path.basename(_pl_dl_hasil['draft_pdf'])}" if _pl_dl_hasil.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
-                                        )
-                                        for _pl_e in _pl_dl_hasil.get("error", []):
-                                            _pl_paket_log.append(f"  ❌ {_pl_e}")
-                                    except Exception as _pl_dl_e:
-                                        _pl_paket_log.append(f"❌ Download error: {_pl_dl_e}")
-                                    try:
-                                        _pl_kak_p = parse_kak_pl.cari_kak_di_folder(_pl_target_b)
-                                        if _pl_kak_p:
-                                            _pl_kak_d = parse_kak_pl.parse_kak(_pl_kak_p)
-                                            _pl_kak_u = {k: v for k, v in _pl_kak_d.items() if v}
-                                            if _pl_kak_u:
-                                                pl_engine.simpan_paket_pl({"kode_paket": _pl_kp_b, **_pl_kak_u})
-                                                _pl_paket_log.append(f"📋 KAK: {','.join(_pl_kak_u.keys())}")
-                                    except Exception as _pl_kak_e:
-                                        _pl_paket_log.append(f"⚠ KAK parse: {_pl_kak_e}")
-                                    # Serap Penyedia otomatis setelah download
-                                    try:
-                                        import parse_kak_pl as _pkpl_sp
-                                        import threading as _sp_th
-                                        _sp_result_box = [None]
-                                        def _sp_run(_k=_pl_kp_b, _log=_pl_paket_log):
-                                            try:
-                                                _sp_result_box[0] = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_k)
-                                            except Exception as _ex:
-                                                _sp_result_box[0] = {"ok": False, "error": str(_ex)}
-                                        _sp_t = _sp_th.Thread(target=_sp_run, daemon=True)
-                                        _sp_t.start()
-                                        _sp_t.join(timeout=60)
-                                        if _sp_t.is_alive():
-                                            _pl_paket_log.append("⚠ Serap penyedia: timeout 60s, dilewati")
-                                        else:
-                                            _sp_res = _sp_result_box[0] or {}
-                                            if _sp_res.get("updated", 0) > 0:
-                                                _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
-                                            else:
-                                                _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
-                                    except Exception as _sp_e:
-                                        _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
-                                    # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
-                                    if _pl_extract_teks:
-                                        try:
-                                            import extract_teks_kualifikasi as _etk
-                                            import threading as _etk_th
-                                            _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
-                                            if _pl_os.path.isdir(_etk_folder):
-                                                _etk_result_box = [None]
-                                                def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
-                                                    try:
-                                                        _etk_result_box[0] = _etk.extract_folder_kualifikasi(
-                                                            _f, progress_cb=lambda m: _log.append(f"  {m}"),
-                                                        )
-                                                    except Exception as _ex:
-                                                        _etk_result_box[0] = {"ok": False, "error": str(_ex)}
-                                                _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
-                                                _etk_t.start()
-                                                _etk_t.join(timeout=120)
-                                                if _etk_t.is_alive():
-                                                    _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
-                                                elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
-                                                    _etk_res = _etk_result_box[0]
-                                                    _etk_n = len(_etk_res.get("penyedia", []))
-                                                    _etk_tok = _etk_res.get("total_token_estimasi", 0)
-                                                    _etk_skip = len(_etk_res.get("skipped_dedup", []))
-                                                    _pl_paket_log.append(f"📝 Extract teks: {_etk_n} penyedia, ~{_etk_tok} token, {_etk_skip} file dedup")
-                                                else:
-                                                    _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
-                                            else:
-                                                _pl_paket_log.append("⚠ Extract teks: folder 8. Dokumen Kualifikasi tidak ada")
-                                        except Exception as _etk_e:
-                                            _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
-                                else:
-                                    # Auto-serap penyedia dari 4. Informasi Lainnya/8. ND.pdf (jika folder ada dan tidak didownload barusan)
-                                    if _pl_os.path.isdir(_pl_target_b):
-                                        try:
-                                            import parse_kak_pl as _pkpl_nd
-                                            import threading as _nd_th
-                                            _nd_result_box = [None]
-                                            def _nd_run(_k=_pl_kp_b):
-                                                try:
-                                                    _nd_result_box[0] = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_k)
-                                                except Exception as _ex:
-                                                    _nd_result_box[0] = {"ok": False, "error": str(_ex)}
-                                            _nd_t = _nd_th.Thread(target=_nd_run, daemon=True)
-                                            _nd_t.start()
-                                            _nd_t.join(timeout=60)
-                                            if _nd_t.is_alive():
-                                                _pl_paket_log.append("⚠ Serap penyedia ND: timeout 60s, dilewati")
-                                            else:
-                                                _nd_res = _nd_result_box[0] or {}
-                                                if _nd_res.get("updated", 0) > 0:
-                                                    _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
-                                                else:
-                                                    _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
-                                        except Exception as _nd_e:
-                                            _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
-
-                                # Scrape HPS + tulis _HPS_.md (tanpa COM, selalu jalan)
-                                try:
-                                    import hps_engine as _hps_eng_b
-                                    _xlsm_b = _cari_xlsm_pl(_pl_target_b)
-                                    _hps_b = _hps_eng_b.scrape_hps_pl(_pl_kp_b)
-                                    if _hps_b and _hps_b.get("items") and _xlsm_b:
-                                        _hps_eng_b._tulis_hps_ke_md(_pl_kp_b, _xlsm_b, _hps_b)
-                                        _pl_paket_log.append(f"📄 HPS.md: {len(_hps_b['items'])} item")
-                                    else:
-                                        _pl_paket_log.append("⚠ HPS.md: tidak ada item HPS")
-                                except Exception as _hps_md_e:
-                                    _pl_paket_log.append(f"⚠ HPS.md: {_hps_md_e}")
-
-                                # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
-                                if _pl_isi_excel:
-                                    _excel_logs = _proses_excel_paket_pl(
-                                        _pl_target_b, _pl_kp_b,
-                                        _pl_bp_item["jenis_pl"], _pl_rt_refresh,
-                                        _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
-                                    )
-                                    for _el in _excel_logs:
-                                        _icon = "📊" if _el.startswith("HPS:") else (
-                                                "📝" if _el.startswith("Master Data") else (
-                                                "🔄" if _el.startswith("Refresh") else "⚠"))
-                                        _pl_paket_log.append(f"{_icon} {_el}")
-                            else:
-                                _pl_fail += 1
-                                _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")
-                        except _pl_sp.TimeoutExpired:
+                    # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
+                    import queue as _pl_queue
+                    _pl_event_q = _pl_queue.Queue()
+                    _pl_live_events = []
+                    _pl_cfg_io = {
+                        "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
+                        "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
+                        "event_q": _pl_event_q,
+                    }
+                    try:
+                        import spse_browser as _pl_sb_io
+                        _pl_cookie = _pl_sb_io.get_spse_cookies()  # ambil 1× untuk semua paket
+                    except Exception as _ck_e:
+                        _pl_cookie = ""
+                    _pl_io_hasil = []
+                    _pl_done_ct = 0
+                    _pl_n_total = len(_pl_terpilih_plan)
+                    with ThreadPoolExecutor(max_workers=4) as _pl_ex:
+                        from concurrent.futures import wait as _pl_wait, FIRST_COMPLETED as _PL_FIRST_COMPLETED
+                        _pl_pending = {
+                            _pl_ex.submit(_pl_proses_io_satu_paket, _it, _pl_cookie, _pl_cfg_io)
+                            for _it in _pl_terpilih_plan
+                        }
+                        while _pl_pending:
+                            _pl_done, _pl_pending = _pl_wait(_pl_pending, timeout=0.5, return_when=_PL_FIRST_COMPLETED)
+                            while not _pl_event_q.empty():
+                                _pl_live_events.append(_pl_event_q.get())
+                                _pl_live_events = _pl_live_events[-12:]
+                            if _pl_live_events:
+                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                            for _pl_fut in _pl_done:
+                                _pl_res = _pl_fut.result()
+                                _pl_io_hasil.append(_pl_res)
+                                _pl_done_ct += 1
+                                _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
+                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]}")
+                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]}")
+                                _pl_live_events = _pl_live_events[-12:]
+                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                    # ── FASE 2: serial (COM/merge/OCR) di main thread ──
+                    for _pl_res in _pl_io_hasil:
+                        _pl_nf = _pl_res["nama_folder"]
+                        _pl_kp_b = _pl_res["kode"]
+                        _pl_target_b = _pl_res["target"]
+                        _pl_paket_log = _pl_res["log"]
+                        if not _pl_res["ok"]:
                             _pl_fail += 1
-                            _pl_paket_log.append("❌ Timeout buat folder")
-                        except Exception as _pl_e_x:
-                            _pl_fail += 1
-                            import traceback as _pl_tb
-                            _pl_paket_log.append(f"❌ EXC {type(_pl_e_x).__name__}: {_pl_e_x}")
-                            _pl_paket_log.append(_pl_tb.format_exc()[-300:])
+                            _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
+                            continue
+                        _pl_ok += 1
+                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]}")
+                        # Merge PDF draft (COM tidak thread-safe → serial)
+                        if _pl_res.get("files_ok"):
+                            try:
+                                _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
+                                if _pl_merged:
+                                    _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
+                            except Exception as _mg_e:
+                                _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
+                        # Extract teks kualifikasi (OCR berat → serial dgn timeout)
+                        if _pl_extract_teks and _pl_dl_dokumen:
+                            try:
+                                import extract_teks_kualifikasi as _etk
+                                import threading as _etk_th
+                                _etk_folder = _pl_os.path.join(_pl_target_b, "8. Dokumen Kualifikasi")
+                                if _pl_os.path.isdir(_etk_folder):
+                                    _etk_result_box = [None]
+                                    def _etk_run(_f=_etk_folder, _log=_pl_paket_log):
+                                        try:
+                                            _etk_result_box[0] = _etk.extract_folder_kualifikasi(
+                                                _f, progress_cb=lambda m: _log.append(f"  {m}"),
+                                            )
+                                        except Exception as _ex:
+                                            _etk_result_box[0] = {"ok": False, "error": str(_ex)}
+                                    _etk_t = _etk_th.Thread(target=_etk_run, daemon=True)
+                                    _etk_t.start()
+                                    _etk_t.join(timeout=120)
+                                    if _etk_t.is_alive():
+                                        _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                    elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
+                                        _etk_res = _etk_result_box[0]
+                                        _pl_paket_log.append(f"📝 Extract teks: {len(_etk_res.get('penyedia', []))} penyedia, ~{_etk_res.get('total_token_estimasi', 0)} token")
+                                    else:
+                                        _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                            except Exception as _etk_e:
+                                _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                        # Refresh + HPS + Master Data: COM Excel (serial)
+                        if _pl_isi_excel:
+                            try:
+                                _excel_logs = _proses_excel_paket_pl(
+                                    _pl_target_b, _pl_kp_b,
+                                    _pl_res["jenis_pl"], _pl_rt_refresh,
+                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                )
+                                for _el in _excel_logs:
+                                    _icon = "📊" if _el.startswith("HPS:") else (
+                                            "📝" if _el.startswith("Master Data") else (
+                                            "🔄" if _el.startswith("Refresh") else "⚠"))
+                                    _pl_paket_log.append(f"{_icon} {_el}")
+                            except Exception as _xl_e:
+                                _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_bulk_status_line.empty()
                     _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
