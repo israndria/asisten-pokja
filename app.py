@@ -2007,11 +2007,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     # Serap Penyedia otomatis setelah download
                                     try:
                                         import parse_kak_pl as _pkpl_sp
-                                        _sp_res = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
-                                        if _sp_res.get("updated", 0) > 0:
-                                            _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                        import threading as _sp_th
+                                        _sp_result_box = [None]
+                                        def _sp_run(_k=_pl_kp_b, _log=_pl_paket_log):
+                                            try:
+                                                _sp_result_box[0] = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_k)
+                                            except Exception as _ex:
+                                                _sp_result_box[0] = {"ok": False, "error": str(_ex)}
+                                        _sp_t = _sp_th.Thread(target=_sp_run, daemon=True)
+                                        _sp_t.start()
+                                        _sp_t.join(timeout=60)
+                                        if _sp_t.is_alive():
+                                            _pl_paket_log.append("⚠ Serap penyedia: timeout 60s, dilewati")
                                         else:
-                                            _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
+                                            _sp_res = _sp_result_box[0] or {}
+                                            if _sp_res.get("updated", 0) > 0:
+                                                _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                            else:
+                                                _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
                                     # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
@@ -2051,11 +2064,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     if _pl_os.path.isdir(_pl_target_b):
                                         try:
                                             import parse_kak_pl as _pkpl_nd
-                                            _nd_res = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
-                                            if _nd_res.get("updated", 0) > 0:
-                                                _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                            import threading as _nd_th
+                                            _nd_result_box = [None]
+                                            def _nd_run(_k=_pl_kp_b):
+                                                try:
+                                                    _nd_result_box[0] = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_k)
+                                                except Exception as _ex:
+                                                    _nd_result_box[0] = {"ok": False, "error": str(_ex)}
+                                            _nd_t = _nd_th.Thread(target=_nd_run, daemon=True)
+                                            _nd_t.start()
+                                            _nd_t.join(timeout=60)
+                                            if _nd_t.is_alive():
+                                                _pl_paket_log.append("⚠ Serap penyedia ND: timeout 60s, dilewati")
                                             else:
-                                                _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
+                                                _nd_res = _nd_result_box[0] or {}
+                                                if _nd_res.get("updated", 0) > 0:
+                                                    _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                                else:
+                                                    _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
                                         except Exception as _nd_e:
                                             _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
 
@@ -5117,11 +5143,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     # Serap Penyedia otomatis setelah download
                                     try:
                                         import parse_kak_pl as _pkpl_sp
-                                        _sp_res = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
-                                        if _sp_res.get("updated", 0) > 0:
-                                            _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                        import threading as _sp_th
+                                        _sp_result_box = [None]
+                                        def _sp_run(_k=_pl_kp_b, _log=_pl_paket_log):
+                                            try:
+                                                _sp_result_box[0] = _pkpl_sp.serap_penyedia_pl(kode_paket_filter=_k)
+                                            except Exception as _ex:
+                                                _sp_result_box[0] = {"ok": False, "error": str(_ex)}
+                                        _sp_t = _sp_th.Thread(target=_sp_run, daemon=True)
+                                        _sp_t.start()
+                                        _sp_t.join(timeout=60)
+                                        if _sp_t.is_alive():
+                                            _pl_paket_log.append("⚠ Serap penyedia: timeout 60s, dilewati")
                                         else:
-                                            _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
+                                            _sp_res = _sp_result_box[0] or {}
+                                            if _sp_res.get("updated", 0) > 0:
+                                                _pl_paket_log.append(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui")
+                                            else:
+                                                _pl_paket_log.append("👤 Penyedia: tidak ada data baru")
                                     except Exception as _sp_e:
                                         _pl_paket_log.append(f"⚠ Serap penyedia: {_sp_e}")
                                     # Extract teks kualifikasi → .txt (hemat token evaluasi AI)
@@ -5161,11 +5200,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     if _pl_os.path.isdir(_pl_target_b):
                                         try:
                                             import parse_kak_pl as _pkpl_nd
-                                            _nd_res = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_pl_kp_b)
-                                            if _nd_res.get("updated", 0) > 0:
-                                                _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                            import threading as _nd_th
+                                            _nd_result_box = [None]
+                                            def _nd_run(_k=_pl_kp_b):
+                                                try:
+                                                    _nd_result_box[0] = _pkpl_nd.serap_penyedia_pl(kode_paket_filter=_k)
+                                                except Exception as _ex:
+                                                    _nd_result_box[0] = {"ok": False, "error": str(_ex)}
+                                            _nd_t = _nd_th.Thread(target=_nd_run, daemon=True)
+                                            _nd_t.start()
+                                            _nd_t.join(timeout=60)
+                                            if _nd_t.is_alive():
+                                                _pl_paket_log.append("⚠ Serap penyedia ND: timeout 60s, dilewati")
                                             else:
-                                                _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
+                                                _nd_res = _nd_result_box[0] or {}
+                                                if _nd_res.get("updated", 0) > 0:
+                                                    _pl_paket_log.append(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui")
+                                                else:
+                                                    _pl_paket_log.append("👤 Penyedia (ND): tidak ada data baru")
                                         except Exception as _nd_e:
                                             _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
 
