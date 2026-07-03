@@ -453,7 +453,9 @@ st.caption("Otomasi SPSE — spse.tapinkab.go.id")
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 
 # Auto-detect role dari CDP kalau session baru tapi Brave masih aktif (misal F5 refresh)
-if not _spse_role:
+# Guard: cek CDP max 1x per session — get_url() mahal kalau Brave tidak aktif
+if not _spse_role and not st.session_state.get("_cdp_role_checked"):
+    st.session_state["_cdp_role_checked"] = True
     try:
         import spse_browser as _sb_detect
         import spse_login as _sl_detect
@@ -1826,7 +1828,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
-            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=True, key="pl_cb_extract_teks")
+            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks")
+            _pl_isi_excel = st.checkbox("📊 Isi HPS + Master Data Excel saat buat folder (lambat ~90s/paket)", value=False, key="pl_cb_isi_excel")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -1920,8 +1923,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 # Auto-simpan nomor_urut ke Supabase saat folder dibuat
                                 try:
                                     import re as _re_nu
-                                    _m_nu = _re_nu.match(r'^\d+\.', _pl_nf)
-                                    _pl_nomor_auto = _m_nu.group(1) if _m_nu else ""
+                                    _m_nu = _re_nu.match(r'^\d+', _pl_nf)
+                                    _pl_nomor_auto = _m_nu.group(0) if _m_nu else ""
                                     if _pl_nomor_auto and _pl_kp_b:
                                         import config as _pl_cfg
                                         _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
@@ -2085,17 +2088,31 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         except Exception as _nd_e:
                                             _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
 
+                                # Scrape HPS + tulis _HPS_.md (tanpa COM, selalu jalan)
+                                try:
+                                    import hps_engine as _hps_eng_b
+                                    _xlsm_b = _cari_xlsm_pl(_pl_target_b)
+                                    _hps_b = _hps_eng_b.scrape_hps_pl(_pl_kp_b)
+                                    if _hps_b and _hps_b.get("items") and _xlsm_b:
+                                        _hps_eng_b._tulis_hps_ke_md(_pl_kp_b, _xlsm_b, _hps_b)
+                                        _pl_paket_log.append(f"📄 HPS.md: {len(_hps_b['items'])} item")
+                                    else:
+                                        _pl_paket_log.append("⚠ HPS.md: tidak ada item HPS")
+                                except Exception as _hps_md_e:
+                                    _pl_paket_log.append(f"⚠ HPS.md: {_hps_md_e}")
+
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
-                                _excel_logs = _proses_excel_paket_pl(
-                                    _pl_target_b, _pl_kp_b,
-                                    _pl_bp_item["jenis_pl"], _pl_rt_refresh,
-                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
-                                )
-                                for _el in _excel_logs:
-                                    _icon = "📊" if _el.startswith("HPS:") else (
-                                            "📝" if _el.startswith("Master Data") else (
-                                            "🔄" if _el.startswith("Refresh") else "⚠"))
-                                    _pl_paket_log.append(f"{_icon} {_el}")
+                                if _pl_isi_excel:
+                                    _excel_logs = _proses_excel_paket_pl(
+                                        _pl_target_b, _pl_kp_b,
+                                        _pl_bp_item["jenis_pl"], _pl_rt_refresh,
+                                        _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    )
+                                    for _el in _excel_logs:
+                                        _icon = "📊" if _el.startswith("HPS:") else (
+                                                "📝" if _el.startswith("Master Data") else (
+                                                "🔄" if _el.startswith("Refresh") else "⚠"))
+                                        _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")
@@ -4962,9 +4979,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 m = _re.search(r"Paket\s+(\d+)", nama, _re.IGNORECASE)
                 return int(m.group(1)) if m else fallback
 
-            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
-            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
-            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=True, key="pl_cb_extract_teks_pk")
+            _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl_pk")
+            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh_pk")
+            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks_pk")
+            _pl_isi_excel = st.checkbox("📊 Isi HPS + Master Data Excel saat buat folder (lambat ~90s/paket)", value=False, key="pl_cb_isi_excel_pk")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -5056,8 +5074,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 # Auto-simpan nomor_urut ke Supabase saat folder dibuat
                                 try:
                                     import re as _re_nu
-                                    _m_nu = _re_nu.match(r'^\d+\.', _pl_nf)
-                                    _pl_nomor_auto = _m_nu.group(1) if _m_nu else ""
+                                    _m_nu = _re_nu.match(r'^\d+', _pl_nf)
+                                    _pl_nomor_auto = _m_nu.group(0) if _m_nu else ""
                                     if _pl_nomor_auto and _pl_kp_b:
                                         import config as _pl_cfg
                                         _pl_cfg.sb().table("draft_paket_pl").update({"nomor_urut": _pl_nomor_auto}).eq("kode_paket", _pl_kp_b).execute()
@@ -5221,17 +5239,31 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         except Exception as _nd_e:
                                             _pl_paket_log.append(f"⚠ Serap penyedia ND: {_nd_e}")
 
+                                # Scrape HPS + tulis _HPS_.md (tanpa COM, selalu jalan)
+                                try:
+                                    import hps_engine as _hps_eng_b
+                                    _xlsm_b = _cari_xlsm_pl(_pl_target_b)
+                                    _hps_b = _hps_eng_b.scrape_hps_pl(_pl_kp_b)
+                                    if _hps_b and _hps_b.get("items") and _xlsm_b:
+                                        _hps_eng_b._tulis_hps_ke_md(_pl_kp_b, _xlsm_b, _hps_b)
+                                        _pl_paket_log.append(f"📄 HPS.md: {len(_hps_b['items'])} item")
+                                    else:
+                                        _pl_paket_log.append("⚠ HPS.md: tidak ada item HPS")
+                                except Exception as _hps_md_e:
+                                    _pl_paket_log.append(f"⚠ HPS.md: {_hps_md_e}")
+
                                 # Refresh + HPS + Master Data: 1 sesi COM, urutan benar
-                                _excel_logs = _proses_excel_paket_pl(
-                                    _pl_target_b, _pl_kp_b,
-                                    _pl_bp_item["jenis_pl"], _pl_rt_refresh,
-                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
-                                )
-                                for _el in _excel_logs:
-                                    _icon = "📊" if _el.startswith("HPS:") else (
-                                            "📝" if _el.startswith("Master Data") else (
-                                            "🔄" if _el.startswith("Refresh") else "⚠"))
-                                    _pl_paket_log.append(f"{_icon} {_el}")
+                                if _pl_isi_excel:
+                                    _excel_logs = _proses_excel_paket_pl(
+                                        _pl_target_b, _pl_kp_b,
+                                        _pl_bp_item["jenis_pl"], _pl_rt_refresh,
+                                        _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    )
+                                    for _el in _excel_logs:
+                                        _icon = "📊" if _el.startswith("HPS:") else (
+                                                "📝" if _el.startswith("Master Data") else (
+                                                "🔄" if _el.startswith("Refresh") else "⚠"))
+                                        _pl_paket_log.append(f"{_icon} {_el}")
                             else:
                                 _pl_fail += 1
                                 _pl_paket_log.append(f"❌ Gagal buat folder: rc={_pl_r2.returncode}\nout_base={_pl_out_b!r}\nfolder={_pl_nf!r}\n{_pl_r2.stderr}")

@@ -1,10 +1,13 @@
 """SPSE Browser Automation — Playwright di thread terpisah (Streamlit-safe)."""
+from __future__ import annotations
 
 import os
 import asyncio
 import threading
 from pathlib import Path
-from playwright.async_api import async_playwright, Page, BrowserContext
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from playwright.async_api import Page, BrowserContext
 
 from config import SPSE_BASE_URL, BROWSER_SESSION_DIR, DOWNLOAD_DIR
 
@@ -213,6 +216,7 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     """Connect ke Chrome yang sudah jalan via CDP.
     Jika navigate=False, hanya connect tanpa membuka tab baru (cepat, untuk auto-reconnect).
     """
+    from playwright.async_api import async_playwright
     if _get_pw() is None:
         _set_pw(await async_playwright().start())
     import os as _os
@@ -901,7 +905,7 @@ def halaman_aktif() -> Page | None:
 
 _cdp_tabs_cache: list[dict] = []
 _cdp_tabs_cache_ts: float = 0.0
-_CDP_CACHE_TTL = 2.0  # detik — cache tab list 2 detik; lebih pendek supaya status sidebar cepat merah saat CDP tutup
+_CDP_CACHE_TTL = 10.0  # detik — cache tab list 10 detik; cukup responsif tapi hemat rerun
 
 
 def _cdp_tabs(force: bool = False) -> list[dict]:
