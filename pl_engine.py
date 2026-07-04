@@ -950,6 +950,18 @@ def download_dokumen_paket_pl(
         current, req_hdrs = _fix_customhostname_url(current)
         return requests.get(current, headers=req_hdrs, timeout=download_timeout, stream=True, allow_redirects=False)
 
+    def _get_download_response_retry(url):
+        for i, delay in enumerate((0, 0.7, 1.5), start=1):
+            if delay:
+                time.sleep(delay)
+            resp = _get_download_response(url)
+            if resp.status_code not in (404, 429, 500, 502, 503, 504):
+                return resp
+            if i < 3:
+                resp.close()
+                log(f"    ↻ retry download {i}/2 (HTTP {resp.status_code})")
+        return resp
+
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
         try:
@@ -982,7 +994,7 @@ def download_dokumen_paket_pl(
                 url_dl, fname = link
                 t0 = time.perf_counter()
                 try:
-                    r_dl = _get_download_response(url_dl)
+                    r_dl = _get_download_response_retry(url_dl)
                     r_dl.raise_for_status()
                     ct = r_dl.headers.get("Content-Type", "")
                     if "text/html" in ct:
@@ -1159,4 +1171,3 @@ def umumkan_paket_pl(kode_paket: str, cookie_str: str) -> dict:
             return {'ok': False, 'pesan': f'POST gagal: HTTP {resp_post.status_code}', 'status_code': resp_post.status_code}
     except Exception as e:
         return {'ok': False, 'pesan': f'POST pengumumanpp gagal: {e}', 'status_code': 0}
-

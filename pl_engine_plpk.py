@@ -544,6 +544,7 @@ def download_dokumen_paket_pl(
     """
     import requests
     import urllib.parse
+    import time
     from bs4 import BeautifulSoup
     import spse_browser
 
@@ -602,6 +603,18 @@ def download_dokumen_paket_pl(
         current, req_hdrs = _fix_customhostname_url(current)
         return requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
 
+    def _get_download_response_retry(url):
+        for i, delay in enumerate((0, 0.7, 1.5), start=1):
+            if delay:
+                time.sleep(delay)
+            resp = _get_download_response(url)
+            if resp.status_code not in (404, 429, 500, 502, 503, 504):
+                return resp
+            if i < 3:
+                resp.close()
+                log(f"    ↻ retry download {i}/2 (HTTP {resp.status_code})")
+        return resp
+
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
         try:
@@ -631,7 +644,7 @@ def download_dokumen_paket_pl(
             log(f"  📂 {label}: {len(links)} file")
             for url_dl, fname in links:
                 try:
-                    r_dl = _get_download_response(url_dl)
+                    r_dl = _get_download_response_retry(url_dl)
                     r_dl.raise_for_status()
                     cd = r_dl.headers.get("Content-Disposition", "")
                     m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)

@@ -194,22 +194,54 @@ def cari_draft_pl_di_folder(folder: str) -> str | None:
     return None
 
 
+def _text_awal_pdf(pdf_path: str, max_pages: int = 2) -> str:
+    """Ambil teks awal PDF saja untuk scoring ringan."""
+    try:
+        import pdfplumber
+        with pdfplumber.open(pdf_path) as pdf:
+            return "\n".join(pg.extract_text() or "" for pg in pdf.pages[:max_pages])
+    except Exception:
+        return ""
+
+def _score_nd_pdf(pdf_path: str) -> int:
+    name = os.path.basename(pdf_path).lower()
+    score = 0
+    if re.search(r"\bnd\b", name):
+        score += 2
+    if "nota dinas" in name or "nota" in name or "nodin" in name:
+        score += 2
+    if "ppk" in name:
+        score += 1
+
+    teks = _text_awal_pdf(pdf_path).lower()
+    if "npwp" in teks:
+        score += 3
+    if "penyedia" in teks:
+        score += 2
+    if "nota dinas" in teks or "nota" in teks:
+        score += 2
+    if "kepada yth" in teks:
+        score += 1
+    if "pejabat pengadaan" in teks:
+        score += 1
+    return score
+
 def cari_nd_di_folder(folder: str) -> str | None:
-    """Cari 8. ND.pdf di subfolder '4. Informasi Lainnya' dalam folder paket."""
+    """Cari PDF Nota Dinas terbaik di subfolder '4. Informasi Lainnya'."""
     if not os.path.isdir(folder):
         return None
     subfolder = os.path.join(folder, "4. Informasi Lainnya")
     if not os.path.isdir(subfolder):
         return None
-    for f in os.listdir(subfolder):
-        if f.lower() == "8. nd.pdf":
-            return os.path.join(subfolder, f)
-    # fallback: file apapun yang mengandung "nd" dan berakhiran .pdf
-    for f in os.listdir(subfolder):
-        fl = f.lower()
-        if fl.endswith(".pdf") and ("nd" in fl or "nota" in fl):
-            return os.path.join(subfolder, f)
-    return None
+    pdfs = [
+        os.path.join(subfolder, f)
+        for f in os.listdir(subfolder)
+        if f.lower().endswith(".pdf")
+    ]
+    if not pdfs:
+        return None
+    scored = sorted(((_score_nd_pdf(p), p) for p in pdfs), reverse=True)
+    return scored[0][1] if scored and scored[0][0] >= 2 else None
 
 
 def parse_nd_penyedia(pdf_path: str) -> dict:
@@ -248,6 +280,63 @@ def parse_nd_penyedia(pdf_path: str) -> dict:
         out["npwp_penyedia"] = re.sub(r"[.\-\s]", "", m_npwp.group(1)).strip()
 
     return out
+
+def serap_identitas_penyedia_pl(kode_paket_filter: str = None, progress_cb=None) -> dict:
+    """Serap ringan identitas penyedia PL dari Nota Dinas. Tidak ekstrak personil."""
+    from config import sb as _sb
+
+    def log(p, m):
+        if progress_cb:
+            progress_cb(p, m)
+
+    _cols = "kode_paket,nama_paket,nomor_urut,jenis_pl,is_ulang"
+    _q = _sb().table("draft_paket_pl").select(_cols)
+    if kode_paket_filter:
+        _q = _q.eq("kode_paket", kode_paket_filter)
+    rows = _q.execute().data or []
+
+    updated = 0
+    not_found = 0
+    no_data = 0
+    errors = []
+    total = max(len(rows), 1)
+    for i, p in enumerate(rows):
+        prog = (i + 1) / total
+        kode = p.get("kode_paket")
+        try:
+            folder, nomor_dari_folder = _resolve_folder_pl(
+                p.get("nomor_urut"),
+                p.get("nama_paket") or "",
+                p.get("jenis_pl") or "JKK",
+                is_ulang=p.get("is_ulang", False),
+            )
+            if not folder:
+                not_found += 1
+                log(prog, f"{kode}: folder tidak ditemukan")
+                continue
+            if not p.get("nomor_urut") and nomor_dari_folder:
+                _sb().table("draft_paket_pl").update({"nomor_urut": nomor_dari_folder}).eq("kode_paket", kode).execute()
+
+            nd_pdf = cari_nd_di_folder(folder)
+            if not nd_pdf:
+                not_found += 1
+                log(prog, "Identitas penyedia: Nota Dinas tidak ditemukan")
+                continue
+
+            data = parse_nd_penyedia(nd_pdf)
+            update = {k: v for k, v in data.items() if k in ("nama_penyedia", "npwp_penyedia") and v}
+            if not update:
+                no_data += 1
+                log(prog, f"Identitas penyedia: data tidak terbaca dari {os.path.basename(nd_pdf)}")
+                continue
+
+            _sb().table("draft_paket_pl").update(update).eq("kode_paket", kode).execute()
+            updated += 1
+            log(prog, f"Identitas penyedia: {update.get('nama_penyedia', '-')} / NPWP {update.get('npwp_penyedia', '-')}")
+        except Exception as e:
+            errors.append(f"{kode}: {e}")
+
+    return {"ok": True, "updated": updated, "not_found": not_found, "no_data": no_data, "errors": errors}
 
 
 def parse_draft_pl(pdf_path: str) -> dict:

@@ -423,10 +423,24 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             except Exception as _kak_e:
                 log(f"⚠ KAK parse: {_kak_e}")
                 _step("KAK", _t_step, " error")
-        # NOTE: Serap penyedia SENGAJA tidak dijalankan di sini (saat create folder baru).
-        # Alasan: penyedia belum mendaftar → parse Draft_PL/ND.pdf + ekstrak personil 3-layer
-        # selalu timeout 60s tanpa hasil (buang ~60s/paket). Serap penyedia dipindah ke tahap
-        # "Download Dokumen Kualifikasi" (Tab 6) — di sana peserta sudah terdaftar & PDF ada.
+            # 5. Serap identitas ringan dari Nota Dinas (tanpa ekstrak personil)
+            try:
+                _t_step = _tm.perf_counter()
+                _id_logs = []
+                _id_res = _pkpl.serap_identitas_penyedia_pl(
+                    kode_paket_filter=kode,
+                    progress_cb=lambda _p, _m: _id_logs.append(_m),
+                )
+                for _m in _id_logs[-2:]:
+                    log(f"👤 {_m}")
+                if not _id_logs and not _id_res.get("updated"):
+                    log("👤 Identitas penyedia: Nota Dinas tidak ditemukan")
+                _step("identitas", _t_step)
+            except Exception as _id_e:
+                log(f"⚠ Identitas penyedia: {_id_e}")
+                _step("identitas", _t_step, " error")
+        # NOTE: Serap penyedia full SENGAJA tidak dijalankan di sini.
+        # Personil 3-layer tetap di tahap "Download Dokumen Kualifikasi" (Tab 6).
 
         # 6. Scrape HPS + tulis _HPS_.md (tanpa COM)
         try:
