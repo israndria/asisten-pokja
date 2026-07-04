@@ -54,27 +54,28 @@ def _get_creds(role: Literal["PP", "POKJA", "PPK"]) -> tuple[str, str]:
 
 def detect_login_role() -> str | None:
     """
-    Deteksi role login aktif.
-    Strategi: baca .browser_session/last_role.txt yang ditulis saat login berhasil.
-    Return: "PP", "POKJA", atau None.
+    Ambil role login aktif dari file cache .browser_session/last_role.txt.
+
+    Login di app ini WAJIB via tombol (Launch & Auto-Login), yang menulis role ke file
+    setelah login sukses. Fungsi ini hanya untuk memulihkan role saat Streamlit hot-reload
+    (session_state hilang tapi browser + file cache masih ada). Bukan deteksi dari DOM SPSE.
+
+    Return: "PP" | "POKJA" | "PPK" | None (kalau belum login / halaman masih di login).
     """
     import spse_browser as _sb
     try:
-        # Cek CDP aktif dulu
         url = _sb.get_url()
         if not url:
             return None
-        # URL root /tapinkab/ atau /tapinkab = halaman setelah logout → belum login
+        # URL root /tapinkab atau /loginpass = belum/pasca logout → belum login
         from config import SPSE_BASE_URL
         _base = SPSE_BASE_URL.rstrip("/")
         if url.rstrip("/") == _base or "loginpass" in url:
             return None
-        # Baca file last_role — ditulis oleh _login_async saat login berhasil
-        _session_dir = Path(__file__).parent / ".browser_session"
-        _role_file = _session_dir / "last_role.txt"
+        _role_file = Path(__file__).parent / ".browser_session" / "last_role.txt"
         if _role_file.exists():
             role = _role_file.read_text(encoding="utf-8").strip()
-            if role in ("PP", "POKJA", "PPK"):
+            if role in ("PP", "POKJA", "PPK", "E-Katalog"):
                 return role
     except Exception:
         pass

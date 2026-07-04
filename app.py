@@ -919,6 +919,18 @@ with st.sidebar:
             st.session_state.pop("spse_role", None)
             _role_label = None
 
+        # Recover role dari file cache setelah Streamlit hot-reload (browser masih login,
+        # tapi session_state hilang). Senyap — tanpa tombol "Deteksi Ulang" yang jadi dead-end.
+        if not _role_label and not _at_loginpass and not _at_logout_root:
+            try:
+                import spse_login as _sl_recover
+                _rec = _sl_recover.detect_login_role()
+                if _rec:
+                    st.session_state["spse_role"] = _rec
+                    _role_label = _rec
+            except Exception:
+                pass
+
         if _role_label:
             # Sudah login berhasil
             st.success("Browser terhubung")
@@ -951,7 +963,7 @@ with st.sidebar:
                         st.session_state.pop(_k, None)
                     st.cache_data.clear()
                     st.rerun()
-            _role_emoji = "🏛️" if _role_label == "PP" else "👥" if _role_label == "POKJA" else "🌐"
+            _role_emoji = {"PP": "🏛️", "POKJA": "👥", "PPK": "📝", "E-Katalog": "🛒"}.get(_role_label, "🌐")
             st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
 
         elif _at_loginpass or st.session_state.get("login_failed"):
@@ -964,39 +976,20 @@ with st.sidebar:
                 st.session_state.pop("login_failed_role", None)
                 st.rerun()
         else:
-            # Browser terhubung tapi role belum terdeteksi — coba detect ulang otomatis
-            try:
-                import spse_login as _sl_redetect
-                _redetected = _sl_redetect.detect_login_role()
-                if _redetected:
-                    st.session_state["spse_role"] = _redetected
-                    st.rerun()
-            except Exception:
-                pass
-            st.warning("⚠️ Browser terhubung, role belum terdeteksi")
+            # Browser hidup tapi tidak dalam sesi login yang dikenali (role recovery di atas
+            # sudah gagal). Bukan dead-end: sediakan tutup bersih lalu form login.
+            st.warning("⚠️ Sesi SPSE tidak dikenali — silakan tutup lalu login ulang.")
             st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔍 Deteksi Ulang", use_container_width=True):
-                    try:
-                        import spse_login as _sl_redetect2
-                        _r2 = _sl_redetect2.detect_login_role()
-                        if _r2:
-                            st.session_state["spse_role"] = _r2
-                            st.rerun()
-                        else:
-                            st.toast("Role tidak terdeteksi — coba login ulang", icon="⚠️")
-                    except Exception as _re_err:
-                        st.toast(f"Deteksi gagal: {_re_err}", icon="❌")
-            with col2:
-                if st.button("❌ Tutup", use_container_width=True):
-                    spse_browser.tutup_browser()
-                    st.session_state.pop("login_failed", None)
-                    st.rerun()
+            if st.button("❌ Tutup Browser & Login Ulang", type="primary", use_container_width=True):
+                spse_browser.tutup_browser()
+                st.session_state.pop("login_failed", None)
+                st.session_state.pop("login_failed_role", None)
+                st.rerun()
     else:
-        # CDP tidak aktif — browser tutup/belum dibuka; bersihkan session role
-        if st.session_state.get("spse_role"):
-            st.session_state.pop("spse_role", None)
+        # CDP tidak aktif — browser tutup/belum dibuka; bersihkan semua state login sisa
+        st.session_state.pop("spse_role", None)
+        st.session_state.pop("login_failed", None)
+        st.session_state.pop("login_failed_role", None)
         _sidebar_login_form()
 
 _spse_role = st.session_state.get("spse_role", None)  # re-sync setelah sidebar logic

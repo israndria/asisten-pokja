@@ -338,31 +338,21 @@ async def _tutup_async():
 
 
 def tutup_browser():
-    """Tutup Chrome: via Playwright jika connect, fallback CDP Browser.close, lalu diskonek."""
-    stop_auto_refresh()
+    """Tutup browser SPSE secara deterministik: kill proses Brave CDP (port 9222) + reset state.
+
+    Sebelumnya fallback hanya menutup TAB via /json/close (proses Brave tetap listen 9222),
+    sehingga tombol Tutup terlihat no-op saat Playwright ctx belum connect. Sekarang selalu
+    kill proses agar port benar-benar bebas dan sidebar kembali ke form login.
+    """
     global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    # Coba tutup rapi via Playwright kalau ctx ada (menyimpan profil dengan bersih)
     if _get_ctx():
-        _run(_tutup_async())
-    else:
-        # Fallback: kirim CDP command Browser.close langsung via HTTP
-        import requests as _req
         try:
-            tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
-            if tabs:
-                ws_url = tabs[0].get("webSocketDebuggerUrl", "")
-                # Pakai /json/close/{id} per tab, lalu Browser.close via CDP WebSocket tidak mudah lewat requests
-                # Alternatif: POST ke /json/close semua tab
-                for t in tabs:
-                    try:
-                        _req.get(f"http://localhost:{CDP_PORT}/json/close/{t['id']}", timeout=2)
-                    except Exception:
-                        pass
+            _run(_tutup_async(), timeout=8)
         except Exception:
             pass
-    # Selalu reset state
-    _set_pw(None)
-    _set_ctx(None)
-    _set_page(None)
+    # Kill proses Brave apa pun kondisinya — ini yang bikin deterministik
+    _kill_browser()
     _cdp_tabs_cache = []
     _cdp_tabs_cache_ts = 0.0
     # Hapus last_role saat browser ditutup
@@ -443,7 +433,7 @@ def _kill_browser():
         for pid in pids:
             if pid.isdigit():
                 subprocess.run(
-                    ["taskkill", "/F", "/PID", pid],
+                    ["taskkill", "/F", "/T", "/PID", pid],
                     capture_output=True, shell=True
                 )
     except Exception:
