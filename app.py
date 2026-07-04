@@ -289,6 +289,12 @@ def _fmt_step_seconds(seconds):
     return f"{seconds:.1f}s"
 
 
+def _template_dir_pl_jkk(row, default_dir):
+    satker = " ".join(str(row.get(k) or "") for k in ("satker", "nama_satker", "nama_dinas"))
+    if re.search(r"perdagangan|disdag", satker, re.IGNORECASE):
+        return str(pathlib.Path(default_dir).with_name("Development - PL - JKK - Disdag"))
+    return default_dir
+
 def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     """Fase I/O murni per paket PL (thread-safe, TANPA st.* dan TANPA COM).
 
@@ -313,7 +319,8 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     jenis_pl = item["jenis_pl"]
     target = _o.path.join(out_base, nama_folder)
     res = {"kode": kode, "nama_folder": nama_folder, "out_base": out_base,
-           "jenis_pl": jenis_pl, "target": target, "ok": False, "log": [], "files_ok": []}
+           "jenis_pl": jenis_pl, "target": target, "template_dir": item.get("template_dir", ""),
+           "ok": False, "log": [], "files_ok": []}
     log = res["log"].append
 
     def _step(label, t0, suffix=""):
@@ -328,8 +335,12 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         _emit("🚀 START worker")
         # 1. Buat folder fisik via subprocess setup_paket_baru.py
         _t_step = _tm.perf_counter()
+        _cmd_setup = [cfg["py"], cfg["script"], "--mode", "pl", "--output-dir", out_base]
+        if item.get("template_dir"):
+            _cmd_setup += ["--template-dir", item["template_dir"]]
+        _cmd_setup.append(nama_folder)
         r2 = _sp.run(
-            [cfg["py"], cfg["script"], "--mode", "pl", "--output-dir", out_base, nama_folder],
+            _cmd_setup,
             capture_output=True, text=True, timeout=120, creationflags=cfg["no_win"],
         )
         if r2.returncode != 0:
@@ -2030,7 +2041,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
             _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks")
-            _pl_isi_excel = st.checkbox("📊 Isi HPS + Master Data Excel saat buat folder (lambat ~90s/paket)", value=False, key="pl_cb_isi_excel")
+            if "pl_cb_isi_excel" not in st.session_state:
+                st.session_state["pl_cb_isi_excel"] = True
+            _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -2062,6 +2075,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     "nama_folder": _bnm_folder0,
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
+                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _TEMPLATE_DIR_PL_PK,
                 })
 
             
@@ -2213,7 +2227,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
-                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                 )
                                 for _el in _excel_logs:
                                     _icon = "📊" if _el.startswith("HPS:") else (
@@ -5100,7 +5114,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl_pk")
             _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh_pk")
             _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks_pk")
-            _pl_isi_excel = st.checkbox("📊 Isi HPS + Master Data Excel saat buat folder (lambat ~90s/paket)", value=False, key="pl_cb_isi_excel_pk")
+            if "pl_cb_isi_excel_pk" not in st.session_state:
+                st.session_state["pl_cb_isi_excel_pk"] = True
+            _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel_pk")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -5130,6 +5146,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     "nama_folder": _bnm_folder0,
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
+                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _TEMPLATE_DIR_PL_PK,
                 })
 
             
@@ -5281,7 +5298,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
-                                    _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                 )
                                 for _el in _excel_logs:
                                     _icon = "📊" if _el.startswith("HPS:") else (
