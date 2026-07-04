@@ -133,6 +133,22 @@ def _lookup_singkatan_dinas(satker: str) -> str:
     return "DPUPR"
 
 
+@st.cache_data(ttl=60)
+def _load_draft_paket_cached() -> list:
+    """Load semua draft_paket sekali, cache 60 detik. Dipakai lintas tab.
+    Invalidasi via _load_draft_paket_cached.clear() setelah mutasi draft_paket."""
+    try:
+        return inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60)
+def _load_draft_pl_cached() -> list:
+    """Cache load_draft_pl() 60 detik. Invalidasi via .clear() setelah mutasi draft_paket_pl."""
+    return pl_engine.load_draft_pl()
+
+
 @st.cache_data(ttl=3600)
 def _lookup_telepon_pp(satker: str) -> str:
     if not satker:
@@ -438,7 +454,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     return res
 
 
-def _proses_excel_paket_tender(target_dir, kode_tender):
+def _proses_excel_paket_tender(target_dir, kode_tender, xl=None):
     """COM: IsiDataByKodeTender → isi @ Master Data Excel Tender saat create folder.
 
     Identik dengan _proses_excel_paket_pl tapi tanpa HPS (HPS sudah dijalankan
@@ -459,7 +475,7 @@ def _proses_excel_paket_tender(target_dir, kode_tender):
     xlsm = os.path.join(target_dir, _xs[0])
 
     try:
-        _res = _imd_t.proses_master_data_tender(kode_tender, xlsm)
+        _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=xl)
         if _res.get("ok"):
             logs.append("Master Data Tender: terisi otomatis")
         else:
@@ -1701,7 +1717,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        _pl_rows = pl_engine.load_draft_pl()
+        _pl_rows = _load_draft_pl_cached()
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
         _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
@@ -1761,7 +1777,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         with st.expander("📋 Log lengkap serap"):
                             st.text("\n".join(_pl_logs))
                         # Reload setelah serap SPSE agar data paket terkini
-                        _pl_rows = pl_engine.load_draft_pl()
+                        _pl_rows = _load_draft_pl_cached()
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
 
@@ -2189,6 +2205,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+                    _load_draft_pl_cached.clear()
             else:
                 st.info("✅ Semua paket sudah punya folder.")
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled")
@@ -2312,15 +2329,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
                 if _opsi_reset_pl:
                     from config import sb as _sb_reset
-                    _reset_ok_pl = 0
-                    for _kr in _opsi_reset_pl.keys():
-                        try:
-                            _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
-                            _reset_ok_pl += 1
-                        except Exception as _er_pl:
-                            st.error(f"{_kr}: {_er_pl}")
-                    if _reset_ok_pl:
-                        st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
+                    _kodes_reset = list(_opsi_reset_pl.keys())
+                    try:
+                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
+                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
+                    except Exception as _er_pl:
+                        st.error(f"Reset gagal: {_er_pl}")
+                    _load_draft_pl_cached.clear()
                     st.rerun()
                 else:
                     st.info("Tidak ada paket dengan status folder untuk direset.")
@@ -2387,7 +2402,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
 
-            _pl_rows_kd = pl_engine.load_draft_pl()
+            _pl_rows_kd = _load_draft_pl_cached()
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
             _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
             _kd_selected = []
@@ -2599,7 +2614,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
 
             import upload_ba_reviu_pl as _ubrpl
-            _pl_rows_ba = pl_engine.load_draft_pl()
+            _pl_rows_ba = _load_draft_pl_cached()
             _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
             _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_ba:
@@ -2702,7 +2717,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         import jadwal_engine_pl as _jepl
         _libur_map_pl = _LIBUR_MAP
 
-        _pljd_rows = pl_engine.load_draft_pl()
+        _pljd_rows = _load_draft_pl_cached()
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
         if not _pljd_rows:
@@ -2970,7 +2985,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         _depl = _depl_jkk  # alias JKK — sudah di-import top-level
 
-        _plsp_rows = pl_engine.load_draft_pl()
+        _plsp_rows = _load_draft_pl_cached()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
         _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
         if not _plsp_rows:
@@ -3116,6 +3131,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(f"❌ {_rr_up['nama_paket'][:40]} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
                             except Exception as _e_upall:
                                 st.error(f"❌ {_rr_up['nama_paket'][:40]}: {_e_upall}")
+                        _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
                 st.markdown("### 2. Konfigurasi Setup Paket")
@@ -3525,6 +3541,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.success(f"✅ Semua {_sukses_sp} operasi sukses!")
                         else:
                             st.warning(f"⚠️ {_sukses_sp} sukses, {_gagal_sp} gagal")
+                        _load_draft_pl_cached.clear()
 
                         # Tampilkan log per paket
                         import pandas as _pd
@@ -3557,8 +3574,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.success(f"✅ {_ref_res_jkk.get('updated',0)} diperbarui, {_ref_res_jkk.get('not_found',0)} tidak ditemukan, {len(_ref_res_jkk.get('errors',[]))} error")
             if _ref_res_jkk.get("errors"):
                 st.warning("\n".join(_ref_res_jkk["errors"][:5]))
+            _load_draft_pl_cached.clear()
             st.rerun()
-        _pp_rows = pl_engine.load_draft_pl()
+        _pp_rows = _load_draft_pl_cached()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
         if _pp_rows:
@@ -3883,7 +3901,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # Load paket PL — filter paket selesai
         _pl8_rows = []
         try:
-            _raw8 = pl_engine.load_draft_pl()
+            _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
         except Exception as _e8:
@@ -4317,7 +4335,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                _raw7 = pl_engine.load_draft_pl()
+                _raw7 = _load_draft_pl_cached()
                 _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
                 _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
                 st.session_state["pl7_rows"] = _raw7
@@ -4734,7 +4752,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        _pl_rows = pl_engine.load_draft_pl()
+        _pl_rows = _load_draft_pl_cached()
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
         _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
@@ -4794,7 +4812,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         with st.expander("📋 Log lengkap serap"):
                             st.text("\n".join(_pl_logs))
                         # Reload setelah serap SPSE agar data paket terkini
-                        _pl_rows = pl_engine.load_draft_pl()
+                        _pl_rows = _load_draft_pl_cached()
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
 
@@ -5220,6 +5238,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.markdown(f"**{_pl_nf[:70]}**")
                             st.code("\n".join(_pl_logs))
                     st.session_state["pl_folder_bulk_created"] = _pl_ringkasan
+                    _load_draft_pl_cached.clear()
             else:
                 st.info("✅ Semua paket sudah punya folder.")
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled_pk")
@@ -5343,15 +5362,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
                 if _opsi_reset_pl:
                     from config import sb as _sb_reset
-                    _reset_ok_pl = 0
-                    for _kr in _opsi_reset_pl.keys():
-                        try:
-                            _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _kr).execute()
-                            _reset_ok_pl += 1
-                        except Exception as _er_pl:
-                            st.error(f"{_kr}: {_er_pl}")
-                    if _reset_ok_pl:
-                        st.success(f"✅ {_reset_ok_pl} paket berhasil direset.")
+                    _kodes_reset = list(_opsi_reset_pl.keys())
+                    try:
+                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
+                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
+                    except Exception as _er_pl:
+                        st.error(f"Reset gagal: {_er_pl}")
+                    _load_draft_pl_cached.clear()
                     st.rerun()
                 else:
                     st.info("Tidak ada paket dengan status folder untuk direset.")
@@ -5366,7 +5383,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
 
-            _pl_rows_kd = pl_engine.load_draft_pl()
+            _pl_rows_kd = _load_draft_pl_cached()
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
             _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
             _kd_selected = []
@@ -5578,7 +5595,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
 
             import upload_ba_reviu_pl as _ubrpl
-            _pl_rows_ba = pl_engine.load_draft_pl()
+            _pl_rows_ba = _load_draft_pl_cached()
             _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
             _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
             if not _pl_rows_ba:
@@ -5681,7 +5698,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         import jadwal_engine_pl as _jepl
         _libur_map_pl = _LIBUR_MAP
 
-        _pljd_rows = pl_engine.load_draft_pl()
+        _pljd_rows = _load_draft_pl_cached()
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
         if not _pljd_rows:
@@ -5949,7 +5966,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _depl = _depl_pk  # alias — sudah di-import top-level
 
-        _plsp_rows = pl_engine.load_draft_pl()
+        _plsp_rows = _load_draft_pl_cached()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
         _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
         if not _plsp_rows:
@@ -6095,6 +6112,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(f"❌ {_rr_up['nama_paket'][:40]} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
                             except Exception as _e_upall:
                                 st.error(f"❌ {_rr_up['nama_paket'][:40]}: {_e_upall}")
+                        _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
                 st.markdown("### 2. Konfigurasi Setup Paket")
@@ -6504,6 +6522,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.success(f"✅ Semua {_sukses_sp} operasi sukses!")
                         else:
                             st.warning(f"⚠️ {_sukses_sp} sukses, {_gagal_sp} gagal")
+                        _load_draft_pl_cached.clear()
 
                         # Tampilkan log per paket
                         import pandas as _pd
@@ -6536,8 +6555,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.success(f"✅ {_ref_res_pk.get('updated',0)} diperbarui, {_ref_res_pk.get('not_found',0)} tidak ditemukan, {len(_ref_res_pk.get('errors',[]))} error")
             if _ref_res_pk.get("errors"):
                 st.warning("\n".join(_ref_res_pk["errors"][:5]))
+            _load_draft_pl_cached.clear()
             st.rerun()
-        _pp_rows = pl_engine.load_draft_pl()
+        _pp_rows = _load_draft_pl_cached()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
         if _pp_rows:
@@ -6862,7 +6882,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Load paket PL — filter paket selesai
         _pl8_rows = []
         try:
-            _raw8 = pl_engine.load_draft_pl()
+            _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
         except Exception as _e8:
@@ -7173,7 +7193,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                _raw7 = pl_engine.load_draft_pl()
+                _raw7 = _load_draft_pl_cached()
                 _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
                 _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
                 st.session_state["pl7_rows"] = _raw7
@@ -7570,11 +7590,7 @@ with tab0:
     _NO_WIN = 0x08000000  # CREATE_NO_WINDOW — cegah jendela hitam ngeblink di Windows
 
     # ── Load data draft_paket ──
-    _draft_rows = []
-    try:
-        _draft_rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
-    except Exception as _e:
-        st.warning(f"Gagal load data: {_e}")
+    _draft_rows = _load_draft_paket_cached()
 
     # Isi tender_tahap_map dari Supabase kalau session state belum ada (startup/refresh)
     if "tender_tahap_map" not in st.session_state:
@@ -7870,7 +7886,22 @@ with tab0:
                 _bulk_status_line = _bulk_status.empty()
                 _ok, _fail = 0, 0
                 _bulk_semua_log = {}
-                for _i, _bp in enumerate(_t_terpilih):
+                # Buka Excel COM 1× untuk semua paket (reuse, hemat cold-start)
+                import win32com.client as _wc_bulk, pythoncom as _pyc_bulk
+                _pyc_bulk.CoInitialize()
+                _xl_bulk = None
+                try:
+                    _xl_bulk = _wc_bulk.DispatchEx("Excel.Application")
+                    _xl_bulk.Visible = False
+                    _xl_bulk.DisplayAlerts = False
+                    try:
+                        _xl_bulk.AutomationSecurity = 1
+                    except Exception:
+                        pass
+                except Exception:
+                    _xl_bulk = None  # fallback: tiap paket buka sendiri
+                try:
+                  for _i, _bp in enumerate(_t_terpilih):
                     _bp2.progress((_i + 1) / len(_t_terpilih))
                     _nf = _bp["nama_folder"]
                     _bulk_status.update(label=f"[{_i+1}/{len(_t_terpilih)}] {_nf[:60]}")
@@ -7921,6 +7952,7 @@ with tab0:
                                     "folder_dibuat": _nf,
                                     "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
                                 }).eq("kode_tender", _bp["kode_tender"]).execute()
+                                _load_draft_paket_cached.clear()
                             except Exception:
                                 pass
                             # Jalankan aksi tercentang (download/HPS/penawaran)
@@ -7933,7 +7965,7 @@ with tab0:
                             )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Isi @ Master Data Excel via COM
-                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"])
+                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk)
                             _paket_log.extend(_excel_t_logs)
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Snapshot dokumen PPK
@@ -7951,6 +7983,17 @@ with tab0:
                         _fail += 1
                         _paket_log.append("❌ Timeout buat folder")
                     _bulk_semua_log[_nf] = _paket_log
+                finally:
+                    # Tutup Excel 1× walau ada paket gagal
+                    if _xl_bulk is not None:
+                        try:
+                            _xl_bulk.Quit()
+                        except Exception:
+                            pass
+                    try:
+                        _pyc_bulk.CoUninitialize()
+                    except Exception:
+                        pass
 
                 _bulk_status_line.empty()
                 _bulk_status.update(label=f"✅ {_ok} folder berhasil, ❌ {_fail} gagal", state="complete", expanded=False)
@@ -8215,6 +8258,7 @@ with tab0:
                                 _rp_data["link_pdf"] = _reparse_link
                                 _st_rp.write("💾 Mengupdate Supabase...")
                                 inbox_engine._sb().table("draft_paket").update(_rp_data).eq("kode_tender", _kt).execute()
+                                _load_draft_paket_cached.clear()
                                 _st_rp.update(label=f"✅ Selesai: {_nm[:40]}", state="complete", expanded=True)
                                 with st.container(border=True):
                                     for k, v in _rp_hasil.items():
