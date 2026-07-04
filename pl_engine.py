@@ -859,6 +859,8 @@ def download_dokumen_paket_pl(
     cookie_str: str = "",
     skip_merge: bool = False,
     force_clean: bool = False,
+    per_file_workers: int = 3,
+    download_timeout: int = 15,
 ) -> dict:
     """
     Download dokumen dari endpoint non-tender PP ke folder_tujuan:
@@ -877,6 +879,9 @@ def download_dokumen_paket_pl(
     import requests
     import urllib.parse
     import glob as _glob
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from bs4 import BeautifulSoup
     import spse_browser
 
@@ -886,6 +891,7 @@ def download_dokumen_paket_pl(
 
     os.makedirs(folder_tujuan, exist_ok=True)
     hasil = {"ok": [], "error": []}
+    _write_lock = threading.Lock()
 
     if force_clean:
         for sub_name in SUBFOLDER_DOK_PPK.values():
@@ -934,7 +940,7 @@ def download_dokumen_paket_pl(
         current = url
         for _ in range(5):
             current, req_hdrs = _fix_customhostname_url(current)
-            resp = requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+            resp = requests.get(current, headers=req_hdrs, timeout=download_timeout, stream=True, allow_redirects=False)
             if resp.status_code not in (301, 302, 303, 307, 308):
                 return resp
             loc = resp.headers.get("Location")
@@ -942,7 +948,7 @@ def download_dokumen_paket_pl(
                 return resp
             current = urllib.parse.urljoin(current, loc)
         current, req_hdrs = _fix_customhostname_url(current)
-        return requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+        return requests.get(current, headers=req_hdrs, timeout=download_timeout, stream=True, allow_redirects=False)
 
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
@@ -971,30 +977,43 @@ def download_dokumen_paket_pl(
                 os.makedirs(folder_dl, exist_ok=True)
 
             log(f"  📂 {label}: {len(links)} file")
-            for url_dl, fname in links:
+
+            def _download_satu(link):
+                url_dl, fname = link
+                t0 = time.perf_counter()
                 try:
                     r_dl = _get_download_response(url_dl)
                     r_dl.raise_for_status()
                     ct = r_dl.headers.get("Content-Type", "")
                     if "text/html" in ct:
-                        hasil["error"].append(f"{fname}: session expired (server return HTML)")
-                        log(f"    ❌ {fname}: session expired — login ulang")
-                        continue
+                        return False, fname, "session expired (server return HTML)", time.perf_counter() - t0
                     cd = r_dl.headers.get("Content-Disposition", "")
                     m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
                     if m_cd:
                         clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
                         if clean:
                             fname = clean
-                    dst = _unique_dst(folder_dl, fname)
-                    with open(dst, "wb") as f:
-                        for chunk in r_dl.iter_content(65536):
-                            f.write(chunk)
-                    hasil["ok"].append(dst)
-                    log(f"    ✅ {os.path.basename(dst)}")
+                    with _write_lock:
+                        dst = _unique_dst(folder_dl, fname)
+                        with open(dst, "wb") as f:
+                            for chunk in r_dl.iter_content(65536):
+                                f.write(chunk)
+                        hasil["ok"].append(dst)
+                    return True, os.path.basename(dst), "", time.perf_counter() - t0
                 except Exception as e:
-                    hasil["error"].append(f"{fname}: {e}")
-                    log(f"    ❌ {fname}: {e}")
+                    return False, fname, str(e), time.perf_counter() - t0
+
+            t_ep = time.perf_counter()
+            max_workers = max(1, min(int(per_file_workers or 1), len(links) or 1))
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                for fut in as_completed([ex.submit(_download_satu, link) for link in links]):
+                    ok, fname, err, dur = fut.result()
+                    if ok:
+                        log(f"    ✅ {fname} ({dur:.1f}s)")
+                    else:
+                        hasil["error"].append(f"{fname}: {err}")
+                        log(f"    ❌ {fname}: {err} ({dur:.1f}s)")
+            log(f"  ⏱ {label}: {len(links)} file, {time.perf_counter() - t_ep:.1f}s")
         except Exception as e:
             hasil["error"].append(f"{label}: {e}")
             log(f"  ❌ {label}: {e}")

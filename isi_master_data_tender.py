@@ -10,7 +10,7 @@ Menggantikan alur manual dropdown F1 + MuatDraftPaket + PilihDraftPaket di Excel
 import os
 
 
-def proses_master_data_tender(kode_tender: str, excel_path: str, progress_cb=None) -> dict:
+def proses_master_data_tender(kode_tender: str, excel_path: str, progress_cb=None, xl=None) -> dict:
     """1 sesi COM: SetSilentTender + IsiDataByKodeTender — entry point utama dari app.py.
 
     Dipakai oleh _proses_excel_paket_tender() di app.py saat bulk-create folder Tender.
@@ -40,16 +40,17 @@ def proses_master_data_tender(kode_tender: str, excel_path: str, progress_cb=Non
     import pywintypes
     pythoncom.CoInitialize()
 
-    xl = None
+    _own_xl = xl is None
     wb = None
     try:
-        xl = win32com.client.DispatchEx("Excel.Application")
-        xl.Visible = False
-        xl.DisplayAlerts = False
-        try:
-            xl.AutomationSecurity = 1  # msoAutomationSecurityLow — izinkan macro
-        except Exception:
-            pass
+        if _own_xl:
+            xl = win32com.client.DispatchEx("Excel.Application")
+            xl.Visible = False
+            xl.DisplayAlerts = False
+            try:
+                xl.AutomationSecurity = 1  # msoAutomationSecurityLow — izinkan macro
+            except Exception:
+                pass
 
         _log(f"Membuka Excel: {os.path.basename(excel_path)}")
         wb = xl.Workbooks.Open(excel_path, UpdateLinks=0)
@@ -79,7 +80,7 @@ def proses_master_data_tender(kode_tender: str, excel_path: str, progress_cb=Non
                 wb.Close(SaveChanges=False)
             except Exception:
                 pass
-        if xl is not None:
+        if _own_xl and xl is not None:
             try:
                 xl.Quit()
             except Exception:

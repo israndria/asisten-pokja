@@ -278,6 +278,17 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     return logs
 
 
+def _fmt_elapsed(seconds):
+    seconds = int(seconds)
+    m, sec = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h}j {m}m {sec}d" if h else f"{m}m {sec}d"
+
+
+def _fmt_step_seconds(seconds):
+    return f"{seconds:.1f}s"
+
+
 def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     """Fase I/O murni per paket PL (thread-safe, TANPA st.* dan TANPA COM).
 
@@ -294,6 +305,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     import subprocess as _sp
     import parse_kak_pl as _pkpl
     import hps_engine as _hps_eng
+    import time as _tm
 
     nama_folder = item["nama_folder"]
     kode = item["kode_paket"]
@@ -303,6 +315,9 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     res = {"kode": kode, "nama_folder": nama_folder, "out_base": out_base,
            "jenis_pl": jenis_pl, "target": target, "ok": False, "log": [], "files_ok": []}
     log = res["log"].append
+
+    def _step(label, t0, suffix=""):
+        log(f"⏱ {label}: {_fmt_step_seconds(_tm.perf_counter() - t0)}{suffix}")
 
     def _emit(msg):
         q = cfg.get("event_q")
@@ -325,6 +340,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     try:
         _emit("🚀 START worker")
         # 1. Buat folder fisik via subprocess setup_paket_baru.py
+        _t_step = _tm.perf_counter()
         r2 = _sp.run(
             [cfg["py"], cfg["script"], "--mode", "pl", "--output-dir", out_base, nama_folder],
             capture_output=True, text=True, timeout=120, creationflags=cfg["no_win"],
@@ -334,21 +350,26 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             _emit("❌ gagal buat folder")
             return res
         log("✅ Folder dibuat")
+        _step("folder", _t_step)
         _emit("📁 folder dibuat")
 
         # Auto-simpan nomor_urut ke Supabase
         try:
+            _t_step = _tm.perf_counter()
             _m_nu = _re.match(r'^\d+', nama_folder)
             _nomor_auto = _m_nu.group(0) if _m_nu else ""
             if _nomor_auto and kode:
                 import config as _cfg
                 _cfg.sb().table("draft_paket_pl").update({"nomor_urut": _nomor_auto}).eq("kode_paket", kode).execute()
                 log(f"🔢 nomor_urut={_nomor_auto} tersimpan")
+            _step("nomor_urut", _t_step)
         except Exception as _nu_e:
             log(f"⚠ nomor_urut: {_nu_e}")
+            _step("nomor_urut", _t_step, " error")
 
         # 2. Copy file evaluator AI
         try:
+            _t_step = _tm.perf_counter()
             _eval_root = _o.path.join(cfg["pokja_root"], "_SOP Evaluator")
             _prareviu = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
             if jenis_pl == "JKK":
@@ -371,8 +392,10 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 if _o.path.isfile(_src):
                     _sh.copy2(_src, _o.path.join(_eval_dir, _ef)); _copied.append(_ef)
             log(f"📄 Evaluator: {len(_copied)} file disalin (0.+5.)" if _copied else "⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+            _step("evaluator", _t_step)
         except Exception as _ev_e:
             log(f"⚠ Evaluator copy: {_ev_e}")
+            _step("evaluator", _t_step, " error")
 
         # tandai folder dibuat
         try:
@@ -387,27 +410,34 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             else:
                 try:
                     _emit("⬇️ mulai download")
+                    _t_step = _tm.perf_counter()
                     _dl = pl_engine.download_dokumen_paket_pl(
                         kode, target, cookie_str=cookie_str, skip_merge=True,
                     )
                     res["files_ok"] = _dl.get("ok", [])
                     log(f"📎 Download: ✅{len(_dl.get('ok', []))} file")
+                    _step("download", _t_step)
                     _emit(f"✅ download {len(_dl.get('ok', []))} file")
                     for _e in _dl.get("error", []):
                         log(f"  ❌ {_e}")
                 except Exception as _dl_e:
                     log(f"❌ Download error: {_dl_e}")
+                    _step("download", _t_step, " error")
             # 4. Parse KAK
             try:
+                _t_step = _tm.perf_counter()
                 _kak_p = _pkpl.cari_kak_di_folder(target)
                 if _kak_p:
                     _kak_u = {k: v for k, v in _pkpl.parse_kak(_kak_p).items() if v}
                     if _kak_u:
                         pl_engine.simpan_paket_pl({"kode_paket": kode, **_kak_u})
                         log(f"📋 KAK: {','.join(_kak_u.keys())}")
+                _step("KAK", _t_step)
             except Exception as _kak_e:
                 log(f"⚠ KAK parse: {_kak_e}")
+                _step("KAK", _t_step, " error")
             # 5. Serap penyedia (pdfplumber bisa hang → jaga timeout 60s seperti flow lama)
+            _t_step = _tm.perf_counter()
             _sp_res = _call_timeout(
                 lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
                 60,
@@ -415,11 +445,14 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             ) or {}
             if _sp_res.get("timeout"):
                 log("⚠ Serap penyedia: timeout 60s, dilewati")
+                _step("serap penyedia", _t_step, " timeout")
             else:
                 log(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui" if _sp_res.get("updated", 0) > 0 else "👤 Penyedia: tidak ada data baru")
+                _step("serap penyedia", _t_step)
         else:
             # Auto-serap dari ND.pdf jika folder ada & tidak download
             if _o.path.isdir(target):
+                _t_step = _tm.perf_counter()
                 _nd_res = _call_timeout(
                     lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
                     60,
@@ -427,11 +460,14 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 ) or {}
                 if _nd_res.get("timeout"):
                     log("⚠ Serap penyedia ND: timeout 60s, dilewati")
+                    _step("serap penyedia ND", _t_step, " timeout")
                 else:
                     log(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui" if _nd_res.get("updated", 0) > 0 else "👤 Penyedia (ND): tidak ada data baru")
+                    _step("serap penyedia ND", _t_step)
 
         # 6. Scrape HPS + tulis _HPS_.md (tanpa COM)
         try:
+            _t_step = _tm.perf_counter()
             _xlsm = _cari_xlsm_pl(target)
             _hps = _hps_eng.scrape_hps_pl(kode)
             if _hps and _hps.get("items") and _xlsm:
@@ -440,8 +476,10 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 _emit(f"📄 HPS {len(_hps['items'])} item")
             else:
                 log("⚠ HPS.md: tidak ada item HPS")
+            _step("HPS.md", _t_step)
         except Exception as _hps_e:
             log(f"⚠ HPS.md: {_hps_e}")
+            _step("HPS.md", _t_step, " error")
 
         res["ok"] = True
         _emit("🏁 selesai I/O")
@@ -1690,7 +1728,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.warning("⚠️ Browser belum login sebagai PP. Login via sidebar terlebih dahulu.")
         st.stop()
 
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9, _pl_tab10 = st.tabs([
+    _PL_TAB_LABELS = [
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -1701,13 +1739,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "8️⃣ Kirim Verifikasi",
         "9️⃣ Upload BA PL",
         "📄 Import DPA",
-    ])
+    ]
+    _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_jkk")
 
-    with _pl_tab10:
+    if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
-    with _pl_tab1:
+    if _pl_active_tab == "1️⃣ Draft Paket PL":
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
         _TEMPLATE_DIR_PL    = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - JKK")
@@ -2090,15 +2129,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     key="pl_btn_buat_terpilih",
                     type="primary",
                 ):
+                    import time as _pl_time
+                    _pl_t0 = _pl_time.perf_counter()
                     _pl_bp = st.progress(0.0)
-                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih...", expanded=True)
+                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0d", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}
                     # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
                     import queue as _pl_queue
                     _pl_event_q = _pl_queue.Queue()
-                    _pl_live_events = []
+                    _pl_live_events = ["⏱ Timer mulai"]
                     _pl_cfg_io = {
                         "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
                         "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
@@ -2129,9 +2170,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _pl_res = _pl_fut.result()
                                 _pl_io_hasil.append(_pl_res)
                                 _pl_done_ct += 1
+                                _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
-                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]}")
-                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]}")
+                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
+                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
                                 _pl_live_events = _pl_live_events[-12:]
                                 _pl_bulk_status_line.code("\n".join(_pl_live_events))
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
@@ -2145,17 +2187,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                             continue
                         _pl_ok += 1
-                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]}")
+                        _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
+                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
                                 if _pl_merged:
                                     _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
+                                _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _mg_e:
                                 _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
+                                _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ merge draft: skipped (0 file)")
                         # Extract teks kualifikasi (OCR berat → serial dgn timeout)
                         if _pl_extract_teks and _pl_dl_dokumen:
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 import extract_teks_kualifikasi as _etk
                                 import threading as _etk_th
@@ -2174,15 +2223,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _etk_t.join(timeout=120)
                                     if _etk_t.is_alive():
                                         _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} timeout")
                                     elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
                                         _etk_res = _etk_result_box[0]
                                         _pl_paket_log.append(f"📝 Extract teks: {len(_etk_res.get('penyedia', []))} penyedia, ~{_etk_res.get('total_token_estimasi', 0)} token")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                                     else:
                                         _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _etk_e:
                                 _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                                _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ OCR: skipped")
                         # Refresh + HPS + Master Data: COM Excel (serial)
                         if _pl_isi_excel:
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -2194,11 +2250,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             "📝" if _el.startswith("Master Data") else (
                                             "🔄" if _el.startswith("Refresh") else "⚠"))
                                     _pl_paket_log.append(f"{_icon} {_el}")
+                                _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _xl_e:
                                 _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
+                                _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ Excel: skipped")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
-                    _pl_bulk_status_line.empty()
-                    _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
+                    _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
+                    _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
+                    _pl_bulk_status_line.code('\n'.join(_pl_live_events[-12:]))
+                    _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal · ⏱ {_pl_total_elapsed}"
                     _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
                     with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
                         for _pl_nf, _pl_logs in _pl_bulk_semua_log.items():
@@ -2396,7 +2458,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _pr_pb.progress(1.0, text="Selesai.")
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    with _pl_tab2:
+    if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
 
         with _kd_col_list:
@@ -2710,7 +2772,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab5:
+    if _pl_active_tab == "5️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -2975,7 +3037,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    with _pl_tab3:
+    if _pl_active_tab == "3️⃣ Setup Paket":
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -3554,7 +3616,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
 
 
-    with _pl_tab4:
+    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -3697,7 +3759,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
-    with _pl_tab4:
+    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -3743,7 +3805,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         else:
                             st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
 
-    with _pl_tab8:
+    if _pl_active_tab == "8️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -3889,7 +3951,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    with _pl_tab9:
+    if _pl_active_tab == "9️⃣ Upload BA PL":
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -4325,7 +4387,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.info(f"Tidak ada file `BA_PLJKK_*.pdf` ditemukan. Paket yang di-scan: {_ba_nama_paket_aktif or '(kosong)'}.")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    with _pl_tab6:
+    if _pl_active_tab == "6️⃣ Download Kualifikasi":
         _ke_pl = _ke_pl_jkk  # alias — sudah di-import top-level
         _he_pl = _he_pl_jkk
 
@@ -4492,7 +4554,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    with _pl_tab7:
+    if _pl_active_tab == "7️⃣ Evaluasi & Teknis/Biaya":
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
@@ -4725,7 +4787,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
-    _pl_tab1, _pl_tab2, _pl_tab3, _pl_tab4, _pl_tab5, _pl_tab6, _pl_tab7, _pl_tab8, _pl_tab9, _pl_tab10 = st.tabs([
+    _PL_TAB_LABELS = [
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket",
@@ -4736,13 +4798,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         "8️⃣ Kirim Verifikasi",
         "9️⃣ Upload BA PL",
         "📄 Import DPA",
-    ])
+    ]
+    _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
 
-    with _pl_tab10:
+    if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
 
     # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
-    with _pl_tab1:
+    if _pl_active_tab == "1️⃣ Draft Paket PL":
         import os as _pl_os, subprocess as _pl_sp
         from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
         _TEMPLATE_DIR_PL    = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - JKK")
@@ -5123,15 +5186,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     key="pl_btn_buat_terpilih",
                     type="primary",
                 ):
+                    import time as _pl_time
+                    _pl_t0 = _pl_time.perf_counter()
                     _pl_bp = st.progress(0.0)
-                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih...", expanded=True)
+                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0d", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}
                     # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
                     import queue as _pl_queue
                     _pl_event_q = _pl_queue.Queue()
-                    _pl_live_events = []
+                    _pl_live_events = ["⏱ Timer mulai"]
                     _pl_cfg_io = {
                         "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
                         "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
@@ -5162,9 +5227,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _pl_res = _pl_fut.result()
                                 _pl_io_hasil.append(_pl_res)
                                 _pl_done_ct += 1
+                                _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
-                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]}")
-                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]}")
+                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
+                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
                                 _pl_live_events = _pl_live_events[-12:]
                                 _pl_bulk_status_line.code("\n".join(_pl_live_events))
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
@@ -5178,17 +5244,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                             continue
                         _pl_ok += 1
-                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]}")
+                        _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
+                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
                                 if _pl_merged:
                                     _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
+                                _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _mg_e:
                                 _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
+                                _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ merge draft: skipped (0 file)")
                         # Extract teks kualifikasi (OCR berat → serial dgn timeout)
                         if _pl_extract_teks and _pl_dl_dokumen:
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 import extract_teks_kualifikasi as _etk
                                 import threading as _etk_th
@@ -5207,15 +5280,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _etk_t.join(timeout=120)
                                     if _etk_t.is_alive():
                                         _pl_paket_log.append("⚠ Extract teks: timeout 120s, dilewati")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} timeout")
                                     elif _etk_result_box[0] and _etk_result_box[0].get("ok"):
                                         _etk_res = _etk_result_box[0]
                                         _pl_paket_log.append(f"📝 Extract teks: {len(_etk_res.get('penyedia', []))} penyedia, ~{_etk_res.get('total_token_estimasi', 0)} token")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                                     else:
                                         _pl_paket_log.append("⚠ Extract teks: tidak ada penyedia/PDF")
+                                        _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _etk_e:
                                 _pl_paket_log.append(f"⚠ Extract teks: {_etk_e}")
+                                _pl_paket_log.append(f"⏱ OCR: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ OCR: skipped")
                         # Refresh + HPS + Master Data: COM Excel (serial)
                         if _pl_isi_excel:
+                            _t_step = _pl_time.perf_counter()
                             try:
                                 _excel_logs = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
@@ -5227,11 +5307,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             "📝" if _el.startswith("Master Data") else (
                                             "🔄" if _el.startswith("Refresh") else "⚠"))
                                     _pl_paket_log.append(f"{_icon} {_el}")
+                                _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _xl_e:
                                 _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
+                                _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
+                        else:
+                            _pl_paket_log.append("⏱ Excel: skipped")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
-                    _pl_bulk_status_line.empty()
-                    _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal"
+                    _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
+                    _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
+                    _pl_bulk_status_line.code('\n'.join(_pl_live_events[-12:]))
+                    _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal · ⏱ {_pl_total_elapsed}"
                     _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
                     with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
                         for _pl_nf, _pl_logs in _pl_bulk_semua_log.items():
@@ -5377,7 +5463,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    with _pl_tab2:
+    if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
         _kd_col_list, _kd_col_detail = st.columns([3, 2])
 
         with _kd_col_list:
@@ -5691,7 +5777,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    with _pl_tab5:
+    if _pl_active_tab == "5️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -5956,7 +6042,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    with _pl_tab3:
+    if _pl_active_tab == "3️⃣ Setup Paket":
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -6535,7 +6621,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
 
 
-    with _pl_tab4:
+    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -6678,7 +6764,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
-    with _pl_tab4:
+    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -6724,7 +6810,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         else:
                             st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
 
-    with _pl_tab8:
+    if _pl_active_tab == "8️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -6870,7 +6956,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    with _pl_tab9:
+    if _pl_active_tab == "9️⃣ Upload BA PL":
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -7183,7 +7269,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    with _pl_tab6:
+    if _pl_active_tab == "6️⃣ Download Kualifikasi":
         _ke_pl = _ke_pl_pk   # alias — sudah di-import top-level
         _he_pl = _he_pl_pk
 
@@ -7350,7 +7436,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    with _pl_tab7:
+    if _pl_active_tab == "7️⃣ Evaluasi & Teknis/Biaya":
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
