@@ -324,19 +324,6 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         if q:
             q.put(f"{nama_folder[:55]} — {msg}")
 
-    def _call_timeout(fn, timeout_s, timeout_value):
-        import threading as _th
-        box = [timeout_value]
-        def _run():
-            try:
-                box[0] = fn()
-            except Exception as _ex:
-                box[0] = {"ok": False, "error": str(_ex)}
-        t = _th.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout_s)
-        return timeout_value if t.is_alive() else box[0]
-
     try:
         _emit("🚀 START worker")
         # 1. Buat folder fisik via subprocess setup_paket_baru.py
@@ -436,34 +423,10 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             except Exception as _kak_e:
                 log(f"⚠ KAK parse: {_kak_e}")
                 _step("KAK", _t_step, " error")
-            # 5. Serap penyedia (pdfplumber bisa hang → jaga timeout 60s seperti flow lama)
-            _t_step = _tm.perf_counter()
-            _sp_res = _call_timeout(
-                lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
-                60,
-                {"ok": False, "timeout": True},
-            ) or {}
-            if _sp_res.get("timeout"):
-                log("⚠ Serap penyedia: timeout 60s, dilewati")
-                _step("serap penyedia", _t_step, " timeout")
-            else:
-                log(f"👤 Penyedia: {_sp_res.get('updated',0)} diperbarui" if _sp_res.get("updated", 0) > 0 else "👤 Penyedia: tidak ada data baru")
-                _step("serap penyedia", _t_step)
-        else:
-            # Auto-serap dari ND.pdf jika folder ada & tidak download
-            if _o.path.isdir(target):
-                _t_step = _tm.perf_counter()
-                _nd_res = _call_timeout(
-                    lambda: _pkpl.serap_penyedia_pl(kode_paket_filter=kode),
-                    60,
-                    {"ok": False, "timeout": True},
-                ) or {}
-                if _nd_res.get("timeout"):
-                    log("⚠ Serap penyedia ND: timeout 60s, dilewati")
-                    _step("serap penyedia ND", _t_step, " timeout")
-                else:
-                    log(f"👤 Penyedia (ND): {_nd_res.get('updated',0)} diperbarui" if _nd_res.get("updated", 0) > 0 else "👤 Penyedia (ND): tidak ada data baru")
-                    _step("serap penyedia ND", _t_step)
+        # NOTE: Serap penyedia SENGAJA tidak dijalankan di sini (saat create folder baru).
+        # Alasan: penyedia belum mendaftar → parse Draft_PL/ND.pdf + ekstrak personil 3-layer
+        # selalu timeout 60s tanpa hasil (buang ~60s/paket). Serap penyedia dipindah ke tahap
+        # "Download Dokumen Kualifikasi" (Tab 6) — di sana peserta sudah terdaftar & PDF ada.
 
         # 6. Scrape HPS + tulis _HPS_.md (tanpa COM)
         try:
@@ -4507,6 +4470,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
                                         )
 
+                                    # Serap penyedia (dipindah dari create folder — di sini peserta sudah
+                                    # terdaftar & Draft_PL/ND.pdf ada, jadi parse berhasil bukan timeout).
+                                    _lcb7("--- Serap penyedia (nama/NPWP/personil) ---")
+                                    try:
+                                        import parse_kak_pl as _pkpl7
+                                        _sp7 = _pkpl7.serap_penyedia_pl(kode_paket_filter=_kpl7)
+                                        _lcb7(f"👤 Penyedia: {_sp7.get('updated',0)} diperbarui"
+                                              if _sp7.get("updated", 0) > 0 else "👤 Penyedia: tidak ada data baru")
+                                    except Exception as _sp7_e:
+                                        _lcb7(f"⚠ Serap penyedia: {_sp7_e}")
+
                                 # Parse evaluasi
                                 if _do_parse7:
                                     _pb7.progress((_i7 + 0.7) / _n_paket7, text=f"{_nama7} — parse evaluasi")
@@ -7388,6 +7362,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         _ke_pl.download_kualifikasi_peserta_pl(
                                             _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
                                         )
+
+                                    # Serap penyedia (dipindah dari create folder — di sini peserta sudah
+                                    # terdaftar & Draft_PL/ND.pdf ada, jadi parse berhasil bukan timeout).
+                                    _lcb7("--- Serap penyedia (nama/NPWP/personil) ---")
+                                    try:
+                                        import parse_kak_pl as _pkpl7
+                                        _sp7 = _pkpl7.serap_penyedia_pl(kode_paket_filter=_kpl7)
+                                        _lcb7(f"👤 Penyedia: {_sp7.get('updated',0)} diperbarui"
+                                              if _sp7.get("updated", 0) > 0 else "👤 Penyedia: tidak ada data baru")
+                                    except Exception as _sp7_e:
+                                        _lcb7(f"⚠ Serap penyedia: {_sp7_e}")
 
                                 # Parse evaluasi
                                 if _do_parse7:

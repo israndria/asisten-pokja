@@ -7,8 +7,8 @@ textColor = "#c9d1d9"          # Off-white teks, nyaman di mata
 font = "sans serif"
 
 [server]
-runOnSave = false
-fileWatcherType = "none"
+runOnSave = true          # auto-rerun tiap file .py disave (tak perlu klik "Rerun")
+fileWatcherType = "auto"   # pantau perubahan file; "auto" pakai watchdog jika ada, fallback polling
 
 [browser]
 gatherUsageStats = false
