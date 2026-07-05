@@ -2039,8 +2039,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
-            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh")
-            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks")
+            _pl_rt_refresh = False
+            _pl_extract_teks = False
             if "pl_cb_isi_excel" not in st.session_state:
                 st.session_state["pl_cb_isi_excel"] = True
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel")
@@ -2263,9 +2263,55 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 "Gunakan tombol ini **hanya** jika ada perubahan dokumen dari PPK atau ingin refresh ulang."
             )
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
+            _cb_template_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing", value=False, key="pl_cb_template_refresh_existing")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
 
             if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
+                # Aksi: Refresh template bulk semua paket berfolder
+                if _cb_template_refresh:
+                    import kualifikasi_engine_pl as _keng_pl_rt
+                    from pathlib import Path as _rt_Path
+                    from refresh_template import refresh_template_paket as _rt_existing
+                    _pl_rows_rt_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    if not _pl_rows_rt_bulk:
+                        st.info("Tidak ada paket dengan folder untuk refresh template.")
+                    else:
+                        _rt_ok, _rt_fail = 0, 0
+                        _rt_status = st.status(
+                            f"🔄 Refresh template {len(_pl_rows_rt_bulk)} paket existing...", expanded=True
+                        )
+                        _rt_line = _rt_status.empty()
+                        _rt_bp = st.progress(0.0)
+                        for _rt_i, _rt_row in enumerate(_pl_rows_rt_bulk):
+                            _rt_kp = _rt_row.get("kode_paket", "")
+                            _rt_nama = _rt_row.get("nama_paket", _rt_kp)[:50]
+                            _rt_bp.progress((_rt_i + 1) / len(_pl_rows_rt_bulk))
+                            _rt_status.update(label=f"[{_rt_i+1}/{len(_pl_rows_rt_bulk)}] {_rt_nama}")
+                            try:
+                                _rt_fr = _keng_pl_rt.resolve_folder_paket_pl(_rt_kp)
+                                _rt_root = _rt_fr.get("pesan", "") if _rt_fr.get("ok") else ""
+                                if not _rt_root or not _pl_os.path.isdir(_rt_root):
+                                    raise ValueError("folder tidak ditemukan")
+                                _rt_jenis = (_rt_row.get("jenis_pl") or "JKK").upper()
+                                _rt_src = _template_dir_pl_jkk(_rt_row, _TEMPLATE_DIR_PL) if _rt_jenis == "JKK" else _TEMPLATE_DIR_PL_PK
+                                _rt_mode = "pl_jkk" if _rt_jenis == "JKK" else "pl_pk"
+                                _rt_existing([_rt_Path(_rt_root)], _rt_Path(_rt_src), _rt_mode, auto_relink=True, dry_run=False)
+                                _rt_ok += 1
+                                _rt_tpl = "Disdag" if "Disdag" in str(_rt_src) else "Default"
+                                _rt_line.write(f"✅ [{_rt_i+1}] {_rt_nama} — template {_rt_tpl}")
+                            except Exception as _rt_e:
+                                _rt_fail += 1
+                                _rt_line.write(f"❌ [{_rt_i+1}] {_rt_nama} — {_rt_e}")
+                        _rt_bp.progress(1.0)
+                        _rt_line.empty()
+                        _rt_status.update(
+                            label=f"🔄 Refresh template selesai: ✅ {_rt_ok} sukses, ❌ {_rt_fail} gagal",
+                            state="complete", expanded=_rt_fail > 0,
+                        )
+
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_pl as _keng_pl_dl
@@ -2417,10 +2463,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
                 _pr_selected[_kpr] = st.checkbox(_lpr, key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
-            _pr_model = st.selectbox(
+            _pr_col_engine, _pr_col_model = st.columns(2)
+            _pr_engine = _pr_col_engine.selectbox(
+                "Engine AI",
+                ["claude", "codex"],
+                key="pr_engine",
+            )
+            _pr_model = _pr_col_model.selectbox(
                 "Model Claude",
                 ["haiku", "sonnet"],
                 key="pr_model",
+                disabled=(_pr_engine != "claude"),
             )
             _btn_pr = st.button(
                 f"🤖 Jalankan Pra-Reviu — {len(_pr_terpilih)} paket",
@@ -2430,7 +2483,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             if _btn_pr and _pr_terpilih:
                 _pr_pb = st.progress(0.0, text="Memulai pra-reviu...")
                 _pr_jobs = [{"nomor_urut": r["nomor_urut"], "nama_paket": r["nama_paket"]} for r in _pr_terpilih]
-                _pr_results = _heval.evaluasi_bulk(_pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=3)
+                _pr_results = _heval.evaluasi_bulk(_pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=3, engine=_pr_engine)
                 for _pri, _prr in enumerate(_pr_results):
                     _pr_pb.progress((_pri + 1) / len(_pr_results))
                     if _prr["status"] == "ok":
@@ -4618,11 +4671,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
                     st.divider()
-                    st.markdown("#### 🤖 Evaluasi AI (Claude Code)")
-                    st.caption("Claude Code baca dokumen di folder paket → output `.md`. Paralel per paket.")
-                    _ai_eval_model = st.selectbox(
+                    st.markdown("#### 🤖 Evaluasi AI")
+                    st.caption("AI baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    _do_extract_teks8 = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8_do_extract_teks")
+                    _pl8_col_engine, _pl8_col_model = st.columns(2)
+                    _ai_eval_engine = _pl8_col_engine.selectbox(
+                        "Engine AI", ["claude", "codex"],
+                        key="pl8_ai_engine",
+                    )
+                    _ai_eval_model = _pl8_col_model.selectbox(
                         "Model", ["haiku", "sonnet"],
                         key="pl8_ai_model",
+                        disabled=(_ai_eval_engine != "claude"),
                     )
                     _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8_do_ai_kual")
                     _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8_do_ai_teknis")
@@ -4633,10 +4693,23 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     )
                     if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis):
                         import ai_evaluator as _heval8
+                        if _do_extract_teks8:
+                            import extract_teks_kualifikasi as _etk8
+                            st.info("📝 Extract teks kualifikasi...")
+                            for _r8 in _pl8_selected_rows:
+                                try:
+                                    _folder8 = _heval8._folder_paket(_r8.get("nomor_urut"), _r8.get("nama_paket", ""), jenis_pl="JKK", is_ulang=bool(_r8.get("is_ulang")))
+                                    if not _folder8:
+                                        continue
+                                    _etk_folder8 = os.path.join(str(_folder8), "8. Dokumen Kualifikasi")
+                                    if os.path.isdir(_etk_folder8):
+                                        _etk8.extract_folder_kualifikasi(_etk_folder8)
+                                except Exception as _etk8_e:
+                                    st.warning(f"⚠ Extract teks {_r8.get('nama_paket','')[:40]}: {_etk8_e}")
                         _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
-                            _res_kual = _heval8.evaluasi_bulk(_ai_jobs, jenis="kualifikasi", model=_ai_eval_model, max_workers=3)
+                            _res_kual = _heval8.evaluasi_bulk(_ai_jobs, jenis="kualifikasi", model=_ai_eval_model, max_workers=3, engine=_ai_eval_engine)
                             for _rk in _res_kual:
                                 if _rk["status"] == "ok":
                                     st.success(f"✅ {_rk['nama'][:50]}")
@@ -4646,7 +4719,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(f"❌ {_rk['nama'][:50]} — {_rk['error'][:200]}")
                         if _do_ai_teknis:
                             st.info("🔬 Menjalankan evaluasi Teknis...")
-                            _res_teknis = _heval8.evaluasi_bulk(_ai_jobs, jenis="teknis", model=_ai_eval_model, max_workers=3)
+                            _res_teknis = _heval8.evaluasi_bulk(_ai_jobs, jenis="teknis", model=_ai_eval_model, max_workers=3, engine=_ai_eval_engine)
                             for _rt in _res_teknis:
                                 if _rt["status"] == "ok":
                                     st.success(f"✅ {_rt['nama'][:50]}")
@@ -5112,8 +5185,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 return int(m.group(1)) if m else fallback
 
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl_pk")
-            _pl_rt_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing setelah buat folder", value=False, key="pl_cb_rt_refresh_pk")
-            _pl_extract_teks = st.checkbox("📝 Extract teks kualifikasi (.txt) untuk evaluasi AI — hemat token", value=False, key="pl_cb_extract_teks_pk")
+            _pl_rt_refresh = False
+            _pl_extract_teks = False
             if "pl_cb_isi_excel_pk" not in st.session_state:
                 st.session_state["pl_cb_isi_excel_pk"] = True
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel_pk")
@@ -7514,11 +7587,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
 
                     st.divider()
-                    st.markdown("#### 🤖 Evaluasi AI (Claude Code)")
-                    st.caption("Claude Code baca dokumen di folder paket → output `.md`. Paralel per paket.")
-                    _ai_eval_model_pk = st.selectbox(
+                    st.markdown("#### 🤖 Evaluasi AI")
+                    st.caption("AI baca dokumen di folder paket → output `.md`. Paralel per paket.")
+                    _do_extract_teks8pk = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8pk_do_extract_teks")
+                    _pl8pk_col_engine, _pl8pk_col_model = st.columns(2)
+                    _ai_eval_engine_pk = _pl8pk_col_engine.selectbox(
+                        "Engine AI", ["claude", "codex"],
+                        key="pl8pk_ai_engine",
+                    )
+                    _ai_eval_model_pk = _pl8pk_col_model.selectbox(
                         "Model", ["haiku", "sonnet"],
                         key="pl8pk_ai_model",
+                        disabled=(_ai_eval_engine_pk != "claude"),
                     )
                     _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8pk_do_ai_kual")
                     _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8pk_do_ai_teknis")
@@ -7529,10 +7609,23 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     )
                     if _btn_ai_eval_pk and (_do_ai_kualifikasi_pk or _do_ai_teknis_pk):
                         import ai_evaluator as _heval8pk
+                        if _do_extract_teks8pk:
+                            import extract_teks_kualifikasi as _etk8pk
+                            st.info("📝 Extract teks kualifikasi...")
+                            for _r8pk in _pl8_selected_rows:
+                                try:
+                                    _folder8pk = _heval8pk._folder_paket(_r8pk.get("nomor_urut"), _r8pk.get("nama_paket", ""), jenis_pl="PK", is_ulang=bool(_r8pk.get("is_ulang")))
+                                    if not _folder8pk:
+                                        continue
+                                    _etk_folder8pk = os.path.join(str(_folder8pk), "8. Dokumen Kualifikasi")
+                                    if os.path.isdir(_etk_folder8pk):
+                                        _etk8pk.extract_folder_kualifikasi(_etk_folder8pk)
+                                except Exception as _etk8pk_e:
+                                    st.warning(f"⚠ Extract teks {_r8pk.get('nama_paket','')[:40]}: {_etk8pk_e}")
                         _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi_pk:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
-                            _res_kual_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="kualifikasi", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK")
+                            _res_kual_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="kualifikasi", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK", engine=_ai_eval_engine_pk)
                             for _rk_pk in _res_kual_pk:
                                 if _rk_pk["status"] == "ok":
                                     st.success(f"✅ {_rk_pk['nama'][:50]}")
@@ -7542,7 +7635,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(f"❌ {_rk_pk['nama'][:50]} — {_rk_pk['error'][:200]}")
                         if _do_ai_teknis_pk:
                             st.info("🔬 Menjalankan evaluasi Teknis...")
-                            _res_teknis_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="teknis", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK")
+                            _res_teknis_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="teknis", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK", engine=_ai_eval_engine_pk)
                             for _rt_pk in _res_teknis_pk:
                                 if _rt_pk["status"] == "ok":
                                     st.success(f"✅ {_rt_pk['nama'][:50]}")
@@ -10520,9 +10613,15 @@ Langkah:
 
 Mulai sekarang."""
 
-        _ai_eval_model_t = st.selectbox(
+        _tkual_col_engine, _tkual_col_model = st.columns(2)
+        _ai_eval_engine_t = _tkual_col_engine.selectbox(
+            "Engine AI", ["claude", "codex"],
+            key="tkual_ai_engine",
+        )
+        _ai_eval_model_t = _tkual_col_model.selectbox(
             "Model", ["haiku", "sonnet"],
             key="tkual_ai_model",
+            disabled=(_ai_eval_engine_t != "claude"),
         )
         _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
         _btn_ai_eval_t = st.button(
@@ -10553,7 +10652,7 @@ Mulai sekarang."""
                 def _run_ait(job):
                     try:
                         _prompt = _prompt_evaluasi_tender(job["folder"], job["nama"])
-                        _out = _heval_t._run_evaluator(_prompt, model=_ai_eval_model_t)
+                        _out = _heval_t._run_evaluator(_prompt, model=_ai_eval_model_t, add_dirs=[job["folder"]], engine=_ai_eval_engine_t)
                         return {"nama": job["nama"], "status": "ok", "output": _out, "error": ""}
                     except Exception as _e:
                         return {"nama": job["nama"], "status": "error", "output": "", "error": str(_e)}
@@ -10762,7 +10861,7 @@ Mulai sekarang."""
                     with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
                         try:
                             _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
-                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=st.session_state.get("tkual_ai_model", "claude-haiku-4-5-20251001"))
+                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=st.session_state.get("tkual_ai_model", "claude-haiku-4-5-20251001"), add_dirs=[_gp_folder], engine=st.session_state.get("tkual_ai_engine", "claude"))
                             st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
                             with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
                                 st.markdown(_out_ap[:3000])

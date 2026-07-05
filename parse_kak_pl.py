@@ -426,6 +426,43 @@ def parse_draft_pl(pdf_path: str) -> dict:
     if m_nota:
         out["nomor_nota_dinas"] = m_nota.group(1).strip()
 
+    # Fallback: sebagian paket punya layout kepala-surat "Nomor : ... " SEBELUM
+    # heading "NOTA DINAS" (bukan sesudah) — regex utama di atas nyasar ke nomor
+    # lain yang muncul lebih jauh di isi surat. Cari ulang persis sebelum heading.
+    if not out["nomor_nota_dinas"] or "Tanggal" in out["nomor_nota_dinas"]:
+        # Cari "Nomor : X" yang berjarak dekat (<300 char) SEBELUM heading NOTA
+        # DINAS asli — dokumen draft sering berisi banyak halaman template
+        # placeholder ("Nomor : __________") lebih awal yang harus dilewati.
+        m_nota2 = re.search(
+            r"Nomor\s*:\s*(\S+).{0,250}?NOTA\s+DINAS",
+            teks, re.IGNORECASE | re.DOTALL,
+        )
+        if m_nota2 and "_" not in m_nota2.group(1) and "." * 5 not in m_nota2.group(1):
+            out["nomor_nota_dinas"] = m_nota2.group(1).strip()
+
+    # Nota Dinas sekaligus berfungsi sebagai usulan rekomendasi kalau tidak ada
+    # section "SURAT REKOMENDASI" terpisah (nomor+tanggal sama).
+    if not out["nomor_rekomendasi"] or "Tanggal" in out["nomor_rekomendasi"]:
+        if out["nomor_nota_dinas"]:
+            out["nomor_rekomendasi"] = out["nomor_nota_dinas"]
+    if not out["tgl_rekomendasi"]:
+        m_heading = re.search(r"NOTA\s+DINAS", teks, re.IGNORECASE)
+        m_nota_tgl = None
+        if m_heading:
+            # Ambil kemunculan tanggal ("Kota, D Bulan YYYY") TERDEKAT sebelum
+            # heading — dokumen draft berisi banyak tanggal placeholder lain.
+            for cand in re.finditer(r"[A-Za-z]+,\s*(\d{1,2})\s+(\w+)\s+(\d{4})", teks[:m_heading.start()]):
+                m_nota_tgl = cand
+        if m_nota_tgl:
+            hari = int(m_nota_tgl.group(1))
+            bln = _BULAN.get(m_nota_tgl.group(2).lower())
+            thn = int(m_nota_tgl.group(3))
+            if bln:
+                try:
+                    out["tgl_rekomendasi"] = datetime.date(thn, bln, hari).isoformat()
+                except ValueError:
+                    pass
+
     return out
 
 

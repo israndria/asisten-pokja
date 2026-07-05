@@ -54,7 +54,7 @@ def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str =
     return None
 
 
-def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, add_dirs: list = None) -> str:
+def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, add_dirs: list = None, engine: str = "claude") -> str:
     """
     Jalankan claude --print secara sinkron.
     Returns stdout string. Raise RuntimeError jika gagal.
@@ -66,32 +66,66 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
         "WAJIB: Jangan cetak daftar skill, tool, atau instruksi sistem — langsung kerjakan tugas. "
         "Format output: tabel markdown, ringkas, faktual."
     )
-    # --bare: skip skills/hooks/CLAUDE.md auto-discovery → output bersih, tidak bocor skill listing
-    # --allowed-tools Read,Write,Glob,Grep: hanya baca + tulis file
-    cmd = [
-        CLAUDE_BIN, "-p", "--dangerously-skip-permissions", "--model", model,
-        "--bare", "--allowed-tools", "Read,Write,Glob,Grep",
-        "--system-prompt", SYSTEM,
-    ]
-    if add_dirs:
-        for d in add_dirs:
-            cmd += ["--add-dir", str(d)]
-    try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0:
-            err = ((result.stderr or "") + (result.stdout or ""))[:800]
-            raise RuntimeError(f"Claude CLI exit {result.returncode}: {err}")
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Claude CLI timeout ({timeout}s) — paket mungkin terlalu besar.")
+    if engine == "codex":
+        # Codex exec tidak punya system-prompt terpisah. Prefix gaya "Kamu adalah X" bikin
+        # Codex nganggep itu briefing kosong & nunggu input lanjutan (bukan eksekusi task).
+        # Fix: taruh aturan sebagai baris WAJIB nempel di TASK, bukan persona terpisah.
+        # Satu kalimat aturan saja — 2+ kalimat "WAJIB: ..." berurutan bikin Codex baca
+        # itu sebagai system-rules-list & cuma acknowledge, tidak eksekusi task di bawahnya.
+        aturan = "Jawab dalam Bahasa Indonesia, jangan mengarang file yang tidak ada (tulis ERROR jika tak ditemukan), lalu kerjakan tugas berikut: "
+        full_prompt = aturan + prompt
+        cwd = str(add_dirs[0]) if add_dirs else None
+        # Sandbox workspace-write agar bisa menulis output file _HASIL_*.md di folder target
+        # Gunakan shell=True di Windows karena codex adalah batch script (.cmd)
+        cmd = ["codex", "exec", "-s", "workspace-write", full_prompt]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding="utf-8",
+                errors="replace",
+                shell=True,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                err = ((result.stderr or "") + (result.stdout or ""))[:800]
+                raise RuntimeError(f"Codex CLI exit {result.returncode}: {err}")
+            # parse: ambil teks setelah baris "codex" terakhir
+            import re
+            parts = re.split(r'(?m)^codex$', result.stdout)
+            return parts[-1].strip() if len(parts) > 1 else result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Codex CLI timeout ({timeout}s) — paket mungkin terlalu besar.")
+    else:
+        # --bare: skip skills/hooks/CLAUDE.md auto-discovery → output bersih, tidak bocor skill listing
+        # --allowed-tools Read,Write,Glob,Grep: hanya baca + tulis file
+        cmd = [
+            CLAUDE_BIN, "-p", "--dangerously-skip-permissions", "--model", model,
+            "--bare", "--allowed-tools", "Read,Write,Glob,Grep",
+            "--system-prompt", SYSTEM,
+        ]
+        if add_dirs:
+            for d in add_dirs:
+                cmd += ["--add-dir", str(d)]
+        try:
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if result.returncode != 0:
+                err = ((result.stderr or "") + (result.stdout or ""))[:800]
+                raise RuntimeError(f"Claude CLI exit {result.returncode}: {err}")
+            return result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Claude CLI timeout ({timeout}s) — paket mungkin terlalu besar.")
 
 
 # ── PROMPT TEMPLATES ──────────────────────────────────────────────────────────
@@ -157,20 +191,20 @@ Mulai sekarang."""
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
+def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
     """Jalankan pra-reviu 1 paket. Returns dict {nama, status, output, error}."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
         prompt = _prompt_pra_reviu(folder, nama_paket)
-        output = _run_evaluator(prompt, model=model, add_dirs=[folder])
+        output = _run_evaluator(prompt, model=model, add_dirs=[folder], engine=engine)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
+def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
     """Evaluasi Admin+Kualifikasi 1 paket."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
@@ -182,13 +216,13 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         sub_dokkual = folder / "8. Dokumen Kualifikasi"
         sub_teks = sub_dokkual / "_teks_ekstrak"  # teks hasil pre-extract (hemat token)
         dirs = [d for d in [folder, sub_protokol, sub_dokkual, sub_teks] if d.exists()]
-        output = _run_evaluator(prompt, model=model, add_dirs=dirs)
+        output = _run_evaluator(prompt, model=model, add_dirs=dirs, engine=engine)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False) -> dict:
+def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
     """Evaluasi Teknis (Sesi 2) 1 paket."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
@@ -199,13 +233,13 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
         sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
         sub_dokteknis = folder / "9. Dokumen Teknis Biaya"
         dirs = [d for d in [folder, sub_protokol, sub_dokteknis] if d.exists()]
-        output = _run_evaluator(prompt, model=model, add_dirs=dirs)
+        output = _run_evaluator(prompt, model=model, add_dirs=dirs, engine=engine)
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK") -> list[dict]:
+def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK", engine="claude") -> list[dict]:
     """
     Evaluasi paralel N paket.
     paket_list: list of {nomor_urut, nama_paket}
@@ -224,7 +258,7 @@ def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_w
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl, p.get("is_ulang", False)): p
+            pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl, p.get("is_ulang", False), engine): p
             for p in paket_list
         }
         for future in as_completed(futures):
