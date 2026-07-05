@@ -2913,6 +2913,29 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _gcal_ok = _gcalpl_g.check_gcal_token()
 
                 st.divider()
+                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Cepat"], horizontal=True, key="pljd_mode")
+
+                if _pljd_selected:
+                    st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
+                    _pk_prev = st.selectbox(
+                        "Pilih paket buat preview",
+                        _pljd_selected,
+                        format_func=lambda _p: _p["nama_paket"][:70],
+                        key="pljd_preview_pilih",
+                    )
+                    _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
+                    _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("08:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
+                    _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
+                    _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv) if _pljd_mode == "Cepat" else _jepl.hitung_jadwal_pl(_t1_pv)
+                    for _jd in _jadwal_pv:
+                        _m, _s = _jd["mulai"], _jd["selesai"]
+                        _sama_hari = _m.date() == _s.date()
+                        _txt_mulai = f"{_HARI_NAMA[_m.weekday()]}, {_m.day} {_BULAN_NAMA[_m.month-1]} {_m.strftime('%H:%M')}"
+                        _txt_selesai = _s.strftime('%H:%M') if _sama_hari else f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
+                        with st.container(border=True):
+                            st.write(f"**{_jd['nama']}**  \n{_txt_mulai} → {_txt_selesai}")
+                    st.divider()
+
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
                 _pljd_submit = st.button(
@@ -2942,7 +2965,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _r = _jepl.submit_full_pl(_kp, _t1)
+                            _mode_str = "cepat" if _pljd_mode == "Cepat" else "normal"
+                            _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil.append({
                                 "paket":  _p['nama_paket'][:40],
@@ -2994,7 +3018,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                _mode_str_prev = "cepat" if _pljd_mode == "Cepat" else "normal"
+                                if _mode_str_prev == "cepat":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
+                                else:
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
                                 st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []
@@ -5951,6 +5979,29 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 import gcal_pl_helper as _gcalpl_gpk
                 _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
 
+                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Cepat"], horizontal=True, key="pljd_mode_pk")
+
+                if _pljd_selected:
+                    st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
+                    _pk_prev = st.selectbox(
+                        "Pilih paket buat preview",
+                        _pljd_selected,
+                        format_func=lambda _p: _p["nama_paket"][:70],
+                        key="pljd_preview_pilih_pk",
+                    )
+                    _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
+                    _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("08:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
+                    _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
+                    _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv) if _pljd_mode == "Cepat" else _jepl.hitung_jadwal_pl(_t1_pv)
+                    for _jd in _jadwal_pv:
+                        _m, _s = _jd["mulai"], _jd["selesai"]
+                        _sama_hari = _m.date() == _s.date()
+                        _txt_mulai = f"{_HARI_NAMA[_m.weekday()]}, {_m.day} {_BULAN_NAMA[_m.month-1]} {_m.strftime('%H:%M')}"
+                        _txt_selesai = _s.strftime('%H:%M') if _sama_hari else f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
+                        with st.container(border=True):
+                            st.write(f"**{_jd['nama']}**  \n{_txt_mulai} → {_txt_selesai}")
+                    st.divider()
+
                 st.divider()
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
@@ -5959,7 +6010,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     type="primary",
                     use_container_width=True,
                     disabled=len(_pljd_selected) == 0 or not _gcal_ok_pk,
-                    key="pljd_submit_btn",
+                    key="pljd_submit_btn_pk",
                 )
 
                 if _pljd_submit:
@@ -5981,7 +6032,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _r = _jepl.submit_full_pl(_kp, _t1)
+                            _mode_str = "cepat" if _pljd_mode == "Cepat" else "normal"
+                            _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil.append({
                                 "paket":  _p['nama_paket'][:40],
@@ -6033,7 +6085,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                _mode_str_prev = "cepat" if _pljd_mode == "Cepat" else "normal"
+                                if _mode_str_prev == "cepat":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
+                                else:
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
                                 st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []

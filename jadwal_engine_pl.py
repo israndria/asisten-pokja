@@ -85,11 +85,51 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [
-        {"nama": "Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
-        {"nama": "Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
-        {"nama": "Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
-        {"nama": "Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
-        {"nama": "Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
+        {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "3. Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "4. Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": "5. Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
+    ]
+
+
+def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
+    """
+    Hitung 5 tahap PL cepat. Tayang Senin → Upload s.d. Rabu, Pembukaan Rabu
+    (30 menit), Evaluasi Rabu→Kamis 16:00, Klarifikasi Kamis, Kontrak Jumat+7 hari.
+    Tayang hari selain Senin: tiap checkpoint yang jatuh Sabtu/Minggu digeser
+    maju ke hari kerja terdekat (jam dipertahankan), biar gak ada tahap di
+    hari libur SPSE.
+    - T1: mulai = tgl_mulai, selesai = mulai + 2 hari KALENDER jam sama (geser weekend)
+    - T2: mulai = T1.selesai + 1 menit, selesai = T2.mulai + 30 menit (geser weekend)
+    - T3: mulai = T2.selesai + 1 menit, selesai = hari berikutnya jam 16:00 (geser weekend)
+    - T4: hari sama T3.selesai, jam 09:00 - 15:30
+    - T5: mulai = geser_ke_hari_kerja(T4.selesai + 1 day) jam 09:00, selesai = mulai + 7 hari jam 16:00
+    """
+    t1_mulai = geser_ke_jam_kerja(tgl_mulai)
+    t1_selesai = geser_ke_hari_kerja(t1_mulai + timedelta(days=2))
+
+    t2_mulai = geser_ke_hari_kerja(t1_selesai + timedelta(minutes=1))
+    t2_selesai = geser_ke_hari_kerja(t1_selesai + timedelta(minutes=30))
+
+    t3_mulai = geser_ke_hari_kerja(t2_selesai + timedelta(minutes=1))
+    t3_selesai = geser_ke_hari_kerja(
+        (t2_selesai + timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
+    )
+
+    t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
+    t4_selesai = t3_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
+
+    t5_mulai_kand = t4_selesai + timedelta(days=1)
+    t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=9, minute=0, second=0, microsecond=0)
+    t5_selesai = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return [
+        {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "3. Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "4. Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": "5. Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
     ]
 
 
@@ -215,16 +255,19 @@ def submit_jadwal_pl(kode_paket: str, payload: dict, cookie_str: str = None) -> 
     }
 
 
-def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime) -> dict:
+def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
     """Full flow: scrap → hitung → build payload."""
     scraped = scrap_hidden_fields_pl(kode_paket)
-    jadwal_list = hitung_jadwal_pl(tgl_mulai)
+    if mode == "cepat":
+        jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
+    else:
+        jadwal_list = hitung_jadwal_pl(tgl_mulai)
     payload = build_payload_pl(scraped, jadwal_list)
     return {"scraped": scraped, "jadwal_list": jadwal_list, "payload": payload}
 
 
-def submit_full_pl(kode_paket: str, tgl_mulai: datetime) -> dict:
-    result = auto_fill_jadwal_pl(kode_paket, tgl_mulai)
+def submit_full_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
+    result = auto_fill_jadwal_pl(kode_paket, tgl_mulai, mode=mode)
     cookie = result["scraped"].get("cookie")
     sub = submit_jadwal_pl(kode_paket, result["payload"], cookie_str=cookie)
     result["submit_result"] = sub
