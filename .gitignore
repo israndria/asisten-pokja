@@ -22,3 +22,14 @@ harness_block_log.md
 .paket_cache*.json
 c.txt
 _debug_pilih_penyedia/
+
+# eksperimen root (jangan commit)
+/test_*.py
+/patch_app*.py
+/read_eval*.py
+/temp_*.png
+/mbm_*.txt
+/mbm_*.md
+/mbm_*.png
+secret_spse.txt
+data/pokja.db
