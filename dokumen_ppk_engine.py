@@ -14,10 +14,11 @@ BASE_URL = SPSE_BASE_URL.rstrip("/")
 
 # Endpoint jenis dokumen yang di-track
 ENDPOINTS = {
-    "spek":    "spek",       # KAK / Spesifikasi Teknis
-    "docsskk": "docsskk",   # Rancangan Kontrak (SSUK+SSKK)
-    "ldk":     "ldk",        # Persyaratan Kualifikasi
-    "lainnya": "lainnya",    # Informasi Lainnya
+    "spek":        "spek",         # KAK / Spesifikasi Teknis dan Gambar
+    "docsskk":     "docsskk",      # Rancangan Kontrak
+    "uploaduraian":"uploaduraian", # Uraian Singkat Pekerjaan
+    "ldk":         "ldk",          # Persyaratan Kualifikasi
+    "lainnya":     "lainnya",      # Informasi Lainnya
 }
 
 
@@ -73,15 +74,42 @@ def fetch_dokumen_endpoint(kode_tender: str, jenis: str, cookie_str: str) -> lis
     return hasil
 
 
+def _link_dokumen_dari_edit(kode_tender: str, cookie_str: str) -> dict:
+    """
+    Scrape /lelang/{kode}/edit, ambil href /dokumen/{id}/{jenis} apa adanya.
+    SPSE kadang kasih {id} beda dari kode_tender utama untuk endpoint tertentu
+    (mis. uploaduraian pakai ID paket lama saat tender diulang) — jangan
+    asumsikan id selalu sama dengan kode_tender.
+    Return: {jenis: (id_dokumen, href)}
+    """
+    url = f"{BASE_URL}/lelang/{kode_tender}/edit"
+    hdrs = {**_headers(BASE_URL), "Cookie": cookie_str}
+    try:
+        r = requests.get(url, headers=hdrs, timeout=15)
+        if r.status_code != 200:
+            return {}
+    except Exception:
+        return {}
+    soup = BeautifulSoup(r.text, "html.parser")
+    hasil = {}
+    for a in soup.find_all("a", href=re.compile(r"/dokumen/")):
+        m = re.search(r"/dokumen/(\d+)/(\w+)", a.get("href", ""))
+        if m:
+            hasil[m.group(2)] = m.group(1)
+    return hasil
+
+
 def ambil_snapshot(kode_tender: str) -> dict:
     """
     Fetch semua endpoint → return snapshot dict.
     {jenis: [{"nama":..., "tanggal":..., "url_dl":...}]}
     """
     cookie_str = _get_cookies()
+    id_per_jenis = _link_dokumen_dari_edit(kode_tender, cookie_str)
     snapshot = {}
     for key, jenis in ENDPOINTS.items():
-        snapshot[key] = fetch_dokumen_endpoint(kode_tender, jenis, cookie_str)
+        id_dok = id_per_jenis.get(jenis, kode_tender)
+        snapshot[key] = fetch_dokumen_endpoint(id_dok, jenis, cookie_str)
     return snapshot
 
 
@@ -113,9 +141,11 @@ def cek_update_dokumen(kode_tender: str) -> dict:
 
     # Fetch snapshot terbaru dari SPSE
     cookie_str = _get_cookies()
+    id_per_jenis = _link_dokumen_dari_edit(kode_tender, cookie_str)
     snapshot_baru = {}
     for key, jenis in ENDPOINTS.items():
-        snapshot_baru[key] = fetch_dokumen_endpoint(kode_tender, jenis, cookie_str)
+        id_dok = id_per_jenis.get(jenis, kode_tender)
+        snapshot_baru[key] = fetch_dokumen_endpoint(id_dok, jenis, cookie_str)
 
     berubah = []
     baru = []

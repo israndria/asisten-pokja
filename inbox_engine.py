@@ -12,8 +12,17 @@ import pdfplumber
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 
+import asyncio as _asyncio_top
+import platform as _platform_top
+
 import spse_browser
 from config import sb as _sb
+
+# Windows: set sekali per proses, bukan per-thread — ganti policy berulang
+# dari thread berbeda bikin Proactor child-watcher/pipe global rusak,
+# nyebabin "Connection closed while reading from the driver" di panggilan ke-2+.
+if _platform_top.system() == "Windows":
+    _asyncio_top.set_event_loop_policy(_asyncio_top.WindowsProactorEventLoopPolicy())
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 SUBJEK_DELEGASI = "(LPSE) Pengumuman Delegasi Pokja"
@@ -812,18 +821,15 @@ def download_dokumen_paket(
 ) -> dict:
     """
     Download semua dokumen paket langsung ke folder_tujuan (tanpa subfolder):
-      - Lampiran dari inbox (klik via Playwright)
-      - Dokumen SPSE: spek, docsskk, uploaduraian, lainnya
+      - Lampiran dari inbox (pure requests)
+      - Dokumen SPSE: spek, docsskk, uploaduraian, lainnya (pure requests)
 
     Setelah download, buat 1 PDF gabungan: Draft_Pokja_{kode_pokja}.pdf
-    Butuh Chrome yang sudah login SPSE (CDP port 9222).
+    Butuh cookie dari Chrome SPSE yang aktif.
     Return: {"ok": [...], "skip": [...], "error": [...], "draft_pdf": str}
     """
-    import asyncio
-    import shutil
     import urllib.parse
-    import threading
-    from playwright.async_api import async_playwright
+    import shutil
     from bs4 import BeautifulSoup
 
     def log(msg):
@@ -833,99 +839,193 @@ def download_dokumen_paket(
     hasil = {"ok": [], "skip": [], "error": [], "draft_pdf": ""}
     os.makedirs(folder_tujuan, exist_ok=True)
 
-    async def _run():
-        async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp("http://localhost:9222")
-            ctx = browser.contexts[0]
+    cookie_str = spse_browser.get_spse_cookies()
+    if not cookie_str:
+        log("❌ Cookie SPSE kosong — buka Chrome SPSE dan login ulang dulu.")
+        hasil["error"].append("Cookie SPSE kosong — silakan login di browser")
+        return hasil
 
-            cookies = await ctx.cookies(["https://spse.inaproc.id"])
-            cookie_str = "; ".join(f'{c["name"]}={c["value"]}' for c in cookies)
-            hdrs = {
-                "Cookie": cookie_str,
-                "User-Agent": "Mozilla/5.0",
-                "Referer": f"{BASE_URL}/admin/pegawai/inbox",
-            }
+    hdrs = {
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": f"{BASE_URL}/admin/pegawai/inbox",
+    }
 
-            # Worker page untuk download (reuse agar tidak bolak-balik buka tab baru)
-            worker_page = await ctx.new_page()
-            try:
-                await worker_page.set_viewport_size({"width": 100, "height": 100})
-            except: pass
+    # ════════════════════════════════
+    # 1. Lampiran Inbox
+    # ════════════════════════════════
+    log(f"📨 Lampiran inbox pesan {id_pesan}...")
+    try:
+        url_inbox = f"{BASE_URL}/non-rekanan/inbox/{id_pesan}"
+        r_inbox = requests.get(url_inbox, headers=hdrs, timeout=15)
+        if r_inbox.status_code == 200:
+            soup_inbox = BeautifulSoup(r_inbox.text, "html.parser")
+            lamp_links = soup_inbox.select('a[href*="/dl/"]')
+            total_lamp = len(lamp_links)
+            log(f"  {total_lamp} lampiran ditemukan")
 
-            async def _playwright_download(url: str, dst: str, pg) -> bool:
-                """Download satu file via Playwright goto + expect_download."""
+            # Semua lampiran inbox → subfolder "4. Informasi Lainnya" (on-demand)
+            folder_inbox = os.path.join(folder_tujuan, "4. Informasi Lainnya")
+            if total_lamp > 0:
+                os.makedirs(folder_inbox, exist_ok=True)
+
+            # Kumpulkan semua (url_dl, fname, dst)
+            lamp_items = []
+            for link in lamp_links:
+                fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
+                                   (link.get_text() or ""), flags=re.IGNORECASE).strip()
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
+                href = link.get("href", "") or ""
+                url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
+                dst = _unique_dst(folder_inbox, fname)
+                lamp_items.append((url_dl, fname, dst))
+
+            import concurrent.futures as _cf_dl
+            import threading as _th_dl
+            _hasil_lock = _th_dl.Lock()
+
+            def _dl_one_lamp(args):
+                url_dl, fname, dst = args
                 try:
-                    async with pg.expect_download(timeout=30000) as dl_info:
-                        try:
-                            await pg.goto(url, wait_until="commit")
-                        except Exception:
-                            pass
-                    dl = await dl_info.value
-                    server_fname = urllib.parse.unquote_plus(dl.suggested_filename or "")
-                    if server_fname:
-                        clean = re.sub(r'[<>:"/\\|?*]', "_", server_fname).strip()
-                        dst = os.path.join(os.path.dirname(dst), clean)
-                    tmp = await dl.path()
-                    if tmp:
-                        shutil.copy2(tmp, dst)
-                        return dst
-                    return False
+                    r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
+                    r_dl.raise_for_status()
+                    if "text/html" in r_dl.headers.get("Content-Type", ""):
+                        with _hasil_lock:
+                            hasil["error"].append(f"{fname}: session expired (server return HTML)")
+                        return ("err", f"{fname}: session expired — login ulang")
+                    # Nama file dari Content-Disposition jika ada
+                    cd = r_dl.headers.get("Content-Disposition", "")
+                    m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                    if m_cd:
+                        clean_cd = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
+                        if clean_cd:
+                            dst = os.path.join(os.path.dirname(dst), clean_cd)
+                            dst = _unique_dst(os.path.dirname(dst), os.path.basename(dst))
+                    with open(dst, "wb") as f_out:
+                        for chunk in r_dl.iter_content(65536):
+                            f_out.write(chunk)
+                    with _hasil_lock:
+                        hasil["ok"].append(dst)
+                    return ("ok", os.path.basename(dst))
                 except Exception as e:
-                    raise e
+                    with _hasil_lock:
+                        hasil["error"].append(f"{fname}: {e}")
+                    return ("err", f"{fname}: {e}")
 
-            # ════════════════════════════════
-            # 1. Lampiran Inbox
-            # ════════════════════════════════
-            log(f"📨 Lampiran inbox pesan {id_pesan}...")
+            with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_lamp:
+                futs = {_pool_lamp.submit(_dl_one_lamp, item): item for item in lamp_items}
+                for i, fut in enumerate(_cf_dl.as_completed(futs), 1):
+                    status, msg = fut.result()
+                    icon = "✅" if status == "ok" else "❌"
+                    log(f"  ({i}/{total_lamp}) {icon} {msg}")
+        else:
+            log(f"  ❌ Gagal buka inbox: HTTP {r_inbox.status_code}")
+            hasil["error"].append(f"Inbox: HTTP {r_inbox.status_code}")
+    except Exception as e:
+        log(f"  ❌ Gagal buka inbox: {e}")
+        hasil["error"].append(f"Inbox: {e}")
+
+    # ════════════════════════════════
+    # 2. Dokumen SPSE
+    # ════════════════════════════════
+    log(f"📄 Mencari link dokumen di halaman persiapan...")
+    try:
+        url_edit = f"{BASE_URL}/lelang/{kode_tender}/edit"
+        r_edit = requests.get(url_edit, headers=hdrs, timeout=15)
+        if r_edit.status_code == 200:
+            soup_edit = BeautifulSoup(r_edit.text, "html.parser")
+        else:
+            log(f"  ❌ Gagal buka halaman edit: HTTP {r_edit.status_code}")
+            soup_edit = None
+    except Exception as e:
+        log(f"  ❌ Gagal buka halaman edit: {e}")
+        soup_edit = None
+
+    if soup_edit:
+        links_dok = soup_edit.select("a.list-group-item")
+        targets = []
+        for a in links_dok:
+            txt = a.get_text().lower()
+            href = a.get("href", "")
+            if not href or "/dl/" in href:
+                continue
+            keywords = ["spek", "rancangan kontrak", "uraian singkat", "lainnya", "kak", "spesifikasi"]
+            if any(kw in txt for kw in keywords):
+                label_clean = re.sub(r"\s*\*.*$", "", a.get_text(strip=True)).strip()
+                targets.append({"label": label_clean, "href": href})
+
+        total_bagisan = len(targets)
+        log(f"  Ditemukan {total_bagisan} bagian dokumen")
+
+        def _map_sub(label_txt):
+            """Klasifikasi label section dok SPSE → subfolder rapi."""
+            t = (label_txt or "").lower()
+            if "uraian" in t:
+                return "3. Uraian Singkat Pekerjaan"
+            if "rancangan" in t:
+                return "2. Rancangan Kontrak"
+            if "spek" in t or "kak" in t or "spesifikasi" in t:
+                return "1. KAK & Spesifikasi Teknis"
+            return "4. Informasi Lainnya"
+
+        for idx, target in enumerate(targets, 1):
+            url_sec = f"https://spse.inaproc.id{target['href']}" if target['href'].startswith("/") else target['href']
+            log(f"[{idx}/{total_bagisan}] 📂 Membuka {target['label']}...")
+            folder_sec = os.path.join(folder_tujuan, _map_sub(target['label']))
             try:
-                await worker_page.goto(
-                    f"{BASE_URL}/non-rekanan/inbox/{id_pesan}",
-                    wait_until="networkidle", timeout=20000,
-                )
-                lamp_links = await worker_page.query_selector_all('a[href*="/dl/"]')
-                total_lamp = len(lamp_links)
-                log(f"  {total_lamp} lampiran ditemukan")
+                hdrs_sec = {**hdrs, "Referer": url_edit}
+                r_sec = requests.get(url_sec, headers=hdrs_sec, timeout=15)
+                if r_sec.status_code == 403:
+                    continue
+                r_sec.raise_for_status()
+                soup_sec = BeautifulSoup(r_sec.text, "html.parser")
 
-                # Semua lampiran inbox → subfolder "4. Informasi Lainnya" (on-demand)
-                folder_inbox = os.path.join(folder_tujuan, "4. Informasi Lainnya")
-                if total_lamp > 0:
-                    os.makedirs(folder_inbox, exist_ok=True)
+                # Scan link file sub-dokumen dari table#files
+                tbl = soup_sec.find("table", id="files")
+                if not tbl:
+                    tbl = soup_sec.find("table", class_="table")
 
-                # Kumpulkan semua (href, fname) dulu — async, lalu download parallel via requests
-                lamp_items = []
-                for link in lamp_links:
+                file_links = []
+                if tbl:
+                    file_links = tbl.select("a[href*='/dl/']")
+
+                num_f = len(file_links)
+                if num_f > 0:
+                    os.makedirs(folder_sec, exist_ok=True)
+
+                # Kumpulkan href+fname, lalu download parallel via requests
+                spse_items = []
+                for fi, link in enumerate(file_links, 1):
                     fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
-                                       (await link.text_content() or ""), flags=re.IGNORECASE).strip()
-                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or "lampiran"
-                    href = await link.get_attribute("href") or ""
-                    url_dl = f"https://spse.inaproc.id{href}" if href.startswith("/") else href
-                    dst = _unique_dst(folder_inbox, fname)
-                    lamp_items.append((url_dl, fname, dst))
+                                       (link.get_text() or ""), flags=re.IGNORECASE).strip()
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_{fi}"
+                    href_spse = link.get("href", "") or ""
+                    url_spse = f"https://spse.inaproc.id{href_spse}" if href_spse.startswith("/") else href_spse
+                    dst = _unique_dst(folder_sec, fname)
+                    spse_items.append((url_spse, fname, dst))
 
                 import concurrent.futures as _cf_dl
                 import threading as _th_dl
                 _hasil_lock = _th_dl.Lock()
 
-                def _dl_one_lamp(args):
-                    url_dl, fname, dst = args
+                def _dl_one_spse(args, _folder_sec=folder_sec):
+                    url_spse, fname, dst = args
                     try:
-                        r_dl = requests.get(url_dl, headers=hdrs, timeout=30, stream=True)
-                        r_dl.raise_for_status()
-                        if "text/html" in r_dl.headers.get("Content-Type", ""):
+                        r_spse = requests.get(url_spse, headers=hdrs, timeout=30, stream=True)
+                        r_spse.raise_for_status()
+                        if "text/html" in r_spse.headers.get("Content-Type", ""):
                             with _hasil_lock:
                                 hasil["error"].append(f"{fname}: session expired (server return HTML)")
                             return ("err", f"{fname}: session expired — login ulang")
-                        # Nama file dari Content-Disposition jika ada
-                        cd = r_dl.headers.get("Content-Disposition", "")
-                        m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
-                        if m_cd:
-                            clean_cd = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
-                            if clean_cd:
-                                dst = os.path.join(os.path.dirname(dst), clean_cd)
-                                dst = _unique_dst(os.path.dirname(dst), os.path.basename(dst))
-                        with open(dst, "wb") as f_out:
-                            for chunk in r_dl.iter_content(65536):
-                                f_out.write(chunk)
+                        cd = r_spse.headers.get("Content-Disposition", "")
+                        m_cd2 = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                        if m_cd2:
+                            clean_cd2 = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd2.group(1).strip())).strip()
+                            if clean_cd2:
+                                dst = _unique_dst(_folder_sec, clean_cd2)
+                        with open(dst, "wb") as f_out2:
+                            for chunk in r_spse.iter_content(65536):
+                                f_out2.write(chunk)
                         with _hasil_lock:
                             hasil["ok"].append(dst)
                         return ("ok", os.path.basename(dst))
@@ -934,141 +1034,19 @@ def download_dokumen_paket(
                             hasil["error"].append(f"{fname}: {e}")
                         return ("err", f"{fname}: {e}")
 
-                with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_lamp:
-                    futs = {_pool_lamp.submit(_dl_one_lamp, item): item for item in lamp_items}
-                    for i, fut in enumerate(_cf_dl.as_completed(futs), 1):
-                        status, msg = fut.result()
-                        icon = "✅" if status == "ok" else "❌"
-                        log(f"  ({i}/{total_lamp}) {icon} {msg}")
+                with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_spse:
+                    futs2 = {_pool_spse.submit(_dl_one_spse, item): item for item in spse_items}
+                    for fi2, fut2 in enumerate(_cf_dl.as_completed(futs2), 1):
+                        status2, msg2 = fut2.result()
+                        icon2 = "✅" if status2 == "ok" else "❌"
+                        log(f"  ({fi2}/{num_f}) {icon2} {msg2}")
             except Exception as e:
-                log(f"  ❌ Gagal buka inbox: {e}")
-                hasil["error"].append(f"Inbox: {e}")
+                log(f"  ❌ Error: {e}")
+                hasil["error"].append(f"{target['label']}: {e}")
+    else:
+        log("  ❌ Lewati scan dokumen")
 
-
-            # ════════════════════════════════
-            # 2. Dokumen SPSE
-            # ════════════════════════════════
-            log(f"📄 Mencari link dokumen di halaman persiapan...")
-            try:
-                await worker_page.goto(f"{BASE_URL}/lelang/{kode_tender}/edit", wait_until="networkidle", timeout=20000)
-                edit_html = await worker_page.content()
-                soup_edit = BeautifulSoup(edit_html, "html.parser")
-            except Exception as e:
-                log(f"  ❌ Gagal buka halaman edit: {e}")
-                soup_edit = None
-
-            if soup_edit:
-                links_dok = soup_edit.select("a.list-group-item")
-                targets = []
-                for a in links_dok:
-                    txt = a.get_text().lower()
-                    href = a.get("href", "")
-                    if not href or "/dl/" in href: continue
-                    keywords = ["spek", "rancangan kontrak", "uraian singkat", "lainnya", "kak", "spesifikasi"]
-                    if any(kw in txt for kw in keywords):
-                        label_clean = re.sub(r"\s*\*.*$", "", a.get_text(strip=True)).strip()
-                        targets.append({"label": label_clean, "href": href})
-                
-                total_bagisan = len(targets)
-                log(f"  Ditemukan {total_bagisan} bagian dokumen")
-
-                def _map_sub(label_txt):
-                    """Klasifikasi label section dok SPSE → subfolder rapi."""
-                    t = (label_txt or "").lower()
-                    if "uraian" in t: return "3. Uraian Singkat Pekerjaan"
-                    if "rancangan" in t: return "2. Rancangan Kontrak"
-                    if "spek" in t or "kak" in t or "spesifikasi" in t: return "1. KAK & Spesifikasi Teknis"
-                    return "4. Informasi Lainnya"
-
-                for idx, target in enumerate(targets, 1):
-                    url_sec = f"https://spse.inaproc.id{target['href']}" if target['href'].startswith("/") else target['href']
-                    log(f"[{idx}/{total_bagisan}] 📂 Membuka {target['label']}...")
-                    folder_sec = os.path.join(folder_tujuan, _map_sub(target['label']))
-                    try:
-                        r = requests.get(url_sec, headers=hdrs, timeout=15)
-                        if r.status_code == 403: continue
-                        r.raise_for_status()
-                        soup = BeautifulSoup(r.text, "html.parser")
-                        # Navigasi ke halaman section via Playwright agar link /dl/ punya session aktif
-                        await worker_page.goto(url_sec, wait_until="networkidle", timeout=20000)
-                        pw_links = await worker_page.query_selector_all(
-                            "table#files a[href*='/dl/'], table.table a[href*='/dl/']"
-                        )
-                        num_f = len(pw_links)
-                        if num_f > 0:
-                            os.makedirs(folder_sec, exist_ok=True)
-                        # Kumpulkan href+fname async, lalu download parallel via requests
-                        spse_items = []
-                        for fi, link in enumerate(pw_links, 1):
-                            fname_raw = re.sub(r"\s*-\s*\d+\s*[KkMm][Bb]\s*$", "",
-                                               (await link.text_content() or ""), flags=re.IGNORECASE).strip()
-                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname_raw).strip() or f"file_{fi}"
-                            href_spse = await link.get_attribute("href") or ""
-                            url_spse = f"https://spse.inaproc.id{href_spse}" if href_spse.startswith("/") else href_spse
-                            dst = _unique_dst(folder_sec, fname)
-                            spse_items.append((url_spse, fname, dst))
-
-                        def _dl_one_spse(args, _folder_sec=folder_sec):
-                            url_spse, fname, dst = args
-                            try:
-                                r_spse = requests.get(url_spse, headers=hdrs, timeout=30, stream=True)
-                                r_spse.raise_for_status()
-                                if "text/html" in r_spse.headers.get("Content-Type", ""):
-                                    with _hasil_lock:
-                                        hasil["error"].append(f"{fname}: session expired (server return HTML)")
-                                    return ("err", f"{fname}: session expired — login ulang")
-                                cd = r_spse.headers.get("Content-Disposition", "")
-                                m_cd2 = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
-                                if m_cd2:
-                                    clean_cd2 = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd2.group(1).strip())).strip()
-                                    if clean_cd2:
-                                        dst = _unique_dst(_folder_sec, clean_cd2)
-                                with open(dst, "wb") as f_out2:
-                                    for chunk in r_spse.iter_content(65536):
-                                        f_out2.write(chunk)
-                                with _hasil_lock:
-                                    hasil["ok"].append(dst)
-                                return ("ok", os.path.basename(dst))
-                            except Exception as e:
-                                with _hasil_lock:
-                                    hasil["error"].append(f"{fname}: {e}")
-                                return ("err", f"{fname}: {e}")
-
-                        with _cf_dl.ThreadPoolExecutor(max_workers=4) as _pool_spse:
-                            futs2 = {_pool_spse.submit(_dl_one_spse, item): item for item in spse_items}
-                            for fi2, fut2 in enumerate(_cf_dl.as_completed(futs2), 1):
-                                status2, msg2 = fut2.result()
-                                icon2 = "✅" if status2 == "ok" else "❌"
-                                log(f"  ({fi2}/{num_f}) {icon2} {msg2}")
-                    except Exception as e:
-                        log(f"  ❌ Error: {e}")
-                        hasil["error"].append(f"{target['label']}: {e}")
-            else:
-                log("  ❌ Lewati scan dokumen")
-
-            await worker_page.close()
-            log("🏁 Proses download dokumen selesai.")
-
-    import concurrent.futures
-
-    def _run_in_thread():
-        if st_ctx:
-            from streamlit.runtime.scriptrunner import add_script_run_ctx
-            add_script_run_ctx(threading.current_thread(), st_ctx)
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_run())
-        finally:
-            loop.close()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(_run_in_thread).result()
-
-    # ════════════════════════════════
-    # 3. Gabung semua jadi 1 PDF Draft
-    # ════════════════════════════════
+    log("🏁 Proses download dokumen selesai.")
     import glob as _glob2
     label = f"Pokja_{kode_pokja}" if kode_pokja else "Draft"
     _draft_ppk_dir = os.path.join(folder_tujuan, "0. Draft Dokumen PPK")

@@ -8011,29 +8011,44 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
 
         # Helper: jalankan aksi (download / HPS / penawaran) untuk 1 paket. Return list log.
         def _jalankan_aksi_tender(kode_tender, id_pesan, kode_pokja, target_path,
-                                  do_dl, do_hps, do_pen, st_ctx=None, log=None):
+                                  do_dl, do_hps, do_pen, st_ctx=None, log=None, line_cb=None):
             log = log if log is not None else []
+            def _append(m, _l=log):
+                _l.append(m)
+                if line_cb:
+                    line_cb()
             # Download dokumen SPSE
             if do_dl and id_pesan and kode_tender:
-                try:
-                    _dh = inbox_engine.download_dokumen_paket(
-                        kode_tender, str(id_pesan), target_path,
-                        kode_pokja=kode_pokja or "",
-                        progress_cb=lambda m, _l=log: _l.append(m),
-                        st_ctx=st_ctx,
-                    )
-                    _cdp_gagal = not _dh["ok"] and not _dh.get("draft_pdf")
-                    if _cdp_gagal:
-                        log.append("❌ Brave CDP tidak aktif — buka Brave lalu ulangi")
-                    else:
-                        log.append(
-                            f"📎 Download: ✅{len(_dh['ok'])} file"
-                            + (f" | Draft: {_os.path.basename(_dh['draft_pdf'])}" if _dh.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
+                for _dl_attempt in (1, 2):
+                    try:
+                        _dh = inbox_engine.download_dokumen_paket(
+                            kode_tender, str(id_pesan), target_path,
+                            kode_pokja=kode_pokja or "",
+                            progress_cb=_append,
+                            st_ctx=st_ctx,
                         )
-                    for _e in _dh.get("error", []):
-                        log.append(f"  ❌ {_e}")
-                except Exception as _e:
-                    log.append(f"❌ Download error: {_e}")
+                        _cdp_gagal = not _dh["ok"] and not _dh.get("draft_pdf")
+                        if _cdp_gagal:
+                            log.append("❌ Brave CDP tidak aktif — buka Brave lalu ulangi")
+                        else:
+                            log.append(
+                                f"📎 Download: ✅{len(_dh['ok'])} file"
+                                + (f" | Draft: {_os.path.basename(_dh['draft_pdf'])}" if _dh.get('draft_pdf') else " | ⚠ Draft tidak terbuat")
+                            )
+                        for _e in _dh.get("error", []):
+                            log.append(f"  ❌ {_e}")
+                        break
+                    except Exception as _e:
+                        _cdp_putus = "connection closed" in str(_e).lower() or "target page" in str(_e).lower()
+                        if _cdp_putus and _dl_attempt == 1:
+                            log.append(f"⚠ CDP terputus, tunggu 2 detik lalu retry... ({_e})")
+                            import time as _time_retry
+                            _time_retry.sleep(2)
+                            continue
+                        import traceback as _tb_dl
+                        log.append(f"❌ Download error: {_e}")
+                        log.append(f"   Traceback: {_tb_dl.format_exc()[-500:]}")
+                        break
             # Scrape HPS → Excel
             _xl = _cari_xlsm_tender(target_path) if (do_hps or do_pen) else None
             if do_hps and kode_tender:
@@ -8269,6 +8284,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 _bp["kode_tender"], _bp.get("id_pesan"), _bp.get("kode_pokja"),
                                 _bp_target, _t_cb_dl, _t_cb_hps, False,
                                 st_ctx=_ctx_bulk, log=_paket_log,
+                                line_cb=_line_cb,
                             )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Isi @ Master Data Excel via COM
@@ -8295,7 +8311,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     _sub_map0 = {
                                         "spek": "1. KAK & Spesifikasi Teknis",
                                         "docsskk": "2. Rancangan Kontrak",
-                                        "ldk": "3. Uraian Singkat Pekerjaan",
+                                        "uploaduraian": "3. Uraian Singkat Pekerjaan",
+                                        "ldk": "8. Dokumen Kualifikasi",
                                         "lainnya": "4. Informasi Lainnya",
                                     }
                                     for _it0 in _items_baru0:
@@ -8306,6 +8323,10 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                         if os.path.exists(_src0):
                                             os.makedirs(os.path.dirname(_dst0), exist_ok=True)
                                             shutil.move(_src0, _dst0)
+                                    # Snapshot awal: "File Baru/" cuma arsip sementara, tidak relevan (belum ada histori revisi)
+                                    _folder_baru0 = os.path.join(_bp_target, "File Baru")
+                                    if os.path.isdir(_folder_baru0):
+                                        shutil.rmtree(_folder_baru0, ignore_errors=True)
                                     _paket_log.append(
                                         f"📥 Dok PPK: ✅{len(_dl_awal['ok'])} file"
                                         + (f", ❌{len(_dl_awal['error'])}" if _dl_awal["error"] else "")
