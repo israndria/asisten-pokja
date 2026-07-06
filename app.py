@@ -63,6 +63,9 @@ _TENDER_SELESAI_KW = (
 
 def _is_tender_selesai(p: dict) -> bool:
     """True jika paket Tender sudah di tahap akhir (Masa Sanggah / Penunjukan / Penandatanganan)."""
+    status_tahap = str(p.get("status_tahap") or "").lower()
+    if status_tahap:
+        return any(k in status_tahap for k in _TENDER_SELESAI_KW)
     status = str(p.get("status") or "").lower()
     return any(k in status for k in _TENDER_SELESAI_KW)
 
