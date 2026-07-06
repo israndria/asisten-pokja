@@ -133,6 +133,41 @@ def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
     ]
 
 
+def hitung_jadwal_pl_standar(tgl_mulai: datetime) -> list[dict]:
+    """
+    Hitung 5 tahap PL mode Standar. Sama pola dengan mode Cepat, tapi T1
+    selesai +3 hari KALENDER (bukan +2), jadi tiap tahap mundur 1 hari.
+    Tayang Senin → Upload s.d. Kamis, Pembukaan Kamis, Evaluasi Kamis→Jumat
+    16:00, Klarifikasi Jumat, Kontrak mulai Jumat (hari sama, +1 menit
+    setelah Klarifikasi selesai) s.d. +7 hari jam 16:00.
+    """
+    t1_mulai = geser_ke_jam_kerja(tgl_mulai)
+    t1_selesai = geser_ke_hari_kerja(t1_mulai + timedelta(days=3))
+
+    t2_mulai = geser_ke_hari_kerja(t1_selesai + timedelta(minutes=1))
+    t2_selesai = geser_ke_hari_kerja(t1_selesai + timedelta(minutes=30))
+
+    t3_mulai = geser_ke_hari_kerja(t2_selesai + timedelta(minutes=1))
+    t3_selesai = geser_ke_hari_kerja(
+        (t2_selesai + timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
+    )
+
+    t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
+    t4_selesai = t3_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
+
+    # T5 mulai hari SAMA dengan T4 selesai (bukan geser ke hari kerja berikutnya)
+    t5_mulai = t4_selesai + timedelta(minutes=1)
+    t5_selesai = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return [
+        {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "3. Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "4. Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": "5. Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Scrape form fields PL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +295,8 @@ def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "norma
     scraped = scrap_hidden_fields_pl(kode_paket)
     if mode == "cepat":
         jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
+    elif mode == "standar":
+        jadwal_list = hitung_jadwal_pl_standar(tgl_mulai)
     else:
         jadwal_list = hitung_jadwal_pl(tgl_mulai)
     payload = build_payload_pl(scraped, jadwal_list)

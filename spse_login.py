@@ -475,6 +475,8 @@ async def _gemini_captcha_attempt(page, password: str, log_fn=None) -> bool:
 
 async def _retry_captcha_async(password: str, log_fn=None) -> bool:
     """Hanya isi ulang password + captcha di halaman /loginpass yang sudah terbuka."""
+    import spse_browser as _sb
+
     def _log(msg):
         if log_fn:
             log_fn(msg)
@@ -542,6 +544,7 @@ async def _retry_captcha_async(password: str, log_fn=None) -> bool:
 
 def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
+    import spse_browser as _sb
     _, password = _get_creds(role)
     return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
 
