@@ -604,6 +604,24 @@ label, .stCheckbox label, .stRadio label,
 [data-testid="stAlert"] p {
     color: #D4D4D4 !important;
 }
+/* Compact file uploader: hilang teks helper, dropzone kecil */
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    padding: 0.25rem 0.5rem !important;
+    min-height: 0 !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] {
+    padding: 0 !important;
+}
+[data-testid="stBaseButton-secondary"][data-testid*="FileUploader"],
+[data-testid="stFileUploader"] button {
+    padding: 0.15rem 0.5rem !important;
+    font-size: 0.8rem !important;
+    min-height: 0 !important;
+}
 /* Fix: warning box — amber border biar beda dari bg */
 [data-testid="stAlert"][data-baseweb="notification"] {
     border-left: 4px solid #CCA700 !important;

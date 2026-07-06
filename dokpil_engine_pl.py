@@ -185,12 +185,11 @@ def build_izin_usaha_jkk(sbu_baru: str, sbu_lama: str) -> list[dict]:
         {
             "jenis_izin": "Izin Usaha di bidang Jasa Konsultansi Konstruksi",
             "klasifikasi": (
-                "Memiliki perizinan berusaha di bidang Jasa Konsultansi Konstruksi. "
-                "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi "
-                "(untuk Badan Usaha yang memiliki SBU KBLI 2020); "
+                "Memiliki izin berusaha di bidang Jasa Konsultansi Konstruksi; "
+                "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi; "
                 "b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum terverifikasi, "
                 "peserta menyampaikan NIB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS "
-                "yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi"
+                "yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi;"
             ),
         },
         {
