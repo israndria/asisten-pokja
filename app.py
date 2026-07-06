@@ -7854,19 +7854,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 # ============================================================
 # MODE: TENDER
 # ============================================================
-tab0, tab9, tab8, tab_setup, tab7, tab_kual, tab_apendo, tab_ba = st.tabs([
+_TENDER_TAB_LABELS = [
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
     "5️⃣ Download Kualifikasi", "6️⃣ Dokumen Penawaran",
     "7️⃣ Upload & Cetak 5 BA",
-])
+]
+_tender_active_tab = st.radio("Tab Tender", _TENDER_TAB_LABELS, horizontal=True, key="tender_active_tab")
 
 # ============================================================
 # Tab 0: Persiapan Draft Paket
 # ============================================================
 
-with tab0:
+if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
     import inbox_engine
     import os as _os, subprocess as _sp
     from config import POKJA_ROOT as _POKJA_ROOT, TENDER_ROOT as _TENDER_ROOT
@@ -8088,11 +8089,26 @@ with tab0:
             value=True,
             key="t_hide_done_chk",
         )
+        def _tender_tahun_cocok(_r):
+            _npp = str(_r.get("nomor_pp") or "")
+            if _npp:
+                return _tahun_skrg in _npp
+            # nomor_pp belum keisi (surat PP belum ada) → anggap baru HANYA jika
+            # diambil_pada masih segar (bukan bulk-import historis, bisa "tahun ini" palsu)
+            _dp = str(_r.get("diambil_pada") or "")
+            try:
+                _dp_dt = datetime.fromisoformat(_dp.replace("Z", "+00:00"))
+                if _dp_dt.tzinfo is not None:
+                    _dp_dt = _dp_dt.replace(tzinfo=None)
+                return (datetime.now() - _dp_dt).days <= 14
+            except (ValueError, TypeError):
+                return False
+
         _rows_valid = [
             _r for _r in _draft_rows
             if _r.get("nama_tender")
             and not str(_r.get("kode_tender", "")).startswith("_err_")
-            and _tahun_skrg in str(_r.get("nomor_pp") or "")
+            and _tender_tahun_cocok(_r)
             and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
         ]
         if _t_done_n and not _t_show_done:
@@ -8556,7 +8572,7 @@ with tab0:
 # Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
 # ============================================================
 
-with tab_setup:
+if _tender_active_tab == "3️⃣ Setup Paket":
     # ── Layout 2 kolom: kiri = pilih paket + upload dokpil, kanan = konfigurasi ─
     _sp_col_kiri, _sp_col_kanan = st.columns([2, 3])
 
@@ -8959,7 +8975,7 @@ with tab_setup:
 # Tab 4: Pemberian Penjelasan (v2 — auto-post sapaan via GCal)
 # ============================================================
 
-with tab7:
+if _tender_active_tab == "4️⃣ Pemberian Penjelasan":
     # ── Layout 2 kolom: kiri = pilih paket, kanan = isi pembukaan ───────
     _pj_col_kiri, _pj_col_kanan = st.columns([2, 3])
 
@@ -9171,7 +9187,7 @@ with tab7:
 # Tab 8: Auto-Fill Jadwal
 # ============================================================
 
-with tab8:
+if _tender_active_tab == "2️⃣ Buat Jadwal":
 
     _libur_map = _LIBUR_MAP
 
@@ -9523,7 +9539,7 @@ except Exception as e:
 # Tab 9: Kirim Undangan
 # ============================================================
 
-with tab9:
+if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
     # ── Layout 2 kolom: kiri = pilih paket, kanan = detail undangan ─────────
     _kp_col_list, _kp_col_detail = st.columns([3, 2])
 
@@ -9855,7 +9871,7 @@ with tab9:
 
 # ============================================================
 
-with tab_ba:
+if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
 
     ba_selected = []
 
@@ -10135,7 +10151,7 @@ with tab_ba:
 # Tab 6: Download Dokumen Kualifikasi
 # ============================================================
 
-with tab_kual:
+if _tender_active_tab == "5️⃣ Download Kualifikasi":
     # ── Auto-fetch paket dari Supabase (tanpa CDP/Chrome) ────────────────────
     if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
         try:
@@ -10773,7 +10789,7 @@ Mulai sekarang."""
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
 
-with tab_apendo:
+if _tender_active_tab == "6️⃣ Dokumen Penawaran":
     import pindah_penawaran_engine as _pe
 
     st.markdown("### Dokumen Penawaran")
