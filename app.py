@@ -1945,12 +1945,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 st.error("Folder tidak ditemukan.")
                             else:
                                 _pr_dl_logs = []
-                                _pr_dl_bar = st.status("🔽 Mengunduh...", expanded=True)
-                                _pr_dl_area = _pr_dl_bar.empty()
-                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_bar):
-                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.update(label=f"🔽 {msg[:50]}")
-                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb)
-                                _pr_dl_bar.update(label=f"✅ {len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error", state="complete", expanded=False)
+                                _pr_dl_label = st.empty()
+                                _pr_dl_area = st.empty()
+                                _pr_dl_label.markdown("🔽 **Mengunduh...**")
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_label):
+                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.markdown(f"🔽 **{msg[:50]}**")
+                                pl_engine.buat_subfolder_dokumen(_pr_dl_root)
+                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb, force_clean=True)
+                                _pr_dl_label.markdown(f"✅ **{len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error**")
                                 _pr_kak_p = parse_kak_pl.cari_kak_di_folder(_pr_dl_root)
                                 if _pr_kak_p:
                                     _pr_kak_d = parse_kak_pl.parse_kak(_pr_kak_p)
@@ -1959,12 +1961,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
                                         st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
                                 try:
-                                    import hps_engine as _hps_pr_dl
-                                    _pr_xl_dl = _cari_xlsm_pl(_pr_dl_root)
-                                    if _pr_xl_dl:
-                                        _hps_pr_dl.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl_dl)
-                                except Exception:
-                                    pass
+                                    _pr_dl_src = _template_dir_pl_jkk(_pr, _TEMPLATE_DIR_PL) if _pr_jenis != "PK" else _TEMPLATE_DIR_PL_PK
+                                    _pr_xl_logs = _proses_excel_paket_pl(
+                                        _pr_dl_root, _pr_kode, _pr_jenis, True,
+                                        _pr_dl_src, _TEMPLATE_DIR_PL_PK,
+                                    )
+                                    st.code("\n".join(_pr_xl_logs))
+                                except Exception as _pr_xl_e:
+                                    st.warning(f"⚠ Refresh Excel: {_pr_xl_e}")
+                                _load_draft_pl_cached.clear()
                                 st.rerun()
                         if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
                             import hps_engine as _hps_pr
@@ -5119,12 +5124,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 st.error("Folder tidak ditemukan.")
                             else:
                                 _pr_dl_logs = []
-                                _pr_dl_bar = st.status("🔽 Mengunduh...", expanded=True)
-                                _pr_dl_area = _pr_dl_bar.empty()
-                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_bar):
-                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.update(label=f"🔽 {msg[:50]}")
-                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb)
-                                _pr_dl_bar.update(label=f"✅ {len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error", state="complete", expanded=False)
+                                _pr_dl_label = st.empty()
+                                _pr_dl_area = st.empty()
+                                _pr_dl_label.markdown("🔽 **Mengunduh...**")
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_label):
+                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.markdown(f"🔽 **{msg[:50]}**")
+                                pl_engine.buat_subfolder_dokumen(_pr_dl_root)
+                                _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb, force_clean=True)
+                                _pr_dl_label.markdown(f"✅ **{len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error**")
                                 _pr_kak_p = parse_kak_pl.cari_kak_di_folder(_pr_dl_root)
                                 if _pr_kak_p:
                                     _pr_kak_d = parse_kak_pl.parse_kak(_pr_kak_p)
@@ -5133,12 +5140,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
                                         st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
                                 try:
-                                    import hps_engine as _hps_pr_dl
-                                    _pr_xl_dl = _cari_xlsm_pl(_pr_dl_root)
-                                    if _pr_xl_dl:
-                                        _hps_pr_dl.scrape_hps_pl_ke_excel(_pr_kode, _pr_xl_dl)
-                                except Exception:
-                                    pass
+                                    _pr_dl_src = _template_dir_pl_jkk(_pr, _TEMPLATE_DIR_PL) if _pr_jenis != "PK" else _TEMPLATE_DIR_PL_PK
+                                    _pr_xl_logs = _proses_excel_paket_pl(
+                                        _pr_dl_root, _pr_kode, _pr_jenis, True,
+                                        _pr_dl_src, _TEMPLATE_DIR_PL_PK,
+                                    )
+                                    st.code("\n".join(_pr_xl_logs))
+                                except Exception as _pr_xl_e:
+                                    st.warning(f"⚠ Refresh Excel: {_pr_xl_e}")
+                                _load_draft_pl_cached.clear()
                                 st.rerun()
                         if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
                             import hps_engine as _hps_pr

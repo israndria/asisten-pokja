@@ -430,13 +430,16 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
         except Exception as e:
             print(f"Warning: Gagal tulis MD HPS: {e}")
 
-        # Upsert uraian_singkat_pk ke Supabase (untuk PK konstruksi)
+        # Upsert uraian_singkat_pk ke Supabase (HANYA untuk PK konstruksi, bukan JKK)
         try:
-            uraian = _build_uraian_singkat_pk(hasil["items"], excel_path)
-            if uraian:
-                from config import sb as _sb
-                _sb().table("draft_paket_pl").update({"uraian_singkat": uraian}).eq("kode_paket", kode_paket).execute()
-                r["uraian_singkat"] = uraian
+            from config import sb as _sb
+            _row = _sb().table("draft_paket_pl").select("jenis_pl").eq("kode_paket", kode_paket).limit(1).execute()
+            _jenis = (_row.data[0].get("jenis_pl") or "").upper() if _row.data else ""
+            if _jenis == "PK":
+                uraian = _build_uraian_singkat_pk(hasil["items"], excel_path)
+                if uraian:
+                    _sb().table("draft_paket_pl").update({"uraian_singkat": uraian}).eq("kode_paket", kode_paket).execute()
+                    r["uraian_singkat"] = uraian
         except Exception as e:
             print(f"Warning: Gagal upsert uraian_singkat: {e}")
 

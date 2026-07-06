@@ -836,19 +836,26 @@ SUBFOLDER_DOK_PPK = {
 
 
 def buat_subfolder_dokumen(folder_paket: str) -> list:
-    """Buat semua subfolder dokumen di folder_paket. Return list subfolder yang baru dibuat."""
+    """Buat semua subfolder dokumen di folder_paket (0-9, selaras setup_paket_baru.py).
+    Return list subfolder yang baru dibuat."""
     dibuat = []
-    subfolder_unik = list(dict.fromkeys(SUBFOLDER_DOK_PPK.values()))
-    for sub in subfolder_unik:
+    _semua_subfolder = [
+        "0. Draft Dokumen PPK",
+        "1. KAK & Spesifikasi Teknis",
+        "2. Rancangan Kontrak",
+        "3. Uraian Singkat Pekerjaan",
+        "4. Informasi Lainnya",
+        "5. Evaluator Kualifikasi & Teknis",
+        "6. BA Reviu Lengkap",
+        "7. Berita Acara + Summary Non Tender",
+        "8. Dokumen Kualifikasi",
+        "9. Dokumen Teknis Biaya",
+    ]
+    for sub in _semua_subfolder:
         p = os.path.join(folder_paket, sub)
         if not os.path.isdir(p):
             os.makedirs(p, exist_ok=True)
             dibuat.append(sub)
-    for extra in ["5. Evaluator Kualifikasi & Teknis"]:
-        p = os.path.join(folder_paket, extra)
-        if not os.path.isdir(p):
-            os.makedirs(p, exist_ok=True)
-            dibuat.append(extra)
     return dibuat
 
 
