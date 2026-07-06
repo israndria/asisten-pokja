@@ -4,6 +4,7 @@ import os
 import glob as _glob_mod
 import pathlib
 import re
+import shutil
 import sys
 import threading
 import time
@@ -8222,7 +8223,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             _ku_val = _bp.get("kode_unik")
                             if _ku_val:
                                 try:
-                                    _sb_client.table("tender").update(
+                                    from config import sb as _sb_ku
+                                    _sb_ku().table("tender").update(
                                         {"kode_unik": _ku_val}
                                     ).eq("kode_tender", _bp["kode_tender"]).execute()
                                     _paket_log.append(f"🔑 Kode unik: {_ku_val}")
@@ -8273,14 +8275,43 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk)
                             _paket_log.extend(_excel_t_logs)
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
-                            # Snapshot dokumen PPK
+                            # Snapshot dokumen PPK + download awal (folder baru = semua file dianggap "baru")
                             try:
                                 import dokumen_ppk_engine as _dpk
                                 _snap = _dpk.ambil_snapshot(_bp["kode_tender"])
                                 _dpk.simpan_snapshot(_bp["kode_tender"], _snap)
-                                _paket_log.append(f"📸 Snapshot PPK: {sum(len(v) for v in _snap.values())} file")
+                                _n_snap = sum(len(v) for v in _snap.values())
+                                _paket_log.append(f"📸 Snapshot PPK: {_n_snap} file")
+                                if _n_snap:
+                                    _items_baru0 = [
+                                        {"jenis": _jk, **_f}
+                                        for _jk, _fl in _snap.items() for _f in _fl
+                                    ]
+                                    _dl_awal = _dpk.download_update_dokumen(
+                                        _bp["kode_tender"], _bp_target, [], _items_baru0, {},
+                                        progress_cb=lambda m, _l=_paket_log: _l.append(m),
+                                    )
+                                    # Pindah dari root ke subfolder sesuai jenis dokumen
+                                    _sub_map0 = {
+                                        "spek": "1. KAK & Spesifikasi Teknis",
+                                        "docsskk": "2. Rancangan Kontrak",
+                                        "ldk": "3. Uraian Singkat Pekerjaan",
+                                        "lainnya": "4. Informasi Lainnya",
+                                    }
+                                    for _it0 in _items_baru0:
+                                        _fn0 = re.sub(r'[<>:"/\\|?*]', "_", _it0["nama"]).strip()
+                                        _src0 = os.path.join(_bp_target, _fn0)
+                                        _sub0 = _sub_map0.get(_it0["jenis"], "4. Informasi Lainnya")
+                                        _dst0 = os.path.join(_bp_target, _sub0, _fn0)
+                                        if os.path.exists(_src0):
+                                            os.makedirs(os.path.dirname(_dst0), exist_ok=True)
+                                            shutil.move(_src0, _dst0)
+                                    _paket_log.append(
+                                        f"📥 Dok PPK: ✅{len(_dl_awal['ok'])} file"
+                                        + (f", ❌{len(_dl_awal['error'])}" if _dl_awal["error"] else "")
+                                    )
                             except Exception as _se:
-                                _paket_log.append(f"⚠ Snapshot gagal: {_se}")
+                                _paket_log.append(f"⚠ Snapshot/download gagal: {_se}")
                         else:
                             _fail += 1
                             _paket_log.append(f"❌ Gagal buat folder: {_r2.stderr[:100]}")
@@ -8300,13 +8331,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     except Exception:
                         pass
 
-                _bulk_status_line.empty()
-                _bulk_status.update(label=f"✅ {_ok} folder berhasil, ❌ {_fail} gagal", state="complete", expanded=False)
-                with st.expander("📋 Log detail per paket", expanded=_fail > 0):
-                    for _nf, _logs in _bulk_semua_log.items():
-                        st.markdown(f"**{_nf[:70]}**")
-                        st.code("\n".join(_logs))
-                st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil dibuat"
+                _bulk_status.update(label=f"✅ {_ok} folder berhasil, ❌ {_fail} gagal", state="complete", expanded=True)
+                st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil, {_fail} gagal"
+                st.session_state["_folder_bulk_log"] = dict(_bulk_semua_log)
                 st.rerun()
         else:
             st.info("Semua paket tahun ini sudah punya folder.")
@@ -8317,6 +8344,32 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 key="t_btn_buat_terpilih_empty",
                 type="primary",
             )
+
+        if st.session_state.get("_folder_bulk_log"):
+            st.success(f"✅ Hasil terakhir: {st.session_state.get('_folder_bulk_created', '')}")
+            with st.expander("📋 Log detail per paket (hasil terakhir)", expanded=True):
+                for _nf, _logs in st.session_state["_folder_bulk_log"].items():
+                    st.markdown(f"**{_nf[:70]}**")
+                    st.code("\n".join(_logs))
+                if st.button("Tutup log", key="t_btn_tutup_log_bulk"):
+                    st.session_state["_folder_bulk_log"] = None
+                    st.rerun()
+
+        st.divider()
+        if st.button("↩️ Reset Status Folder", key="t_btn_reset_folder", use_container_width=True):
+            _opsi_reset_t = {r.get("kode_tender"): r for r in _rows_valid if r.get("folder_dibuat") and r.get("kode_tender")}
+            if _opsi_reset_t:
+                from config import sb as _sb_reset_t
+                _kodes_reset_t = list(_opsi_reset_t.keys())
+                try:
+                    _sb_reset_t().table("draft_paket").update({"folder_dibuat": None}).in_("kode_tender", _kodes_reset_t).execute()
+                    st.success(f"✅ {len(_kodes_reset_t)} paket berhasil direset.")
+                except Exception as _er_t:
+                    st.error(f"Reset gagal: {_er_t}")
+                _load_draft_paket_cached.clear()
+                st.rerun()
+            else:
+                st.info("Tidak ada paket dengan status folder untuk direset.")
 
         # ── Cek Semua Dokumen PPK (batch) ── (Dipindah ke sini agar selalu di bawah seksi 2)
         st.divider()
