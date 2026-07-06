@@ -435,8 +435,11 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
                 )
 
                 # Kode Pokja: "Diteruskan Kepada Pokja Pemilihan : 335"
+                # Bisa juga:
+                # "Diteruskan Kepada Pokja Pemilihan :
+                # 016"
                 hasil["kode_pokja"] = _re_extract(
-                    r"Pokja Pemilihan\s*:\s*(\d+)", txt1
+                    r"Pokja Pemilihan\s*:?\s*\n*\s*(\d{1,4})\b", txt1
                 )
 
                 # Nomor Surat Dinas: "Nomor Surat : 72-L4/KAB-TAPIN/DPUPR-BM/IX/2024"
