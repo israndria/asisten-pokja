@@ -3858,7 +3858,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        _paket_berfolder_umum = [r for r in _pp_rows if r.get("kode_paket") and r.get("folder_dibuat")]
         if not _paket_berfolder_umum:
             st.info("Tidak ada paket berfolder yang bisa diumumkan.")
         else:
@@ -6937,7 +6937,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum_pk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+        _paket_berfolder_umum_pk = [r for r in _pp_rows if r.get("kode_paket") and r.get("folder_dibuat")]
         if not _paket_berfolder_umum_pk:
             st.info("Tidak ada paket berfolder yang bisa diumumkan.")
         else:
