@@ -516,6 +516,29 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None):
     return logs
 
 
+_TENDER_EXCLUDE_KODES = {
+    "10096884000",  # legacy 2025 Hatungun; jangan muncul/terbuat lagi di Tab 0 2026
+}
+
+
+def _nomor_folder_tertinggi_tender(output_base: str) -> int:
+    """Scan disk sebagai guard jika nomor_urut Supabase stale/duplikat."""
+    import re as _re
+    try:
+        names = os.listdir(output_base)
+    except Exception:
+        return 0
+    max_no = 0
+    for name in names:
+        path = os.path.join(output_base, name)
+        if not os.path.isdir(path):
+            continue
+        m = _re.match(r"^\s*(\d+)\.", name)
+        if m:
+            max_no = max(max_no, int(m.group(1)))
+    return max_no
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -7945,6 +7968,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                         st.success(f"{len(hasil['data'])} paket diproses.")
                     else:
                         _st.warning("Tidak ada pesan Delegasi Pokja baru.")
+                    _load_draft_paket_cached.clear()
                 except Exception as e:
                     st.error(f"Gagal serap inbox: {e}")
 
@@ -7961,6 +7985,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
+                    _load_draft_paket_cached.clear()
                 st.toast("✅ Data paket SPSE tersinkronkan!", icon="🔄")
                 st.success(f"Draft: {len(_gd_r.get('paket',[]))} paket | Aktif: {len(_ga_r.get('paket',[]))} paket")
 
@@ -8127,6 +8152,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             _r for _r in _draft_rows
             if _r.get("nama_tender")
             and not str(_r.get("kode_tender", "")).startswith("_err_")
+            and str(_r.get("kode_tender", "")) not in _TENDER_EXCLUDE_KODES
             and _tender_tahun_cocok(_r)
             and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
         ]
@@ -8134,7 +8160,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             st.caption(f"🔒 {_t_done_n} paket selesai (Masa Sanggah/Penunjukan/Penandatanganan) disembunyikan — centang di atas untuk tampilkan.")
         _rows_belum = [
             _r for _r in _rows_valid
-            if not _r.get("folder_dibuat") or not _t_hide_done
+            if not _r.get("folder_dibuat")
         ]
         # Filter rows_sudah: sembunyikan paket selesai kecuali _t_show_done
         _rows_sudah = [
@@ -8144,7 +8170,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
         ]
 
         # Plan nama folder per paket belum-folder (auto-nomor)
-        _max_urut = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
+        _max_urut_db = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
+        _max_urut_disk = _nomor_folder_tertinggi_tender(_TENDER_ROOT)
+        _max_urut = max(_max_urut_db, _max_urut_disk)
         _t_plan, _ctr = {}, _max_urut
         import kode_unik_engine as _ku_engine
         for _r in sorted(_rows_belum, key=lambda x: x.get("diambil_pada") or ""):
