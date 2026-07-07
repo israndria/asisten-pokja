@@ -791,6 +791,13 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         inp = soup.find("input", {"name": "authenticityToken"})
         return inp["value"] if inp else ""
 
+    def _nama_key(s: str) -> str:
+        return _re.sub(r"\s+", " ", (s or "").upper().replace(".", " ")).strip()
+
+    def _nama_tanpa_prefix(s: str) -> str:
+        stop = {"CV", "PT", "UD", "TB", "FA", "FIRMA", "KOPERASI"}
+        return " ".join(w for w in _nama_key(s).split() if w and w not in stop)
+
     # Siapkan NPWP dalam 2 format
     npwp_fmt = _format_npwp_15(npwp)
     npwp_digits = "".join(c for c in npwp if c.isdigit())
@@ -845,6 +852,30 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         if target_idx is None and len(rekanan_data) == 1:
             target_idx = list(rekanan_data.keys())[0]
             search_mode = "npwp_single"
+
+    # Fallback: search by nama. Penting untuk NPWP 16 placeholder/NIK-like yang
+    # tidak terdaftar persis di DB rekanan SPSE, tapi nama penyedia tersedia.
+    if target_idx is None and nama_penyedia:
+        nama_cari = _nama_tanpa_prefix(nama_penyedia)
+        if nama_cari:
+            url_search_nama = f"{url_form}?search=true&nama={_up.quote(nama_cari)}&npwp=&jenisIjin="
+            r2 = sess.get(url_search_nama, timeout=45)
+            if r2.status_code == 200:
+                soup2 = _BS(r2.text, "html.parser")
+                csrf = csrf or _get_csrf(soup2)
+                rekanan_data = _parse_rekanan(soup2)
+                target_nama = _nama_key(nama_penyedia)
+                target_nama_strip = _nama_tanpa_prefix(nama_penyedia)
+                for idx, d in rekanan_data.items():
+                    nama_db = _nama_key(d.get("rkn_nama", ""))
+                    nama_db_strip = _nama_tanpa_prefix(d.get("rkn_nama", ""))
+                    if nama_db == target_nama or nama_db_strip == target_nama_strip:
+                        target_idx = idx
+                        search_mode = "nama_exact"
+                        break
+                if target_idx is None and len(rekanan_data) == 1:
+                    target_idx = list(rekanan_data.keys())[0]
+                    search_mode = "nama_single"
 
     # Fallback: GET form saja untuk CSRF jika search NPWP tidak menghasilkan rekanan
     if not csrf:
