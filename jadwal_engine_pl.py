@@ -96,15 +96,16 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
 def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung 5 tahap PL cepat. Tayang Senin → Upload s.d. Rabu, Pembukaan Rabu
-    (30 menit), Evaluasi Rabu→Kamis 16:00, Klarifikasi Kamis, Kontrak Jumat+7 hari.
+    (30 menit), Evaluasi Rabu→Kamis 16:00, Klarifikasi Kamis, Kontrak mulai
+    hari sama +7 hari kalender.
     Tayang hari selain Senin: tiap checkpoint yang jatuh Sabtu/Minggu digeser
     maju ke hari kerja terdekat (jam dipertahankan), biar gak ada tahap di
     hari libur SPSE.
     - T1: mulai = tgl_mulai, selesai = mulai + 2 hari KALENDER jam sama (geser weekend)
     - T2: mulai = T1.selesai + 1 menit, selesai = T2.mulai + 30 menit (geser weekend)
-    - T3: mulai = T2.selesai + 1 menit, selesai = hari berikutnya jam 16:00 (geser weekend)
-    - T4: hari sama T3.selesai, jam 09:00 - 15:30
-    - T5: mulai = geser_ke_hari_kerja(T4.selesai + 1 day) jam 09:00, selesai = mulai + 7 hari jam 16:00
+    - T3: mulai = T2.selesai + 1 menit, selesai = T4.selesai + 30 menit (hari sama T4, geser weekend)
+    - T4: hari berikutnya dari T2 (geser weekend), jam 08:30 - 13:00
+    - T5: mulai = T3.selesai + 30 menit (hari sama, no geser), selesai = mulai + 7 hari jam 16:00
     """
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
     t1_selesai = geser_ke_hari_kerja(t1_mulai + timedelta(days=2))
@@ -113,16 +114,16 @@ def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
     t2_selesai = geser_ke_hari_kerja(t1_selesai + timedelta(minutes=30))
 
     t3_mulai = geser_ke_hari_kerja(t2_selesai + timedelta(minutes=1))
-    t3_selesai = geser_ke_hari_kerja(
-        (t2_selesai + timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
-    )
+    t4_hari = geser_ke_hari_kerja(t2_selesai + timedelta(days=1))
 
-    t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
-    t4_selesai = t3_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
+    t4_mulai = t4_hari.replace(hour=8, minute=30, second=0, microsecond=0)
+    t4_selesai = t4_hari.replace(hour=13, minute=0, second=0, microsecond=0)
 
-    t5_mulai_kand = t4_selesai + timedelta(days=1)
-    t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=9, minute=0, second=0, microsecond=0)
-    t5_selesai = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
+    t3_selesai = t4_selesai + timedelta(minutes=30)
+
+    t5_mulai = t3_selesai + timedelta(minutes=30)
+    t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
+    t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [
         {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
