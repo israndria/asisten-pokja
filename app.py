@@ -539,6 +539,26 @@ def _nomor_folder_tertinggi_tender(output_base: str) -> int:
     return max_no
 
 
+def _simpan_tanggal_undangan_dpp(kode_tender: str, tgl_ba_reviu, tgl_kirim) -> tuple[bool, str]:
+    """Simpan tanggal hasil kirim undangan DPP ke Supabase.
+
+    Kolom baru perlu ada lebih dulu:
+    - tgl_ba_reviu_dpp
+    - tgl_kirim_undangan_dpp
+    """
+    if not kode_tender:
+        return False, "kode_tender kosong"
+    try:
+        from config import sb as _sb_tgl_dpp
+        _sb_tgl_dpp().table("draft_paket").update({
+            "tgl_ba_reviu_dpp": tgl_ba_reviu.isoformat() if hasattr(tgl_ba_reviu, "isoformat") else str(tgl_ba_reviu),
+            "tgl_kirim_undangan_dpp": tgl_kirim.isoformat() if hasattr(tgl_kirim, "isoformat") else str(tgl_kirim),
+        }).eq("kode_tender", str(kode_tender)).execute()
+        return True, "tanggal tersimpan"
+    except Exception as e:
+        return False, str(e)[:180]
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -9847,11 +9867,19 @@ if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
                             lampiran_nama=_lamp_nama,
                         )
 
+                        _tgl_save_ok, _tgl_save_msg = False, "-"
+                        if res["sukses"]:
+                            _tgl_save_ok, _tgl_save_msg = _simpan_tanggal_undangan_dpp(
+                                paket["kode"], _tgl_acara, _tgl_kirim
+                            )
+
                         hasil_list.append({
                             "pokja": f"Pokja {_kode_pokja.zfill(3)}",
                             "nama": paket["nama"],
+                            "tgl_ba": _tgl_acara.strftime("%d-%m-%Y"),
                             "pdf": "✅" if gen_res["sukses"] else f"❌ {gen_res['pesan']}",
                             "kirim": "✅" if res["sukses"] else f"❌ {res['pesan']}",
+                            "supabase": "✅" if _tgl_save_ok else ("-" if not res["sukses"] else f"⚠️ {_tgl_save_msg}"),
                         })
 
                     progress.empty()
@@ -9869,8 +9897,10 @@ if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
                         column_config={
                             "pokja": st.column_config.TextColumn("Pokja", width="small"),
                             "nama":  st.column_config.TextColumn("Nama Paket", width="large"),
+                            "tgl_ba": st.column_config.TextColumn("Tanggal BA", width="small"),
                             "pdf":   st.column_config.TextColumn("PDF", width="small"),
                             "kirim": st.column_config.TextColumn("Kirim", width="small"),
+                            "supabase": st.column_config.TextColumn("Supabase", width="small"),
                         },
                         hide_index=True,
                     )
