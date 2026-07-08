@@ -1,14 +1,15 @@
 """
 undangan_pdf_engine.py — Generate PDF Undangan Reviu DPP via Word COM.
 
-Flow: copy template .docx → replace placeholder teks → export PDF via Word COM.
-Template: Paket Experiment/4. Undangan Full PK - Template.docx
+Flow: copy template Word → replace placeholder teks → export PDF via Word COM.
+Template: Paket Experiment/8. Lampiran Undangan Full PK.docx
 Data dari Supabase draft_paket + input user (tanggal, hari_tgl_rapat, pukul, tempat).
 """
 
 import os
 import re
 import shutil
+import tempfile
 from datetime import date
 from typing import Optional
 
@@ -18,7 +19,8 @@ _BULAN = ["Januari","Februari","Maret","April","Mei","Juni",
           "Juli","Agustus","September","Oktober","November","Desember"]
 _HARI  = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"]
 
-_TEMPLATE_REL    = r"Paket Experiment\4. Undangan Full PK - Template.docx"
+_TEMPLATE_REL    = r"Paket Experiment\8. Lampiran Undangan Full PK.docx"
+_TEMPLATE_REL_FALLBACK = r"Paket Experiment\8. Lampiran Undangan Full PK.docm"
 _TEMPLATE_REL_PL = (
     r"Paket Experiment - Pengadaan Langsung"
     r"\Development - PL - JKK\4. Undangan Full PLJK - Template.docx"
@@ -45,6 +47,16 @@ def _title_case_dinas(nama: str) -> str:
 def _build_nomor_surat(kode_pokja: str, kode_unik: str, tahun: int) -> str:
     no = str(int(kode_pokja)).zfill(2) if kode_pokja.isdigit() else "01"
     return f"000.3.3/{no}/Pokja{kode_pokja.zfill(3)}/T/Reviu-{kode_unik}/{tahun}"
+
+
+def _nama_pekerjaan_tender(data: dict) -> str:
+    nama = str(data.get("nama_tender") or "").strip()
+    if nama:
+        return nama
+    folder = str(data.get("folder_dibuat") or "").strip()
+    folder = re.sub(r"^\s*\d+\.\s*", "", folder)
+    folder = re.sub(r"\s+-\s+Pokja\s+\d+\s*$", "", folder, flags=re.IGNORECASE)
+    return folder
 
 
 def _replace_all(doc: docx.Document, placeholder: str, value: str):
@@ -79,8 +91,22 @@ def _replace_all(doc: docx.Document, placeholder: str, value: str):
         doc.element.body.append(child)
 
 
-def _export_pdf_via_word(docx_path: str, pdf_path: str) -> None:
-    """Export .docx ke PDF via Word COM (ExportAsFixedFormat)."""
+def _replace_word_com(doc, replacements: dict) -> None:
+    for placeholder, value in replacements.items():
+        find = doc.Content.Find
+        find.ClearFormatting()
+        find.Replacement.ClearFormatting()
+        find.Execute(
+            FindText=str(placeholder),
+            ReplaceWith=str(value),
+            Replace=2,  # wdReplaceAll
+            Forward=True,
+            Wrap=1,  # wdFindContinue
+        )
+
+
+def _export_pdf_via_word(docx_path: str, pdf_path: str, replacements: dict | None = None) -> None:
+    """Export Word document ke PDF via Word COM (ExportAsFixedFormat)."""
     import win32com.client
     import pythoncom
     pythoncom.CoInitialize()
@@ -93,6 +119,8 @@ def _export_pdf_via_word(docx_path: str, pdf_path: str) -> None:
             ReadOnly=False,
             AddToRecentFiles=False,
         )
+        if replacements:
+            _replace_word_com(doc, replacements)
         # Matikan gridlines agar tidak ikut ter-print ke PDF
         try:
             word.ActiveWindow.DisplayGridLines = False
@@ -175,12 +203,15 @@ def generate_undangan_pdf(
     # ── Template path ──
     template_path = os.path.join(POKJA_ROOT, _TEMPLATE_REL)
     if not os.path.isfile(template_path):
+        template_path = os.path.join(POKJA_ROOT, _TEMPLATE_REL_FALLBACK)
+    if not os.path.isfile(template_path):
         return {"sukses": False, "pdf_path": "", "pdf_bytes": b"",
                 "pesan": f"Template tidak ditemukan: {template_path}"}
 
     # ── Susun nilai placeholder ──
     nama_dinas   = _title_case_dinas(data.get("nama_dinas", ""))
     nama_tender  = data.get("nama_tender", "")
+    nama_pekerjaan = _nama_pekerjaan_tender(data)
     kode_pokja   = data.get("kode_pokja", "001")
     kode_unik    = data.get("kode_unik") or "DPP"
     nomor_sd     = data.get("nomor_surat_dinas", "")
@@ -208,25 +239,38 @@ def generate_undangan_pdf(
         "«ACARA»":            f"Reviu Dokumen Persiapan Pengadaan {nama_tender}",
         "«TEMPAT»":           tempat_rapat or tempat_default,
         "«NAMA_POKJA»":       kode_pokja.zfill(3),
+        "«Nama_Pekerjaan»":   nama_pekerjaan,
+        "«Sumber_Dana»":      data.get("sumber_anggaran") or "APBD",
+        "«Jangka_Waktu_Pelaksanaan»": data.get("jangka_waktu") or "-",
+        "«Referensi_HPS»":    data.get("referensi_hps") or "Dokumen HPS PPK",
     }
 
-    # ── Copy template → tmp docx → replace → export PDF ──
+    # ── Copy template → tmp Word file → replace → export PDF ──
     # Simpan tmp di folder output agar Word COM tidak anggap read-only
     output_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(output_dir, exist_ok=True)
-    tmp_docx = os.path.join(output_dir, f"_tmp_undangan_{os.getpid()}.docx")
+    tmp_ext = os.path.splitext(template_path)[1] or ".docx"
+    fd, tmp_docx = tempfile.mkstemp(prefix="_tmp_undangan_", suffix=tmp_ext, dir=output_dir)
+    os.close(fd)
     try:
         shutil.copy2(template_path, tmp_docx)
 
-        doc = docx.Document(tmp_docx)
-        for ph, val in replacements.items():
-            _replace_all(doc, ph, str(val))
-        doc.save(tmp_docx)
+        if tmp_ext.lower() == ".docm":
+            _export_pdf_via_word(
+                os.path.abspath(tmp_docx),
+                os.path.abspath(output_path),
+                replacements,
+            )
+        else:
+            doc = docx.Document(tmp_docx)
+            for ph, val in replacements.items():
+                _replace_all(doc, ph, str(val))
+            doc.save(tmp_docx)
 
-        _export_pdf_via_word(
-            os.path.abspath(tmp_docx),
-            os.path.abspath(output_path),
-        )
+            _export_pdf_via_word(
+                os.path.abspath(tmp_docx),
+                os.path.abspath(output_path),
+            )
     except Exception as e:
         return {"sukses": False, "pdf_path": output_path, "pdf_bytes": b"",
                 "pesan": f"Gagal generate PDF: {e}"}
