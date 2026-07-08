@@ -197,6 +197,7 @@ def generate_undangan_pdf(
             folder_abs = folder_rel if os.path.isabs(folder_rel) else os.path.join(TENDER_ROOT, folder_rel)
         else:
             folder_abs = TENDER_ROOT
+        folder_abs = os.path.join(folder_abs, "0. Draft Dokumen PPK")
         safe_kode = re.sub(r'[\\/]', '-', kode_tender)
         output_path = os.path.join(folder_abs, f"Undangan_{safe_kode}.pdf")
 

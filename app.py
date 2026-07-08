@@ -559,6 +559,30 @@ def _simpan_tanggal_undangan_dpp(kode_tender: str, tgl_ba_reviu, tgl_kirim) -> t
         return False, str(e)[:180]
 
 
+def _generate_lampiran_undangan_dpp_preview(kode_tender: str) -> tuple[bool, str]:
+    """Generate PDF lampiran DPP lokal saat folder Tender baru dibuat.
+
+    Tanggal/jam hanya preview; saat kirim undangan, PDF digenerate ulang dari input final Tab 1.
+    """
+    try:
+        import undangan_pdf_engine as _upe_tender
+        _tgl = datetime.now().date()
+        _hari_tgl = f"{_HARI_NAMA[_tgl.weekday()]}, {_tgl.day} {_BULAN_NAMA[_tgl.month-1]} {_tgl.year}"
+        _res = _upe_tender.generate_undangan_pdf(
+            kode_tender=kode_tender,
+            tanggal_kirim=_tgl,
+            hari_tgl_rapat=_hari_tgl,
+            pukul_rapat="09.00 s.d. 11.00 Wita",
+            tempat_rapat=kirimpesan_engine.DEFAULT_TEMPAT,
+            output_path=None,
+        )
+        if _res.get("sukses"):
+            return True, os.path.basename(_res.get("pdf_path") or "")
+        return False, _res.get("pesan", "gagal generate lampiran")
+    except Exception as e:
+        return False, str(e)[:180]
+
+
 st.set_page_config(
     page_title="Asisten Pokja",
     page_icon="🤖",
@@ -8301,6 +8325,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     "PROTOKOL_EVALUASI_AI.md",
                                     "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
                                 ]
+                                _t_draft_eval_files = [
+                                    "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md",
+                                ]
                                 _t_eval_copied = []
                                 _t_eval_src_dir = os.path.join(_POKJA_ROOT, "_SOP Evaluator")
                                 for _tef in _t_eval_files:
@@ -8309,6 +8336,13 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                         _t_eval_dir = os.path.join(_bp_target, "5. Evaluator Kualifikasi & Teknis")
                                         os.makedirs(_t_eval_dir, exist_ok=True)
                                         _t_shutil.copy2(_tef_src, os.path.join(_t_eval_dir, _tef))
+                                        _t_eval_copied.append(_tef)
+                                for _tef in _t_draft_eval_files:
+                                    _tef_src = os.path.join(_t_eval_src_dir, _tef)
+                                    if os.path.isfile(_tef_src):
+                                        _t_draft_dir = os.path.join(_bp_target, "0. Draft Dokumen PPK")
+                                        os.makedirs(_t_draft_dir, exist_ok=True)
+                                        _t_shutil.copy2(_tef_src, os.path.join(_t_draft_dir, _tef))
                                         _t_eval_copied.append(_tef)
                                 if _t_eval_copied:
                                     _paket_log.append(f"📄 Evaluator: {len(_t_eval_copied)} file disalin")
@@ -8338,6 +8372,11 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             # Isi @ Master Data Excel via COM
                             _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk)
                             _paket_log.extend(_excel_t_logs)
+                            _bulk_status_line.code("\n".join(_paket_log[-10:]))
+                            _lamp_ok, _lamp_msg = _generate_lampiran_undangan_dpp_preview(_bp["kode_tender"])
+                            _paket_log.append(
+                                f"📎 Lampiran DPP: {_lamp_msg}" if _lamp_ok else f"⚠ Lampiran DPP: {_lamp_msg}"
+                            )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Snapshot dokumen PPK + download awal (folder baru = semua file dianggap "baru")
                             try:
