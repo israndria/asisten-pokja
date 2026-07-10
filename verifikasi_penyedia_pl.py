@@ -115,6 +115,7 @@ def kirim_verifikasi(
     id_nontender: str,
     waktu_start: str,
     waktu_end: str,
+    kode_paket: Optional[str] = None,
     tempat: str = TEMPAT_DEFAULT,
     yang_harus_hadir: str = YANG_HARUS_HADIR_DEFAULT,
     yang_harus_dibawa: str = YANG_HARUS_DIBAWA_DEFAULT,
@@ -124,7 +125,8 @@ def kirim_verifikasi(
     POST kirim undangan verifikasi penyedia PL ke SPSE.
 
     Args:
-        id_nontender: kolom 0 dt/paketpp (bukan kode_paket)
+        id_nontender: ID peserta dari tabel evaluasi (bukan ID paket di draft_paket_pl)
+        kode_paket: kode paket resmi, dipakai untuk update status DB
         waktu_start: "DD-MM-YYYY HH:MM"
         waktu_end: "DD-MM-YYYY HH:MM"
         cookie_str: dari spse_browser.get_spse_cookies() — jika None, auto-fetch
@@ -179,10 +181,15 @@ def kirim_verifikasi(
             try:
                 from datetime import datetime, timezone
                 from config import sb as _sb_f
-                _sb_f().table("draft_paket_pl").update({
+                _q = _sb_f().table("draft_paket_pl").update({
                     "tgl_undangan_verifikasi": datetime.now(timezone.utc).isoformat(),
                     "status_undangan_verifikasi": "terkirim",
-                }).eq("id_nontender", id_nontender).execute()
+                })
+                if kode_paket:
+                    _q = _q.eq("kode_paket", kode_paket)
+                else:
+                    _q = _q.eq("id_nontender", id_nontender)
+                _q.execute()
             except Exception:
                 pass
             return {"ok": True, "msg": "Undangan verifikasi berhasil terkirim", "status_code": r.status_code}

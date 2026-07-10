@@ -4116,15 +4116,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.error("Waktu mulai dan selesai wajib diisi.")
                         else:
                                 import verifikasi_penyedia_pl as _vpl_batch
+                                import evaluasi_admin_kualifikasi_pl as _eval_verif_batch
                                 _hasil_batch = []
                                 _prog = st.progress(0, text="Mengirim...")
                                 for _bi2, _bp2 in enumerate(_batch_selected):
                                     _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
-                                    _res = _vpl_batch.kirim_verifikasi(
-                                        id_nontender=_bp2["id_nontender"],
-                                        waktu_start=_batch_start,
-                                        waktu_end=_batch_end,
-                                    )
+                                    _peserta_res = _eval_verif_batch.scrape_peserta_evaluasi(_bp2["kode_paket"])
+                                    if not _peserta_res.get("ok") or not _peserta_res.get("peserta"):
+                                        _res = {"ok": False, "msg": _peserta_res.get("pesan", "Peserta tidak ditemukan")}
+                                    else:
+                                        _hasil_peserta = []
+                                        for _peserta in _peserta_res["peserta"]:
+                                            _hasil_peserta.append(_vpl_batch.kirim_verifikasi(
+                                                id_nontender=_peserta["id_nontender"],
+                                                kode_paket=_bp2["kode_paket"],
+                                                waktu_start=_batch_start,
+                                                waktu_end=_batch_end,
+                                            ))
+                                        _res = {
+                                            "ok": all(_r.get("ok") for _r in _hasil_peserta),
+                                            "msg": "; ".join(_r.get("msg", "") for _r in _hasil_peserta),
+                                        }
                                     _hasil_batch.append({
                                         "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
                                         "nama": _bp2["nama_paket"][:40],
@@ -7216,15 +7228,27 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.error("Waktu mulai dan selesai wajib diisi.")
                         else:
                                 import verifikasi_penyedia_pl as _vpl_batch
+                                import evaluasi_admin_kualifikasi_pl as _eval_verif_batch
                                 _hasil_batch = []
                                 _prog = st.progress(0, text="Mengirim...")
                                 for _bi2, _bp2 in enumerate(_batch_selected):
                                     _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
-                                    _res = _vpl_batch.kirim_verifikasi(
-                                        id_nontender=_bp2["id_nontender"],
-                                        waktu_start=_batch_start,
-                                        waktu_end=_batch_end,
-                                    )
+                                    _peserta_res = _eval_verif_batch.scrape_peserta_evaluasi(_bp2["kode_paket"])
+                                    if not _peserta_res.get("ok") or not _peserta_res.get("peserta"):
+                                        _res = {"ok": False, "msg": _peserta_res.get("pesan", "Peserta tidak ditemukan")}
+                                    else:
+                                        _hasil_peserta = []
+                                        for _peserta in _peserta_res["peserta"]:
+                                            _hasil_peserta.append(_vpl_batch.kirim_verifikasi(
+                                                id_nontender=_peserta["id_nontender"],
+                                                kode_paket=_bp2["kode_paket"],
+                                                waktu_start=_batch_start,
+                                                waktu_end=_batch_end,
+                                            ))
+                                        _res = {
+                                            "ok": all(_r.get("ok") for _r in _hasil_peserta),
+                                            "msg": "; ".join(_r.get("msg", "") for _r in _hasil_peserta),
+                                        }
                                     _hasil_batch.append({
                                         "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
                                         "nama": _bp2["nama_paket"][:40],
