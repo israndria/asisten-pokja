@@ -96,6 +96,9 @@ import dokpil_engine_plpk as _depl_pk
 import upload_dokpil_pl as _udpl
 import kualifikasi_engine_pl as _ke_pl_jkk
 import kualifikasi_engine_plpk as _ke_pl_pk
+# Alias resolver default dipakai lintas Tab 6/7/8. Jangan hanya didefinisikan
+# di blok render Tab 6 karena user bisa langsung membuka Tab 7/8.
+_ke_pl = _ke_pl_jkk
 import kualifikasi_parser_pl as _kp_pl
 import hasil_evaluasi_pl_engine as _he_pl_jkk
 import hasil_evaluasi_plpk_engine as _he_pl_pk
@@ -4765,15 +4768,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.markdown("## Evaluasi SPSE & Download Teknis/Biaya — Pengadaan Langsung")
         st.caption("Submit evaluasi Admin+Kualifikasi LULUS di SPSE, lalu download dokumen teknis/biaya peserta.")
 
-        # Cache paket list (share dengan Tab 7)
-        if "pl7_rows" not in st.session_state:
-            try:
-                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
-                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
-                ).order("nomor_urut").execute().data or []
-            except Exception:
-                st.session_state["pl7_rows"] = []
-        _pl8_rows = st.session_state["pl7_rows"]
+        # Selalu normalisasi daftar di sini. Tab Evaluasi dapat dibuka langsung,
+        # tanpa lebih dulu merender Tab Download Kualifikasi.
+        _raw8 = _load_draft_pl_cached()
+        _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
+        _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+        if _pl8_dup_n:
+            st.caption(f"♻️ {_pl8_dup_n} row lama duplikat disembunyikan otomatis.")
 
         if not _pl8_rows:
             st.info("Tidak ada paket PL. Reload di Tab 7.")
@@ -4786,6 +4787,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.session_state["pl8_checked"] = {}
 
                 _pl8_kodes = [r["kode_paket"] for r in _pl8_rows]
+                if st.session_state.get("pl8_selection_default_v2") != True:
+                    for _k in _pl8_kodes:
+                        st.session_state.pop(f"pl8_chk_{_k}", None)
+                    st.session_state["pl8_checked"].clear()
+                    st.session_state["pl8_selection_default_v2"] = True
                 for _k in _pl8_kodes:
                     if f"pl8_chk_{_k}" not in st.session_state:
                         st.session_state[f"pl8_chk_{_k}"] = True
@@ -4824,6 +4830,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
+
+                    st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
+                    _konfirmasi8 = st.checkbox(
+                        "Saya paham tindakan ini tidak bisa dibatalkan.",
+                        value=False, key="pl8_konfirmasi",
+                    )
+                    _btn8_disabled = (_do_eval_admin or _do_eval_teknis or _do_eval_harga) and not _konfirmasi8
+                    if _btn8_disabled:
+                        st.info("Centang konfirmasi untuk mengaktifkan tombol.")
+                    _btn8 = st.button(
+                        f"▶ Jalankan — {_n_paket8} paket",
+                        type="primary", key="pl8_run", use_container_width=True,
+                        disabled=_btn8_disabled,
+                    )
 
                     st.divider()
                     st.markdown("#### 🤖 Evaluasi AI")
@@ -4883,23 +4903,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 else:
                                     st.error(f"❌ {_rt['nama'][:50]} — {_rt['error'][:200]}")
 
-
-                    st.divider()
-                    st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
-                    _konfirmasi8 = st.checkbox(
-                        "Saya paham tindakan ini tidak bisa dibatalkan.",
-                        value=False, key="pl8_konfirmasi",
-                    )
-
-                    _btn8_disabled = (_do_eval_admin or _do_eval_teknis or _do_eval_harga) and not _konfirmasi8
-                    if _btn8_disabled:
-                        st.info("Centang konfirmasi untuk mengaktifkan tombol.")
-
-                    _btn8 = st.button(
-                        f"▶ Jalankan — {_n_paket8} paket",
-                        type="primary", key="pl8_run", use_container_width=True,
-                        disabled=_btn8_disabled,
-                    )
 
                     if _btn8:
                         _pb8 = st.progress(0.0, text="Memulai...")
@@ -7742,15 +7745,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.markdown("## Evaluasi SPSE & Download Teknis/Biaya — Pengadaan Langsung")
         st.caption("Submit evaluasi Admin+Kualifikasi LULUS di SPSE, lalu download dokumen teknis/biaya peserta.")
 
-        # Cache paket list (share dengan Tab 7)
-        if "pl7_rows" not in st.session_state:
-            try:
-                st.session_state["pl7_rows"] = pl_engine._sb().table("draft_paket_pl").select(
-                    "kode_paket, nama_paket, jenis_pl, nomor_urut, kode_unik"
-                ).order("nomor_urut").execute().data or []
-            except Exception:
-                st.session_state["pl7_rows"] = []
-        _pl8_rows = st.session_state["pl7_rows"]
+        # Selalu normalisasi daftar di sini. Tab Evaluasi dapat dibuka langsung,
+        # tanpa lebih dulu merender Tab Download Kualifikasi.
+        _raw8 = _load_draft_pl_cached()
+        _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
+        _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+        if _pl8_dup_n:
+            st.caption(f"♻️ {_pl8_dup_n} row lama duplikat disembunyikan otomatis.")
 
         if not _pl8_rows:
             st.info("Tidak ada paket PL. Reload di Tab 7.")
@@ -7763,6 +7764,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.session_state["pl8_checked"] = {}
 
                 _pl8_kodes = [r["kode_paket"] for r in _pl8_rows]
+                if st.session_state.get("pl8_selection_default_v2") != True:
+                    for _k in _pl8_kodes:
+                        st.session_state.pop(f"pl8_chk_{_k}", None)
+                    st.session_state["pl8_checked"].clear()
+                    st.session_state["pl8_selection_default_v2"] = True
                 for _k in _pl8_kodes:
                     if f"pl8_chk_{_k}" not in st.session_state:
                         st.session_state[f"pl8_chk_{_k}"] = True
@@ -7801,6 +7807,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     _do_tekbio8  = st.checkbox("⬇️ Download dokumen teknis/biaya + gabung PDF", value=True, key="pl8_do_tekbio")
                     _do_penawaran8 = st.checkbox("📊 Tulis rincian penawaran ke sheet '6. Penawaran' Excel", value=True, key="pl8_do_penawaran")
+
+                    st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
+                    _konfirmasi8 = st.checkbox(
+                        "Saya paham tindakan ini tidak bisa dibatalkan.",
+                        value=False, key="pl8_konfirmasi",
+                    )
+                    _btn8_disabled = (_do_eval_admin or _do_eval_teknis or _do_eval_harga) and not _konfirmasi8
+                    if _btn8_disabled:
+                        st.info("Centang konfirmasi untuk mengaktifkan tombol.")
+                    _btn8 = st.button(
+                        f"▶ Jalankan — {_n_paket8} paket",
+                        type="primary", key="pl8_run", use_container_width=True,
+                        disabled=_btn8_disabled,
+                    )
 
                     st.divider()
                     st.markdown("#### 🤖 Evaluasi AI")
@@ -7859,23 +7879,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         st.markdown(_rt_pk["output"][:3000])
                                 else:
                                     st.error(f"❌ {_rt_pk['nama'][:50]} — {_rt_pk['error'][:200]}")
-
-                    st.divider()
-                    st.warning("Evaluasi LULUS bersifat **permanen** — modifikasi data SPSE production.")
-                    _konfirmasi8 = st.checkbox(
-                        "Saya paham tindakan ini tidak bisa dibatalkan.",
-                        value=False, key="pl8_konfirmasi",
-                    )
-
-                    _btn8_disabled = (_do_eval_admin or _do_eval_teknis or _do_eval_harga) and not _konfirmasi8
-                    if _btn8_disabled:
-                        st.info("Centang konfirmasi untuk mengaktifkan tombol.")
-
-                    _btn8 = st.button(
-                        f"▶ Jalankan — {_n_paket8} paket",
-                        type="primary", key="pl8_run", use_container_width=True,
-                        disabled=_btn8_disabled,
-                    )
 
                     if _btn8:
                         _pb8 = st.progress(0.0, text="Memulai...")
