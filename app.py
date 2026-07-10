@@ -760,8 +760,16 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 if _is_dark:
     st.markdown(_get_dark_css(), unsafe_allow_html=True)
 
-st.title("🤖 Asisten Pokja")
-st.caption("Otomasi SPSE — spse.tapinkab.go.id")
+_header_title_col, _header_role_col = st.columns([3, 2])
+with _header_title_col:
+    st.title("🤖 Asisten Pokja")
+    st.caption("Otomasi SPSE — spse.tapinkab.go.id")
+
+# Kontrol login diringkas dalam popover agar header tidak menjadi kolom vertikal.
+if "header_login_role" not in st.session_state:
+    st.session_state["header_login_role"] = st.session_state.get("sidebar_login_role", "PP")
+with _header_role_col:
+    _login_popover = st.popover("🔐 Login / SPSE", use_container_width=True)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
@@ -830,16 +838,12 @@ def _sidebar_login_form():
             else:
                 st.info("Belum ada clone sebelumnya.")
 
-    def _on_login_role_change():
-        st.session_state["selected_login_role"] = st.session_state["sidebar_login_role"]
-
-    _login_role = st.radio(
+    _login_role = st.selectbox(
         "Login sebagai",
         ["PP", "POKJA", "PPK", "E-Katalog"],
-        horizontal=True,
-        key="sidebar_login_role",
-        on_change=_on_login_role_change,
+        key="header_login_role",
     )
+    st.session_state["selected_login_role"] = _login_role
 
     if _login_role == "E-Katalog":
         import ekatalog_login as _ekl
@@ -980,7 +984,7 @@ def _sidebar_login_form():
                 st.code(traceback.format_exc())
 
 
-with st.sidebar:
+with _login_popover:
     # ── Toggle Light/Dark Mode ──────────────────────────────────────────────
     _dark_mode = st.toggle("🌙 Dark Mode", value=True, key="toggle_dark_mode")
     if not _dark_mode:
