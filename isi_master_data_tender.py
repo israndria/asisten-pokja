@@ -237,6 +237,49 @@ def _normalisasi_sumber_anggaran(v: str) -> str:
     return s
 
 
+def _parse_metadata_pdf_local(pdf: Path) -> dict:
+    """Parse metadata halaman awal Draft_Pokja lokal sebagai fallback row DB."""
+    try:
+        import inbox_engine
+        return inbox_engine.parse_pdf_inmemory("", pdf_bytes=pdf.read_bytes()) or {}
+    except Exception:
+        return {}
+
+
+def _isi_metadata_fallback(kode_tender: str, row_data: dict, data: dict, pdf: Path, log) -> dict:
+    """Isi field metadata kosong dari PDF lokal, lalu simpan balik ke draft_paket."""
+    parsed = _parse_metadata_pdf_local(pdf)
+    src = data.get("input_data", {})
+    pdf_reviu = src.get("E33", {}).get("nilai")
+    candidates = {
+        "nomor_pp": parsed.get("nomor_pp"),
+        "nomor_surat_dinas": parsed.get("nomor_surat_dinas"),
+        "nama_dinas": parsed.get("nama_dinas"),
+        "jangka_waktu": parsed.get("jangka_waktu"),
+        # E33 hasil parse_reviu sudah menormalkan APBD + tahun; gunakan itu
+        # sebelum nilai mentah halaman surat yang kadang berbunyi APBD/APBN.
+        "sumber_anggaran": pdf_reviu or parsed.get("sumber_anggaran"),
+    }
+    filled = {}
+    for key, value in candidates.items():
+        if row_data.get(key) in (None, "") and value not in (None, ""):
+            row_data[key] = value
+            filled[key] = value
+    if not filled:
+        return {}
+
+    log("Fallback metadata: " + ", ".join(filled))
+    try:
+        import inbox_engine
+        inbox_engine._sb().table("draft_paket").update(filled).eq(
+            "kode_tender", kode_tender
+        ).execute()
+        log("Metadata draft_paket disinkronkan")
+    except Exception as e:
+        log(f"WARN sync metadata draft_paket: {e}")
+    return filled
+
+
 def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progress_cb=None, xl=None) -> dict:
 
     def _log(m):
@@ -250,7 +293,11 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
     xlsm = Path(excel_path)
     folder = xlsm.parent
     data = {}
-    row_data = {**row_data, **_fresh_viewdraft_data(kode_tender)}
+    fresh_viewdraft = _fresh_viewdraft_data(kode_tender)
+    row_data = {
+        **row_data,
+        **{k: v for k, v in fresh_viewdraft.items() if v not in (None, "")},
+    }
     row_data["sumber_anggaran"] = _normalisasi_sumber_anggaran(row_data.get("sumber_anggaran"))
 
     pdf = _cari_draft_pdf(folder, str(row_data.get("kode_pokja") or ""))
@@ -264,6 +311,7 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
         if res.returncode != 0:
             return {"ok": False, "pesan": (res.stderr or res.stdout or "parse_reviu gagal")[-500:]}
         data = json.loads((folder / "_parse_reviu.json").read_text(encoding="utf-8"))
+        _isi_metadata_fallback(kode_tender, row_data, data, pdf, _log)
     else:
         _log("WARN Draft_Pokja PDF tidak ditemukan")
 

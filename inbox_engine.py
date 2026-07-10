@@ -400,7 +400,7 @@ def _re_extract(pattern: str, text: str, flags=re.IGNORECASE) -> str:
     return m.group(1).strip() if m else ""
 
 
-def parse_pdf_inmemory(pdf_url: str) -> dict:
+def parse_pdf_inmemory(pdf_url: str, pdf_bytes: bytes | None = None) -> dict:
     """
     Download PDF ke memory (tidak disimpan ke disk), extract field via pdfplumber.
     Halaman 1: Lembar Disposisi  → kode_pokja, nomor_pp, nomor_surat_dinas, nama_dinas
@@ -417,14 +417,16 @@ def parse_pdf_inmemory(pdf_url: str) -> dict:
         "sumber_anggaran": "",
     }
 
-    try:
-        r = requests.get(pdf_url, headers=_headers(pdf_url), timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        return {**hasil, "_error_pdf": str(e)}
+    if pdf_bytes is None:
+        try:
+            r = requests.get(pdf_url, headers=_headers(pdf_url), timeout=30)
+            r.raise_for_status()
+            pdf_bytes = r.content
+        except Exception as e:
+            return {**hasil, "_error_pdf": str(e)}
 
     try:
-        with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             # ── Halaman 1: Lembar Disposisi ──
             if len(pdf.pages) >= 1:
                 txt1 = pdf.pages[0].extract_text() or ""
