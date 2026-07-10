@@ -2516,9 +2516,30 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
 
             st.divider()
-            if st.button("↩️ Reset Status Folder", key="pl_btn_reset_folder", use_container_width=True):
-                _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-                if _opsi_reset_pl:
+            st.markdown("#### ↩️ Reset Status Folder")
+            _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+            if _opsi_reset_pl:
+                _label_reset_pl = {
+                    f"{r.get('folder_dibuat')} — {r.get('kode_paket')}": k
+                    for k, r in _opsi_reset_pl.items()
+                }
+                _pilih_reset_pl = st.multiselect(
+                    "Pilih paket yang direset",
+                    list(_label_reset_pl.keys()),
+                    key="pl_reset_folder_select",
+                )
+                _c_reset_sel, _c_reset_all = st.columns(2)
+                if _c_reset_sel.button("Reset Terpilih", key="pl_btn_reset_folder_selected", use_container_width=True, disabled=not _pilih_reset_pl):
+                    from config import sb as _sb_reset
+                    _kodes_reset = [_label_reset_pl[x] for x in _pilih_reset_pl]
+                    try:
+                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
+                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
+                    except Exception as _er_pl:
+                        st.error(f"Reset gagal: {_er_pl}")
+                    _load_draft_pl_cached.clear()
+                    st.rerun()
+                if _c_reset_all.button("Reset Semua", key="pl_btn_reset_folder_all", use_container_width=True):
                     from config import sb as _sb_reset
                     _kodes_reset = list(_opsi_reset_pl.keys())
                     try:
@@ -2528,8 +2549,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.error(f"Reset gagal: {_er_pl}")
                     _load_draft_pl_cached.clear()
                     st.rerun()
-                else:
-                    st.info("Tidak ada paket dengan status folder untuk direset.")
+            else:
+                st.info("Tidak ada paket dengan status folder untuk direset.")
 
 
 
@@ -5654,9 +5675,30 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
 
             st.divider()
-            if st.button("↩️ Reset Status Folder", key="pl_btn_reset_folder_pk", use_container_width=True):
-                _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-                if _opsi_reset_pl:
+            st.markdown("#### ↩️ Reset Status Folder")
+            _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
+            if _opsi_reset_pl:
+                _label_reset_pl = {
+                    f"{r.get('folder_dibuat')} — {r.get('kode_paket')}": k
+                    for k, r in _opsi_reset_pl.items()
+                }
+                _pilih_reset_pl = st.multiselect(
+                    "Pilih paket yang direset",
+                    list(_label_reset_pl.keys()),
+                    key="pl_reset_folder_select_pk",
+                )
+                _c_reset_sel, _c_reset_all = st.columns(2)
+                if _c_reset_sel.button("Reset Terpilih", key="pl_btn_reset_folder_selected_pk", use_container_width=True, disabled=not _pilih_reset_pl):
+                    from config import sb as _sb_reset
+                    _kodes_reset = [_label_reset_pl[x] for x in _pilih_reset_pl]
+                    try:
+                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
+                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
+                    except Exception as _er_pl:
+                        st.error(f"Reset gagal: {_er_pl}")
+                    _load_draft_pl_cached.clear()
+                    st.rerun()
+                if _c_reset_all.button("Reset Semua", key="pl_btn_reset_folder_all_pk", use_container_width=True):
                     from config import sb as _sb_reset
                     _kodes_reset = list(_opsi_reset_pl.keys())
                     try:
@@ -5666,8 +5708,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.error(f"Reset gagal: {_er_pl}")
                     _load_draft_pl_cached.clear()
                     st.rerun()
-                else:
-                    st.info("Tidak ada paket dengan status folder untuk direset.")
+            else:
+                st.info("Tidak ada paket dengan status folder untuk direset.")
 
 
 
@@ -8470,9 +8512,30 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.rerun()
 
         st.divider()
-        if st.button("↩️ Reset Status Folder", key="t_btn_reset_folder", use_container_width=True):
-            _opsi_reset_t = {r.get("kode_tender"): r for r in _rows_valid if r.get("folder_dibuat") and r.get("kode_tender")}
-            if _opsi_reset_t:
+        st.markdown("#### ↩️ Reset Status Folder")
+        _opsi_reset_t = {r.get("kode_tender"): r for r in _rows_valid if r.get("folder_dibuat") and r.get("kode_tender")}
+        if _opsi_reset_t:
+            _label_reset_t = {
+                f"{r.get('folder_dibuat')} — {r.get('kode_tender')}": k
+                for k, r in _opsi_reset_t.items()
+            }
+            _pilih_reset_t = st.multiselect(
+                "Pilih paket yang direset",
+                list(_label_reset_t.keys()),
+                key="t_reset_folder_select",
+            )
+            _c_reset_sel_t, _c_reset_all_t = st.columns(2)
+            if _c_reset_sel_t.button("Reset Terpilih", key="t_btn_reset_folder_selected", use_container_width=True, disabled=not _pilih_reset_t):
+                from config import sb as _sb_reset_t
+                _kodes_reset_t = [_label_reset_t[x] for x in _pilih_reset_t]
+                try:
+                    _sb_reset_t().table("draft_paket").update({"folder_dibuat": None}).in_("kode_tender", _kodes_reset_t).execute()
+                    st.success(f"✅ {len(_kodes_reset_t)} paket berhasil direset.")
+                except Exception as _er_t:
+                    st.error(f"Reset gagal: {_er_t}")
+                _load_draft_paket_cached.clear()
+                st.rerun()
+            if _c_reset_all_t.button("Reset Semua", key="t_btn_reset_folder_all", use_container_width=True):
                 from config import sb as _sb_reset_t
                 _kodes_reset_t = list(_opsi_reset_t.keys())
                 try:
@@ -8482,8 +8545,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.error(f"Reset gagal: {_er_t}")
                 _load_draft_paket_cached.clear()
                 st.rerun()
-            else:
-                st.info("Tidak ada paket dengan status folder untuk direset.")
+        else:
+            st.info("Tidak ada paket dengan status folder untuk direset.")
 
         # ── Cek Semua Dokumen PPK (batch) ── (Dipindah ke sini agar selalu di bawah seksi 2)
         st.divider()
