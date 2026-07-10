@@ -484,7 +484,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     return res
 
 
-def _proses_excel_paket_tender(target_dir, kode_tender, xl=None):
+def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
     """COM: IsiDataByKodeTender → isi @ Master Data Excel Tender saat create folder.
 
     Identik dengan _proses_excel_paket_pl tapi tanpa HPS (HPS sudah dijalankan
@@ -505,7 +505,7 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None):
     xlsm = os.path.join(target_dir, _xs[0])
 
     try:
-        _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=xl)
+        _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=xl, row_data=row_data)
         if _res.get("ok"):
             logs.append("Master Data Tender: terisi otomatis")
         else:
@@ -519,6 +519,11 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None):
 _TENDER_EXCLUDE_KODES = {
     "10096884000",  # legacy 2025 Hatungun; jangan muncul/terbuat lagi di Tab 0 2026
 }
+
+
+def _is_tender_excluded(row_or_kode) -> bool:
+    kode = row_or_kode if isinstance(row_or_kode, str) else str(row_or_kode.get("kode_tender") or row_or_kode.get("kode") or "")
+    return kode in _TENDER_EXCLUDE_KODES
 
 
 def _nomor_folder_tertinggi_tender(output_base: str) -> int:
@@ -8196,7 +8201,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             _r for _r in _draft_rows
             if _r.get("nama_tender")
             and not str(_r.get("kode_tender", "")).startswith("_err_")
-            and str(_r.get("kode_tender", "")) not in _TENDER_EXCLUDE_KODES
+            and not _is_tender_excluded(_r)
             and _tender_tahun_cocok(_r)
             and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
         ]
@@ -8231,6 +8236,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {_nama_tender} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
                 "id_pesan": _r.get("id_pesan", ""),
                 "kode_pokja": _r.get("kode_pokja", ""),
+                "row": _r,
             }
 
         # ── Checklist pilih paket untuk buat folder (tiru pola PL) ──
@@ -8370,7 +8376,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Isi @ Master Data Excel via COM
-                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk)
+                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk, row_data=_bp.get("row"))
                             _paket_log.extend(_excel_t_logs)
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             _lamp_ok, _lamp_msg = _generate_lampiran_undangan_dpp_preview(_bp["kode_tender"])
@@ -8488,7 +8494,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 .select("kode_tender, folder_dibuat, dokumen_snapshot") \
                 .not_.is_("dokumen_snapshot", "null") \
                 .execute()
-            _snap_paket = _snap_rows.data if _snap_rows.data else []
+            _snap_paket = [r for r in (_snap_rows.data if _snap_rows.data else []) if not _is_tender_excluded(r)]
             if not _snap_paket:
                 st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
             else:

@@ -615,6 +615,43 @@ def upsert_draft_paket(data: dict) -> dict:
     r = sb.table("draft_paket").upsert(filtered).execute()
     return r
 
+def _scrape_viewdraft_tender(kode_tender: str) -> dict:
+    """Ambil sumber dana/tahun dari /lelang/{kode}/viewdraft via cookie browser, tanpa Playwright."""
+    try:
+        import spse_browser
+        cookie_str = spse_browser.get_spse_cookies()
+        if not cookie_str:
+            return {}
+        url = f"{BASE_URL}/lelang/{kode_tender}/viewdraft"
+        r = requests.get(
+            url,
+            headers={**_headers(url), "Cookie": cookie_str, "Referer": f"{BASE_URL}/paket"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        txt = re.sub(r"<[^>]+>", " ", r.text)
+        txt = re.sub(r"\s+", " ", txt)
+        out = {}
+        m_sd = re.search(r"Sumber\s+Dana\s*:?\s*(APBDP|APBD\s*P|APBD-P|APBD|APBN)", txt, re.IGNORECASE)
+        m_ta = re.search(r"Tahun\s+Anggaran\s*:?\s*(\d{4})", txt, re.IGNORECASE)
+        if m_sd:
+            raw = m_sd.group(1).upper().replace(" ", "")
+            jenis = "APBDP" if raw in ("APBDP", "APBD-P") else raw
+            out["sumber_anggaran"] = f"{jenis} {m_ta.group(1) if m_ta else datetime.now().year}"
+        m_rup = re.search(r"Kode\s+RUP\s*:?\s*(\d+)", txt, re.IGNORECASE)
+        if m_rup:
+            out["kode_rup"] = m_rup.group(1)
+        m_pagu = re.search(r"Nilai\s+Pagu(?:\s+Paket)?\s*:?\s*(Rp\.\s*[\d\.,]+)", txt, re.IGNORECASE)
+        if m_pagu:
+            out["nilai_pagu"] = m_pagu.group(1)
+        m_hps = re.search(r"Nilai\s+HPS(?:\s+Paket)?\s*:?\s*(Rp\.\s*[\d\.,]+)", txt, re.IGNORECASE)
+        if m_hps:
+            out["nilai_hps"] = m_hps.group(1)
+        return out
+    except Exception:
+        return {}
+
 
 def set_kualifikasi_usaha(kode_tender: str, kualifikasi_id: str = "21") -> bool:
     """
@@ -673,8 +710,9 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
 
         kode_tender = detail_html["kode_tender"]
         detail_anggota = parse_anggota_pokja(kode_tender)
+        detail_viewdraft = _scrape_viewdraft_tender(kode_tender)
 
-        record = {**detail_html, **detail_pdf, **detail_anggota}
+        record = {**detail_html, **detail_pdf, **detail_anggota, **detail_viewdraft}
         record.pop("_error_pdf", None)
         record.pop("_kode_tender_for_anggota", None)
         record["id_pesan"] = pesan["id_pesan"]
