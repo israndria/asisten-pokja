@@ -76,6 +76,7 @@ import ldk_engine
 import ldk_config
 import checklist_engine
 import masa_berlaku_engine
+import tender_setup_engine
 import penjelasan_engine
 import penjelasan_config
 import jadwal_engine
@@ -982,6 +983,37 @@ def _sidebar_login_form():
                 import traceback
                 st.error(f"Retry gagal: {e2}")
                 st.code(traceback.format_exc())
+
+        _manual_captcha = st.text_input(
+            "CAPTCHA terlihat di Brave",
+            max_chars=8,
+            placeholder="Isi 4-8 karakter",
+            key="manual_spse_captcha",
+        )
+        if st.button("🔐 Login dengan CAPTCHA manual", use_container_width=True):
+            if not _manual_captcha.strip():
+                st.warning("Isi CAPTCHA yang terlihat di Brave terlebih dahulu.")
+            else:
+                try:
+                    import spse_login as _spse_login
+                    _manual_logs: list[str] = []
+                    with st.spinner("Mengirim CAPTCHA manual..."):
+                        _spse_login.submit_manual_captcha(
+                            role=_retry_role,
+                            captcha_text=_manual_captcha,
+                            log_fn=_manual_logs.append,
+                        )
+                    st.info("\n".join(_manual_logs))
+                    spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                    st.session_state["spse_role"] = _retry_role
+                    spse_browser.mulai_auto_refresh()
+                    st.session_state.pop("login_failed", None)
+                    st.session_state.pop("login_failed_role", None)
+                    st.session_state.pop("manual_spse_captcha", None)
+                    st.success(f"✅ Login berhasil sebagai {_retry_role}!")
+                    st.rerun(scope="app")
+                except Exception as e3:
+                    st.error(f"Login manual gagal: {e3}")
 
 
 with _login_popover:
@@ -8971,269 +9003,297 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                     
                     status.update(label=f"Selesai! {sukses_count}/{_dp_n_file} dokumen berhasil diupload.", state="complete" if sukses_count == _dp_n_file else "error")
 
-    with _sp_col_kanan:
-        st.markdown("### 3. Konfigurasi")
-        st.caption("Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push.")
+        with _sp_col_kanan:
+            st.markdown("### 3. Konfigurasi")
+            st.caption("Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push.")
 
-        st.divider()
+        with _sp_col_kanan:
+            # ── Izin Usaha rows (fallback jika DOKPIL tidak diupload) ────────────
+            st.markdown("**Izin Usaha** *(default — ditimpa oleh DOKPIL jika diupload)*")
+            _t_izin_default = (
+                "Memiliki perizinan berusaha di bidang Pekerjaan/Jasa Konstruksi. "
+                "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi; "
+                "b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum terverifikasi, "
+                "peserta menyampaikan NIB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS "
+                "yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi"
+            )
+            if "ijin_rows" not in st.session_state:
+                st.session_state["ijin_rows"] = [dict(r) for r in ldk_config.IJIN_USAHA_DEFAULT["rows"]]
+            if st.session_state["ijin_rows"] and st.session_state["ijin_rows"][0].get("klasifikasi", "").startswith(
+                "Memiliki perizinan berusaha di bidang Jasa Konstruksi."
+            ):
+                st.session_state["ijin_rows"][0]["klasifikasi"] = _t_izin_default
+                if st.session_state.get("ijin_klas_0", "").startswith(
+                    "Memiliki perizinan berusaha di bidang Jasa Konstruksi."
+                ):
+                    st.session_state["ijin_klas_0"] = _t_izin_default
+            _t_ijin_custom = st.toggle("Gunakan izin usaha custom", value=True, key="t_ijin_custom")
+            st.caption("Mode custom aktif sebagai default. Isi jenis izin dan klasifikasi langsung.")
 
-        # ── Izin Usaha rows (fallback jika DOKPIL tidak diupload) ────────────
-        st.markdown("**Izin Usaha** *(default — ditimpa oleh DOKPIL jika diupload)*")
-        if "ijin_rows" not in st.session_state:
-            st.session_state["ijin_rows"] = [dict(r) for r in ldk_config.IJIN_USAHA_DEFAULT["rows"]]
+            # ── Load/save SBU terakhir ke file ───────────────────────────────────
+            import json as _json
+            _SBU_LAST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_last.json")
 
-        # ── Load/save SBU terakhir ke file ───────────────────────────────────
-        import json as _json
-        _SBU_LAST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_last.json")
+            def _load_sbu_last():
+                try:
+                    with open(_SBU_LAST_FILE, "r", encoding="utf-8") as f:
+                        return _json.load(f)
+                except Exception:
+                    return {"sbu_2020": "", "sbu_2015": ""}
 
-        def _load_sbu_last():
-            try:
-                with open(_SBU_LAST_FILE, "r", encoding="utf-8") as f:
-                    return _json.load(f)
-            except Exception:
-                return {"sbu_2020": "", "sbu_2015": ""}
+            def _save_sbu_last(sbu_2020, sbu_2015):
+                try:
+                    with open(_SBU_LAST_FILE, "w", encoding="utf-8") as f:
+                        _json.dump({"sbu_2020": sbu_2020, "sbu_2015": sbu_2015}, f)
+                except Exception:
+                    pass
 
-        def _save_sbu_last(sbu_2020, sbu_2015):
-            try:
-                with open(_SBU_LAST_FILE, "w", encoding="utf-8") as f:
-                    _json.dump({"sbu_2020": sbu_2020, "sbu_2015": sbu_2015}, f)
-            except Exception:
-                pass
+            # Inisialisasi default SBU dari file — hanya sekali per session, SEBELUM widget dirender
+            if "sbu_last_loaded" not in st.session_state:
+                _last = _load_sbu_last()
+                # Hanya set jika key belum ada (jangan overwrite pilihan user saat ini)
+                if "sbu_2020_1" not in st.session_state:
+                    st.session_state["sbu_2020_1"] = _last["sbu_2020"]
+                if "sbu_2015_1" not in st.session_state:
+                    st.session_state["sbu_2015_1"] = _last["sbu_2015"]
+                st.session_state["sbu_last_loaded"] = True
 
-        # Inisialisasi default SBU dari file — hanya sekali per session, SEBELUM widget dirender
-        if "sbu_last_loaded" not in st.session_state:
-            _last = _load_sbu_last()
-            # Hanya set jika key belum ada (jangan overwrite pilihan user saat ini)
-            if "sbu_2020_1" not in st.session_state:
-                st.session_state["sbu_2020_1"] = _last["sbu_2020"]
-            if "sbu_2015_1" not in st.session_state:
-                st.session_state["sbu_2015_1"] = _last["sbu_2015"]
-            st.session_state["sbu_last_loaded"] = True
-
-        # Opsi SBU dropdown — dari _SBU_RULES inbox_engine (cached per session)
-        if "sbu_opts_cache" not in st.session_state:
-            _sbu_cache = ldk_config.load_sbu_dari_rules()
-            st.session_state["sbu_opts_cache"] = _sbu_cache
-        else:
-            _sbu_cache = st.session_state["sbu_opts_cache"]
-
-        _sbu_opts_2020 = [""] + _sbu_cache["kbli_2020"]
-        _sbu_opts_2015 = [""] + _sbu_cache["kbli_2015"]
-
-        # Validasi: nilai tersimpan harus ada di opsi — reset jika tidak ada
-        if st.session_state.get("sbu_2020_1", "") not in _sbu_opts_2020:
-            st.session_state["sbu_2020_1"] = ""
-        if st.session_state.get("sbu_2015_1", "") not in _sbu_opts_2015:
-            st.session_state["sbu_2015_1"] = ""
-
-        _sbu_sumber = _sbu_cache.get("sumber", "rules")
-        st.caption(
-            f"📋 {len(_sbu_cache['kbli_2020'])} SBU 2020 · {len(_sbu_cache['kbli_2015'])} SBU 2015 "
-            f"(sumber: {_sbu_sumber})"
-        )
-
-        for i, row in enumerate(st.session_state["ijin_rows"]):
-            st.caption(f"Row {i+1}")
-
-            # Row 2 = SBU → tampilkan 2 dropdown
-            if i == 1:
-                col_jn, col_del = st.columns([6, 1])
-                with col_jn:
-                    st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
-                        "Jenis Izin", value=row["jenis_izin"],
-                        key=f"ijin_nama_{i}", label_visibility="collapsed",
-                    )
-                with col_del:
-                    if len(st.session_state["ijin_rows"]) > 1:
-                        if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
-                            st.session_state["ijin_rows"].pop(i)
-                            st.rerun()
-
-                col_2020, col_2015 = st.columns(2)
-                with col_2020:
-                    sbu_2020 = st.selectbox(
-                        "SBU KBLI 2020",
-                        options=_sbu_opts_2020,
-                        key="sbu_2020_1",
-                        label_visibility="visible",
-                    )
-                with col_2015:
-                    sbu_2015 = st.selectbox(
-                        "SBU KBLI 2015 (opsional — kosongkan jika hanya SBU 2020)",
-                        options=_sbu_opts_2015,
-                        key="sbu_2015_1",
-                        label_visibility="visible",
-                    )
-
-                # Auto-generate teks klasifikasi dari pilihan dropdown
-                _gen = ldk_config.build_sbu_klasifikasi(sbu_2020, sbu_2015)
-                if _gen:
-                    st.session_state["ijin_rows"][i]["klasifikasi"] = _gen
-                    st.text_area(
-                        "Preview teks SBU",
-                        value=_gen,
-                        key=f"ijin_klas_{i}_preview",
-                        label_visibility="collapsed",
-                        height=100,
-                        disabled=True,
-                    )
-                else:
-                    # Fallback: edit manual jika belum pilih SBU
-                    st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
-                        "Klasifikasi manual",
-                        value=row["klasifikasi"],
-                        key=f"ijin_klas_{i}",
-                        label_visibility="collapsed",
-                        height=80,
-                    )
+            # Opsi SBU dropdown — dari _SBU_RULES inbox_engine (cached per session)
+            if "sbu_opts_cache" not in st.session_state:
+                _sbu_cache = ldk_config.load_sbu_dari_rules()
+                st.session_state["sbu_opts_cache"] = _sbu_cache
             else:
-                col_r1, col_r2, col_r3 = st.columns([2, 5, 1])
-                with col_r1:
-                    st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
-                        "Jenis Izin", value=row["jenis_izin"],
-                        key=f"ijin_nama_{i}", label_visibility="collapsed",
-                    )
-                with col_r2:
-                    st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
-                        "Klasifikasi", value=row["klasifikasi"],
-                        key=f"ijin_klas_{i}", label_visibility="collapsed", height=80,
-                    )
-                with col_r3:
-                    if len(st.session_state["ijin_rows"]) > 1:
-                        if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
-                            st.session_state["ijin_rows"].pop(i)
-                            st.rerun()
+                _sbu_cache = st.session_state["sbu_opts_cache"]
 
-        if st.button("➕ Tambah Row Izin", key="tambah_row_ijin"):
-            st.session_state["ijin_rows"].append({"jenis_izin": "", "klasifikasi": ""})
-            st.rerun()
+            _sbu_opts_2020 = [""] + _sbu_cache["kbli_2020"]
+            _sbu_opts_2015 = [""] + _sbu_cache["kbli_2015"]
 
-        st.divider()
+            # Validasi: nilai tersimpan harus ada di opsi — reset jika tidak ada
+            if st.session_state.get("sbu_2020_1", "") not in _sbu_opts_2020:
+                st.session_state["sbu_2020_1"] = ""
+            if st.session_state.get("sbu_2015_1", "") not in _sbu_opts_2015:
+                st.session_state["sbu_2015_1"] = ""
 
-        # ── Syarat Teknis (Kinerja Penyedia + rows tambahan) ─────────────────
-        st.markdown("**Syarat Teknis**")
-        if "sp_syarat_teknis_rows" not in st.session_state:
-            st.session_state["sp_syarat_teknis_rows"] = [
-                {"label": "Kinerja Penyedia", "teks": ldk_config.KINERJA_PENYEDIA_DEFAULT}
-            ]
-
-        _st_rows = st.session_state["sp_syarat_teknis_rows"]
-        for i, st_row in enumerate(_st_rows):
-            col_lbl, col_del = st.columns([5, 1])
-            with col_lbl:
-                chk = st.checkbox(
-                    st_row["label"],
-                    value=st.session_state.get(f"sp_st_chk_{i}", True),
-                    key=f"sp_st_chk_{i}",
-                )
-            with col_del:
-                if len(_st_rows) > 1 and st.button("🗑️", key=f"sp_st_del_{i}", use_container_width=True):
-                    _st_rows.pop(i)
-                    st.rerun()
-            if chk:
-                _st_rows[i]["teks"] = st.text_area(
-                    "Teks",
-                    value=st_row["teks"],
-                    key=f"sp_st_teks_{i}",
-                    height=80,
-                    label_visibility="collapsed",
-                )
-
-        if st.button("➕ Tambah Syarat Teknis", key="sp_tambah_syarat"):
-            _st_rows.append({"label": "Syarat Teknis Baru", "teks": ""})
-            st.rerun()
-
-        st.divider()
-
-        # ── Masa Berlaku ──────────────────────────────────────────────────────
-        st.markdown("**Masa Berlaku Penawaran**")
-        mb_nilai_hari = st.number_input(
-            "Hari",
-            min_value=1, max_value=365, value=40, step=1,
-            help="Default 40 hari — standar konstruksi usaha kecil",
-            label_visibility="collapsed",
-        )
-        st.caption(f"{int(mb_nilai_hari)} hari")
-
-        st.divider()
-
-        sp_push = st.button(
-            f"🚀 Push Setup ke SPSE ({len(sp_selected)} paket)",
-            type="primary",
-            use_container_width=True,
-            disabled=len(sp_selected) == 0,
-            key="sp_push_all",
-        )
-
-        if sp_push:
-            import tempfile
-
-            # Simpan pilihan SBU terakhir (persisten lintas restart Streamlit)
-            _save_sbu_last(
-                st.session_state.get("sbu_2020_1", ""),
-                st.session_state.get("sbu_2015_1", ""),
+            _sbu_sumber = _sbu_cache.get("sumber", "rules")
+            st.caption(
+                f"📋 {len(_sbu_cache['kbli_2020'])} SBU 2020 · {len(_sbu_cache['kbli_2015'])} SBU 2015 "
+                f"(sumber: {_sbu_sumber})"
             )
 
-            # Default dari form (dipakai jika paket tidak punya DOKPIL)
-            _default_ijin = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
-            _default_kinerja = "\n".join(
+            for i, row in enumerate(st.session_state["ijin_rows"]):
+                if i == 0:
+                    continue
+                st.caption(f"Row {i+1}")
+
+                # Legacy dropdown SBU sengaja tidak dipakai; semua row custom text.
+                if False:
+                    col_jn, col_del = st.columns([6, 1])
+                    with col_jn:
+                        st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
+                            "Jenis Izin", value=row["jenis_izin"],
+                            key=f"ijin_nama_{i}", label_visibility="collapsed", disabled=not _t_ijin_custom,
+                        )
+                    with col_del:
+                        if len(st.session_state["ijin_rows"]) > 1:
+                            if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
+                                st.session_state["ijin_rows"].pop(i)
+                                st.rerun()
+
+                    col_2020, col_2015 = st.columns(2)
+                    with col_2020:
+                        sbu_2020 = st.selectbox(
+                            "SBU KBLI 2020",
+                            options=_sbu_opts_2020,
+                            key="sbu_2020_1",
+                            label_visibility="visible",
+                        )
+                    with col_2015:
+                        sbu_2015 = st.selectbox(
+                            "SBU KBLI 2015 (opsional — kosongkan jika hanya SBU 2020)",
+                            options=_sbu_opts_2015,
+                            key="sbu_2015_1",
+                            label_visibility="visible",
+                        )
+
+                    # Auto-generate teks klasifikasi dari pilihan dropdown
+                    _gen = ldk_config.build_sbu_klasifikasi(sbu_2020, sbu_2015)
+                    if _gen:
+                        st.session_state["ijin_rows"][i]["klasifikasi"] = _gen
+                        st.text_area(
+                            "Preview teks SBU",
+                            value=_gen,
+                            key=f"ijin_klas_{i}_preview",
+                            label_visibility="collapsed",
+                            height=100,
+                            disabled=True,
+                        )
+                    else:
+                        # Fallback: edit manual jika belum pilih SBU
+                        st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
+                            "Klasifikasi manual",
+                            value=row["klasifikasi"],
+                            key=f"ijin_klas_{i}",
+                            label_visibility="collapsed",
+                            height=80,
+                        )
+                else:
+                    col_r1, col_r2, col_r3 = st.columns([2, 5, 1])
+                    with col_r1:
+                        st.session_state["ijin_rows"][i]["jenis_izin"] = st.text_input(
+                            "Jenis Izin", value=row["jenis_izin"],
+                            key=f"ijin_nama_{i}", label_visibility="collapsed",
+                        )
+                    with col_r2:
+                        st.session_state["ijin_rows"][i]["klasifikasi"] = st.text_area(
+                            "Klasifikasi", value=row["klasifikasi"],
+                            key=f"ijin_klas_{i}", label_visibility="collapsed", height=80,
+                            disabled=not _t_ijin_custom,
+                        )
+                    with col_r3:
+                        if len(st.session_state["ijin_rows"]) > 1 and _t_ijin_custom:
+                            if st.button("🗑️", key=f"hapus_row_{i}", use_container_width=True):
+                                st.session_state["ijin_rows"].pop(i)
+                                st.rerun()
+
+            # ── Kinerja Penyedia: internal, tidak ditampilkan ────────────────────
+            if "sp_syarat_teknis_rows" not in st.session_state:
+                st.session_state["sp_syarat_teknis_rows"] = [
+                    {"label": "Kinerja Penyedia", "teks": ldk_config.KINERJA_PENYEDIA_DEFAULT}
+                ]
+
+            # ── Persyaratan Kualifikasi Tender ───────────────────────────────────
+            _t_ldk_admin_ids = ["401", "402", "403", "404"]
+            _t_ldk_teknis_ids = ["437", "438", "439"]
+
+            # ── Checklist Dokumen Penawaran ──────────────────────────────────────
+            _t_check_admin_ids = []
+            _t_check_teknis_ids = ["341", "342", "344"]
+            _t_check_harga_ids = ["347", "348"]
+
+            # ── Masa Berlaku ──────────────────────────────────────────────────────
+            mb_nilai_hari = 40
+
+            _t_default_ijin = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            _t_kinerja_text = "\n".join(
                 r["teks"] for i, r in enumerate(st.session_state.get("sp_syarat_teknis_rows", []))
-                if st.session_state.get(f"sp_st_chk_{i}", True) and r["teks"].strip()
+                if st.session_state.get(f"sp_st_chk_{i}", True) and r.get("teks", "").strip()
             )
-            mb_hari = int(mb_nilai_hari)
 
-            progress = st.progress(0, text="Memulai...")
-            hasil_sp = []
+            if st.button(
+                f"📋 Submit Syarat Kualifikasi + Kinerja ({len(sp_selected)} paket)",
+                key="sp_submit_ldk_fixed", use_container_width=True, disabled=not sp_selected,
+            ):
+                for _p in sp_selected:
+                    try:
+                        _r = tender_setup_engine.submit_ldk(
+                            _p["id_lelang"], _t_default_ijin, _t_ldk_admin_ids, _t_ldk_teknis_ids,
+                            kinerja_text=_t_kinerja_text,
+                        )
+                        st.write(f"{'✅' if _r['ok'] else '❌'} {_p['nama'][:45]} — HTTP {_r['status']}")
+                    except Exception as _e:
+                        st.write(f"❌ {_p['nama'][:45]} — {_e}")
 
-            for i, p in enumerate(sp_selected):
-                pid = p["id_lelang"]
-                progress.progress((i + 1) / len(sp_selected), text=f"Setup {p['kode']} ({i+1}/{len(sp_selected)})...")
+            if st.button(
+                f"🛂 Submit 2 Syarat Izin Usaha ({len(sp_selected)} paket)",
+                key="sp_submit_ijin_fixed", use_container_width=True, disabled=not sp_selected,
+            ):
+                for _p in sp_selected:
+                    try:
+                        _r = tender_setup_engine.submit_izin_usaha(_p["id_lelang"], _t_default_ijin)
+                        st.write(f"{'✅' if _r['ok'] else '❌'} {_p['nama'][:45]} — HTTP {_r['status']}")
+                    except Exception as _e:
+                        st.write(f"❌ {_p['nama'][:45]} — {_e}")
 
-                row_result = {"kode": p["kode"], "nama": p["nama"][:50], "ldk": "—", "checklist": "—", "masa_berlaku": "—"}
+            if st.button(
+                f"📄 Submit Checklist Dokumen ({len(sp_selected)} paket)",
+                key="sp_submit_checklist_fixed", use_container_width=True, disabled=not sp_selected,
+            ):
+                for _p in sp_selected:
+                    try:
+                        _r = tender_setup_engine.submit_checklist(
+                            _p["id_lelang"], _t_check_admin_ids, _t_check_teknis_ids, _t_check_harga_ids,
+                        )
+                        st.write(f"{'✅' if _r['ok'] else '❌'} {_p['nama'][:45]} — HTTP {_r['status']}")
+                    except Exception as _e:
+                        st.write(f"❌ {_p['nama'][:45]} — {_e}")
 
-                # Sesuai instruksi: Seluruh konfigurasi LDK (SBU, Izin, Kinerja)
-                # mutlak menggunakan input manual dari UI Streamlit (Tab 3 Konfigurasi).
-                # Tidak ada lagi parsing otomatis dari file DOKPIL PDF.
-                ijin_rows   = _default_ijin
-                kinerja_txt = _default_kinerja
-                row_result["ldk"] = "—"
-
-                try:
-                    r_ldk = ldk_engine.submit_ldk(pid, ijin_usaha_rows=ijin_rows, kinerja_text=kinerja_txt)
-                    row_result["ldk"] = "✅" if r_ldk["ok"] else f"❌ {r_ldk['status']}"
-                except Exception as e:
-                    row_result["ldk"] = f"❌ {e}"
-
-                try:
-                    r_ck = checklist_engine.submit_checklist(pid)
-                    row_result["checklist"] = "✅" if r_ck["sukses"] else f"❌ {r_ck['pesan']}"
-                except Exception as e:
-                    row_result["checklist"] = f"❌ {e}"
-
-                try:
-                    r_mb = masa_berlaku_engine.submit_masa_berlaku(pid, mb_hari)
-                    row_result["masa_berlaku"] = "✅" if r_mb["sukses"] else f"❌ {r_mb['pesan']}"
-                except Exception as e:
-                    row_result["masa_berlaku"] = f"❌ {e}"
-
-                hasil_sp.append(row_result)
-
-            progress.empty()
-
-            sukses_n = sum(1 for h in hasil_sp if all(v == "✅" for k, v in h.items() if k not in ("kode", "nama")))
-            st.success(f"✅ Selesai! {sukses_n}/{len(hasil_sp)} paket berhasil.")
-            st.dataframe(
-                hasil_sp,
+            sp_push = st.button(
+                f"🚀 Push Setup ke SPSE ({len(sp_selected)} paket)",
+                type="primary",
                 use_container_width=True,
-                column_config={
-                    "kode":         st.column_config.TextColumn("Kode", width="small"),
-                    "nama":         st.column_config.TextColumn("Nama Paket", width="large"),
-                    "ldk":          st.column_config.TextColumn("LDK", width="small"),
-                    "checklist":    st.column_config.TextColumn("Checklist", width="small"),
-                    "masa_berlaku": st.column_config.TextColumn("Masa Berlaku", width="small"),
-                },
-                hide_index=True,
+                disabled=len(sp_selected) == 0,
+                key="sp_push_all",
             )
+
+            if sp_push:
+                import tempfile
+
+                # Default dari form (dipakai jika paket tidak punya DOKPIL)
+                _default_ijin = _t_default_ijin
+                mb_hari = int(mb_nilai_hari)
+
+                progress = st.progress(0, text="Memulai...")
+                hasil_sp = []
+
+                for i, p in enumerate(sp_selected):
+                    pid = p["id_lelang"]
+                    progress.progress((i + 1) / len(sp_selected), text=f"Setup {p['kode']} ({i+1}/{len(sp_selected)})...")
+
+                    row_result = {"kode": p["kode"], "nama": p["nama"][:50], "ldk": "—", "checklist": "—", "masa_berlaku": "—"}
+
+                    # Sesuai instruksi: Seluruh konfigurasi LDK (SBU, Izin, Kinerja)
+                    # mutlak menggunakan input manual dari UI Streamlit (Tab 3 Konfigurasi).
+                    # Tidak ada lagi parsing otomatis dari file DOKPIL PDF.
+                    ijin_rows   = _default_ijin
+                    row_result["ldk"] = "—"
+
+                    try:
+                        r_ldk = tender_setup_engine.submit_ldk(
+                            pid,
+                            ijin_rows=ijin_rows,
+                            admin_ids=_t_ldk_admin_ids,
+                            teknis_ids=_t_ldk_teknis_ids,
+                            kinerja_text=_t_kinerja_text,
+                        )
+                        row_result["ldk"] = "✅" if r_ldk["ok"] else f"❌ {r_ldk['status']}"
+                    except Exception as e:
+                        row_result["ldk"] = f"❌ {e}"
+
+                    try:
+                        r_ck = tender_setup_engine.submit_checklist(
+                            pid,
+                            admin_ids=_t_check_admin_ids,
+                            teknis_ids=_t_check_teknis_ids,
+                            harga_ids=_t_check_harga_ids,
+                        )
+                        row_result["checklist"] = "✅" if r_ck["ok"] else f"❌ HTTP {r_ck['status']}"
+                    except Exception as e:
+                        row_result["checklist"] = f"❌ {e}"
+
+                    try:
+                        r_mb = tender_setup_engine.submit_masa_berlaku(pid, mb_hari)
+                        row_result["masa_berlaku"] = "✅" if r_mb["ok"] else f"❌ HTTP {r_mb['status']}"
+                    except Exception as e:
+                        row_result["masa_berlaku"] = f"❌ {e}"
+
+                    hasil_sp.append(row_result)
+
+                progress.empty()
+
+                sukses_n = sum(1 for h in hasil_sp if all(v == "✅" for k, v in h.items() if k not in ("kode", "nama")))
+                st.success(f"✅ Selesai! {sukses_n}/{len(hasil_sp)} paket berhasil.")
+                st.dataframe(
+                    hasil_sp,
+                    use_container_width=True,
+                    column_config={
+                        "kode":         st.column_config.TextColumn("Kode", width="small"),
+                        "nama":         st.column_config.TextColumn("Nama Paket", width="large"),
+                        "ldk":          st.column_config.TextColumn("LDK", width="small"),
+                        "checklist":    st.column_config.TextColumn("Checklist", width="small"),
+                        "masa_berlaku": st.column_config.TextColumn("Masa Berlaku", width="small"),
+                    },
+                    hide_index=True,
+                )
 
 # ============================================================
 # Tab 4: Pemberian Penjelasan (v2 — auto-post sapaan via GCal)

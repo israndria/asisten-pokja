@@ -549,6 +549,53 @@ def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bo
     return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
 
 
+async def _submit_manual_captcha_async(
+    role: Literal["PP", "POKJA", "PPK"],
+    captcha_text: str,
+    log_fn=None,
+) -> bool:
+    """Isi CAPTCHA yang dibaca user; tidak mencoba menebak atau bypass CAPTCHA."""
+    import spse_browser as _sb
+
+    page = _sb._get_page()
+    if page is None:
+        raise RuntimeError("Browser belum terhubung.")
+    if "loginpass" not in page.url:
+        raise RuntimeError("Halaman sudah berpindah — CAPTCHA manual tidak diperlukan.")
+
+    _, password = _get_creds(role)
+    value = "".join(c for c in captcha_text.strip().lower() if c.isalnum())
+    if not 4 <= len(value) <= 8:
+        raise ValueError("CAPTCHA harus 4-8 karakter alfanumerik.")
+
+    await page.fill("#txtPassword", password)
+    await page.fill("#txtCode", value)
+    await page.click("button[type='submit']")
+    await page.wait_for_timeout(2000)
+
+    if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
+        if log_fn:
+            log_fn("✅ Login berhasil dengan CAPTCHA manual.")
+        return True
+
+    err_el = await page.query_selector(".alert-danger, .alert-error, .error")
+    err_msg = (await err_el.inner_text()).strip() if err_el else "CAPTCHA ditolak atau login belum berhasil."
+    raise RuntimeError(f"Login manual gagal: {err_msg[:120]}")
+
+
+def submit_manual_captcha(
+    role: Literal["PP", "POKJA", "PPK"] = "PP",
+    captcha_text: str = "",
+    log_fn=None,
+) -> bool:
+    """Entry point sinkronus untuk CAPTCHA yang dibaca user."""
+    import spse_browser as _sb
+    return _sb._run(
+        _submit_manual_captcha_async(role, captcha_text, log_fn=log_fn),
+        timeout=60,
+    )
+
+
 def logout_spse(log_fn=None) -> bool:
     """POST ke /logout SPSE via requests + cookie CDP. 302 = sukses."""
     import requests as _req
