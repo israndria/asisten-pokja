@@ -370,6 +370,15 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
             ws.Cells(total_row, 8).Value = _fmt_rp(total)
             ws.Cells(total_row, 8).NumberFormat = FMT_RP
 
+            # Sheet 7.2 berisi formula turunan dari sheet 6. Penawaran.
+            # Hitung ulang dulu, lalu rapikan row setelah semua nilai masuk.
+            try:
+                wb.Calculate()
+                xl.Run(f"'{wb.Name}'!FixSheetByName", "7.2 Dengan Nego")
+                _log("  Autofit otomatis: sheet '7.2 Dengan Nego' dirapikan.")
+            except Exception as e:
+                _log(f"  ⚠️ Autofit 7.2 dilewati: {e}")
+
             wb.Save()
             wb.Close(False)
             _log(f"  Berhasil tulis {no_counter} item + Total → {os.path.basename(xlsm_path)}")

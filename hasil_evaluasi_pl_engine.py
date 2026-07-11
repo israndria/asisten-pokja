@@ -46,6 +46,40 @@ def _xlsm_locked(xlsm_path: str) -> bool:
     return os.path.exists(os.path.join(folder, lock_name))
 
 
+def _personel_slots(personel: list) -> tuple[str, str, list[str]]:
+    """Petakan personel berdasarkan jabatan, bukan posisi baris HTML."""
+    team_leader = ""
+    k3 = ""
+    lainnya = []
+    for item in personel or []:
+        text = str(item or "").strip()
+        role = text.rsplit("(", 1)[-1].rstrip(")").lower() if "(" in text else text.lower()
+        if not team_leader and re.search(r"team\s*leader|ketua\s*tim|\bleader\b", role):
+            team_leader = text
+        elif not k3 and re.search(r"\bk3\b|keselamatan", role):
+            k3 = text
+        else:
+            lainnya.append(text)
+    # Fallback hanya untuk data tanpa jabatan yang bisa dikenali.
+    if not team_leader and lainnya:
+        team_leader, lainnya = lainnya[0], lainnya[1:]
+    if not k3 and lainnya:
+        k3, lainnya = lainnya[0], lainnya[1:]
+    return team_leader, k3, lainnya
+
+
+def _is_perusahaan_baru(akta_pendirian: dict, tahun: int | None = None) -> bool:
+    """True bila umur perusahaan kurang dari 3 tahun berdasarkan tanggal akta."""
+    if not akta_pendirian:
+        return False
+    m = re.search(r"(19|20)\d{2}", str(akta_pendirian.get("tanggal", "")))
+    if not m:
+        return False
+    from datetime import date
+    tahun = tahun or date.today().year
+    return tahun - int(m.group(0)) < 3
+
+
 def _hapus_lock_orphan(xlsm_path: str, log=None) -> bool:
     """
     Cek & hapus lock file orphan (~$<basename>) jika Excel tidak beneran jalan.
@@ -155,8 +189,11 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
        catatan=f"No. {akta_p.get('nomor','')} tgl {akta_p.get('tanggal','')} — {akta_p.get('notaris','')}" if akta_p else "")
 
     akta_u = peserta_data.get("akta_perubahan", {})
+    perusahaan_baru = _is_perusahaan_baru(akta_p)
     _r("Akta Perubahan Terakhir", "Administrasi", "preview t2",
-       catatan=f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {akta_u.get('notaris','')}" if akta_u else "")
+       "TIDAK ADA" if perusahaan_baru and not akta_u else ("ADA" if akta_u else "PERIKSA"),
+       f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {akta_u.get('notaris','')}" if akta_u
+       else ("Perusahaan baru (tidak ada akta perubahan)" if perusahaan_baru else ""))
 
     # Direktur: prioritas dari PDF (direktur_pdf), fallback pemilik[0] (sudah ter-filter nama PT)
     _direktur_pdf = peserta_data.get("direktur_pdf", "")
@@ -169,11 +206,12 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
 
     # ── Teknis JKK ─────────────────────────────────────────────────────────────
     personel = peserta_data.get("personel_list", [])
+    tl, k3, personel_lain = _personel_slots(personel)
     if personel:
-        _r("Team Leader", "Teknis JKK", "table-tenaga-ahli row 1", catatan=personel[0] if len(personel) > 0 else "")
-        _r("Petugas/Ahli K3", "Teknis JKK", "table-tenaga-ahli row 2", catatan=personel[1] if len(personel) > 1 else "-")
-        for i, p in enumerate(personel[2:], 3):
-            _r(f"Tenaga Ahli {i}", "Teknis JKK", f"table-tenaga-ahli row {i}", catatan=p)
+        _r("Team Leader", "Teknis JKK", "table-tenaga-ahli / jabatan", catatan=tl or "-")
+        _r("Petugas/Ahli K3", "Teknis JKK", "table-tenaga-ahli / jabatan", catatan=k3 or "-")
+        for i, p in enumerate(personel_lain, 3):
+            _r(f"Tenaga Ahli {i}", "Teknis JKK", "table-tenaga-ahli / jabatan", catatan=p)
     else:
         _r("Team Leader", "Teknis JKK", "table-tenaga-ahli", catatan="(tidak ada data personel)")
         _r("Petugas/Ahli K3", "Teknis JKK", "table-tenaga-ahli", catatan="(tidak ada data personel)")
@@ -243,8 +281,9 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
     kinerja_nilai = peserta_data.get("kinerja_nilai", "-")
     kinerja_kat = peserta_data.get("kinerja_kategori", "-")
     _r("Kinerja Penyedia", "Kualifikasi", "PDF Penilaian Kinerja",
-       "ADA" if kinerja_ada else "PERIKSA",
-       f"{kinerja_nilai} ({kinerja_kat})" if kinerja_ada else "-")
+       "ADA" if kinerja_ada or perusahaan_baru else "PERIKSA",
+       f"{kinerja_nilai} ({kinerja_kat})" if kinerja_ada
+       else ("Dikecualikan karena perusahaan baru berdiri" if perusahaan_baru else "-"))
 
     skp = peserta_data.get("skp", 5)
     _r("SKP (Sisa Kemampuan Paket)", "Kualifikasi", "NPWP lookup V20",

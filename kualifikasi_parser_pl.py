@@ -22,6 +22,31 @@ from kualifikasi_parser import (
 )
 
 
+def _decode_cf_email(cf_hex: str) -> str:
+    """Decode alamat email Cloudflare dari atribut data-cfemail."""
+    try:
+        key = int(cf_hex[:2], 16)
+        return "".join(
+            chr(int(cf_hex[i:i + 2], 16) ^ key)
+            for i in range(2, len(cf_hex), 2)
+        )
+    except (TypeError, ValueError):
+        return ""
+
+
+def _clean_person_name(value: str) -> str:
+    """Buang prefix sistem/NIK agar nilai aman dipakai sebagai nama orang."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"\bBADAN\s+USAHA\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b\d{16}\b", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" -:;,.")
+    if not text or re.fullmatch(r"[\d\s./-]+", text):
+        return ""
+    if re.match(r"^(CV|PT|UD|PD|Koperasi|Firma)\b", text, re.IGNORECASE):
+        return ""
+    return text
+
+
 def _headers() -> dict:
     cookie = spse_browser.get_spse_cookies()
     return {"Cookie": cookie, "User-Agent": "Mozilla/5.0", "Referer": SPSE_BASE_URL}
@@ -68,6 +93,11 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
     hasil["npwp"]   = _cell(t0, "NPWP")
     hasil["alamat"] = _cell(t0, "Alamat")
     hasil["email"]  = _cell(t0, "Email")
+    # SPSE menampilkan placeholder [email protected] saat Cloudflare
+    # protection aktif; alamat asli ada di data-cfemail.
+    if "email protected" in hasil["email"].lower() or "[email" in hasil["email"].lower():
+        cf = soup.select_one("[data-cfemail]")
+        hasil["email"] = _decode_cf_email(cf.get("data-cfemail", "")) if cf else ""
 
     # Tabel 1: IZIN USAHA (NIB, SS, SBU)
     t1 = _tbl(1)
@@ -134,8 +164,11 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
     pemilik_list = []
     for row in t3[1:]:
         if row and len(row) >= 1 and row[0] and row[0] != "No data available in table":
-            if not _re_pt_filter.match(row[0].strip()):
-                pemilik_list.append(row[0])
+            if _re_pt_filter.match(row[0].strip()):
+                continue
+            nama = _clean_person_name(row[0])
+            if nama:
+                pemilik_list.append(nama)
     hasil["pemilik"] = pemilik_list
 
     # PERSONEL — table#table-tenaga-ahli
@@ -307,7 +340,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                 full_text, re.DOTALL | re.IGNORECASE
             )
             if m:
-                result["direktur"] = m.group(1).strip()
+                result["direktur"] = _clean_person_name(m.group(1))
             else:
                 # Pola 2: "Nama : X\nJabatan : Direktur" (form pakta integritas/surat pernyataan)
                 m2 = re.search(
@@ -315,7 +348,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                     full_text, re.IGNORECASE
                 )
                 if m2:
-                    result["direktur"] = m2.group(1).strip()
+                    result["direktur"] = _clean_person_name(m2.group(1))
             # Pola 3: "ABDUL MALIK, ST\nDirektur" (ttd di akhir dokumen)
             if not result["direktur"]:
                 m3 = re.search(
@@ -325,7 +358,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                 if m3:
                     cand = m3.group(1).strip()
                     if len(cand.split()) >= 2:  # minimal 2 kata
-                        result["direktur"] = cand
+                        result["direktur"] = _clean_person_name(cand)
 
             # Pola 4 (PDF gabungan Kualifikasi): multiline — nama diikuti "Direktur" di baris
             # bawahnya, mungkin ada baris kosong di antara. Contoh:
@@ -338,7 +371,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                 if m4:
                     cand4 = m4.group(1).strip()
                     if len(cand4.split()) >= 2 and not _re_pt.match(cand4):
-                        result["direktur"] = cand4
+                        result["direktur"] = _clean_person_name(cand4)
 
             # Pola 5: "Direktur\n\n{NAMA}" (urutan terbalik, form Cover/Cap)
             # Contoh: "Direktur \n \n Ir. Muhammad Dhiya Khairi Ananda, M.T. "
@@ -350,7 +383,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
                 if m5:
                     cand5 = m5.group(1).strip()
                     if len(cand5.split()) >= 2 and not _re_pt.match(cand5):
-                        result["direktur"] = cand5
+                        result["direktur"] = _clean_person_name(cand5)
 
             # Validasi: jika hasil diawali nama PT/CV → reset ke kosong, lanjut PDF berikutnya
             if result["direktur"] and _re_pt.match(result["direktur"]):
