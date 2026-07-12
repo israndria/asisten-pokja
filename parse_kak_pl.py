@@ -1059,9 +1059,15 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             if nd_pdf:
                 data = parse_nd_penyedia(nd_pdf)
                 log(prog, f"  📄 {kode}: parse ND.pdf → nama={data.get('nama_penyedia','')[:20]}")
-                # We still need to parse sub_kegiatan from Draft_PL if it exists
+                # ND menjadi sumber identitas penyedia. Draft_PL tetap wajib
+                # dipakai untuk nomor/tanggal Nota Dinas dan Surat Rekomendasi;
+                # sebelumnya field ini hilang setiap kali ND.pdf ditemukan.
                 pdf = cari_draft_pl_di_folder(folder)
                 if pdf:
+                    draft_data = parse_draft_pl(pdf)
+                    for key in ("nomor_nota_dinas", "nomor_rekomendasi", "tgl_rekomendasi"):
+                        if draft_data.get(key):
+                            data[key] = draft_data[key]
                     sub_keg = parse_sub_kegiatan_dari_draft_pl(pdf)
                     if sub_keg:
                         data["sub_kegiatan"] = sub_keg
