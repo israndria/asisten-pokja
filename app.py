@@ -220,6 +220,32 @@ def _cari_xlsm_pl(folder):
     return os.path.join(folder, xs[0])
 
 
+def _baca_master_data_pl(row: dict) -> dict:
+    """Baca field authoritative workbook PL tanpa pernah menyimpan .xlsm."""
+    try:
+        import parse_kak_pl as _pkl_md
+        folder, _ = _pkl_md._resolve_folder_pl(
+            row.get("nomor_urut"), row.get("nama_paket") or "",
+            row.get("jenis_pl") or "JKK", is_ulang=bool(row.get("is_ulang")),
+        )
+        xlsm = _cari_xlsm_pl(folder) if folder else None
+        if not xlsm:
+            return {}
+        from openpyxl import load_workbook
+        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
+        try:
+            ws = wb["@ Master Data"]
+            return {
+                "kode_unik": str(ws["F2"].value or "").strip(),
+                "nomor_dokpil": str(ws["C20"].value or "").strip(),
+                "tgl_dokpil": pl_engine._normalisasi_tanggal_excel(ws["C21"].value),
+            }
+        finally:
+            wb.close()
+    except Exception:
+        return {}
+
+
 def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
                             template_dir_jkk, template_dir_pk):
     """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->
@@ -3343,6 +3369,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 skpd_singkat=_sk_prev,
                                 tahun=_tgl_prev.year,
                                 paket_ulang=_pl_paket_ulang(_rr),
+                                nomor_urut=_rr.get("nomor_urut"),
                             )
                             st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
@@ -3408,6 +3435,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 skpd_singkat=_sk_up,
                                 tahun=_tgl_up.year,
                                 paket_ulang=_pl_paket_ulang(_rr_up),
+                                nomor_urut=_rr_up.get("nomor_urut"),
                             )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
@@ -3790,12 +3818,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
                                     _kode_unik = _p.get("kode_unik") or ""
                                     _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
-                                    _nomor_dokpil = _udpl.generate_nomor_dokpil(
+                                    _nomor_dokpil = _p.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                         nama_paket=_p["nama_paket"],
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
                                         tahun=_plsp_tgl_dokpil.year,
                                         paket_ulang=_pl_paket_ulang(_p),
+                                        nomor_urut=_p.get("nomor_urut"),
                                     )
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
@@ -4226,21 +4255,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 pass
             return "DPUPR"
 
+        def _kode_unik_excel_pl8(_row):
+            """Baca kode unik manual dari @ Master Data!F2 workbook paket."""
+            return _baca_master_data_pl(_row).get("kode_unik", "")
+
         def _nomor_dokpil_pl8(_row):
-            """Nomor dokpil dasar (slot /01/) — dari DB jika ada, else generate."""
-            _nd = (_row.get("nomor_dokpil") or "").strip()
-            if _nd:
-                return _nd
-            try:
-                import upload_dokpil_pl as _udpl8
-                return _udpl8.generate_nomor_dokpil(
-                    nama_paket=_row.get("nama_paket", ""),
-                    kode_unik=_row.get("kode_unik") or "",
-                    skpd_singkat=_skpd_pl8(_row.get("satker", "")),
-                    paket_ulang=_pl_paket_ulang(_row),
-                )
-            except Exception:
-                return ""
+            """Nomor dokpil final dari @ Master Data!C20 workbook paket."""
+            return _baca_master_data_pl(_row).get("nomor_dokpil", "")
 
         def _auto_nomor_pl8(_row, _jenis_key):
             """Derive nomor BA per jenis: ganti slot /NN/ pertama."""
@@ -6455,6 +6476,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 skpd_singkat=_sk_prev,
                                 tahun=_tgl_prev.year,
                                 paket_ulang=_pl_paket_ulang(_rr),
+                                nomor_urut=_rr.get("nomor_urut"),
                             )
                             st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
@@ -6520,6 +6542,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 skpd_singkat=_sk_up,
                                 tahun=_tgl_up.year,
                                 paket_ulang=_pl_paket_ulang(_rr_up),
+                                nomor_urut=_rr_up.get("nomor_urut"),
                             )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
@@ -6902,12 +6925,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
                                     _kode_unik = _p.get("kode_unik") or ""
                                     _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
-                                    _nomor_dokpil = _udpl.generate_nomor_dokpil(
+                                    _nomor_dokpil = _p.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                         nama_paket=_p["nama_paket"],
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
                                         tahun=_plsp_tgl_dokpil.year,
                                         paket_ulang=_pl_paket_ulang(_p),
+                                        nomor_urut=_p.get("nomor_urut"),
                                     )
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
@@ -7338,21 +7362,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 pass
             return "DPUPR"
 
+        def _kode_unik_excel_pl8(_row):
+            """Baca kode unik manual dari @ Master Data!F2 workbook paket."""
+            return _baca_master_data_pl(_row).get("kode_unik", "")
+
         def _nomor_dokpil_pl8(_row):
-            """Nomor dokpil dasar (slot /01/) — dari DB jika ada, else generate."""
-            _nd = (_row.get("nomor_dokpil") or "").strip()
-            if _nd:
-                return _nd
-            try:
-                import upload_dokpil_pl as _udpl8
-                return _udpl8.generate_nomor_dokpil(
-                    nama_paket=_row.get("nama_paket", ""),
-                    kode_unik=_row.get("kode_unik") or "",
-                    skpd_singkat=_skpd_pl8(_row.get("satker", "")),
-                    paket_ulang=_pl_paket_ulang(_row),
-                )
-            except Exception:
-                return ""
+            """Nomor dokpil final dari @ Master Data!C20 workbook paket."""
+            return _baca_master_data_pl(_row).get("nomor_dokpil", "")
 
         def _auto_nomor_pl8(_row, _jenis_key):
             """Derive nomor BA per jenis: ganti slot /NN/ pertama."""

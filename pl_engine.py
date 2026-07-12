@@ -6,7 +6,7 @@ Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from config import sb as _sb
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
@@ -22,11 +22,67 @@ SATKER_LIST = [
 
 STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
 
+_BULAN_INDONESIA = {
+    "januari": 1, "februari": 2, "maret": 3, "april": 4,
+    "mei": 5, "juni": 6, "juli": 7, "agustus": 8,
+    "september": 9, "oktober": 10, "november": 11, "desember": 12,
+}
+
+
+def _normalisasi_tanggal_excel(value) -> str:
+    """Normalisasi C21 Excel ke ISO agar bisa dipakai UI dan SPSE."""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value or "").strip()
+    m = re.fullmatch(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", text)
+    if m and m.group(2).lower() in _BULAN_INDONESIA:
+        return date(int(m.group(3)), _BULAN_INDONESIA[m.group(2).lower()], int(m.group(1))).isoformat()
+    return text
+
+
+def _enrich_manual_excel_pl(row: dict) -> dict:
+    """Excel F2/C20 menang atas cache Supabase untuk nomor surat PL."""
+    try:
+        from parse_kak_pl import _resolve_folder_pl
+        folder, _ = _resolve_folder_pl(
+            row.get("nomor_urut"), row.get("nama_paket") or "",
+            row.get("jenis_pl") or "JKK", is_ulang=bool(row.get("is_ulang")),
+        )
+        if not folder:
+            return row
+        xlsm = next(
+            (os.path.join(folder, f) for f in os.listdir(folder)
+             if f.lower().endswith(".xlsm") and "backup" not in f.lower()),
+            "",
+        )
+        if not xlsm:
+            return row
+        from openpyxl import load_workbook
+        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
+        try:
+            ws = wb["@ Master Data"]
+            kode_unik = str(ws["F2"].value or "").strip()
+            nomor_dokpil = str(ws["C20"].value or "").strip()
+            tgl_dokpil = _normalisasi_tanggal_excel(ws["C21"].value)
+        finally:
+            wb.close()
+        if kode_unik:
+            row["kode_unik"] = kode_unik
+        if nomor_dokpil:
+            row["nomor_dokpil"] = nomor_dokpil
+        if tgl_dokpil:
+            row["tgl_dokpil"] = tgl_dokpil
+    except Exception:
+        pass
+    return row
+
 
 def load_draft_pl() -> list[dict]:
     """Ambil paket PL JKK (jenis_pl=JKK, jenis_kontrak=Lumsum/Waktu Penugasan), urut terbaru dulu."""
     try:
-        return (
+        rows = (
             _sb()
             .table("draft_paket_pl")
             .select("*")
@@ -36,6 +92,7 @@ def load_draft_pl() -> list[dict]:
             .execute()
             .data or []
         )
+        return [_enrich_manual_excel_pl(row) for row in rows]
     except Exception as e:
         return []
 

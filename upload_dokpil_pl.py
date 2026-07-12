@@ -58,13 +58,21 @@ def generate_nomor_dokpil(
     skpd_singkat: str,
     tahun: str | int | None = None,
     paket_ulang: bool = False,
+    nomor_urut: str | int | None = None,
 ) -> str:
     """
     Pattern: 000.3.3/01/PL/PP-{NN}/{KodeUnik}/{SkpdSingkat}/{Tahun}
     Contoh:  000.3.3/01/PL/PP-01/KPP1/DPUPR/2026
     paket_ulang=True → sisip /PLU/ setelah 000.3.3.
     """
-    pp_nn = _extract_digit_paket(nama_paket)
+    # Nomor urut paket dari database adalah sumber utama. Ekstraksi dari
+    # nama paket hanya fallback legacy; nama paket bisa tidak memuat nomor
+    # folder dan menghasilkan PP-01 yang salah.
+    if nomor_urut is not None and str(nomor_urut).strip():
+        m_urut = re.search(r"\d+", str(nomor_urut))
+        pp_nn = m_urut.group(0).zfill(2) if m_urut else _extract_digit_paket(nama_paket)
+    else:
+        pp_nn = _extract_digit_paket(nama_paket)
     if not kode_unik:
         kode_unik = "KodeUnik"
     if not skpd_singkat:
