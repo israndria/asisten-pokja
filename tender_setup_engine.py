@@ -48,6 +48,24 @@ def _indexed_items(form, prefixes: tuple[str, ...]) -> dict[str, list[dict]]:
     return {p: [items[i] for i in sorted(items)] for p, items in result.items()}
 
 
+def _hidden_payload(form) -> dict[str, str]:
+    """Pertahankan hidden field form SPSE; server memakai sebagian untuk binding row."""
+    payload = {}
+    for inp in form.find_all("input", type="hidden"):
+        name = inp.get("name", "")
+        if name and name != "authenticityToken":
+            payload[name] = inp.get("value", "")
+    return payload
+
+
+def _set_selected(payload: dict, prefix: str, items: list[dict], selected: list[str]) -> None:
+    selected_set = {str(x) for x in selected}
+    for i, item in enumerate(items):
+        ckm_id = str(item.get("ckm_id", ""))
+        if ckm_id in selected_set:
+            payload[f"{prefix}[{i}].ckm_id"] = item.get("ckm_id", "")
+
+
 def scrape_ldk(kode: str) -> dict:
     soup, meta, form = _get_form(kode, "ldk", "ldksubmitbaru")
     items = _indexed_items(form, ("syaratAdmin", "syaratTeknis", "ijin"))
@@ -62,8 +80,10 @@ def scrape_ldk(kode: str) -> dict:
 
 def submit_izin_usaha(kode: str, ijin_rows: list[dict]) -> dict:
     """POST hanya dua row izin usaha pada form LDK tender."""
-    ctx = scrape_ldk(kode)
-    payload = {"authenticityToken": ctx["token"]}
+    _, meta, form = _get_form(kode, "ldk", "ldksubmitbaru")
+    items = _indexed_items(form, ("syaratAdmin", "syaratTeknis", "ijin"))
+    ctx = {**meta, "ijin": items["ijin"], "submit": f"{BASE}/dokumen/{kode}/ldksubmitbaru"}
+    payload = {"authenticityToken": ctx["token"], **_hidden_payload(form)}
     for i, row in enumerate(ijin_rows[:2]):
         item = ctx["ijin"][i] if i < len(ctx["ijin"]) else {}
         payload[f"ijin[{i}].chk_id"] = item.get("chk_id", "")
@@ -84,8 +104,10 @@ def submit_ldk(
     teknis_ids: list[str],
     kinerja_text: str = "",
 ) -> dict:
-    ctx = scrape_ldk(kode)
-    payload = {"authenticityToken": ctx["token"]}
+    _, meta, form = _get_form(kode, "ldk", "ldksubmitbaru")
+    items = _indexed_items(form, ("syaratAdmin", "syaratTeknis", "ijin"))
+    ctx = {**meta, "admin": items["syaratAdmin"], "teknis": items["syaratTeknis"], "ijin": items["ijin"], "submit": f"{BASE}/dokumen/{kode}/ldksubmitbaru"}
+    payload = {"authenticityToken": ctx["token"], **_hidden_payload(form)}
     for i, row in enumerate(ijin_rows[:2]):
         item = ctx["ijin"][i] if i < len(ctx["ijin"]) else {}
         payload[f"ijin[{i}].chk_id"] = item.get("chk_id", "")
@@ -94,8 +116,9 @@ def submit_ldk(
     for prefix, items, selected in (("syaratAdmin", ctx["admin"], admin_ids), ("syaratTeknis", ctx["teknis"], teknis_ids)):
         for i, item in enumerate(items):
             payload[f"{prefix}[{i}].chk_id"] = item.get("chk_id", "")
+        _set_selected(payload, prefix, items, selected)
+        for i, item in enumerate(items):
             if str(item.get("ckm_id", "")) in {str(x) for x in selected}:
-                payload[f"{prefix}[{i}].ckm_id"] = item.get("ckm_id", "")
                 payload[f"checklist_kualifikasi_{'administrasi' if prefix == 'syaratAdmin' else 'teknis'}_ckm_id[{i}]"] = item.get("ckm_id", "")
     if kinerja_text.strip():
         existing = next((i for i, item in enumerate(ctx["teknis"]) if str(item.get("ckm_id", "")) == "996"), None)
@@ -115,14 +138,16 @@ def scrape_checklist(kode: str) -> dict:
 
 
 def submit_checklist(kode: str, admin_ids: list[str], teknis_ids: list[str], harga_ids: list[str]) -> dict:
-    ctx = scrape_checklist(kode)
-    payload = {"authenticityToken": ctx["token"]}
+    soup, meta, form = _get_form(kode, "checklist", "checklistsubmit")
+    items = _indexed_items(form, ("syaratAdmin", "syarat", "syaratHarga"))
+    if not any(items.values()):
+        raise RuntimeError("Field checklist SPSE tidak terbaca dari form.")
+    ctx = {**meta, "admin": items["syaratAdmin"], "teknis": items["syarat"], "harga": items["syaratHarga"], "submit": f"{BASE}/dokumen/{kode}/checklistsubmit"}
+    payload = {"authenticityToken": ctx["token"], "simpan": "simpan", **_hidden_payload(form)}
     for prefix, items, selected in (("syaratAdmin", ctx["admin"], admin_ids), ("syarat", ctx["teknis"], teknis_ids), ("syaratHarga", ctx["harga"], harga_ids)):
-        selected_set = {str(x) for x in selected}
         for i, item in enumerate(items):
             payload[f"{prefix}[{i}].chk_id"] = item.get("chk_id", "")
-            if str(item.get("ckm_id", "")) in selected_set:
-                payload[f"{prefix}[{i}].ckm_id"] = item.get("ckm_id", "")
+        _set_selected(payload, prefix, items, selected)
     resp = requests.post(ctx["submit"], data=payload, headers={**HEADERS, "Cookie": ctx["cookie"], "Referer": ctx["url"]}, allow_redirects=False, timeout=30)
     return {"ok": resp.status_code in (200, 302), "status": resp.status_code, "redirect": resp.headers.get("Location", "")}
 

@@ -1247,7 +1247,7 @@ _COOKIE_CACHE_TTL = 300.0  # cookie valid 5 menit (cukup utk bulk paralel)
 _cookie_lock = threading.Lock()
 
 
-def get_spse_cookies() -> str:
+def get_spse_cookies(force: bool = False) -> str:
     """
     Ambil cookies SPSE via Playwright context yang sudah ada.
     Di-cache 5 menit + thread-safe lock agar concurrent caller (bulk paralel)
@@ -1255,6 +1255,10 @@ def get_spse_cookies() -> str:
     """
     import time as _time
     global _cookie_cache, _cookie_cache_ts
+
+    if force:
+        _cookie_cache = ""
+        _cookie_cache_ts = 0.0
 
     # Fast-path: cache hit tanpa lock
     now = _time.time()

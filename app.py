@@ -969,6 +969,7 @@ def _sidebar_login_form():
 
                 # Tampilkan log setelah selesai (di main thread)
                 _log_box.info("\n".join(_login_logs))
+                _spse_login.remember_login_role(_login_role)
 
                 # Connect CDP setelah login berhasil
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
@@ -998,6 +999,7 @@ def _sidebar_login_form():
                     _spse_login.retry_captcha(role=_retry_role, log_fn=_rlog)
 
                 _rlog_box.info("\n".join(_retry_logs))
+                _spse_login.remember_login_role(_retry_role)
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                 st.session_state["spse_role"] = _retry_role
                 spse_browser.mulai_auto_refresh()
@@ -1029,6 +1031,7 @@ def _sidebar_login_form():
                             captcha_text=_manual_captcha,
                             log_fn=_manual_logs.append,
                         )
+                    _spse_login.remember_login_role(_retry_role)
                     st.info("\n".join(_manual_logs))
                     spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                     st.session_state["spse_role"] = _retry_role
@@ -9064,6 +9067,31 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
+            _SBU_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_history.json")
+            _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
+
+            def _load_sbu_history():
+                try:
+                    with open(_SBU_HISTORY_FILE, "r", encoding="utf-8") as f:
+                        values = _json.load(f)
+                    return [str(v).strip() for v in values if str(v).strip()]
+                except Exception:
+                    return []
+
+            def _save_sbu_history(value):
+                value = str(value or "").strip()
+                if not value:
+                    return
+                history = [value] + [v for v in _load_sbu_history() if v != value]
+                try:
+                    with open(_SBU_HISTORY_FILE, "w", encoding="utf-8") as f:
+                        _json.dump(history[:20], f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
+            if "tender_sbu_history" not in st.session_state:
+                st.session_state["tender_sbu_history"] = _load_sbu_history()
+
             # Inisialisasi default SBU dari file — hanya sekali per session, SEBELUM widget dirender
             if "sbu_last_loaded" not in st.session_state:
                 _last = _load_sbu_last()
@@ -9098,6 +9126,28 @@ if _tender_active_tab == "3️⃣ Setup Paket":
 
             for i, row in enumerate(st.session_state["ijin_rows"]):
                 if i == 0:
+                    continue
+                if i == 1:
+                    # Row 2 fixed: hanya deskripsi SBU yang terlihat; nama izin + kalimat baku hidden.
+                    st.session_state["ijin_rows"][i]["jenis_izin"] = "Sertifikat Badan Usaha SBU"
+                    _sbu_new_option = "✏️ Input SBU baru"
+                    _sbu_options = st.session_state["tender_sbu_history"] + [_sbu_new_option]
+                    _sbu_pick = st.selectbox(
+                        "SBU — pilih histori",
+                        _sbu_options,
+                        index=0,
+                        key="tender_sbu_history_pick",
+                    )
+                    if _sbu_pick == _sbu_new_option:
+                        _sbu_desc = st.text_input(
+                            "Deskripsi SBU baru",
+                            value=st.session_state.get("tender_sbu_new", ""),
+                            key="tender_sbu_new",
+                            placeholder="Contoh: SBU BS004 Konstruksi Jaringan Irigasi dan Drainase KBLI 42201",
+                        )
+                    else:
+                        _sbu_desc = _sbu_pick
+                    st.session_state["ijin_rows"][i]["klasifikasi"] = f"{_SBU_PREFIX}\n{_sbu_desc}" if _sbu_desc else _SBU_PREFIX
                     continue
                 st.caption(f"Row {i+1}")
 
@@ -9190,6 +9240,10 @@ if _tender_active_tab == "3️⃣ Setup Paket":
             mb_nilai_hari = 40
 
             _t_default_ijin = st.session_state.get("ijin_rows", ldk_config.IJIN_USAHA_DEFAULT["rows"])
+            _t_sbu_desc = (
+                _t_default_ijin[1].get("klasifikasi", "").replace(_SBU_PREFIX, "", 1).strip()
+                if len(_t_default_ijin) > 1 else ""
+            )
             _t_kinerja_text = "\n".join(
                 r["teks"] for i, r in enumerate(st.session_state.get("sp_syarat_teknis_rows", []))
                 if st.session_state.get(f"sp_st_chk_{i}", True) and r.get("teks", "").strip()
@@ -9199,6 +9253,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"📋 Submit Syarat Kualifikasi + Kinerja ({len(sp_selected)} paket)",
                 key="sp_submit_ldk_fixed", use_container_width=True, disabled=not sp_selected,
             ):
+                _save_sbu_history(_t_sbu_desc)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_ldk(
@@ -9213,6 +9268,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"🛂 Submit 2 Syarat Izin Usaha ({len(sp_selected)} paket)",
                 key="sp_submit_ijin_fixed", use_container_width=True, disabled=not sp_selected,
             ):
+                _save_sbu_history(_t_sbu_desc)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_izin_usaha(_p["id_lelang"], _t_default_ijin)
@@ -9224,6 +9280,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"📄 Submit Checklist Dokumen ({len(sp_selected)} paket)",
                 key="sp_submit_checklist_fixed", use_container_width=True, disabled=not sp_selected,
             ):
+                _save_sbu_history(_t_sbu_desc)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_checklist(
@@ -9233,8 +9290,9 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                     except Exception as _e:
                         st.write(f"❌ {_p['nama'][:45]} — {_e}")
 
+            st.caption("Bulk Setup menjalankan LDK + izin usaha + checklist + masa berlaku. Upload DOKPIL tetap tombol terpisah.")
             sp_push = st.button(
-                f"🚀 Push Setup ke SPSE ({len(sp_selected)} paket)",
+                f"🚀 Bulk Setup ke SPSE ({len(sp_selected)} paket)",
                 type="primary",
                 use_container_width=True,
                 disabled=len(sp_selected) == 0,
@@ -9243,6 +9301,9 @@ if _tender_active_tab == "3️⃣ Setup Paket":
 
             if sp_push:
                 import tempfile
+
+                _sbu_for_history = st.session_state["ijin_rows"][1].get("klasifikasi", "").replace(_SBU_PREFIX, "", 1).strip() if len(st.session_state.get("ijin_rows", [])) > 1 else ""
+                _save_sbu_history(_sbu_for_history)
 
                 # Default dari form (dipakai jika paket tidak punya DOKPIL)
                 _default_ijin = _t_default_ijin

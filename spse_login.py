@@ -11,6 +11,8 @@ Security:
 from __future__ import annotations
 import os
 import re
+import hashlib
+import json
 import time
 import asyncio
 import tempfile
@@ -23,6 +25,23 @@ from typing import Literal
 # ============================================================
 
 _ENV_PATH = Path(__file__).parent / "secret_spse.env"
+_ROLE_FILE = Path(__file__).parent / ".browser_session" / "last_role.txt"
+
+
+def _cookie_fingerprint(cookie: str) -> str:
+    """Hash SPSE_SESSION; nilai cookie tidak pernah disimpan."""
+    session = next((p.split("=", 1)[1] for p in cookie.split("; ") if p.startswith("SPSE_SESSION=")), "")
+    return hashlib.sha256(session.encode("utf-8")).hexdigest() if session else ""
+
+
+def remember_login_role(role: str) -> None:
+    """Simpan role + fingerprint sesi agar cache role stale ditolak saat F5."""
+    import spse_browser as _sb
+    cookie = _sb.get_spse_cookies(force=True)
+    if not cookie:
+        return
+    _ROLE_FILE.parent.mkdir(exist_ok=True)
+    _ROLE_FILE.write_text(json.dumps({"role": role, "cookie_fp": _cookie_fingerprint(cookie)}), encoding="utf-8")
 
 def _load_env() -> dict[str, str]:
     """Baca secret_spse.env → dict. Raise jika file tidak ada."""
@@ -54,11 +73,11 @@ def _get_creds(role: Literal["PP", "POKJA", "PPK"]) -> tuple[str, str]:
 
 def detect_login_role() -> str | None:
     """
-    Ambil role login aktif dari file cache .browser_session/last_role.txt.
+    Ambil role login aktif dari cache yang dicocokkan dengan cookie sesi Brave.
 
     Login di app ini WAJIB via tombol (Launch & Auto-Login), yang menulis role ke file
     setelah login sukses. Fungsi ini hanya untuk memulihkan role saat Streamlit hot-reload
-    (session_state hilang tapi browser + file cache masih ada). Bukan deteksi dari DOM SPSE.
+    (session_state hilang tapi browser + file cache masih ada). Cache teks lama ditolak.
 
     Return: "PP" | "POKJA" | "PPK" | None (kalau belum login / halaman masih di login).
     """
@@ -72,10 +91,11 @@ def detect_login_role() -> str | None:
         _base = SPSE_BASE_URL.rstrip("/")
         if url.rstrip("/") == _base or "loginpass" in url:
             return None
-        _role_file = Path(__file__).parent / ".browser_session" / "last_role.txt"
-        if _role_file.exists():
-            role = _role_file.read_text(encoding="utf-8").strip()
-            if role in ("PP", "POKJA", "PPK", "E-Katalog"):
+        if _ROLE_FILE.exists():
+            record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
+            role = record.get("role")
+            cookie = _sb.get_spse_cookies(force=True)
+            if role in ("PP", "POKJA", "PPK", "E-Katalog") and record.get("cookie_fp") == _cookie_fingerprint(cookie):
                 return role
     except Exception:
         pass
@@ -383,13 +403,6 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
 
         if "loginpass" not in current_url and "login" not in current_url.split("/")[-1]:
             _log(f"✅ Login berhasil sebagai {role}!")
-            # Simpan role ke file agar bisa di-detect saat F5 refresh
-            try:
-                _sess_dir = Path(__file__).parent / ".browser_session"
-                _sess_dir.mkdir(exist_ok=True)
-                (_sess_dir / "last_role.txt").write_text(role, encoding="utf-8")
-            except Exception:
-                pass
             return True
 
         err_el = await page.query_selector(".alert-danger, .alert-error, .error")
