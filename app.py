@@ -8985,7 +8985,23 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 .select("kode_tender, folder_dibuat, dokumen_snapshot") \
                 .not_.is_("dokumen_snapshot", "null") \
                 .execute()
-            _snap_paket = [r for r in (_snap_rows.data if _snap_rows.data else []) if not _is_tender_excluded(r)]
+            # Hanya cek paket yang sedang tampil di Tab 0 (tahun/status aktif).
+            # Query snapshot sebelumnya mengambil seluruh histori draft_paket,
+            # sehingga paket lama ikut muncul kembali.
+            _kode_tender_valid = {
+                str(r.get("kode_tender", "")) for r in _rows_valid
+                if r.get("kode_tender")
+            }
+            _kode_tender_terkini = {
+                str(p.get("kode", "")) for p in _get_paket_gabungan(filter_selesai=False)
+                if p.get("kode")
+            }
+            _snap_paket = [
+                r for r in (_snap_rows.data if _snap_rows.data else [])
+                if not _is_tender_excluded(r)
+                and str(r.get("kode_tender", "")) in _kode_tender_valid
+                and str(r.get("kode_tender", "")) in _kode_tender_terkini
+            ]
             if not _snap_paket:
                 st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
             else:
@@ -9030,6 +9046,10 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             _ada_update_list = [x for x in _bh if x.get("ada_update")]
             _error_list = [x for x in _bh if x.get("error")]
             _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
+            _sama_list = [
+                x for x in _bh
+                if not x.get("ada_update") and not x.get("error") and not x.get("cookie_invalid")
+            ]
             if _cookie_invalid_list:
                 st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Brave.")
             if _ada_update_list:
@@ -9078,22 +9098,64 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             _diff_dl["berubah"], _diff_dl["baru"],
                             _sn_lama2, progress_cb=_dl_cb4,
                         )
-                        _dpk_dl.simpan_snapshot(_kt_dl, _diff_dl["snapshot_baru"])
-                        _dl_st4.update(
-                            label=f"✅ {len(_dl_res4['ok'])} file diupdate, ❌ {len(_dl_res4['error'])} gagal",
-                            state="complete", expanded=False,
-                        )
+                        _download_final_ok = False
                         if _dl_res4["error"]:
+                            _dl_st4.update(
+                                label=f"❌ {len(_dl_res4['ok'])} file diupdate, {len(_dl_res4['error'])} gagal — snapshot tidak dimajukan",
+                                state="error", expanded=True,
+                            )
                             for _e6 in _dl_res4["error"]:
                                 st.error(_e6)
                         else:
-                            st.success(f"✅ {_item['nama'][:50]} — selesai. Parse Draft ulang di Excel.")
-                        st.session_state["_batch_cek_hasil"] = [
-                            x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
-                        ]
+                            # Download sukses penuh: parse Draft lokal + isi @ Master Data
+                            # sebelum snapshot dimajukan. Jika Excel sedang terbuka atau
+                            # COM gagal, snapshot ditahan agar update bisa dicoba ulang.
+                            _row_update = next(
+                                (r for r in _draft_rows if str(r.get("kode_tender", "")) == str(_kt_dl)),
+                                None,
+                            )
+                            _md_logs = _proses_excel_paket_tender(
+                                _folder_dl, _kt_dl, row_data=_row_update
+                            )
+                            _md_gagal = any(
+                                "WARN" in str(_line).upper()
+                                or "ERROR" in str(_line).upper()
+                                for _line in _md_logs
+                            )
+                            _dl_log4.extend(f"🧾 {_line}" for _line in _md_logs)
+                            if _md_gagal:
+                                _dl_st4.update(
+                                    label="⚠️ File terunduh, sinkronisasi @ Master Data gagal — snapshot ditahan",
+                                    state="error", expanded=True,
+                                )
+                                st.warning(
+                                    f"⚠️ {_item['nama'][:50]} — file sudah terunduh, "
+                                    "tetapi @ Master Data belum tersinkron. Perbaiki Excel lalu ulangi."
+                                )
+                                _dl_area4.code("\n".join(_dl_log4[-20:]))
+                            else:
+                                _dpk_dl.simpan_snapshot(_kt_dl, _diff_dl["snapshot_baru"])
+                                _download_final_ok = True
+                                _dl_st4.update(
+                                    label=f"✅ {len(_dl_res4['ok'])} file diupdate + @ Master Data tersinkron",
+                                    state="complete", expanded=True,
+                                )
+                                _dl_area4.code("\n".join(_dl_log4[-20:]))
+                                st.success(f"✅ {_item['nama'][:50]} — dokumen dan @ Master Data sudah diperbarui.")
+                        if _download_final_ok:
+                            st.session_state["_batch_cek_hasil"] = [
+                                x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
+                            ]
                         st.rerun()
             else:
                 st.success(f"✅ Semua {len(_bh)} paket — tidak ada update dokumen PPK")
+            if _sama_list:
+                st.caption(
+                    f"ℹ️ {_sama_list[0]['nama'][:70]}"
+                    if len(_sama_list) == 1
+                    else f"ℹ️ {len(_sama_list)} paket diperiksa tanpa perubahan: "
+                    + ", ".join(x["nama"][:45] for x in _sama_list)
+                )
             if _error_list:
                 with st.expander(f"⚠️ {len(_error_list)} paket gagal dicek"):
                     for _item in _error_list:
@@ -9118,22 +9180,40 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     continue
                 _ac1, _ac2, _ac3, _ac4, _ac5, _ac6, _ac7 = st.columns(7)
                 # 📦 Unduh
-                if _ac1.button("📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True):
+                if _ac1.button(
+                    "📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True,
+                    help="Unduh dokumen paket terbaru dari SPSE ke folder paket.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "dl"
                 # 💰 HPS
-                if _ac2.button("💰 HPS", key=f"t_hps_{_kt}", use_container_width=True):
+                if _ac2.button(
+                    "💰 HPS", key=f"t_hps_{_kt}", use_container_width=True,
+                    help="Ambil rincian HPS dari SPSE dan isi ke Excel paket.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "hps"
                 # 🔄 Refresh
-                if _ac3.button("🔄 Refresh", key=f"t_ref_{_kt}", use_container_width=True):
+                if _ac3.button(
+                    "🔄 Refresh", key=f"t_ref_{_kt}", use_container_width=True,
+                    help="Refresh template Excel paket dari template master.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "ref"
                 # 👀 Peserta
-                if _ac4.button("👀 Peserta", key=f"t_mon_{_kt}", use_container_width=True):
+                if _ac4.button(
+                    "👀 Peserta", key=f"t_mon_{_kt}", use_container_width=True,
+                    help="Cek peserta dan status pemenang paket di SPSE.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "mon"
                 # 📂 Buka
-                if _ac5.button("📂 Buka", key=f"t_open_{_kt}", use_container_width=True):
+                if _ac5.button(
+                    "📂 Buka", key=f"t_open_{_kt}", use_container_width=True,
+                    help="Buka folder dokumen paket di File Explorer.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "open"
                 # 🔁 Parse
-                if _ac6.button("🔁 Parse", key=f"t_parse_{_kt}", use_container_width=True):
+                if _ac6.button(
+                    "🔁 Parse", key=f"t_parse_{_kt}", use_container_width=True,
+                    help="Baca ulang Draft PPK dan sinkronkan metadata paket ke Supabase.",
+                ):
                     st.session_state[f"_t_act_{_kt}"] = "parse"
                 if _ac7.button(
                     "🧾 Patch Reviu", key=f"t_patch_reviu_{_kt}",
