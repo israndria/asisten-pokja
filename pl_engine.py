@@ -1235,3 +1235,64 @@ def umumkan_paket_pl(kode_paket: str, cookie_str: str) -> dict:
             return {'ok': False, 'pesan': f'POST gagal: HTTP {resp_post.status_code}', 'status_code': resp_post.status_code}
     except Exception as e:
         return {'ok': False, 'pesan': f'POST pengumumanpp gagal: {e}', 'status_code': 0}
+
+
+def umumkan_pemenang_pl(kode_paket: str, cookie_str: str) -> dict:
+    """Kirim Pengumuman Pemenang non-tender via halaman undangan SPSE."""
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+    from config import SPSE_BASE_URL
+
+    base = f"{SPSE_BASE_URL}nontender/{kode_paket}"
+    headers = {
+        "Cookie": cookie_str,
+        "User-Agent": "Mozilla/5.0",
+        "Referer": base,
+    }
+    try:
+        resp_get = requests.get(f"{base}/undangan", headers=headers, timeout=15)
+        soup = BeautifulSoup(resp_get.text, "html.parser")
+        form = next(
+            (f for f in soup.find_all("form")
+             if f.find("input", {"name": "authenticityToken"})),
+            None,
+        )
+        token = form.find("input", {"name": "authenticityToken"}) if form else None
+        if resp_get.status_code != 200 or not form or not token:
+            return {
+                "ok": False,
+                "pesan": f"Halaman pengumuman gagal dibaca (HTTP {resp_get.status_code})",
+                "status_code": resp_get.status_code,
+            }
+
+        winners = []
+        for row in soup.select("form table tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) >= 3 and row.select_one(".fa-check-circle"):
+                winners.append({
+                    "nama": cells[1].get_text(" ", strip=True),
+                    "email": cells[2].get_text(" ", strip=True),
+                })
+        if not winners:
+            return {"ok": False, "pesan": "Pemenang tidak ditemukan di halaman pengumuman", "status_code": 200}
+
+        action = urljoin(f"{SPSE_BASE_URL}nontender/{kode_paket}/", form.get("action", ""))
+        resp_post = requests.post(
+            action,
+            data={"authenticityToken": token.get("value", ""), "simpan": "simpan"},
+            headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+            allow_redirects=False,
+            timeout=15,
+        )
+        location = resp_post.headers.get("Location", "")
+        if resp_post.status_code == 302 and not any(x in location.lower() for x in ("login", "error")):
+            return {"ok": True, "pesan": "Pengumuman pemenang berhasil dikirim", "status_code": 302, "winners": winners}
+        return {
+            "ok": False,
+            "pesan": f"POST pengumuman gagal (HTTP {resp_post.status_code})",
+            "status_code": resp_post.status_code,
+            "winners": winners,
+        }
+    except Exception as e:
+        return {"ok": False, "pesan": f"Pengumuman pemenang gagal: {e}", "status_code": 0}

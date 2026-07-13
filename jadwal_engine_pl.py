@@ -232,6 +232,8 @@ def scrap_hidden_fields_pl(kode_paket: str) -> dict:
             "hidden":       hidden,
             "name_mulai":   f"{prefix}dtj_tglawal",
             "name_selesai": f"{prefix}dtj_tglakhir",
+            "mulai":         form_jadwal.find("input", {"name": f"{prefix}dtj_tglawal"}).get("value", ""),
+            "selesai":       form_jadwal.find("input", {"name": f"{prefix}dtj_tglakhir"}).get("value", ""),
         })
 
     rows.sort(key=lambda r: r["index"])
@@ -289,6 +291,33 @@ def submit_jadwal_pl(kode_paket: str, payload: dict, cookie_str: str = None) -> 
         "body":     (r.text or "")[:2000],
         "redirect": r.headers.get("Location", ""),
     }
+
+
+def parse_jadwal_aktual_pl(scraped: dict) -> list[dict]:
+    """Ubah nilai tanggal hasil scrape menjadi 5 baris jadwal editable."""
+    hasil = []
+    for row in scraped.get("rows", []):
+        hasil.append({
+            "nama": row.get("index", 0) + 1,
+            "mulai": datetime.strptime(row["mulai"], "%d-%m-%Y %H:%M"),
+            "selesai": datetime.strptime(row["selesai"], "%d-%m-%Y %H:%M"),
+        })
+    return hasil
+
+
+def submit_perubahan_jadwal_pl(kode_paket: str, jadwal_list: list[dict], keterangan: str) -> dict:
+    """Scrape jadwal live, pertahankan hidden ID, lalu submit perubahan."""
+    if len((keterangan or "").strip()) < 30:
+        raise ValueError("Alasan perubahan minimal 30 karakter.")
+    scraped = scrap_hidden_fields_pl(kode_paket)
+    payload = build_payload_pl(scraped, jadwal_list)
+    payload.update({
+        "harus_berubah": "true",
+        "keterangan": keterangan.strip(),
+        "simpan": "simpan",
+    })
+    result = submit_jadwal_pl(kode_paket, payload, cookie_str=scraped.get("cookie"))
+    return {"scraped": scraped, "jadwal_list": jadwal_list, "payload": payload, "submit_result": result}
 
 
 def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
