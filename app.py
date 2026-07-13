@@ -9116,7 +9116,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 if not _ada:
                     st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
                     continue
-                _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
+                _ac1, _ac2, _ac3, _ac4, _ac5, _ac6, _ac7 = st.columns(7)
                 # 📦 Unduh
                 if _ac1.button("📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True):
                     st.session_state[f"_t_act_{_kt}"] = "dl"
@@ -9135,6 +9135,12 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 # 🔁 Parse
                 if _ac6.button("🔁 Parse", key=f"t_parse_{_kt}", use_container_width=True):
                     st.session_state[f"_t_act_{_kt}"] = "parse"
+                if _ac7.button(
+                    "🧾 Patch Reviu", key=f"t_patch_reviu_{_kt}",
+                    use_container_width=True,
+                    help="Baca SOP patch manual, koreksi jawaban, dan unlock seluruh Content Control",
+                ):
+                    st.session_state[f"_t_act_{_kt}"] = "patch_reviu"
 
             # Proses aksi di LUAR expander (hindari nested st.status di expander)
             _act = st.session_state.pop(f"_t_act_{_kt}", None)
@@ -9230,6 +9236,39 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             _st_rp.update(label=f"❌ Gagal re-parse: {_rp_e}", state="error")
 
 # ============================================================
+                elif _act == "patch_reviu":
+                    import ai_evaluator as _ai_patch
+                    _patch_st = st.status(
+                        f"🧾 Menjalankan patch manual Isi Reviu {_nm[:40]}...",
+                        expanded=True,
+                    )
+                    _patch_st.write("Membaca SOP dan memvalidasi dokumen paket...")
+                    try:
+                        _patch_res = _ai_patch.patch_manual_isi_reviu_single(
+                            _tpath, _nm, engine="codex"
+                        )
+                        if _patch_res.get("status") == "ok":
+                            _patch_st.write(_patch_res.get("output") or "AI selesai tanpa output tambahan.")
+                            _patch_st.update(
+                                label=f"✅ Patch Reviu selesai: {_nm[:40]}",
+                                state="complete",
+                                expanded=True,
+                            )
+                        else:
+                            _patch_st.update(
+                                label=f"❌ Patch Reviu gagal: {_nm[:40]}",
+                                state="error",
+                                expanded=True,
+                            )
+                            st.error(_patch_res.get("error") or "AI gagal menjalankan patch.")
+                    except Exception as _patch_e:
+                        _patch_st.update(
+                            label=f"❌ Patch Reviu gagal: {_nm[:40]}",
+                            state="error",
+                            expanded=True,
+                        )
+                        st.error(str(_patch_e))
+
 # Tab Setup Paket: LDK Auto-fill + Checklist + Masa Berlaku
 # ============================================================
 

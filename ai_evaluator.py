@@ -23,6 +23,7 @@ DEFAULT_MODEL = "haiku"
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
+PATCH_MANUAL_SOP = Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\PANDUAN_PATCH_MANUAL_EVALUASI.md")
 
 
 def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str = None, is_ulang: bool = False) -> Path:
@@ -187,6 +188,56 @@ Langkah:
 4. Output: _HASIL_EVALUASI_TEKNIS.md di ROOT folder paket.
 
 Mulai sekarang."""
+
+
+def _prompt_patch_manual_isi_reviu(folder_paket: Path, docm_path: Path, nama_paket: str) -> str:
+    """Prompt satu-klik untuk patch manual Isi Reviu PK Tender."""
+    return f"""Lakukan patch manual Isi Reviu PK untuk paket berikut.
+
+Paket: {nama_paket}
+Folder paket: {folder_paket}
+File target: {docm_path}
+SOP WAJIB: {PATCH_MANUAL_SOP}
+
+Ikuti SOP tersebut sepenuhnya. Baca SOP dan seluruh dokumen sumber paket yang relevan,
+validasi identitas paket sebelum menjawab, lalu periksa seluruh pertanyaan Content Control
+di file target. Koreksi/isi jawaban berdasarkan bukti dokumen; jangan mengarang fakta.
+
+Untuk file DOCM:
+- buat backup unik di folder paket sebelum mengubah file;
+- ungroup/un-nest seluruh Content Control jika ada;
+- buat semua Content Control bertag cat_, rekomen_, atau tanggapan_ bisa diedit
+  (LockContents=False dan LockContentControl=False);
+- pertahankan VBA, format, tabel, dan isi lain yang tidak perlu diubah;
+- simpan file target dan buka ulang melalui Word COM untuk verifikasi;
+- pastikan jumlah CC tetap, seluruh CC tidak terkunci, dan VBA tetap ada.
+
+Setelah selesai, tulis log singkat ke folder paket dengan nama
+PATCH_MANUAL_ISI_REVIU_LOG.md yang memuat file target, backup, jumlah CC sebelum/sesudah,
+perubahan jawaban, dan hasil verifikasi. Jangan hanya menjelaskan langkah; kerjakan langsung.
+Jika sumber atau file target tidak ditemukan, tulis ERROR dan jangan mengarang.
+
+Mulai sekarang."""
+
+
+def patch_manual_isi_reviu_single(folder_paket, nama_paket: str, engine: str = "codex") -> dict:
+    """Jalankan patch manual Isi Reviu PK satu paket via AI CLI."""
+    folder = Path(folder_paket)
+    candidates = sorted(
+        p for p in folder.glob("2. Isi Reviu PK - *.docm")
+        if ".backup" not in p.name.lower() and ".bak_" not in p.name.lower()
+    )
+    if not candidates:
+        return {"nama": nama_paket, "status": "error", "output": "", "error": "File 2. Isi Reviu PK - *.docm tidak ditemukan."}
+    if not PATCH_MANUAL_SOP.is_file():
+        return {"nama": nama_paket, "status": "error", "output": "", "error": f"SOP tidak ditemukan: {PATCH_MANUAL_SOP}"}
+    docm_path = candidates[0]
+    try:
+        prompt = _prompt_patch_manual_isi_reviu(folder, docm_path, nama_paket)
+        output = _run_evaluator(prompt, model=DEFAULT_MODEL, timeout=1800, add_dirs=[folder], engine=engine)
+        return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(docm_path)}
+    except Exception as e:
+        return {"nama": nama_paket, "status": "error", "output": "", "error": str(e), "file": str(docm_path)}
 
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
