@@ -82,6 +82,32 @@ def detect_login_role() -> str | None:
     Return: "PP" | "POKJA" | "PPK" | None (kalau belum login / halaman masih di login).
     """
     import spse_browser as _sb
+
+    def _detect_role_from_page(url: str, cookie: str) -> str | None:
+        """Validasi role dari halaman SPSE saat fingerprint cookie berubah."""
+        import requests
+        from bs4 import BeautifulSoup
+        try:
+            response = requests.get(
+                url,
+                headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
+                timeout=10,
+                allow_redirects=True,
+            )
+            final_url = response.url.lower()
+            if "loginpass" in final_url:
+                return None
+            text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+            if "Pejabat Pengadaan" in text:
+                return "PP"
+            if "Pejabat Pembuat Komitmen" in text:
+                return "PPK"
+            if "Kelompok Kerja" in text or "Pokja" in text:
+                return "POKJA"
+        except Exception:
+            pass
+        return None
+
     try:
         url = _sb.get_url()
         if not url:
@@ -95,8 +121,21 @@ def detect_login_role() -> str | None:
             record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
             role = record.get("role")
             cookie = _sb.get_spse_cookies(force=True)
-            if role in ("PP", "POKJA", "PPK", "E-Katalog") and record.get("cookie_fp") == _cookie_fingerprint(cookie):
+            if role not in ("PP", "POKJA", "PPK", "E-Katalog"):
+                return None
+            current_fp = _cookie_fingerprint(cookie)
+            if record.get("cookie_fp") == current_fp:
                 return role
+
+            # Session SPSE dapat rotate tanpa logout. Validasi halaman aktif,
+            # lalu refresh fingerprint agar F5 tidak memaksa login ulang.
+            detected = _detect_role_from_page(url, cookie)
+            if detected:
+                _ROLE_FILE.write_text(
+                    json.dumps({"role": detected, "cookie_fp": current_fp}),
+                    encoding="utf-8",
+                )
+                return detected
     except Exception:
         pass
     return None
