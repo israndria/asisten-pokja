@@ -1,6 +1,6 @@
 Dim shell, port, checkResult, cmd, python, appDir, appPy
 
-python  = "C:\WinPython313\python\pythonw.exe"
+python  = "C:\WinPython313\python\python.exe"
 appDir  = "G:\Other computers\My Laptop\@ POKJA 2026\Asisten_Pokja"
 appPy   = appDir & "\app.py"
 port    = "8502"
