@@ -61,6 +61,69 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
             result.append(p)
     return result
 
+
+def _enrich_kode_unik_tender_excel(paket: dict) -> tuple[str, str, str]:
+    """Baca G2 workbook Tender sebagai source of truth, tanpa menyimpan XLSM.
+
+    Return: (kode_excel, kode_db, status). Status dipakai UI untuk memberi
+    peringatan jika Excel dan cache Supabase berbeda.
+    """
+    kode_db = str(paket.get("kode_unik") or "").strip()
+    try:
+        from config import TENDER_ROOT as _KU_TENDER_ROOT, sb as _KU_SB
+        import os as _ku_os
+        import re as _ku_re
+        rows = (
+            _KU_SB().table("draft_paket")
+            .select("folder_dibuat")
+            .eq("kode_tender", str(paket.get("kode") or paket.get("id_lelang") or ""))
+            .limit(1).execute().data or []
+        )
+        folder_name = str((rows[0] if rows else {}).get("folder_dibuat") or "").strip()
+        if not folder_name:
+            return "", kode_db, "folder tidak ditemukan"
+        folder_name = _ku_re.sub(r'[/\\:*?"<>|]', "-", folder_name).strip()
+        folder = _ku_os.path.join(_KU_TENDER_ROOT, folder_name)
+        candidates = sorted(
+            p for p in _ku_os.listdir(folder)
+            if p.lower().endswith(".xlsm")
+            and "backup" not in p.lower()
+            and ".bak_" not in p.lower()
+        )
+        if not candidates:
+            return "", kode_db, "workbook tidak ditemukan"
+        from openpyxl import load_workbook
+        path = _ku_os.path.join(folder, candidates[0])
+        wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
+        try:
+            ws = wb["@ Master Data"]
+            kode_excel = str(ws["G2"].value or "").strip()
+        finally:
+            wb.close()
+        if kode_excel:
+            return kode_excel, kode_db, "excel" if kode_excel == kode_db else "beda"
+        return "", kode_db, "G2 kosong"
+    except Exception as exc:
+        return "", kode_db, f"gagal baca Excel: {exc}"
+
+
+def _enrich_kode_unik_pl_excel(row: dict) -> str:
+    """Pastikan alur BA PL memakai F2 workbook sebagai kode unik utama.
+
+    ``_load_draft_pl_cached`` biasanya sudah melakukan enrichment, tetapi tab
+    BA juga dipanggil setelah cache lama masih hidup. Karena itu baca ulang F2
+    hanya pada saat tab BA dirender. Return status untuk peringatan UI.
+    """
+    kode_db = str(row.get("kode_unik") or "").strip()
+    try:
+        kode_excel = str(_baca_master_data_pl(row).get("kode_unik") or "").strip()
+        if kode_excel:
+            row["kode_unik"] = kode_excel
+            return "excel" if kode_excel == kode_db else "beda"
+        return "F2 kosong; memakai fallback DB" if kode_db else "F2 kosong"
+    except Exception as exc:
+        return f"gagal baca Excel: {exc}"
+
 _TENDER_SELESAI_KW = (
     "surat penunjukan penyedia", "penunjukan penyedia",
     "penandatanganan kontrak", "penandatanganan",
@@ -3315,8 +3378,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+            _pl8_kode_status = []
+            for _r8 in _pl8_rows:
+                _s8 = _enrich_kode_unik_pl_excel(_r8)
+                if _s8 != "excel":
+                    _pl8_kode_status.append(
+                        f"{_r8.get('kode_paket')}: {_s8}"
+                    )
         except Exception as _e8:
             st.error(f"Gagal load paket PL: {_e8}")
+            _pl8_kode_status = []
+        if _pl8_kode_status:
+            st.warning(
+                "⚠️ Status Kode Unik PL (sumber utama `@ Master Data!F2`):\n\n"
+                + "\n".join(f"- {x}" for x in _pl8_kode_status)
+            )
 
         # ── Helper auto nomor + tanggal (otomatis seperti mode tender) ───────
         def _skpd_pl8(_satker):
@@ -3338,7 +3414,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         def _nomor_dokpil_pl8(_row):
             """Nomor dokpil final dari @ Master Data!C20 workbook paket."""
-            return _baca_master_data_pl(_row).get("nomor_dokpil", "")
+            _md = _baca_master_data_pl(_row)
+            _base = str(_md.get("nomor_dokpil") or "").strip()
+            _kode = str(_md.get("kode_unik") or _row.get("kode_unik") or "").strip()
+            if _base and _kode:
+                # Format PL: .../PP-XX/<kode unik>/<SKPD>/2026.
+                _base = _re8.sub(r"(/PP-[^/]+/)[^/]+(?=/)", rf"\1{_kode}", _base, count=1)
+            return _base
 
         def _auto_nomor_pl8(_row, _jenis_key):
             """Derive nomor BA per jenis: ganti slot /NN/ pertama."""
@@ -6424,8 +6506,21 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+            _pl8_kode_status = []
+            for _r8 in _pl8_rows:
+                _s8 = _enrich_kode_unik_pl_excel(_r8)
+                if _s8 != "excel":
+                    _pl8_kode_status.append(
+                        f"{_r8.get('kode_paket')}: {_s8}"
+                    )
         except Exception as _e8:
             st.error(f"Gagal load paket PL: {_e8}")
+            _pl8_kode_status = []
+        if _pl8_kode_status:
+            st.warning(
+                "⚠️ Status Kode Unik PL (sumber utama `@ Master Data!F2`):\n\n"
+                + "\n".join(f"- {x}" for x in _pl8_kode_status)
+            )
 
         # ── Helper auto nomor + tanggal (otomatis seperti mode tender) ───────
         def _skpd_pl8(_satker):
@@ -6447,7 +6542,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         def _nomor_dokpil_pl8(_row):
             """Nomor dokpil final dari @ Master Data!C20 workbook paket."""
-            return _baca_master_data_pl(_row).get("nomor_dokpil", "")
+            _md = _baca_master_data_pl(_row)
+            _base = str(_md.get("nomor_dokpil") or "").strip()
+            _kode = str(_md.get("kode_unik") or _row.get("kode_unik") or "").strip()
+            if _base and _kode:
+                _base = _re8.sub(r"(/PP-[^/]+/)[^/]+(?=/)", rf"\1{_kode}", _base, count=1)
+            return _base
 
         def _auto_nomor_pl8(_row, _jenis_key):
             """Derive nomor BA per jenis: ganti slot /NN/ pertama."""
@@ -9516,6 +9616,25 @@ if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
                         st.rerun()
                 if checked:
                     ba_selected.append(p)
+            # Source of truth Tender: baca G2 workbook sebelum nomor BA dibuat.
+            _ba_kode_mismatch = []
+            for _p_ba in ba_selected:
+                _kode_xl, _kode_db, _kode_src = _enrich_kode_unik_tender_excel(_p_ba)
+                if _kode_xl:
+                    _p_ba["kode_unik"] = _kode_xl
+                if _kode_src == "beda":
+                    _ba_kode_mismatch.append(
+                        f"{_p_ba.get('kode')}: Excel `{_kode_xl}` ≠ DB `{_kode_db}`"
+                    )
+                elif _kode_src not in ("excel", "beda") and _kode_db:
+                    _ba_kode_mismatch.append(
+                        f"{_p_ba.get('kode')}: G2 {_kode_src}; memakai fallback DB `{_kode_db}`"
+                    )
+            if _ba_kode_mismatch:
+                st.warning(
+                    "⚠️ Ada status Kode Unik yang perlu diperhatikan:\n\n"
+                    + "\n".join(f"- {x}" for x in _ba_kode_mismatch)
+                )
             st.caption(f"**{len(ba_selected)}** dari **{len(paket_list_ba)}** paket dipilih")
             st.divider()
             if st.button(
@@ -10276,14 +10395,20 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
         # ── Dashboard Konflik Personil & Alat (semua paket) ──────────────────
         st.divider()
         st.markdown("### ⚠️ Konflik Personil & Alat Lintas Paket")
-        st.caption("Personil atau alat yang diajukan penyedia di >1 paket aktif (berdasarkan Draft Paket).")
+        st.caption("Personil atau alat yang diajukan penyedia di >1 paket aktif. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
 
         def _render_konflik_dashboard(trigger_sync_doktek: bool = False):
             """Query + tampilkan dashboard konflik. Ringan — hanya baca Supabase."""
             try:
                 import conflict_engine as _ce_dash
+                _cov = _ce_dash.get_sync_coverage()
+                st.info(
+                    f"Coverage data: {_cov['lengkap']}/{_cov['aktif']} paket lengkap "
+                    f"(personil {_cov['personil']}, alat {_cov['alat']}). "
+                    f"Belum lengkap: {_cov['belum_lengkap']} paket."
+                )
                 if trigger_sync_doktek:
-                    # Hanya sync paket yang belum ada di paket_personil
+                    # Sinkronkan paket yang personil atau alatnya belum lengkap.
                     _ce_dash.sync_new_paket()
                 # Lookup nama paket
                 from config import sb as _sb_kf
@@ -10339,7 +10464,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                 st.error(f"Error: {_e_dash}")
 
         # Tombol refresh manual — juga trigger sync dari folder doktek
-        if st.button("🔄 Cek Konflik (+ Sinkronkan Folder Doktek)", key="kual_cek_konflik"):
+        if st.button("🔄 Cek Konflik + Sinkronkan Data Belum Lengkap", key="kual_cek_konflik"):
             _render_konflik_dashboard(trigger_sync_doktek=True)
         else:
             # Auto-tampil dari data Supabase yang sudah ada (tanpa sync folder)
