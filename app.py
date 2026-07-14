@@ -819,8 +819,7 @@ def _generate_lampiran_undangan_dpp_preview(kode_tender: str) -> tuple[bool, str
 
 
 st.set_page_config(
-    page_title="Asisten Pokja",
-    page_icon="🤖",
+    page_title="Dashboard",
     layout="wide",
 )
 
@@ -987,16 +986,10 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 if _is_dark:
     st.markdown(_get_dark_css(), unsafe_allow_html=True)
 
-_header_title_col, _header_role_col = st.columns([3, 2])
-with _header_title_col:
-    st.title("🤖 Asisten Pokja")
-    st.caption("Otomasi SPSE — spse.tapinkab.go.id")
-
 # Kontrol login diringkas dalam popover agar header tidak menjadi kolom vertikal.
 if "header_login_role" not in st.session_state:
     st.session_state["header_login_role"] = st.session_state.get("sidebar_login_role", "PP")
-with _header_role_col:
-    _login_popover = st.popover("🔐 Login / SPSE", use_container_width=True)
+_login_popover = st.popover("🔐 Login / SPSE", use_container_width=True)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
