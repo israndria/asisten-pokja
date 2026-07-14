@@ -15,9 +15,11 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Evaluator dokumen distandardisasi ke Codex. Model mengikuti config Codex CLI.
+# Evaluator dokumen distandardisasi ke Codex dengan model tetap.
 DEFAULT_ENGINE = "codex"
-DEFAULT_MODEL = None
+CODEX_MODEL = "gpt-5.6-luna"
+CODEX_REASONING_EFFORT = "medium"
+DEFAULT_MODEL = CODEX_MODEL
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
@@ -78,7 +80,12 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
         cwd = str(add_dirs[0]) if add_dirs else None
         # Sandbox workspace-write agar bisa menulis output file _HASIL_*.md di folder target
         # Gunakan shell=True di Windows karena codex adalah batch script (.cmd)
-        cmd = ["codex", "exec", "-s", "workspace-write", full_prompt]
+        cmd = [
+            "codex", "exec", "-s", "workspace-write",
+            "-m", CODEX_MODEL,
+            "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
+            full_prompt,
+        ]
         try:
             result = subprocess.run(
                 cmd,
@@ -264,6 +271,8 @@ Setelah selesai, tulis log singkat ke folder paket dengan nama
 PATCH_MANUAL_ISI_REVIU_LOG.md yang memuat file target, backup, jumlah CC sebelum/sesudah,
 perubahan jawaban, tanggapan draft, dan hasil verifikasi. Jangan hanya menjelaskan
 langkah; kerjakan langsung.
+Selain log teknis, tulis `_HASIL_PRA_REVIU_DPP.md` di root paket berisi ringkasan
+temuan, daftar klarifikasi, rekomendasi, dan sumber dokumen yang dipakai.
 Jika sumber atau file target tidak ditemukan, tulis ERROR dan jangan mengarang.
 
 Mulai sekarang."""

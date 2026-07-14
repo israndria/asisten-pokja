@@ -1708,7 +1708,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
         st.divider()
         st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
-        st.caption("Codex CLI membaca SOP + dokumen PPK, lalu mengisi jawaban dan draft tanggapan langsung ke DOCM serta membuat `_HASIL_PRA_REVIU_DPP.md`.")
+        st.caption("Satu tombol untuk mengirim prompt terstandar ke Codex: baca SOP + dokumen PPK, isi jawaban dan draft tanggapan ke DOCM, lalu buat `_HASIL_PRA_REVIU_DPP.md`.")
 
         _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
         if not _pl_rows_punya_folder:
@@ -1735,9 +1735,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
             _pr_engine = "codex"
             _pr_model = None
-            st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
+            st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
             _btn_pr = st.button(
-                f"🤖 Jalankan Pra-Reviu — {len(_pr_terpilih)} paket",
+                f"🤖 Pra-Reviu + Isi DOCM — {len(_pr_terpilih)} paket",
                 key="btn_pra_reviu", disabled=not _pr_terpilih,
                 type="primary", use_container_width=True,
             )
@@ -3996,7 +3996,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _do_extract_teks8 = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8_do_extract_teks")
                     _ai_eval_engine = "codex"
                     _ai_eval_model = None
-                    st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
+                    st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
                     _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8_do_ai_kual")
                     _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8_do_ai_teknis")
                     _btn_ai_eval = st.button(
@@ -6982,7 +6982,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_extract_teks8pk = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8pk_do_extract_teks")
                     _ai_eval_engine_pk = "codex"
                     _ai_eval_model_pk = None
-                    st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
+                    st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
                     _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8pk_do_ai_kual")
                     _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8pk_do_ai_teknis")
                     _btn_ai_eval_pk = st.button(
@@ -7945,9 +7945,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "parse"
                 if _ac7.button(
-                    "🧾 Patch Reviu", key=f"t_patch_reviu_{_kt}",
+                    "🤖 Pra-Reviu + Isi DOCM", key=f"t_patch_reviu_{_kt}",
                     use_container_width=True,
-                    help="Baca SOP patch manual, koreksi jawaban, dan unlock seluruh Content Control",
+                    help="Kirim prompt pra-reviu ke Codex, isi jawaban + draft tanggapan ke DOCM, dan buat Markdown audit.",
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "patch_reviu"
 
@@ -10347,7 +10347,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
         st.divider()
         st.markdown("#### 🤖 Evaluasi AI (Codex) — Tender")
-        st.caption("Codex CLI membaca dokumen di folder paket Tender → output `.md`. Model mengikuti konfigurasi Codex CLI. Paralel per paket. Centang paket di Seksi 1 di atas.")
+        st.caption("Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium · Membaca dokumen Tender dan menulis output `.md`. Paralel per paket.")
 
         import ai_evaluator as _heval_t
 
