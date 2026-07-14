@@ -1038,6 +1038,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(_e)
                         with st.expander("📋 Log lengkap serap"):
                             st.text("\n".join(_pl_logs))
+                        # Invalidasi cache agar hasil serap SPSE langsung terbaca.
+                        _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = _load_draft_pl_cached()
                         if not _pl_show_done:
@@ -4259,6 +4261,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(_e)
                         with st.expander("📋 Log lengkap serap"):
                             st.text("\n".join(_pl_logs))
+                        # Invalidasi cache agar hasil serap SPSE langsung terbaca.
+                        _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = _load_draft_pl_cached()
                         if not _pl_show_done:
