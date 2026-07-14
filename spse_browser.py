@@ -102,10 +102,13 @@ def _refresh_worker(interval_menit: int):
             return
         if not _cek_cdp_aktif():
             break
-        try:
-            refresh_browser()
-        except Exception:
-            pass
+        for _attempt in range(2):
+            try:
+                if refresh_browser():
+                    break
+            except Exception:
+                if _attempt == 0:
+                    time.sleep(1)
 
 def mulai_auto_refresh(interval_menit: int = 10):
     state = _builtins._spse_refresh_state
@@ -137,6 +140,7 @@ CDP_PORT = 9222
 # karena dapat menghilangkan input manual yang sedang dikerjakan user.
 _AUTO_REFRESH_PATHS = {
     "/home",
+    "/paket",           # halaman paket Pokja yang dipakai Brave saat ini
     "/paketnontender",    # PP/PPK
     "/paketlelang",       # Pokja (jika UI memakai route ini)
     "/paketpanitia",      # fallback route tender lama

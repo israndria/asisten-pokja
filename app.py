@@ -1708,7 +1708,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
         st.divider()
         st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
-        st.caption("Claude Code membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
+        st.caption("Codex CLI membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
 
         _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
         if not _pl_rows_punya_folder:
@@ -1733,18 +1733,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
                 _pr_selected[_kpr] = st.checkbox(_lpr, key=f"pr_chk_{_kpr}")
             _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
-            _pr_col_engine, _pr_col_model = st.columns(2)
-            _pr_engine = _pr_col_engine.selectbox(
-                "Engine AI",
-                ["claude", "codex"],
-                key="pr_engine",
-            )
-            _pr_model = _pr_col_model.selectbox(
-                "Model Claude",
-                ["haiku", "sonnet"],
-                key="pr_model",
-                disabled=(_pr_engine != "claude"),
-            )
+            _pr_engine = "codex"
+            _pr_model = None
+            st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
             _btn_pr = st.button(
                 f"🤖 Jalankan Pra-Reviu — {len(_pr_terpilih)} paket",
                 key="btn_pra_reviu", disabled=not _pr_terpilih,
@@ -4003,16 +3994,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.markdown("#### 🤖 Evaluasi AI")
                     st.caption("AI baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _do_extract_teks8 = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8_do_extract_teks")
-                    _pl8_col_engine, _pl8_col_model = st.columns(2)
-                    _ai_eval_engine = _pl8_col_engine.selectbox(
-                        "Engine AI", ["claude", "codex"],
-                        key="pl8_ai_engine",
-                    )
-                    _ai_eval_model = _pl8_col_model.selectbox(
-                        "Model", ["haiku", "sonnet"],
-                        key="pl8_ai_model",
-                        disabled=(_ai_eval_engine != "claude"),
-                    )
+                    _ai_eval_engine = "codex"
+                    _ai_eval_model = None
+                    st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
                     _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8_do_ai_kual")
                     _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8_do_ai_teknis")
                     _btn_ai_eval = st.button(
@@ -6996,16 +6980,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.markdown("#### 🤖 Evaluasi AI")
                     st.caption("AI baca dokumen di folder paket → output `.md`. Paralel per paket.")
                     _do_extract_teks8pk = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8pk_do_extract_teks")
-                    _pl8pk_col_engine, _pl8pk_col_model = st.columns(2)
-                    _ai_eval_engine_pk = _pl8pk_col_engine.selectbox(
-                        "Engine AI", ["claude", "codex"],
-                        key="pl8pk_ai_engine",
-                    )
-                    _ai_eval_model_pk = _pl8pk_col_model.selectbox(
-                        "Model", ["haiku", "sonnet"],
-                        key="pl8pk_ai_model",
-                        disabled=(_ai_eval_engine_pk != "claude"),
-                    )
+                    _ai_eval_engine_pk = "codex"
+                    _ai_eval_model_pk = None
+                    st.caption("Engine: Codex CLI · Model mengikuti konfigurasi Codex CLI")
                     _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8pk_do_ai_kual")
                     _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8pk_do_ai_teknis")
                     _btn_ai_eval_pk = st.button(
@@ -9862,26 +9839,16 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
-            # Selectbox: pilih 1 paket aktif untuk tampil pesertanya
             _kl_paket_aktif_opsi = [p for p in _kl_paket_list2 if st.session_state.get(f"kl_chk_{p['kode']}", False)]
+            _kl_kode_aktif = None
             if _kl_paket_aktif_opsi:
-                _kl_kode_aktif = st.selectbox(
-                    "📌 Paket aktif (pilih untuk lihat pesertanya):",
-                    options=[p["kode"] for p in _kl_paket_aktif_opsi],
-                    format_func=lambda k: next(
-                        (f"{_pokja_label(pp)[:55]}" for pp in _kl_paket_aktif_opsi if pp["kode"] == k), k
-                    ),
-                    key="kl_paket_aktif",
-                )
+                st.caption("Paket tercentang ditampilkan sekaligus. Pilih peserta di masing-masing paket.")
             else:
-                _kl_kode_aktif = None
-                st.caption("← Centang paket di Section 1 dulu.")
+                st.caption("← Centang paket di Seksi 1 dulu.")
 
             _kl_ada_terpilih = False
             for p in _kl_paket_list2:
                 if not st.session_state.get(f"kl_chk_{p['kode']}", False):
-                    continue
-                if p["kode"] != _kl_kode_aktif:
                     continue
                 _kl_ada_terpilih = True
                 kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
@@ -10207,18 +10174,13 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             if _kl_do_kk: _kl_btn_label.append("Parse → Excel")
             _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
 
-            # Tombol global proses HANYA paket aktif (selectbox Section 2), bukan
-            # semua tercentang — cegah paket lain ikut terproses tanpa sadar.
-            _kl_kode_aktif_run = st.session_state.get("kl_paket_aktif")
-            _kl_item_aktif = next(
-                (it for it in _kl_paket_dipilih if it["paket"]["kode"] == _kl_kode_aktif_run),
-                None,
-            )
-            _kl_n_aktif = len(_kl_item_aktif["peserta"]) if _kl_item_aktif else 0
+            # Tombol global memproses semua paket terpilih; tombol per paket tetap tersedia.
+            _kl_items_run = _kl_paket_dipilih
+            _kl_n_aktif = sum(len(it["peserta"]) for it in _kl_items_run)
 
             _kl_disabled = (
-                (not _kl_btn_label) or (_kl_item_aktif is None) or (_kl_n_aktif == 0)
-                or (_kl_do_download and _kl_item_aktif is not None and not _kl_item_aktif["folder_ok"])
+                (not _kl_btn_label) or (not _kl_items_run) or (_kl_n_aktif == 0)
+                or (_kl_do_download and any(not it["folder_ok"] for it in _kl_items_run))
             )
             if not _kl_semua_folder_ok and _kl_do_download:
                 st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
@@ -10226,13 +10188,13 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             st.divider()
 
             if st.button(
-                f"▶ Jalankan: {_kl_btn_text} — paket aktif ({_kl_kode_aktif_run or '-'}), {_kl_n_aktif} peserta",
+                f"▶ Jalankan: {_kl_btn_text} — {_kl_total_paket} paket, {_kl_n_aktif} peserta",
                 key="kl_jalankan",
                 type="primary",
                 use_container_width=True,
                 disabled=_kl_disabled,
             ):
-                _proses_paket_kk([_kl_item_aktif], _kl_do_download, _kl_do_kk, _kl_do_excel)
+                _proses_paket_kk(_kl_items_run, _kl_do_download, _kl_do_kk, _kl_do_excel)
 
                 # ── Tampilkan konflik personil & alat lintas paket
                 if _kl_do_kk:
@@ -10335,8 +10297,8 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             _render_konflik_dashboard(trigger_sync_doktek=False)
 
         st.divider()
-        st.markdown("#### 🤖 Evaluasi AI (Claude Code) — Tender")
-        st.caption("Claude Code baca dokumen di folder paket Tender → output `.md`. Paralel per paket. Centang paket di Section 1 di atas.")
+        st.markdown("#### 🤖 Evaluasi AI (Codex) — Tender")
+        st.caption("Codex CLI membaca dokumen di folder paket Tender → output `.md`. Model mengikuti konfigurasi Codex CLI. Paralel per paket. Centang paket di Seksi 1 di atas.")
 
         import ai_evaluator as _heval_t
 
@@ -10354,16 +10316,8 @@ Langkah:
 
 Mulai sekarang."""
 
-        _tkual_col_engine, _tkual_col_model = st.columns(2)
-        _ai_eval_engine_t = _tkual_col_engine.selectbox(
-            "Engine AI", ["claude", "codex"],
-            key="tkual_ai_engine",
-        )
-        _ai_eval_model_t = _tkual_col_model.selectbox(
-            "Model", ["haiku", "sonnet"],
-            key="tkual_ai_model",
-            disabled=(_ai_eval_engine_t != "claude"),
-        )
+        _ai_eval_engine_t = "codex"
+        _ai_eval_model_t = None
         _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
         _btn_ai_eval_t = st.button(
             f"🤖 Jalankan Evaluasi AI — {len(_ai_t_selected_kode)} paket",
@@ -10602,7 +10556,7 @@ Mulai sekarang."""
                     with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
                         try:
                             _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
-                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=st.session_state.get("tkual_ai_model", "claude-haiku-4-5-20251001"), add_dirs=[_gp_folder], engine=st.session_state.get("tkual_ai_engine", "claude"))
+                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=None, add_dirs=[_gp_folder], engine="codex")
                             st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
                             with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
                                 st.markdown(_out_ap[:3000])

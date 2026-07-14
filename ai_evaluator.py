@@ -15,11 +15,9 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Path claude CLI
-CLAUDE_BIN = shutil.which("claude") or r"D:\nodejs\claude"
-
-# Model default untuk evaluasi
-DEFAULT_MODEL = "haiku"
+# Evaluator dokumen distandardisasi ke Codex. Model mengikuti config Codex CLI.
+DEFAULT_ENGINE = "codex"
+DEFAULT_MODEL = None
 
 PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
 PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
@@ -55,11 +53,13 @@ def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str =
     return None
 
 
-def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, add_dirs: list = None, engine: str = "claude") -> str:
+def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, add_dirs: list = None, engine: str = DEFAULT_ENGINE) -> str:
     """
-    Jalankan claude --print secara sinkron.
+    Jalankan Codex CLI secara sinkron.
     Returns stdout string. Raise RuntimeError jika gagal.
     """
+    if engine != "codex":
+        raise ValueError("Evaluator hanya mendukung engine Codex.")
     SYSTEM = (
         "Kamu adalah evaluator pengadaan barang/jasa pemerintah Indonesia. "
         "WAJIB: Semua output dalam Bahasa Indonesia. "
@@ -242,7 +242,7 @@ def patch_manual_isi_reviu_single(folder_paket, nama_paket: str, engine: str = "
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
+def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:
     """Jalankan pra-reviu 1 paket. Returns dict {nama, status, output, error}."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
@@ -255,7 +255,7 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
+def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:
     """Evaluasi Admin+Kualifikasi 1 paket."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
@@ -273,7 +273,7 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine="claude") -> dict:
+def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:
     """Evaluasi Teknis (Sesi 2) 1 paket."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
@@ -290,7 +290,7 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK", engine="claude") -> list[dict]:
+def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK", engine=DEFAULT_ENGINE) -> list[dict]:
     """
     Evaluasi paralel N paket.
     paket_list: list of {nomor_urut, nama_paket}
