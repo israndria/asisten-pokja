@@ -1708,7 +1708,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
         st.divider()
         st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
-        st.caption("Codex CLI membaca protokol + dokumen PPK di folder paket → output `_HASIL_PRA_REVIU.md`.")
+        st.caption("Codex CLI membaca SOP + dokumen PPK, lalu mengisi jawaban dan draft tanggapan langsung ke DOCM serta membuat `_HASIL_PRA_REVIU_DPP.md`.")
 
         _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
         if not _pl_rows_punya_folder:
@@ -7531,6 +7531,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 ]
                                 _t_draft_eval_files = [
                                     "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md",
+                                    "PANDUAN_PATCH_MANUAL_EVALUASI.md",
                                 ]
                                 _t_eval_copied = []
                                 _t_eval_src_dir = os.path.join(_POKJA_ROOT, "_SOP Evaluator")
@@ -10351,18 +10352,45 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
         import ai_evaluator as _heval_t
 
         def _prompt_evaluasi_tender(folder_paket, nama_paket):
-            return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
+            return f"""Lakukan evaluasi penawaran Tender Pekerjaan Konstruksi Pascakualifikasi Sistem Gugur.
 
-Nama paket: {nama_paket}
-Folder paket: {folder_paket}
+IDENTITAS PAKET
+- Nama paket: {nama_paket}
+- Folder paket: {folder_paket}
 
-Langkah:
-1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
-2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
-3. Evaluasi semua penyedia yang ditemukan di folder Dokumen Evaluasi / Dokumen Kualifikasi paket ini.
-4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
+PREFLIGHT WAJIB — berhenti dengan ERROR jika gagal
+1. Pastikan folder paket di atas benar dan dapat dibaca.
+2. Baca PROTOKOL_EVALUASI_AI.md dari folder paket/5. Evaluator Kualifikasi & Teknis/.
+   Jika tidak ada, gunakan master root _SOP Evaluator/PROTOKOL_EVALUASI_AI.md.
+3. Baca evaluator spesifik: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md,
+   prioritaskan salinan di folder paket/5. Evaluator Kualifikasi & Teknis/.
+4. Pastikan Dokpil tersedia. Cari dokpil_*.pdf atau dokumen pemilihan di root paket
+   dan subfolder 2. Rancangan Kontrak/.
+5. Daftar penyedia dari folder 8. Dokumen Kualifikasi/ dan/atau 9. Dokumen Penawaran
+   Teknis & Biaya/. Jika struktur berbeda, lakukan Glob seluruh root paket dan jelaskan
+   struktur aktual. Jangan mengarang penyedia atau dokumen.
 
-Mulai sekarang."""
+ATURAN EVALUASI WAJIB
+1. Baca Dokpil lebih dahulu; ekstrak syarat LDP/LDK sebelum membaca penawaran.
+2. Evaluasi setiap penyedia satu per satu, maksimal 3 peserta utama jika tersedia.
+   Jangan mencampur nama, nilai, atau bukti antar peserta.
+3. Gunakan bukti dokumen lokal saja; jangan menjadikan Supabase/Excel sebagai bukti
+   evaluasi. Jika dokumen tidak ada, tulis TIDAK ADA.
+4. Ikuti protokol anti-false-positive: cari seluruh dokumen sebelum menyimpulkan tidak ada;
+   ragu = FLAG KLARIFIKASI, bukan gugur otomatis.
+5. Untuk setiap temuan, cite nama file + halaman/section + kutipan singkat.
+6. Jangan memberi skor jika evaluator menetapkan PASS/FAIL. Jangan membuat fakta,
+   halaman, dokumen, atau kutipan.
+
+OUTPUT WAJIB
+- Tulis _HASIL_EVALUASI_PK.md di ROOT folder paket (bukan subfolder).
+- Isi hasil per peserta: Administrasi, Teknis, Kualifikasi, Flag Audit, dan Kesimpulan Akhir.
+- Pertahankan bagian ANALISIS MANUAL jika file output sudah ada.
+- Setelah menulis, buka ulang/cek file output dan pastikan tidak kosong.
+- Jika file sumber, protokol, atau output gagal dibuat, tulis ERROR yang spesifik dan
+  jangan menyatakan evaluasi berhasil.
+
+Mulai evaluasi sekarang."""
 
         _ai_eval_engine_t = "codex"
         _ai_eval_model_t = None
@@ -10396,6 +10424,9 @@ Mulai sekarang."""
                     try:
                         _prompt = _prompt_evaluasi_tender(job["folder"], job["nama"])
                         _out = _heval_t._run_evaluator(_prompt, model=_ai_eval_model_t, add_dirs=[job["folder"]], engine=_ai_eval_engine_t)
+                        _hasil_path = _os_ait.path.join(job["folder"], "_HASIL_EVALUASI_PK.md")
+                        if not _os_ait.path.isfile(_hasil_path) or _os_ait.path.getsize(_hasil_path) == 0:
+                            raise RuntimeError("Codex selesai, tetapi _HASIL_EVALUASI_PK.md tidak dibuat atau kosong.")
                         return {"nama": job["nama"], "status": "ok", "output": _out, "error": ""}
                     except Exception as _e:
                         return {"nama": job["nama"], "status": "error", "output": "", "error": str(_e)}

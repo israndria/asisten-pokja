@@ -131,16 +131,60 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
 
 # ── PROMPT TEMPLATES ──────────────────────────────────────────────────────────
 
-def _prompt_pra_reviu(folder_paket: Path, nama_paket: str) -> str:
-    return f"""Lakukan pra-reviu dokumen PPK untuk paket berikut.
+def _find_reviu_docm(folder: Path, jenis: str = "tender_pk") -> Path | None:
+    """Cari DOCM utama; arsip Merged/backup tidak boleh dipilih."""
+    prefixes = {
+        "pl_jkk": "2. Isi Reviu PLJKK - ",
+        "pl_pk": "2. Isi Reviu PLPK - ",
+        "tender_pk": "2. Isi Reviu PK - ",
+    }
+    prefix = prefixes.get(jenis, prefixes["tender_pk"])
+    candidates = sorted(
+        p for p in folder.glob(f"{prefix}*.docm")
+        if "(merged)" not in p.name.lower()
+        and ".backup" not in p.name.lower()
+        and ".bak_" not in p.name.lower()
+    )
+    return candidates[0] if candidates else None
+
+
+def _domain_sop(jenis: str) -> Path:
+    if jenis == "pl_jkk":
+        return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_PL_JKK.md")
+    if jenis == "pl_pk":
+        return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_PL_PK.md")
+    return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md")
+
+
+def _prompt_pra_reviu(folder_paket: Path, nama_paket: str, docm_path: Path, jenis: str) -> str:
+    domain_sop = _domain_sop(jenis)
+    return f"""Lakukan reviu DPP langsung pada dokumen Word berikut.
 
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
+File DOCM target: {docm_path}
+SOP teknis patch DOCM: {PATCH_MANUAL_SOP}
+SOP domain/checklist: {domain_sop}
 
-Langkah:
-1. Baca file PROTOKOL_PRA_REVIU.md di subfolder "0. Draft Dokumen PPK" dalam folder paket di atas.
-2. Ikuti seluruh instruksi dalam protokol tersebut — jangan buat protokol sendiri.
-3. Tulis output ke _HASIL_PRA_REVIU.md di ROOT folder paket (bukan subfolder).
+Baca kedua SOP, seluruh Content Control bertag cat_*, rekomen_*, dan tanggapan_*
+di DOCM, lalu baca dokumen sumber relevan di folder paket. Jawab setiap pertanyaan
+berdasarkan bukti dokumen. Gunakan "Perlu klarifikasi ..." bila ambigu dan jangan
+mengarang fakta.
+
+WAJIB:
+1. Buat backup unik sebelum mengubah DOCM.
+2. Isi jawaban reviu ke cat_* dan rekomendasi ke rekomen_*.
+3. Isi tanggapan_* sebagai DRAFT tanggapan PPK yang logis berdasarkan rekomendasi.
+   Tanggapan boleh diedit PPK; jangan menulis seolah-olah sudah disetujui PPK.
+4. Jika CC sudah berisi teks nyata, pertahankan agar edit manual tidak tertimpa.
+   Isi hanya CC yang kosong atau masih placeholder.
+5. Tulis _HASIL_PRA_REVIU_DPP.md di root paket sebagai audit temuan, klarifikasi,
+   sumber dokumen, dan daftar CC yang diisi.
+6. Pertahankan VBA, tabel, format, dan struktur DOCM. Verifikasi buka ulang via Word COM.
+
+Jangan hanya membuat analisis Markdown; patch file DOCM secara langsung. Jika file
+target atau dokumen sumber wajib tidak ditemukan, tulis ERROR spesifik dan jangan
+mengarang jawaban.
 
 Mulai sekarang."""
 
@@ -198,8 +242,9 @@ Paket: {nama_paket}
 Folder paket: {folder_paket}
 File target: {docm_path}
 SOP WAJIB: {PATCH_MANUAL_SOP}
+SOP checklist/domain: {_domain_sop("tender_pk")}
 
-Ikuti SOP tersebut sepenuhnya. Baca SOP dan seluruh dokumen sumber paket yang relevan,
+Ikuti kedua SOP tersebut sepenuhnya. Baca SOP dan seluruh dokumen sumber paket yang relevan,
 validasi identitas paket sebelum menjawab, lalu periksa seluruh pertanyaan Content Control
 di file target. Koreksi/isi jawaban berdasarkan bukti dokumen; jangan mengarang fakta.
 
@@ -208,13 +253,17 @@ Untuk file DOCM:
 - ungroup/un-nest seluruh Content Control jika ada;
 - buat semua Content Control bertag cat_, rekomen_, atau tanggapan_ bisa diedit
   (LockContents=False dan LockContentControl=False);
+- isi `tanggapan_*` sebagai DRAFT tanggapan PPK berdasarkan rekomendasi; jangan
+  menulis seolah-olah tanggapan tersebut sudah disetujui PPK;
+- jangan menimpa teks nyata yang sudah ada karena mungkin merupakan edit manual user;
 - pertahankan VBA, format, tabel, dan isi lain yang tidak perlu diubah;
 - simpan file target dan buka ulang melalui Word COM untuk verifikasi;
 - pastikan jumlah CC tetap, seluruh CC tidak terkunci, dan VBA tetap ada.
 
 Setelah selesai, tulis log singkat ke folder paket dengan nama
 PATCH_MANUAL_ISI_REVIU_LOG.md yang memuat file target, backup, jumlah CC sebelum/sesudah,
-perubahan jawaban, dan hasil verifikasi. Jangan hanya menjelaskan langkah; kerjakan langsung.
+perubahan jawaban, tanggapan draft, dan hasil verifikasi. Jangan hanya menjelaskan
+langkah; kerjakan langsung.
 Jika sumber atau file target tidak ditemukan, tulis ERROR dan jangan mengarang.
 
 Mulai sekarang."""
@@ -223,18 +272,17 @@ Mulai sekarang."""
 def patch_manual_isi_reviu_single(folder_paket, nama_paket: str, engine: str = "codex") -> dict:
     """Jalankan patch manual Isi Reviu PK satu paket via AI CLI."""
     folder = Path(folder_paket)
-    candidates = sorted(
-        p for p in folder.glob("2. Isi Reviu PK - *.docm")
-        if ".backup" not in p.name.lower() and ".bak_" not in p.name.lower()
-    )
-    if not candidates:
+    docm_path = _find_reviu_docm(folder, "tender_pk")
+    if not docm_path:
         return {"nama": nama_paket, "status": "error", "output": "", "error": "File 2. Isi Reviu PK - *.docm tidak ditemukan."}
     if not PATCH_MANUAL_SOP.is_file():
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"SOP tidak ditemukan: {PATCH_MANUAL_SOP}"}
-    docm_path = candidates[0]
     try:
         prompt = _prompt_patch_manual_isi_reviu(folder, docm_path, nama_paket)
-        output = _run_evaluator(prompt, model=DEFAULT_MODEL, timeout=1800, add_dirs=[folder], engine=engine)
+        output = _run_evaluator(
+            prompt, model=DEFAULT_MODEL, timeout=1800,
+            add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
+        )
         return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(docm_path)}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e), "file": str(docm_path)}
@@ -248,8 +296,18 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
     try:
-        prompt = _prompt_pra_reviu(folder, nama_paket)
-        output = _run_evaluator(prompt, model=model, add_dirs=[folder], engine=engine)
+        jenis = "pl_jkk" if jenis_pl == "JKK" else "pl_pk"
+        docm_path = _find_reviu_docm(folder, jenis)
+        if not docm_path:
+            return {"nama": nama_paket, "status": "error", "output": "", "error": f"DOCM reviu {jenis} tidak ditemukan di {folder}"}
+        domain_sop = _domain_sop(jenis)
+        if not domain_sop.is_file() or not PATCH_MANUAL_SOP.is_file():
+            return {"nama": nama_paket, "status": "error", "output": "", "error": "SOP reviu atau SOP patch tidak ditemukan."}
+        prompt = _prompt_pra_reviu(folder, nama_paket, docm_path, jenis)
+        output = _run_evaluator(
+            prompt, model=model, timeout=1800,
+            add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
+        )
         return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
