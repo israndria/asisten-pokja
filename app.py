@@ -54,6 +54,8 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     for p in draft_list + aktif_list:
         if p["kode"] not in seen:
             seen.add(p["kode"])
+            if _is_tender_excluded(p):
+                continue
             if filter_selesai:
                 tahap = tahap_map.get(p["kode"]) or p.get("status") or ""
                 if _is_tender_selesai({"status": tahap}):
@@ -215,12 +217,18 @@ def _lookup_singkatan_dinas(satker: str) -> str:
     return "DPUPR"
 
 
+_TENDER_EXCLUDE_KODES = {
+    "10096884000",  # legacy 2025 Hatungun; jangan muncul/terbuat lagi di semua workflow Tender
+}
+
+
 @st.cache_data(ttl=60)
 def _load_draft_paket_cached() -> list:
     """Load semua draft_paket sekali, cache 60 detik. Dipakai lintas tab.
     Invalidasi via _load_draft_paket_cached.clear() setelah mutasi draft_paket."""
     try:
-        return inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+        rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+        return [r for r in rows if not _is_tender_excluded(r)]
     except Exception:
         return []
 
@@ -295,14 +303,31 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
     return logs
 
 
-_TENDER_EXCLUDE_KODES = {
-    "10096884000",  # legacy 2025 Hatungun; jangan muncul/terbuat lagi di Tab 0 2026
-}
-
-
 def _is_tender_excluded(row_or_kode) -> bool:
     kode = row_or_kode if isinstance(row_or_kode, str) else str(row_or_kode.get("kode_tender") or row_or_kode.get("kode") or "")
     return kode in _TENDER_EXCLUDE_KODES
+
+
+def _validasi_hasil_evaluasi_tender(path: str) -> list[str]:
+    """Validasi minimum output evaluasi Tender sebelum UI menyatakan sukses."""
+    try:
+        with open(path, encoding="utf-8") as _f:
+            _txt = _f.read()
+    except Exception as _e:
+        return [f"gagal membaca output: {_e}"]
+    _required = {
+        "ekstraksi Dokpil": ("EKSTRAK PERSYARATAN", "DOKPIL"),
+        "evaluasi administrasi": ("ADMINISTRASI",),
+        "evaluasi teknis": ("TEKNIS",),
+        "evaluasi kualifikasi": ("KUALIFIKASI",),
+        "flag audit": ("FLAG AUDIT", "FLAG KLARIFIKASI"),
+        "kesimpulan akhir": ("KESIMPULAN AKHIR",),
+    }
+    _upper = _txt.upper()
+    _missing = [label for label, markers in _required.items() if not any(m in _upper for m in markers)]
+    if not _txt.strip():
+        _missing.insert(0, "file kosong")
+    return _missing
 
 
 def _nomor_folder_tertinggi_tender(output_base: str) -> int:
@@ -7454,6 +7479,36 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     log.append(f"⚠ Penawaran gagal: {_e}")
             return log
 
+        def _serap_satu_paket_tender(kode_tender):
+            """Refresh inbox + daftar SPSE hanya untuk satu paket."""
+            _hasil_inbox = inbox_engine.serap_inbox(kode_tender=kode_tender)
+            _hasil_spse = kirimpesan_engine.fetch_paket_satu(kode_tender)
+            _paket_spse = _hasil_spse.get("paket", []) if _hasil_spse.get("sukses") else []
+            if _paket_spse:
+                _tahap_satu = kirimpesan_engine.fetch_tahap_tender(_paket_spse)
+                kirimpesan_engine.enrich_paket_supabase(_paket_spse, tahap_map=_tahap_satu)
+
+                for _cache_key in ("global_paket_draft", "global_paket_aktif"):
+                    _cache = st.session_state.get(_cache_key, {})
+                    _cache["paket"] = [
+                        _p for _p in _cache.get("paket", [])
+                        if str(_p.get("kode")) != str(kode_tender)
+                    ]
+                    st.session_state[_cache_key] = _cache
+                _satu = _paket_spse[0]
+                _status_satu = str(_satu.get("status") or "").lower()
+                _target_cache = "global_paket_draft" if "draft" in _status_satu else "global_paket_aktif"
+                st.session_state.setdefault(_target_cache, {}).setdefault("paket", []).append(_satu)
+                _tahap_satu_value = _tahap_satu.get(str(kode_tender), "")
+                if _tahap_satu_value:
+                    st.session_state.setdefault("tender_tahap_map", {})[str(kode_tender)] = _tahap_satu_value
+                kirimpesan_engine.save_paket_cache(
+                    st.session_state.get("global_paket_draft", {"paket": []}),
+                    st.session_state.get("global_paket_aktif", {"paket": []}),
+                )
+            _load_draft_paket_cached.clear()
+            return _hasil_inbox, _hasil_spse
+
         # ── Checkbox aksi global (jalan untuk tiap paket saat buat folder) ──
         st.caption("Pilih aksi yang dijalankan otomatis untuk tiap paket saat buat folder.")
         _t_cb_dl  = st.checkbox("📦 Download dokumen SPSE + lampiran", value=True, key="t_cb_dl_dokumen")
@@ -8007,44 +8062,38 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 if not _ada:
                     st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
                     continue
-                _ac1, _ac2, _ac3, _ac4, _ac5, _ac6, _ac7 = st.columns(7)
-                # 📦 Unduh
+                _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
+                # 🔄 Serap satu paket
                 if _ac1.button(
+                    "🔄 Serap Paket", key=f"t_sync_{_kt}", use_container_width=True,
+                    help="Update inbox dan sinkronkan daftar SPSE hanya untuk paket ini.",
+                ):
+                    st.session_state[f"_t_act_{_kt}"] = "sync"
+                # 📦 Unduh
+                if _ac2.button(
                     "📦 Unduh", key=f"t_dl_{_kt}", use_container_width=True,
                     help="Unduh dokumen paket terbaru dari SPSE ke folder paket.",
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "dl"
                 # 💰 HPS
-                if _ac2.button(
+                if _ac3.button(
                     "💰 HPS", key=f"t_hps_{_kt}", use_container_width=True,
                     help="Ambil rincian HPS dari SPSE dan isi ke Excel paket.",
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "hps"
                 # 🔄 Refresh
-                if _ac3.button(
+                if _ac4.button(
                     "🔄 Refresh", key=f"t_ref_{_kt}", use_container_width=True,
                     help="Refresh template Excel paket dari template master.",
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "ref"
-                # 👀 Peserta
-                if _ac4.button(
-                    "👀 Peserta", key=f"t_mon_{_kt}", use_container_width=True,
-                    help="Cek peserta dan status pemenang paket di SPSE.",
-                ):
-                    st.session_state[f"_t_act_{_kt}"] = "mon"
-                # 📂 Buka
-                if _ac5.button(
-                    "📂 Buka", key=f"t_open_{_kt}", use_container_width=True,
-                    help="Buka folder dokumen paket di File Explorer.",
-                ):
-                    st.session_state[f"_t_act_{_kt}"] = "open"
                 # 🔁 Parse
-                if _ac6.button(
+                if _ac5.button(
                     "🔁 Parse", key=f"t_parse_{_kt}", use_container_width=True,
                     help="Baca ulang Draft PPK dan sinkronkan metadata paket ke Supabase.",
                 ):
                     st.session_state[f"_t_act_{_kt}"] = "parse"
-                if _ac7.button(
+                if _ac6.button(
                     "🤖 Pra-Reviu + Isi DOCM", key=f"t_patch_reviu_{_kt}",
                     use_container_width=True,
                     help="Kirim prompt pra-reviu ke Codex, isi jawaban + draft tanggapan ke DOCM, dan buat Markdown audit.",
@@ -8054,7 +8103,28 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             # Proses aksi di LUAR expander (hindari nested st.status di expander)
             _act = st.session_state.pop(f"_t_act_{_kt}", None)
             if _act:
-                if _act in ("dl", "hps", "pen"):
+                if _act == "sync":
+                    with st.status(f"🔄 Menyerap dan menyinkronkan {_nm[:40]}...", expanded=True) as _sync_st:
+                        try:
+                            _sync_inbox, _sync_spse = _serap_satu_paket_tender(_kt)
+                            if _sync_inbox.get("error"):
+                                _sync_st.write(f"⚠ Inbox: {len(_sync_inbox['error'])} error")
+                            else:
+                                _sync_st.write(
+                                    f"📥 Inbox: { _sync_inbox.get('baru', 0) } baru / "
+                                    f"{ _sync_inbox.get('diperbarui', 0) } diperbarui"
+                                )
+                            if _sync_spse.get("sukses") and _sync_spse.get("paket"):
+                                _sync_st.update(label="✅ Paket berhasil disinkronkan", state="complete")
+                            else:
+                                _sync_st.update(
+                                    label=f"⚠ Paket tidak ditemukan di SPSE: {_sync_spse.get('pesan', '-')}",
+                                    state="error",
+                                )
+                        except Exception as _sync_e:
+                            _sync_st.update(label=f"❌ Sinkronisasi gagal: {_sync_e}", state="error")
+                    st.rerun()
+                elif _act in ("dl", "hps", "pen"):
                     _do_dl  = _act == "dl"
                     _do_hps = _act == "hps"
                     _do_pen = _act == "pen"
@@ -8090,34 +8160,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                         with st.expander("Lihat Log"):
                             for _l in _logs:
                                 st.caption(_l)
-
-                elif _act == "mon":
-                    import peserta_monitor_tender as _pmt
-                    with st.spinner(f"👀 Mengambil data peserta {_nm[:40]}..."):
-                        _hasil = _pmt.fetch_semua_paket([_kt])
-                        _data = _hasil.get(_kt, {})
-                        _jum = _data.get("jumlah", 0)
-                        _err = _data.get("error")
-                        _peserta = _data.get("peserta", [])
-
-                        if _err:
-                            st.error(f"❌ Error: {_err}")
-                        elif _jum == 0:
-                            st.info("⬜ Belum ada peserta.")
-                        else:
-                            st.success(f"✅ Ditemukan {_jum} peserta.")
-                            with st.expander(f"📋 Daftar Peserta ({_jum})", expanded=True):
-                                for _mp in _peserta:
-                                    _bintang = " ⭐ (Pemenang)" if _mp.get("is_pemenang") else ""
-                                    st.caption(f"{_mp['nama']}{' — ' + _mp['npwp'] if _mp.get('npwp') else ''}{_bintang}")
-
-                elif _act == "open":
-                    import os as _os_open
-                    try:
-                        _os_open.startfile(_tpath)
-                        st.success(f"📂 Membuka folder: `{_tpath}`")
-                    except Exception as _op_e:
-                        st.error(f"Gagal membuka folder: {_op_e}")
 
                 elif _act == "parse":
                     with st.status(f"⏳ Re-parsing PDF untuk {_nm[:40]}...", expanded=True) as _st_rp:
@@ -9883,6 +9925,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             _kl_rows = _sb_kl().table("draft_paket").select(
                 "kode_tender,nama_tender,kode_pokja,nomor_urut"
             ).order("nomor_urut").execute().data or []
+            _kl_rows = [r for r in _kl_rows if not _is_tender_excluded(r)]
             # Adapter: sesuaikan format dengan yang diharapkan _get_paket_gabungan()
             # field: kode, nama, id_lelang, pokja, status, tanggal
             _kl_paket_mapped = [
@@ -9913,7 +9956,9 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
         _kl_perlu_fetch = [
             p for p in _get_paket_gabungan()
             if p.get("kode") != "00000000000"
-            and st.session_state.get(f"kl_chk_{p['kode']}", False)
+            # Default checkbox paket = tercentang; widget baru dibuat beberapa
+            # baris di bawah, jadi jangan menganggap key yang belum ada False.
+            and st.session_state.get(f"kl_chk_{p['kode']}", True)
             and f"kl_peserta_{p['kode']}" not in st.session_state
         ]
         if _kl_perlu_fetch:
@@ -9986,18 +10031,25 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                     _kl_limit = min(3, n_p) if _kl_hanya_top3 else n_p
                     _kl_badge = f"Top {_kl_limit} dari {n_p}" if (_kl_hanya_top3 and n_p > 3) else str(n_p)
                     with st.expander(f"**{p['kode']}** — {_kl_badge} peserta", expanded=True):
-                        c1, c2, c3 = st.columns(3)
+                        c1, c2, c3, c4 = st.columns(4)
                         with c1:
+                            if st.button("👀 Peserta", key=f"kl_refresh_peserta_{p['kode']}", use_container_width=True,
+                                         help="Ambil ulang daftar peserta paket ini dari SPSE."):
+                                _kl_id = p.get("id_lelang") or p["kode"]
+                                with st.spinner("Mengambil peserta dari SPSE..."):
+                                    st.session_state[f"kl_peserta_{p['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
+                                st.rerun()
+                        with c2:
                             if st.button("🏆 Top 3", key=f"kl_top3_{p['kode']}", use_container_width=True):
                                 for j, ps in enumerate(kl_res_p["peserta"], 1):
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = (j <= 3)
                                 st.rerun()
-                        with c2:
+                        with c3:
                             if st.button("✅ Semua", key=f"kl_all_{p['kode']}", use_container_width=True):
                                 for ps in kl_res_p["peserta"]:
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = True
                                 st.rerun()
-                        with c3:
+                        with c4:
                             if st.button("⬜ Batal", key=f"kl_none_{p['kode']}", use_container_width=True):
                                 for ps in kl_res_p["peserta"]:
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = False
@@ -10489,15 +10541,18 @@ PREFLIGHT WAJIB — berhenti dengan ERROR jika gagal
    Jika tidak ada, gunakan master root _SOP Evaluator/PROTOKOL_EVALUASI_AI.md.
 3. Baca evaluator spesifik: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md,
    prioritaskan salinan di folder paket/5. Evaluator Kualifikasi & Teknis/.
-4. Pastikan Dokpil tersedia. Cari dokpil_*.pdf atau dokumen pemilihan di root paket
-   dan subfolder 2. Rancangan Kontrak/.
-5. Daftar penyedia dari folder 8. Dokumen Kualifikasi/ dan/atau 9. Dokumen Penawaran
-   Teknis & Biaya/. Jika struktur berbeda, lakukan Glob seluruh root paket dan jelaskan
-   struktur aktual. Jangan mengarang penyedia atau dokumen.
+4. Pastikan Dokpil tersedia. Prioritaskan `3. Dokpil Full PK v1.docx`, `dokpil_*.pdf`,
+   dan dokumen pemilihan di root paket/subfolder `2. Rancangan Kontrak/`.
+5. Cari penyedia pada struktur aktual Tender: `1. Dokumen Penawaran/`,
+   `1. Dokumen Gabungan/`, dan `8. Dokumen Kualifikasi/`. File gabungan per peserta
+   adalah sumber baca utama; file pecahan hanya fallback jika gabungan rusak/tidak terbaca.
+   Jika struktur berbeda, lakukan Glob seluruh root paket dan jelaskan struktur aktual.
+   Jangan mengarang penyedia atau dokumen.
 
 ATURAN EVALUASI WAJIB
 1. Baca Dokpil lebih dahulu; ekstrak syarat LDP/LDK sebelum membaca penawaran.
 2. Evaluasi setiap penyedia satu per satu, maksimal 3 peserta utama jika tersedia.
+   Sebutkan daftar penyedia yang ditemukan dan jangan diam-diam melewati peserta.
    Jangan mencampur nama, nilai, atau bukti antar peserta.
 3. Gunakan bukti dokumen lokal saja; jangan menjadikan Supabase/Excel sebagai bukti
    evaluasi. Jika dokumen tidak ada, tulis TIDAK ADA.
@@ -10506,12 +10561,17 @@ ATURAN EVALUASI WAJIB
 5. Untuk setiap temuan, cite nama file + halaman/section + kutipan singkat.
 6. Jangan memberi skor jika evaluator menetapkan PASS/FAIL. Jangan membuat fakta,
    halaman, dokumen, atau kutipan.
+7. Jangan mengubah Excel, DOCM, Supabase, SPSE, atau dokumen sumber. Output otomatis
+   hanya `_HASIL_EVALUASI_PK.md` di root folder paket.
 
 OUTPUT WAJIB
 - Tulis _HASIL_EVALUASI_PK.md di ROOT folder paket (bukan subfolder).
 - Isi hasil per peserta: Administrasi, Teknis, Kualifikasi, Flag Audit, dan Kesimpulan Akhir.
-- Pertahankan bagian ANALISIS MANUAL jika file output sudah ada.
+- Pertahankan bagian `<!-- ANALISIS MANUAL -->` jika file output sudah ada; jangan timpa
+  analisis manual user.
 - Setelah menulis, buka ulang/cek file output dan pastikan tidak kosong.
+- Pastikan output memuat: ekstraksi persyaratan Dokpil, evaluasi Administrasi, Teknis,
+  Kualifikasi, Flag Audit/Klarifikasi, dan Kesimpulan Akhir per peserta.
 - Jika file sumber, protokol, atau output gagal dibuat, tulis ERROR yang spesifik dan
   jangan menyatakan evaluasi berhasil.
 
@@ -10552,6 +10612,11 @@ Mulai evaluasi sekarang."""
                         _hasil_path = _os_ait.path.join(job["folder"], "_HASIL_EVALUASI_PK.md")
                         if not _os_ait.path.isfile(_hasil_path) or _os_ait.path.getsize(_hasil_path) == 0:
                             raise RuntimeError("Codex selesai, tetapi _HASIL_EVALUASI_PK.md tidak dibuat atau kosong.")
+                        _missing_eval = _validasi_hasil_evaluasi_tender(_hasil_path)
+                        if _missing_eval:
+                            raise RuntimeError(
+                                "Output evaluasi belum lengkap; bagian hilang: " + ", ".join(_missing_eval)
+                            )
                         return {"nama": job["nama"], "status": "ok", "output": _out, "error": ""}
                     except Exception as _e:
                         return {"nama": job["nama"], "status": "error", "output": "", "error": str(_e)}
@@ -10577,15 +10642,16 @@ Mulai evaluasi sekarang."""
 if _tender_active_tab == "6️⃣ Dokumen Penawaran":
     import pindah_penawaran_engine as _pe
 
-    st.markdown("### Dokumen Penawaran")
+    st.markdown("### 6️⃣ Dokumen Penawaran")
     st.caption(
-        "Scan otomatis hasil decrypt Apendo di `D:\\data\\biddings`, "
-        "cocokkan dengan paket + peserta di Supabase, lalu pindah ke folder paket."
+        "Alur kerja: scan hasil decrypt Apendo → pindahkan/gabung dokumen → evaluasi dan input BA."
     )
 
-    _dp_col_scan, _ = st.columns([1, 3])
+    st.markdown("#### 1. Scan Dokumen Apendo")
+    st.caption("Sumber: `D:\\data\\biddings`. Data dicocokkan dengan paket dan peserta di Supabase.")
+    _dp_col_scan, _dp_col_info = st.columns([1, 3])
     with _dp_col_scan:
-        if st.button("🔍 Scan Apendo", key="dp_scan", use_container_width=True):
+        if st.button("🔍 Scan Ulang Apendo", key="dp_scan", type="primary", use_container_width=True):
             st.session_state.pop("dp_scan_result", None)
             st.rerun()
 
@@ -10598,10 +10664,80 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
                 _enriched = []
             st.session_state["dp_scan_result"] = _enriched
 
-    _dp_items = st.session_state.get("dp_scan_result", [])
+    _dp_items_raw = st.session_state.get("dp_scan_result", [])
+    # Cache sesi lama mungkin belum membawa status_tahap; enrich sekali agar
+    # paket selesai tetap tersaring tanpa mewajibkan restart aplikasi.
+    if _dp_items_raw and any("status_tahap" not in _item for _item in _dp_items_raw):
+        _dp_items_raw = _pe.lookup_supabase(_dp_items_raw)
+        st.session_state["dp_scan_result"] = _dp_items_raw
+    _dp_items = [
+        _item for _item in _dp_items_raw
+        if not _is_tender_selesai(_item)
+    ]
+
+    with _dp_col_info:
+        if _dp_items:
+            _dp_paket_n = len({x.get("kode_tender") for x in _dp_items})
+            _dp_peserta_n = len(_dp_items)
+            _dp_m1, _dp_m2, _dp_m3 = st.columns(3)
+            _dp_m1.metric("Paket", _dp_paket_n)
+            _dp_m2.metric("Peserta", _dp_peserta_n)
+            _dp_m3.metric("Status", "Siap diproses")
+        else:
+            st.caption("Belum ada hasil scan.")
 
     if "dp_notif" in st.session_state:
         st.success(st.session_state.pop("dp_notif"))
+
+    # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
+    _dp_paket_rows = []
+    try:
+        from config import sb as _sb_dp_shared
+        _dp_r_shared = _sb_dp_shared().table("draft_paket").select(
+            "kode_tender,nama_tender,folder_dibuat,status_tahap"
+        ).not_.is_("folder_dibuat", "null").execute()
+        _dp_paket_rows = [
+            _r for _r in (_dp_r_shared.data or [])
+            if _r.get("folder_dibuat")
+            and not _is_tender_excluded(_r)
+            and not _is_tender_selesai(_r)
+        ]
+        _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
+    except Exception as _dp_shared_e:
+        st.warning(f"⚠️ Gagal memuat daftar paket: {_dp_shared_e}")
+
+    st.divider()
+    st.markdown("#### 2. Pilih Paket")
+    if _dp_paket_rows:
+        _dp_sel_c1, _dp_sel_c2, _dp_sel_c3 = st.columns([1, 1, 3])
+        if _dp_sel_c1.button("✅ Pilih Semua", key="dp_pilih_semua", use_container_width=True):
+            for _r in _dp_paket_rows:
+                st.session_state[f"dp_chk_{_r['kode_tender']}"] = True
+            st.rerun()
+        if _dp_sel_c2.button("❌ Batal Semua", key="dp_batal_semua", use_container_width=True):
+            for _r in _dp_paket_rows:
+                st.session_state[f"dp_chk_{_r['kode_tender']}"] = False
+            st.rerun()
+        _dp_sel_n = 0
+        for _r in _dp_paket_rows:
+            _dp_kt = _r["kode_tender"]
+            _dp_ck = f"dp_chk_{_dp_kt}"
+            if _dp_ck not in st.session_state:
+                st.session_state[_dp_ck] = True
+            if st.checkbox(
+                f"{_r.get('folder_dibuat', _r.get('nama_tender', _dp_kt))}",
+                key=_dp_ck,
+                help=f"{_dp_kt} · status: {_r.get('status_tahap') or '-'}",
+            ):
+                _dp_sel_n += 1
+        _dp_selected_kodes = {
+            _r["kode_tender"] for _r in _dp_paket_rows
+            if st.session_state.get(f"dp_chk_{_r['kode_tender']}", False)
+        }
+        _dp_sel_c3.caption(f"{_dp_sel_n} dari {len(_dp_paket_rows)} paket terpilih untuk aksi bulk.")
+    else:
+        _dp_selected_kodes = set()
+        st.info("Tidak ada paket aktif dengan folder yang dapat diproses.")
 
     if not _dp_items:
         st.info("Tidak ada data di `D:\\data\\biddings`. Download dulu via Apendo.")
@@ -10616,17 +10752,57 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
         for _it in _dp_items:
             _dp_by_paket.setdefault(_it["kode_tender"], []).append(_it)
 
+        _dp_scan_selected = {
+            _kt for _kt in _dp_by_paket if _kt in _dp_selected_kodes
+        }
+        _dp_bulk_c1, _dp_bulk_c2 = st.columns([1, 3])
+        with _dp_bulk_c1:
+            if st.button(
+                "🚚 Pindahkan & Gabung Terpilih",
+                key="dp_bulk_pindah",
+                type="primary",
+                use_container_width=True,
+                disabled=not _dp_scan_selected,
+            ):
+                _bulk_log = []
+                _bulk_ok, _bulk_fail = [], []
+                for _bulk_kt in _dp_scan_selected:
+                    for _bulk_ps in _dp_by_paket[_bulk_kt]:
+                        _bulk_dest = _pe.resolve_dest(_bulk_ps, _dp_total)
+                        _bulk_res = _pe.pindah_dan_gabung(_bulk_ps, _bulk_dest, log=_bulk_log.append)
+                        _bulk_ok.extend(_bulk_res["sukses"])
+                        _bulk_fail.extend(_bulk_res["gagal"])
+                if _bulk_ok:
+                    st.session_state["dp_notif"] = (
+                        f"✅ {len(_bulk_ok)} file berhasil dipindah dari {len(_dp_scan_selected)} paket."
+                    )
+                    st.session_state.pop("dp_scan_result", None)
+                    st.rerun()
+                if _bulk_fail:
+                    st.error(f"❌ {len(_bulk_fail)} file gagal dipindah.")
+                    for _e in _bulk_fail:
+                        st.caption(f"• {_e}")
+        with _dp_bulk_c2:
+            st.caption(
+                f"{len(_dp_scan_selected)} paket terpilih memiliki hasil scan Apendo. "
+                "Aksi per-paket tetap tersedia di expander bawah."
+            )
+
         for _kt, _peserta_list in _dp_by_paket.items():
             _folder_dibuat = _peserta_list[0].get("folder_dibuat", "")
             _paket_label = _folder_dibuat if _folder_dibuat else _peserta_list[0].get("nama_tender", _kt)
             _folder_paket = _peserta_list[0].get("folder_paket", "")
             _folder_ada = bool(_folder_paket and os.path.isdir(_folder_paket))
 
-            with st.expander(f"**{_paket_label}** ({len(_peserta_list)} peserta)", expanded=True):
+            with st.expander(f"**{_paket_label}** · {len(_peserta_list)} peserta", expanded=False):
+                _dp_s1, _dp_s2, _dp_s3 = st.columns(3)
+                _dp_s1.metric("Peserta", len(_peserta_list))
+                _dp_s2.metric("Folder paket", "✅ Ada" if _folder_ada else "❌ Tidak ada")
+                _dp_s3.metric("Status", "Siap" if _folder_ada else "Perlu Tab 0")
                 if not _folder_ada:
                     st.warning("Folder paket belum ditemukan — buat folder di Tab 0 dulu.")
                 else:
-                    st.text(f"📂 {_folder_paket}")
+                    st.caption(f"📂 `{_folder_paket}`")
 
                 for _ps in _peserta_list:
                     _nama = _ps["nama_perusahaan"]
@@ -10685,19 +10861,12 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
                             for _m in _gab_log:
                                 st.caption(_m)
 
-    # ── Seksi 2: Gabung Dok Lengkap (independen dari Scan Apendo) ─────────────
+    # ── Seksi 3: Gabung Dok Lengkap (independen dari Scan Apendo) ─────────────
     st.divider()
-    st.markdown("### 📎 Gabung Dokumen Lengkap")
+    st.markdown("#### 3. Gabung Dokumen Lengkap")
     st.caption("Gabung `DoktekFull` + `DokkualifFull` per peserta → `1. Dokumen Gabungan/`. Tidak perlu Scan Apendo dulu.")
 
-    # Ambil daftar paket dari Supabase
-    _gab_paket_list = []
-    try:
-        from config import sb as _sb_gab
-        _gab_r = _sb_gab().table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").not_.is_("folder_dibuat", "null").execute()
-        _gab_paket_list = [r for r in (_gab_r.data or []) if r.get("folder_dibuat")]
-    except Exception as _gab_e:
-        st.warning(f"⚠️ Gagal ambil daftar paket: {_gab_e}")
+    _gab_paket_list = _dp_paket_rows
 
     if _gab_paket_list:
         from config import TENDER_ROOT as _TENDER_ROOT_GAB
@@ -10706,18 +10875,24 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
             if os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
             or os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
         ]
-        if st.button("📎 Gabung Semua Paket", key="gab2_semua", type="primary", use_container_width=False):
-            _gab_all_log = st.empty()
-            _gab_all_lines = []
-            _gab_all_ok = 0
-            for _gp in _gab_valid:
-                _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
-                def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
-                    _lines.append(m)
-                    _area.code("\n".join(_lines[-20:]))
-                _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
-                _gab_all_ok += _r["ok"]
-            st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_valid)} paket.")
+        _gab_c1, _gab_c2 = st.columns([1, 3])
+        with _gab_c1:
+            _gab_bulk = [r for r in _gab_valid if r["kode_tender"] in _dp_selected_kodes]
+            if st.button("📎 Gabung Paket Terpilih", key="gab2_semua", type="primary", use_container_width=True,
+                         disabled=not _gab_bulk):
+                _gab_all_log = st.empty()
+                _gab_all_lines = []
+                _gab_all_ok = 0
+                for _gp in _gab_bulk:
+                    _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
+                    def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
+                        _lines.append(m)
+                        _area.code("\n".join(_lines[-20:]))
+                    _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
+                    _gab_all_ok += _r["ok"]
+                st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
+        with _gab_c2:
+            st.caption(f"{len(_gab_valid)} paket valid · {len(_gab_bulk)} terpilih untuk aksi bulk.")
         st.divider()
 
         def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket):
@@ -10729,10 +10904,50 @@ Folder paket: {folder_paket}
 Langkah:
 1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
 2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
-3. Evaluasi semua penyedia yang ditemukan di folder Dokumen Evaluasi / Dokumen Kualifikasi paket ini.
+3. Evaluasi semua penyedia yang ditemukan pada `1. Dokumen Penawaran/`,
+   `1. Dokumen Gabungan/`, dan/atau `8. Dokumen Kualifikasi/` paket ini.
+   Prioritaskan file gabungan per peserta; gunakan file pecahan hanya sebagai fallback.
 4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
 
+Jangan mengubah Excel, DOCM, Supabase, SPSE, atau dokumen sumber. Pertahankan bagian
+`<!-- ANALISIS MANUAL -->` jika output sudah ada. Output wajib memuat ekstraksi Dokpil,
+Administrasi, Teknis, Kualifikasi, Flag Audit/Klarifikasi, dan Kesimpulan Akhir.
+
 Mulai sekarang."""
+
+        _gab_ai_bulk = [r for r in _gab_valid if r["kode_tender"] in _dp_selected_kodes]
+        if st.button(
+            "🤖 Evaluasi AI Paket Terpilih",
+            key="gab2_ai_bulk",
+            type="primary",
+            use_container_width=True,
+            disabled=not _gab_ai_bulk,
+        ):
+            import ai_evaluator as _heval_bulk
+            _bulk_ai_ok, _bulk_ai_fail = 0, 0
+            with st.status(f"🤖 Mengevaluasi {len(_gab_ai_bulk)} paket terpilih...", expanded=True) as _bulk_ai_st:
+                for _gp_ai in _gab_ai_bulk:
+                    _gp_ai_folder = os.path.join(_TENDER_ROOT_GAB, _gp_ai["folder_dibuat"])
+                    try:
+                        _prompt_ai = _prompt_evaluasi_tender_apendo(
+                            _gp_ai_folder, _gp_ai.get("folder_dibuat", _gp_ai["kode_tender"])
+                        )
+                        _out_ai = _heval_bulk._run_evaluator(
+                            _prompt_ai, model=None, add_dirs=[_gp_ai_folder], engine="codex"
+                        )
+                        _hasil_ai = os.path.join(_gp_ai_folder, "_HASIL_EVALUASI_PK.md")
+                        _missing_ai = _validasi_hasil_evaluasi_tender(_hasil_ai)
+                        if _missing_ai:
+                            raise RuntimeError("Output belum lengkap: " + ", ".join(_missing_ai))
+                        _bulk_ai_ok += 1
+                        _bulk_ai_st.write(f"✅ {_gp_ai.get('folder_dibuat', '')[:70]}")
+                    except Exception as _bulk_ai_e:
+                        _bulk_ai_fail += 1
+                        _bulk_ai_st.write(f"❌ {_gp_ai.get('folder_dibuat', '')[:60]} — {_bulk_ai_e}")
+                _bulk_ai_st.update(
+                    label=f"✅ { _bulk_ai_ok } berhasil · ❌ { _bulk_ai_fail } gagal",
+                    state="complete" if _bulk_ai_fail == 0 else "error",
+                )
 
         for _gp in _gab_valid:
             _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
@@ -10761,6 +10976,12 @@ Mulai sekarang."""
                         try:
                             _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
                             _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=None, add_dirs=[_gp_folder], engine="codex")
+                            _hasil_ap = os.path.join(_gp_folder, "_HASIL_EVALUASI_PK.md")
+                            _missing_ap = _validasi_hasil_evaluasi_tender(_hasil_ap)
+                            if _missing_ap:
+                                raise RuntimeError(
+                                    "Output evaluasi belum lengkap; bagian hilang: " + ", ".join(_missing_ap)
+                                )
                             st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
                             with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
                                 st.markdown(_out_ap[:3000])
@@ -10769,25 +10990,15 @@ Mulai sekarang."""
     else:
         st.info("Tidak ada paket ditemukan di Supabase.")
 
-    # ── Seksi 3: Input BA → tulis Excel langsung via COM ─────────────────────
+    # ── Seksi 4: Input BA → tulis Excel langsung via COM ─────────────────────
     st.divider()
-    st.markdown("### 📋 Input BA → tulis Excel")
+    st.markdown("#### 4. Input BA ke Excel")
     st.caption(
         "Isi sheet '0. Input BA' (identitas peserta, dokumen penawaran, SKP) "
         "langsung ke file .xlsm via COM. Urutan peserta dari KK Evaluasi."
     )
 
-    # Ambil daftar paket (folder sudah dibuat)
-    _iba_paket_list = []
-    try:
-        from config import sb as _sb_iba, POKJA_ROOT as _POKJA_ROOT_IBA
-        _iba_r = _sb_iba().table("draft_paket").select(
-            "kode_tender,nama_tender,folder_dibuat"
-        ).not_.is_("folder_dibuat", "null").execute()
-        _iba_paket_list = [r for r in (_iba_r.data or []) if r.get("folder_dibuat")]
-        _iba_paket_list = sorted(_iba_paket_list, key=lambda x: x.get("folder_dibuat", ""))
-    except Exception as _iba_e:
-        st.warning(f"Gagal ambil daftar paket: {_iba_e}")
+    _iba_paket_list = _dp_paket_rows
 
     if not _iba_paket_list:
         st.info("Tidak ada paket dengan folder dibuat.")
@@ -11017,6 +11228,52 @@ Mulai sekarang."""
             else:
                 st.warning(f"Input BA {kode_tender} gagal: {_res['pesan']}")
 
+        def _resolve_input_ba_target(_iba_p):
+            """Resolve folder kualifikasi + workbook BA untuk satu paket."""
+            _kode = _iba_p["kode_tender"]
+            _folder_res = kualifikasi_engine.resolve_folder_paket(_kode)
+            _folder_kual = _folder_res.get("path", "")
+            _folder_paket = os.path.dirname(_folder_kual) if _folder_kual else ""
+            _xlsm = ""
+            if _folder_paket and os.path.isdir(_folder_paket):
+                _candidates = (
+                    _glob_mod.glob(os.path.join(_folder_paket, "0. BA*.xlsm")) or
+                    _glob_mod.glob(os.path.join(_folder_paket, "*.xlsm"))
+                )
+                if _candidates:
+                    _xlsm = _candidates[0]
+            return _folder_kual, _xlsm
+
+        _iba_bulk = [r for r in _iba_paket_list if r["kode_tender"] in _dp_selected_kodes]
+        _iba_bulk_c1, _iba_bulk_c2 = st.columns([1, 3])
+        with _iba_bulk_c1:
+            if st.button(
+                "▶ Input BA Paket Terpilih",
+                key="iba_bulk_selected",
+                type="primary",
+                use_container_width=True,
+                disabled=not _iba_bulk,
+            ):
+                _iba_bulk_ok, _iba_bulk_skip = 0, 0
+                for _iba_selected in _iba_bulk:
+                    _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_selected)
+                    if not _iba_xlsm:
+                        _iba_bulk_skip += 1
+                        st.warning(f"⚠️ {_iba_selected.get('nama_tender', '')[:50]} — xlsm tidak ditemukan.")
+                        continue
+                    _proses_input_ba(
+                        _iba_selected["kode_tender"],
+                        _iba_selected.get("nama_tender", _iba_selected["kode_tender"]),
+                        _iba_folder_kual,
+                        _iba_xlsm,
+                        st.session_state.get("iba_do_teknis", True),
+                        st.session_state.get("iba_do_gcal", True),
+                    )
+                    _iba_bulk_ok += 1
+                st.info(f"Input BA selesai: {_iba_bulk_ok} diproses, {_iba_bulk_skip} dilewati.")
+        with _iba_bulk_c2:
+            st.caption(f"{len(_iba_bulk)} paket terpilih untuk input BA.")
+
         # Tombol per-paket
         st.divider()
         for _iba_p in _iba_paket_list:
@@ -11025,19 +11282,7 @@ Mulai sekarang."""
             _iba_label = _iba_p.get("folder_dibuat", _iba_kode)
 
             # Resolve folder & xlsm
-            _iba_folder_res = kualifikasi_engine.resolve_folder_paket(_iba_kode)
-            _iba_folder_kual = _iba_folder_res.get("path", "")
-            _iba_folder_paket = os.path.dirname(_iba_folder_kual) if _iba_folder_kual else ""
-
-            # Cari xlsm di folder paket (parent dari folder kualifikasi)
-            _iba_xlsm = ""
-            if _iba_folder_paket and os.path.isdir(_iba_folder_paket):
-                _iba_cand = (
-                    _glob_mod.glob(os.path.join(_iba_folder_paket, "0. BA*.xlsm")) or
-                    _glob_mod.glob(os.path.join(_iba_folder_paket, "*.xlsm"))
-                )
-                if _iba_cand:
-                    _iba_xlsm = _iba_cand[0]
+            _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_p)
 
             _iba_c1, _iba_c2 = st.columns([4, 1])
             with _iba_c1:

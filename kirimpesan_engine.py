@@ -381,7 +381,7 @@ def fetch_paket_draft() -> dict:
         return {"sukses": False, "pesan": str(e), "paket": []}
 
 
-def fetch_paket_semua() -> dict:
+def fetch_paket_semua(kode_filter: str | None = None) -> dict:
     """
     Ambil SEMUA paket dari SPSE (termasuk yang sudah selesai).
     Return: {"sukses": bool, "paket": [{...}], "pesan": str}
@@ -400,6 +400,8 @@ def fetch_paket_semua() -> dict:
         "search[value]": "",
         "search[regex]": "false",
     }
+    if kode_filter:
+        params["search[value]"] = str(kode_filter).strip()
     try:
         resp = requests.get(
             url,
@@ -437,6 +439,18 @@ def fetch_paket_semua() -> dict:
         return {"sukses": True, "paket": paket, "pesan": f"{len(paket)} paket ditemukan (semua status)"}
     except Exception as e:
         return {"sukses": False, "pesan": str(e), "paket": []}
+
+
+def fetch_paket_satu(kode_tender: str) -> dict:
+    """Ambil satu paket dari dt/paketpanitia memakai pencarian server-side."""
+    kode_tender = str(kode_tender or "").strip()
+    if not kode_tender:
+        return {"sukses": False, "pesan": "Kode tender kosong", "paket": []}
+    hasil = fetch_paket_semua(kode_filter=kode_tender)
+    # Guard: beberapa implementasi DataTables mengabaikan search[value].
+    hasil["paket"] = [p for p in hasil.get("paket", []) if str(p.get("kode")) == kode_tender]
+    hasil["pesan"] = f"{len(hasil['paket'])} paket cocok" if hasil.get("sukses") else hasil.get("pesan", "")
+    return hasil
 
 
 def fetch_tahap_tender(paket_list: list[dict]) -> dict:

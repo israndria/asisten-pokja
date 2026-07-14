@@ -744,7 +744,7 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         return {"_error": f"ID {pesan['id_pesan']}: {e}"}
 
 
-def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
+def serap_inbox(progress_cb=None, max_workers: int = 10, kode_tender: str | None = None) -> dict:
     """
     Serap pesan Delegasi Pokja dari inbox, simpan ke Supabase.
     Incremental: skip id_pesan yang sudah ada. Paralel: max_workers thread.
@@ -758,6 +758,15 @@ def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
     log(0.05, "Mengambil list inbox...")
     semua = ambil_list_inbox()
     delegasi = filter_delegasi(semua)
+    if kode_tender:
+        kode_tender = str(kode_tender).strip()
+        delegasi = [
+            p for p in delegasi
+            if kode_tender in str(p.get("kode_paket_raw") or "")
+        ]
+        # Jika ada beberapa Delegasi untuk kode sama, proses pesan terbaru saja.
+        delegasi.sort(key=lambda p: str(p.get("tanggal") or ""), reverse=True)
+        delegasi = delegasi[:1]
 
     if not delegasi:
         log(1.0, "Tidak ada pesan Delegasi Pokja ditemukan di inbox.")
@@ -775,11 +784,15 @@ def serap_inbox(progress_cb=None, max_workers: int = 10) -> dict:
                      for r in (existing_raw.data or []) if r.get("nama_tender")}
 
     # Filter: skip jika id_pesan sudah ada ATAU nama paket sudah ada di DB
-    to_process = [
-        p for p in delegasi
-        if p["id_pesan"] not in existing_id_pesan
-        and p["kode_paket_raw"].strip().lower() not in existing_nama
-    ]
+    if kode_tender:
+        # Mode target harus re-parse pesan terbaru agar perubahan inbox masuk.
+        to_process = list(delegasi)
+    else:
+        to_process = [
+            p for p in delegasi
+            if p["id_pesan"] not in existing_id_pesan
+            and p["kode_paket_raw"].strip().lower() not in existing_nama
+        ]
     skip = len(delegasi) - len(to_process)
     total = len(to_process)
 

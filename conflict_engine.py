@@ -21,6 +21,11 @@ _RE_GELAR = re.compile(
     re.IGNORECASE,
 )
 _RE_NONALPHA = re.compile(r"[^a-z\s]")
+_ALAT_HINT = re.compile(
+    r"\b(mesin|trimer|trimmer|las|cutting|whell|wheel|genset|ramset|"
+    r"scaf+old|excavator|roller|crane|jack\s*hammer|vibrator|pancang)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_nama(raw: str) -> str:
@@ -33,6 +38,27 @@ def _normalize_nama(raw: str) -> str:
     # Hapus spasi berlebih
     s = " ".join(s.split())
     return s
+
+
+def _normalize_alat(raw: str) -> str:
+    """Normalisasi alat; jumlah/unit/prefix bukan identitas alat."""
+    if not raw:
+        return ""
+    s = (raw.lower()
+         .replace("scafolding", "scaffolding")
+         .replace("schafolding", "scaffolding")
+         .replace("whell", "wheel")
+         .replace("trimer", "trimmer"))
+    s = re.sub(r"\btp\s*[-:]?\s*", "", s)
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = re.sub(r"\b\d+(?:[.,]\d+)?\s*(unit|set|buah|kg|kva|watt|joule|ton)?\b", " ", s)
+    s = re.sub(r"[^a-z\s]", " ", s)
+    return " ".join(s.split())
+
+
+def _looks_like_alat(raw: str) -> bool:
+    """Guard parser: sinyal kuat nama alat jangan disimpan sebagai personil."""
+    return bool(_ALAT_HINT.search(raw or ""))
 
 
 # ------------------------------------------------------------------
@@ -118,7 +144,7 @@ def sync_from_supabase(kode_tender: str, log=print) -> dict:
         nama_penyedia = row.get("nama_perusahaan", "")
         for key in ("personel_1", "personel_2"):
             raw = row.get(key, "")
-            if not raw:
+            if not raw or _looks_like_alat(_parse_nama(raw)):
                 continue
             upsert_p.append({
                 "kode_tender":  kode_tender,
@@ -169,7 +195,7 @@ def sync_from_pdf(
             "sumber":        "pdf",
         }
         for i, raw in enumerate(personel_list)
-        if raw and _parse_nama(raw)
+        if raw and _parse_nama(raw) and not _looks_like_alat(_parse_nama(raw))
     ]
     upsert_a = [
         {
@@ -209,22 +235,26 @@ def _resolve_folder_paket(kode_pokja: str) -> str | None:
 
 def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
     """
-    Fallback: peserta yang personel_1 masih kosong di peserta_identitas
+    Fallback: peserta yang personel_1 atau alat_1 masih kosong di peserta_identitas
     → cari DoktekFull_*.pdf di folder paket lokal → parse personil+alat
     → upsert ke paket_personil + paket_alat via sync_from_pdf().
     """
     import os
     import glob
 
-    # Ambil peserta yang personel_1 kosong/null
+    # Ambil peserta yang personil atau alat belum lengkap
     rows = _sb().table("peserta_identitas")\
-        .select("peserta_id,nama_perusahaan,personel_1")\
+        .select("peserta_id,nama_perusahaan,personel_1,alat_1")\
         .eq("kode_tender", kode_tender)\
         .execute().data or []
 
-    kosong = [r for r in rows if not (r.get("personel_1") or "").strip()]
+    kosong = [
+        r for r in rows
+        if not (r.get("personel_1") or "").strip()
+        or not (r.get("alat_1") or "").strip()
+    ]
     if not kosong:
-        log(f"sync_from_doktek_folder {kode_tender}: semua peserta sudah punya personel_1, skip")
+        log(f"sync_from_doktek_folder {kode_tender}: personil + alat sudah lengkap, skip")
         return {"personil": 0, "alat": 0}
 
     # Ambil kode_pokja dari draft_paket (satu paket, satu kode_pokja)
@@ -295,7 +325,10 @@ def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
 def _get_aktif_kode_tender() -> list[str]:
     """Semua kode_tender di draft_paket = paket aktif."""
     rows = _sb().table("draft_paket").select("kode_tender").execute().data or []
-    return [r["kode_tender"] for r in rows if r.get("kode_tender")]
+    return [
+        r["kode_tender"] for r in rows
+        if r.get("kode_tender") and str(r["kode_tender"]) != "10096884000"
+    ]
 
 
 def sync_new_paket(log=print) -> dict:
@@ -307,13 +340,17 @@ def sync_new_paket(log=print) -> dict:
     if not aktif:
         return {"synced": 0}
 
-    # Paket yang sudah punya data di paket_personil
-    tersync = set(
+    # Paket dianggap lengkap hanya jika personil DAN alat sudah tersync.
+    tersync_p = set(
         r["kode_tender"]
         for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
     )
+    tersync_a = set(
+        r["kode_tender"]
+        for r in (_sb().table("paket_alat").select("kode_tender").execute().data or [])
+    )
 
-    belum = aktif - tersync
+    belum = aktif - (tersync_p & tersync_a)
     if not belum:
         log("sync_new_paket: semua paket sudah tersync, skip")
         return {"synced": 0}
@@ -324,6 +361,26 @@ def sync_new_paket(log=print) -> dict:
         r = sync_from_doktek_folder(kt, log=log)
         total += r.get("personil", 0)
     return {"synced": len(belum), "personil": total}
+
+
+def get_sync_coverage() -> dict:
+    """Ringkasan coverage data konflik tanpa membaca PDF."""
+    aktif = set(_get_aktif_kode_tender())
+    p = {
+        r["kode_tender"]
+        for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
+    }
+    a = {
+        r["kode_tender"]
+        for r in (_sb().table("paket_alat").select("kode_tender").execute().data or [])
+    }
+    return {
+        "aktif": len(aktif),
+        "personil": len(aktif & p),
+        "alat": len(aktif & a),
+        "lengkap": len(aktif & p & a),
+        "belum_lengkap": len(aktif - (p & a)),
+    }
 
 
 def _overlap(mulai_a, selesai_a, mulai_b, selesai_b) -> bool:
@@ -442,18 +499,24 @@ def get_konflik_alat(kode_tender_target: str | None = None) -> list[dict]:
 
     from collections import defaultdict
     grouped: dict[str, list] = defaultdict(list)
+    display_map: dict[str, str] = {}
     for r in rows:
         mulai, selesai = _jadwal(r["kode_tender"])
-        grouped[r["nama_alat"]].append({
+        norm = _normalize_alat(r["nama_alat"] or "")
+        if not norm:
+            continue
+        display_map.setdefault(norm, r["nama_alat"])
+        grouped[norm].append({
             "kode_tender": r["kode_tender"],
             "nama_penyedia": r["nama_penyedia"],
             "peserta_id": r["peserta_id"],
+            "nama_alat": r["nama_alat"],
             "tgl_mulai": mulai,
             "tgl_selesai": selesai,
         })
 
     konflik = []
-    for nama, entries in grouped.items():
+    for norm, entries in grouped.items():
         seen_kt: dict[str, dict] = {}
         for e in entries:
             if e["kode_tender"] not in seen_kt:
@@ -478,6 +541,10 @@ def get_konflik_alat(kode_tender_target: str | None = None) -> list[dict]:
         if not ada_overlap:
             continue
 
-        konflik.append({"nama_alat": nama, "paket": entries})
+        konflik.append({
+            "nama_alat": display_map[norm],
+            "nama_alat_normalized": norm,
+            "paket": entries,
+        })
 
     return konflik

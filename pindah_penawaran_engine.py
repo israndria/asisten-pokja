@@ -73,6 +73,10 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     Urutan peserta ikut ranking di tender_peserta (bukan urutan filesystem).
     Nama peserta: cari dari peserta_identitas → kk_evaluasi_peserta → fallback ID.
     """
+    _excluded = {"10096884000"}  # legacy 2025 Hatungun
+    items = [i for i in items if str(i.get("kode_tender")) not in _excluded]
+    if not items:
+        return []
     kode_tenders = list({i["kode_tender"] for i in items})
     peserta_ids  = list({i["peserta_id"]  for i in items})
 
@@ -80,7 +84,7 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
     paket_map, nama_map, urutan_map = {}, {}, {}
 
     try:
-        r = sb.table("draft_paket").select("kode_tender,nama_tender,folder_dibuat").in_("kode_tender", kode_tenders).execute()
+        r = sb.table("draft_paket").select("kode_tender,nama_tender,folder_dibuat,status_tahap").in_("kode_tender", kode_tenders).execute()
         for row in (r.data or []):
             paket_map[row["kode_tender"]] = row
     except Exception:
@@ -160,6 +164,7 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
                 "urutan":          seq,
                 "nama_tender":     paket.get("nama_tender", kt),
                 "folder_dibuat":   folder_nama,
+                "status_tahap":    paket.get("status_tahap", ""),
                 "nomor_pokja":     _nomor_pokja(folder_nama),
                 "folder_paket":    os.path.join(TENDER_ROOT, folder_nama) if folder_nama else "",
                 "nama_perusahaan": nama_map.get(item["peserta_id"], f"Peserta {item['peserta_id']}"),
