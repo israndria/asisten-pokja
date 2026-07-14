@@ -9926,6 +9926,54 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
         if not _kl_paket_dipilih:
             st.info("← Centang paket dan tunggu peserta dimuat.")
         else:
+            # ── Publish Paket: finalisasi metadata setelah data tersimpan ────
+            # Tidak scrape ulang. Hanya validasi tabel Supabase + tulis manifest.
+            import publish_workflow as _pub_wf
+            with st.expander("📤 Publish Paket", expanded=True):
+                st.caption(
+                    "Klik setelah proses Download/Parse selesai. Publish hanya menandai "
+                    "snapshot terbaru untuk dibaca Excel."
+                )
+                _pub_preview = []
+                for _pub_item in _kl_paket_dipilih:
+                    _pub_p = _pub_item["paket"]
+                    _pub_root = os.path.dirname(_pub_item["folder"]) if _pub_item.get("folder") else None
+                    _pub_m = _pub_wf.get_manifest(_pub_p["kode"], _pub_root)
+                    _pub_preview.append({
+                        "Paket": _pub_p["kode"],
+                        "Publish terakhir": _pub_m.get("last_published_at", "Belum pernah"),
+                        "Status": ", ".join(
+                            f"{k}: {v}" for k, v in (_pub_m.get("status") or {}).items()
+                        ) or "Belum pernah publish",
+                    })
+                if _pub_preview:
+                    st.dataframe(_pub_preview, use_container_width=True, hide_index=True)
+                if st.button(
+                    f"📤 Publish {len(_kl_paket_dipilih)} paket",
+                    key="kl_publish_paket",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not _kl_paket_dipilih,
+                ):
+                    _pub_ok = 0
+                    for _pub_item in _kl_paket_dipilih:
+                        _pub_p = _pub_item["paket"]
+                        _pub_root = os.path.dirname(_pub_item["folder"]) if _pub_item.get("folder") else None
+                        _pub_res = _pub_wf.publish_paket(
+                            _pub_p["kode"], _pub_root, _pub_item["peserta"]
+                        )
+                        if _pub_res.get("ok"):
+                            _pub_ok += 1
+                            _pub_warn = (_pub_res.get("manifest") or {}).get("warnings") or []
+                            if _pub_warn:
+                                st.warning(f"⚠️ {_pub_p['kode']}: publish berhasil dengan catatan: {'; '.join(_pub_warn)}")
+                            else:
+                                st.success(f"✅ {_pub_p['kode']}: snapshot berhasil dipublish.")
+                        else:
+                            st.error(f"❌ {_pub_p['kode']}: {_pub_res.get('error', 'gagal publish')}")
+                    if _pub_ok:
+                        st.info(f"{_pub_ok}/{len(_kl_paket_dipilih)} paket siap di-refresh dari Excel.")
+
             # ── Fungsi proses (dipakai tombol global + per-paket) ──────────────
             def _proses_paket_kk(items_to_run, do_download, do_kk, do_excel):
                 log_area = st.empty()
