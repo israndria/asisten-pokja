@@ -241,9 +241,10 @@ def parse_detail_pesan_pl(id_pesan: str) -> dict:
 
 
 def serap_inbox_pl(progress_cb=None) -> dict:
-    """Serap pesan Delegasi PP (inbox non-tender PL), upsert mak+kode_rup+nilai ke draft_paket_pl.
+    """Serap pesan Delegasi PP (inbox non-tender PL), upsert metadata non-HPS.
 
-    Field yang di-update: mak, kode_rup, nilai_pagu, nilai_hps.
+    Field Inbox yang di-update: mak, kode_rup.
+    Nilai Pagu/HPS selalu disinkronkan dari halaman HPS SPSE live.
     Match key: kode_paket.
     """
     def log(p, m):
@@ -284,21 +285,20 @@ def serap_inbox_pl(progress_cb=None) -> dict:
             if kode_paket not in existing_kode:
                 log(prog, f"  ⚠ {kode_paket} tidak ada di draft_paket_pl — skip")
                 continue
-            _hps_raw  = detail.get("nilai_hps") or ""
-            _pagu_raw = detail.get("nilai_pagu") or ""
-            if _hps_raw and not _hps_raw.startswith("Rp."):
-                _hps_raw = "Rp. " + _hps_raw
-            if _pagu_raw and not _pagu_raw.startswith("Rp."):
-                _pagu_raw = "Rp. " + _pagu_raw
             update_data = {
                 "mak": detail.get("mak") or None,
                 "kode_rup": detail.get("kode_rup") or None,
-                "nilai_pagu": _pagu_raw or None,
-                "nilai_hps": _hps_raw or None,
             }
             # Hapus key dengan None biar tidak overwrite existing nilai
             update_data = {k: v for k, v in update_data.items() if v}
             _sb().table("draft_paket_pl").update(update_data).eq("kode_paket", kode_paket).execute()
+            try:
+                from hps_engine import scrape_dan_upsert_hps_pl
+                _hps_result = scrape_dan_upsert_hps_pl(kode_paket)
+                if _hps_result.get("error"):
+                    errors.append(f"{kode_paket}: HPS live gagal — {_hps_result['error']}")
+            except Exception as _hps_e:
+                errors.append(f"{kode_paket}: HPS live gagal — {_hps_e}")
             matched += 1
             log(prog, f"  OK {kode_paket} ({detail.get('nama_paket', '')[:30]}) - MAK {detail.get('mak', '')[:30]}")
         except Exception as e:
@@ -717,6 +717,9 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         record = {**detail_html, **detail_pdf, **detail_anggota, **detail_viewdraft}
         record.pop("_error_pdf", None)
         record.pop("_kode_tender_for_anggota", None)
+        # Inbox/viewdraft bukan authority HPS/Pagu; nilai diisi ulang dari halaman HPS live.
+        record.pop("nilai_pagu", None)
+        record.pop("nilai_hps", None)
         record["id_pesan"] = pesan["id_pesan"]
         record["_is_baru"] = kode_tender not in existing_kode
         record["_tanggal_pesan"] = pesan["tanggal"]
@@ -726,10 +729,13 @@ def _proses_satu_pesan(pesan: dict, existing_kode: set) -> dict:
         record["sbu_baru"] = sbu_baru
         record["sbu_lama"] = sbu_lama
 
-        # Scrape HPS via Playwright (halaman di-render JS)
+        # Scrape HPS/Pagu live dari halaman HPS SPSE.
         try:
             from hps_engine import scrape_dan_upsert_hps
-            scrape_dan_upsert_hps(kode_tender)
+            _hps_result = scrape_dan_upsert_hps(kode_tender)
+            if not _hps_result.get("error"):
+                record["nilai_pagu"] = _hps_result.get("nilai_pagu") or None
+                record["nilai_hps"] = _hps_result.get("nilai_hps") or None
         except Exception:
             pass  # HPS gagal tidak menggagalkan proses utama
 

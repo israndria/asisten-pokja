@@ -600,6 +600,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         # 2. Fetch detail dari halaman edit
         jenis_kontrak = ""
         hps_str = ""
+        _hps_live = {}
         metode_pengadaan = ""
         edit_html = ""
         try:
@@ -608,11 +609,18 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
                 headers=headers, timeout=15
             )
             edit_html = r_edit.text
-            hps_str = _parse_hps_dari_edit(edit_html)
             jenis_kontrak = _parse_jenis_kontrak_dari_edit(edit_html)
             metode_pengadaan = _parse_metode_pengadaan_dari_edit(edit_html)
         except Exception as e:
             errors.append(f"{kode_paket}: gagal fetch edit — {e}")
+
+        # HPS/Pagu wajib berasal dari halaman HPS live, bukan nilai stale di edit.
+        try:
+            from hps_engine import scrape_hps_pl
+            _hps_live = scrape_hps_pl(kode_paket)
+            hps_str = _hps_live.get("nilai_hps", "")
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal scrape HPS live — {e}")
 
         # 2b. Fetch nama PPK dari halaman view
         nama_ppk = ""
@@ -648,6 +656,8 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
         if nama_ppk:
             data["nama_ppk"] = nama_ppk
+        if _hps_live.get("nilai_pagu"):
+            data["nilai_pagu"] = _hps_live["nilai_pagu"]
         if viewdraft.get("sumber_anggaran"):
             data["sumber_anggaran"] = viewdraft["sumber_anggaran"]
         if viewdraft.get("lokasi"):

@@ -249,6 +249,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         # 2. Fetch detail dari halaman edit
         jenis_kontrak = ""
         hps_str = ""
+        _hps_live = {}
         metode_pengadaan = ""
         edit_html = ""
         try:
@@ -257,11 +258,18 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
                 headers=headers, timeout=15
             )
             edit_html = r_edit.text
-            hps_str = _parse_hps_dari_edit(edit_html)
             jenis_kontrak = _parse_jenis_kontrak_dari_edit(edit_html)
             metode_pengadaan = _parse_metode_pengadaan_dari_edit(edit_html)
         except Exception as e:
             errors.append(f"{kode_paket}: gagal fetch edit — {e}")
+
+        # HPS/Pagu wajib berasal dari halaman HPS live, bukan nilai stale di edit.
+        try:
+            from hps_engine import scrape_hps_pl
+            _hps_live = scrape_hps_pl(kode_paket)
+            hps_str = _hps_live.get("nilai_hps", "")
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal scrape HPS live — {e}")
 
         # 3. Deteksi jenis PL (dari metode, fallback nama)
         jenis_pl = _derive_jenis_pl_dari_metode(metode_pengadaan, nama_paket)
@@ -278,6 +286,9 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "status":            status_spse.lower() if status_spse else "draft",
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
+
+        if _hps_live.get("nilai_pagu"):
+            data["nilai_pagu"] = _hps_live["nilai_pagu"]
 
         try:
             _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()

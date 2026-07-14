@@ -17,18 +17,49 @@ def _parse_rp(s: str) -> float:
         return 0.0
 
 
-def _fetch_data_var(kode_tender: str) -> list:
+def _format_rp(value: float) -> str:
+    """Format angka ke format SPSE: Rp. 1.234.567,89."""
+    formatted = f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"Rp. {formatted}"
+
+
+def _parse_hps_page(html: str) -> dict:
+    """Parse JSON item HPS + TOTAL PAGU dari satu halaman HPS SPSE."""
+    import json as _json
+
+    m = re.search(r"var\s+data\s*=\s*(\[.*?\]);\s*(?:var|</script)", html, re.DOTALL)
+    if not m:
+        m = re.search(r"data\s*=\s*(\[\{.+?\}\])", html, re.DOTALL)
+    if not m:
+        return {"items": [], "nilai_pagu": ""}
+
+    try:
+        items = _json.loads(m.group(1))
+    except _json.JSONDecodeError:
+        return {"items": [], "nilai_pagu": ""}
+
+    m_pagu = re.search(
+        r"TOTAL\s+PAGU\s*:?.{0,300}?Rp\.\s*([\d.,]+)",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return {
+        "items": items,
+        "nilai_pagu": f"Rp. {m_pagu.group(1)}" if m_pagu else "",
+    }
+
+
+def _fetch_hps_page(kode_tender: str) -> dict:
     """
-    Ambil variabel JS `data` dari halaman HPS via requests + cookie CDP.
-    Data di-embed di HTML — tidak butuh Playwright/CDP browser launch.
+    Ambil halaman HPS Tender via requests + cookie CDP.
+    Satu response membawa rincian HPS dan TOTAL PAGU.
     """
     import requests
-    import json as _json
     import spse_browser
 
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        return []
+        return {"items": [], "nilai_pagu": ""}
 
     url = f"{SPSE_BASE_URL}dokumen/{kode_tender}/hps"
     r = requests.get(url, headers={
@@ -37,29 +68,28 @@ def _fetch_data_var(kode_tender: str) -> list:
         "Referer": f"{SPSE_BASE_URL}paket",
     }, timeout=15)
     if r.status_code != 200:
-        return []
+        return {"items": [], "nilai_pagu": ""}
+    return _parse_hps_page(r.text)
 
-    m = re.search(r"var\s+data\s*=\s*(\[.*?\]);\s*(?:var|</script)", r.text, re.DOTALL)
-    if not m:
-        m = re.search(r"data\s*=\s*(\[\{.+?\}\])", r.text, re.DOTALL)
-    if not m:
-        return []
 
-    try:
-        return _json.loads(m.group(1))
-    except _json.JSONDecodeError:
-        return []
+def _fetch_data_var(kode_tender: str) -> list:
+    """Kompatibilitas lama: hanya kembalikan item HPS."""
+    return _fetch_hps_page(kode_tender).get("items", [])
 
 
 def scrape_hps(kode_tender: str, session=None) -> dict:
     """
     Scrape HPS dari variabel JS `data` di halaman /dokumen/{kode_tender}/hps.
-    Return dict: {"items": [...], "total_nilai": float, "total_nilai_bulat": float}
+    Halaman yang sama juga menjadi sumber `nilai_pagu`.
     """
-    raw = _fetch_data_var(kode_tender)
+    page = _fetch_hps_page(kode_tender)
+    raw = page.get("items", [])
 
     if not raw:
-        return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+        return {
+            "items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0,
+            "nilai_pagu": page.get("nilai_pagu", ""), "nilai_hps": "",
+        }
 
     items = []
     for i, d in enumerate(raw):
@@ -111,6 +141,8 @@ def scrape_hps(kode_tender: str, session=None) -> dict:
         "items":             items,
         "total_nilai":       total_nilai,
         "total_nilai_bulat": total_nilai_bulat,
+        "nilai_pagu":        page.get("nilai_pagu", ""),
+        "nilai_hps":         _format_rp(total_nilai),
     }
 
 
@@ -154,6 +186,22 @@ def upsert_hps(kode_tender: str, hasil: dict) -> dict:
     }
 
 
+def _sync_tender_summary(kode_tender: str, hasil: dict) -> bool:
+    """Sinkronkan Pagu/HPS live ke draft_paket setelah scrape HPS berhasil."""
+    update = {}
+    if hasil.get("nilai_pagu"):
+        update["nilai_pagu"] = hasil["nilai_pagu"]
+    if hasil.get("nilai_hps"):
+        update["nilai_hps"] = hasil["nilai_hps"]
+    if not update:
+        return False
+    try:
+        _sb().table("draft_paket").update(update).eq("kode_tender", kode_tender).execute()
+        return True
+    except Exception:
+        return False
+
+
 def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
     """
     Fungsi utama: scrape HPS dari SPSE → upsert ke Supabase.
@@ -165,11 +213,15 @@ def scrape_dan_upsert_hps(kode_tender: str, session=None) -> dict:
             return {"count": 0, "warning": [], "total_nilai": 0.0,
                     "total_nilai_bulat": 0.0, "error": "Tidak ada item HPS ditemukan"}
         r = upsert_hps(kode_tender, hasil)
+        metadata_updated = _sync_tender_summary(kode_tender, hasil)
         return {
             "count":             r["count"],
             "warning":           r["warning"],
             "total_nilai":       hasil["total_nilai"],
             "total_nilai_bulat": hasil["total_nilai_bulat"],
+            "nilai_pagu":        hasil.get("nilai_pagu", ""),
+            "nilai_hps":         hasil.get("nilai_hps", ""),
+            "metadata_updated":  metadata_updated,
             "error":             None,
         }
     except Exception as e:
@@ -370,6 +422,9 @@ def scrape_hps_ke_excel(kode_tender: str, excel_path: str, progress_cb=None) -> 
         r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
         r["total_nilai"] = hasil["total_nilai"]
         r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+        r["nilai_pagu"] = hasil.get("nilai_pagu", "")
+        r["nilai_hps"] = hasil.get("nilai_hps", "")
+        r["metadata_updated"] = _sync_tender_summary(kode_tender, hasil)
 
         # Auto-generate markdown sebagai sumber data AI
         try:
@@ -422,6 +477,9 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
         r = _tulis_hps_ke_sheet(excel_path, hasil, progress_cb)
         r["total_nilai"] = hasil["total_nilai"]
         r["total_nilai_bulat"] = hasil["total_nilai_bulat"]
+        r["nilai_pagu"] = hasil.get("nilai_pagu", "")
+        r["nilai_hps"] = hasil.get("nilai_hps", "")
+        r["metadata_updated"] = _sync_pl_summary(kode_paket, hasil)
 
         # Auto-generate markdown sebagai sumber data AI
         try:
@@ -545,15 +603,18 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     # Auto-generate PDF tabel BoQ (tanpa header ringkasan)
     try:
         from _hps_to_pdf import md_to_pdf
-        # Ambil nilai_pagu dari Supabase (best-effort)
-        _nilai_pagu = None
-        try:
-            from config import sb as _sb
-            _row = _sb().table("draft_paket_pl").select("nilai_pagu").eq("kode_paket", kode_paket).maybe_single().execute()
-            if _row and _row.data:
-                _nilai_pagu = _row.data.get("nilai_pagu")
-        except Exception:
-            pass
+        # Utamakan Pagu live dari halaman HPS; DB hanya fallback.
+        _nilai_pagu = hasil.get("nilai_pagu") or None
+        if not _nilai_pagu:
+            try:
+                from config import sb as _sb
+                _table = "draft_paket_pl" if mode == "pl" else "draft_paket"
+                _key = "kode_paket" if mode == "pl" else "kode_tender"
+                _row = _sb().table(_table).select("nilai_pagu").eq(_key, kode_paket).maybe_single().execute()
+                if _row and _row.data:
+                    _nilai_pagu = _row.data.get("nilai_pagu")
+            except Exception:
+                pass
         md_to_pdf(md_path, nama_paket=nama_paket, total_hps=total_bulat, nilai_pagu=_nilai_pagu)
     except Exception:
         pass  # best-effort, jangan block HPS flow
@@ -590,21 +651,19 @@ def _resolve_dokid_hps_pl(kode_paket: str, cookie_str: str) -> str:
     return m.group(1) if m else ""
 
 
-def _fetch_data_var_pl(kode_paket: str) -> list:
-    """Ambil var JS `data` dari halaman HPS non-tender via requests + cookie PP.
-    Resolve DOKID HPS dari kode_paket (link /surveyhargappk), GET /hps dgn Referer wajib."""
+def _fetch_hps_page_pl(kode_paket: str) -> dict:
+    """Ambil rincian HPS + TOTAL PAGU non-tender via requests + cookie PP."""
     import requests
-    import json as _json
     import spse_browser
 
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        return []
+        return {"items": [], "nilai_pagu": ""}
 
     # Resolve DOKID dulu — id_nontender di DB adalah ID peserta, bukan DOKID HPS
     dokid = _resolve_dokid_hps_pl(kode_paket, cookie_str)
     if not dokid:
-        return []
+        return {"items": [], "nilai_pagu": ""}
 
     url = f"{SPSE_BASE_URL}dokumennontender/{dokid}/hps"
     r = requests.get(
@@ -618,26 +677,24 @@ def _fetch_data_var_pl(kode_paket: str) -> list:
         timeout=15,
     )
     if r.status_code != 200:
-        return []
+        return {"items": [], "nilai_pagu": ""}
+    return _parse_hps_page(r.text)
 
-    # Parse var data = [...]; dari script tag
-    m = re.search(r"var\s+data\s*=\s*(\[.*?\]);\s*(?:var|</script)", r.text, re.DOTALL)
-    if not m:
-        m = re.search(r"data\s*=\s*(\[\{.+?\}\])", r.text, re.DOTALL)
-    if not m:
-        return []
 
-    try:
-        return _json.loads(m.group(1))
-    except _json.JSONDecodeError:
-        return []
+def _fetch_data_var_pl(kode_paket: str) -> list:
+    """Kompatibilitas lama: hanya kembalikan item HPS non-tender."""
+    return _fetch_hps_page_pl(kode_paket).get("items", [])
 
 
 def scrape_hps_pl(kode_paket: str) -> dict:
     """Scrape HPS PL via kode_paket (resolve DOKID live). Struktur sama dengan tender."""
-    raw = _fetch_data_var_pl(kode_paket)
+    page = _fetch_hps_page_pl(kode_paket)
+    raw = page.get("items", [])
     if not raw:
-        return {"items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0}
+        return {
+            "items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0,
+            "nilai_pagu": page.get("nilai_pagu", ""), "nilai_hps": "",
+        }
 
     items = []
     for i, d in enumerate(raw):
@@ -686,6 +743,8 @@ def scrape_hps_pl(kode_paket: str) -> dict:
         "items":             items,
         "total_nilai":       total_nilai,
         "total_nilai_bulat": total_nilai_bulat,
+        "nilai_pagu":        page.get("nilai_pagu", ""),
+        "nilai_hps":         _format_rp(total_nilai),
     }
 
 
@@ -724,6 +783,22 @@ def upsert_hps_pl(kode_paket: str, hasil: dict) -> dict:
     }
 
 
+def _sync_pl_summary(kode_paket: str, hasil: dict) -> bool:
+    """Sinkronkan Pagu/HPS live ke draft_paket_pl setelah scrape HPS berhasil."""
+    update = {}
+    if hasil.get("nilai_pagu"):
+        update["nilai_pagu"] = hasil["nilai_pagu"]
+    if hasil.get("nilai_hps"):
+        update["nilai_hps"] = hasil["nilai_hps"]
+    if not update:
+        return False
+    try:
+        _sb().table("draft_paket_pl").update(update).eq("kode_paket", kode_paket).execute()
+        return True
+    except Exception:
+        return False
+
+
 def scrape_dan_upsert_hps_pl(kode_paket: str) -> dict:
     """Scrape HPS PL → upsert. Resolve DOKID langsung dari kode_paket (tanpa lookup DB)."""
     try:
@@ -733,11 +808,15 @@ def scrape_dan_upsert_hps_pl(kode_paket: str) -> dict:
                     "total_nilai_bulat": 0.0, "error": "Tidak ada item HPS"}
 
         r = upsert_hps_pl(kode_paket, hasil)
+        metadata_updated = _sync_pl_summary(kode_paket, hasil)
         return {
             "count":             r["count"],
             "warning":           r["warning"],
             "total_nilai":       hasil["total_nilai"],
             "total_nilai_bulat": hasil["total_nilai_bulat"],
+            "nilai_pagu":        hasil.get("nilai_pagu", ""),
+            "nilai_hps":         hasil.get("nilai_hps", ""),
+            "metadata_updated":  metadata_updated,
             "error":             None,
         }
     except Exception as e:

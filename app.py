@@ -823,6 +823,18 @@ st.set_page_config(
     layout="wide",
 )
 
+# Streamlit meredupkan elemen lama (data-stale) saat script masih berjalan.
+# Pertahankan tampilan normal agar progress/log terasa live di semua role.
+st.markdown("""
+<style>
+[data-testid="stElementContainer"][data-stale="true"],
+[data-testid="stTab"][data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Baca dark mode preference dari session_state sebelum inject CSS
 _is_dark = st.session_state.get("toggle_dark_mode", True)
 
