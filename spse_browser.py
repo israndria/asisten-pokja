@@ -133,6 +133,28 @@ CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppD
 CHROME_PROFILE_DIR = "Profile 1"  # direktori profil israndria di dalam CHROME_PROFILE
 CDP_PORT = 9222
 
+# Auto-refresh hanya halaman navigasi aman. Jangan reload halaman form/detail
+# karena dapat menghilangkan input manual yang sedang dikerjakan user.
+_AUTO_REFRESH_PATHS = {
+    "/home",
+    "/paketnontender",    # PP/PPK
+    "/paketlelang",       # Pokja (jika UI memakai route ini)
+    "/paketpanitia",      # fallback route tender lama
+}
+
+
+def _boleh_auto_refresh(url: str) -> bool:
+    from urllib.parse import urlsplit
+    base = urlsplit(SPSE_BASE_URL)
+    current = urlsplit(url or "")
+    return (
+        current.scheme == base.scheme
+        and current.netloc == base.netloc
+        and current.path.rstrip("/") in {
+            f"{base.path.rstrip('/')}{path}" for path in _AUTO_REFRESH_PATHS
+        }
+    )
+
 # File/folder yang di-clone dari profil asli (tanpa cache)
 _CLONE_FILES = [
     "Bookmarks", "Bookmarks.bak", "Preferences", "Secure Preferences",
@@ -366,31 +388,41 @@ def tutup_browser():
 
 
 def refresh_browser():
-    """Reload tab aktif Chrome via CDP HTTP (tidak butuh Playwright _page)."""
+    """Reload tab SPSE yang sedang berada di halaman navigasi aman."""
     import requests as _req
     global _cdp_tabs_cache, _cdp_tabs_cache_ts
     try:
         tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
         page_tabs = [t for t in tabs if t.get("type") == "page"]
-        if not page_tabs:
+        target_tabs = [t for t in page_tabs if _boleh_auto_refresh(t.get("url", ""))]
+        if not target_tabs:
             return False
-        # Reload background — jangan activate (foreground takeover)
-        tab = page_tabs[0]
+        # Reload background — jangan activate (foreground takeover).
+        tab = target_tabs[0]
         current_url = tab.get("url", "")
-        # Jika Playwright tersedia, pakai reload
-        page = halaman_aktif()
+        # Cari page berdasarkan URL, bukan halaman pertama/aktif yang bisa salah tab.
+        page = next(
+            (
+                p for p in ((_get_ctx().pages) if _get_ctx() else [])
+                if not p.is_closed() and p.url == current_url
+            ),
+            None,
+        )
+        if page is None:
+            try:
+                _run(_connect_cdp_async(navigate=False), timeout=15)
+                page = next(
+                    (
+                        p for p in ((_get_ctx().pages) if _get_ctx() else [])
+                        if not p.is_closed() and p.url == current_url
+                    ),
+                    None,
+                )
+            except Exception:
+                page = None
         if page and not page.is_closed():
             try:
-                page.reload(timeout=15000)
-                _cdp_tabs_cache = []
-                _cdp_tabs_cache_ts = 0.0
-                return True
-            except Exception:
-                pass
-        # Fallback: navigate ulang ke URL yang sama via Playwright connect
-        if current_url and current_url.startswith("http"):
-            try:
-                buka_browser(current_url, navigate=True)
+                _run(page.reload(timeout=15000), timeout=20)
                 _cdp_tabs_cache = []
                 _cdp_tabs_cache_ts = 0.0
                 return True
