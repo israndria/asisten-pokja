@@ -1,14 +1,17 @@
-Dim shell, port, checkResult, cmd, python, appDir, appPy
+Dim shell, fso, port, checkResult, cmd, python, appDir, appPy
 
-python  = "D:\Dokumen\@ POKJA 2026\V19_Scheduler\WPy64-313110\python\pythonw.exe"
-appDir  = "D:\Dokumen\@ POKJA 2026\Asisten_Pokja"
+Set fso = CreateObject("Scripting.FileSystemObject")
+appDir  = fso.GetParentFolderName(WScript.ScriptFullName)
+python  = fso.GetAbsolutePathName(appDir & "\..\Runtime\WPy64-313110\python\python.exe")
 appPy   = appDir & "\app.py"
 port    = "8502"
 
 Set shell = CreateObject("WScript.Shell")
+shell.Environment("Process")("POKJA_CODE_ROOT") = appDir
+shell.Environment("Process")("POKJA_PYTHON") = python
 
 ' Cek apakah port sudah aktif
-checkResult = shell.Run("cmd /c netstat -ano | findstr :" & port, 0, True)
+checkResult = shell.Run("cmd /c netstat -ano | findstr :" & port & " | findstr LISTENING", 0, True)
 
 If checkResult = 0 Then
     WScript.Quit
