@@ -13,7 +13,7 @@ Protokol lengkap ada di PROTOKOL_*.md dalam folder paket — AI baca sendiri.
 import os
 import subprocess
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from config import POKJA_ROOT
 
@@ -94,26 +94,25 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
             "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
             full_prompt,
         ]
+        proc = None
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
+            proc = subprocess.Popen(
+                cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", shell=False,
                 stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             )
-            if result.returncode != 0:
-                err = ((result.stderr or "") + (result.stdout or ""))[:800]
-                raise RuntimeError(f"Codex CLI exit {result.returncode}: {err}")
+            stdout, stderr = proc.communicate(timeout=timeout)
+            if proc.returncode != 0:
+                err = ((stderr or "") + (stdout or ""))[:800]
+                raise RuntimeError(f"Codex CLI exit {proc.returncode}: {err}")
             # parse: ambil teks setelah baris "codex" terakhir
             import re
-            parts = re.split(r'(?m)^codex$', result.stdout)
-            return parts[-1].strip() if len(parts) > 1 else result.stdout.strip()
+            parts = re.split(r'(?m)^codex$', stdout or "")
+            return parts[-1].strip() if len(parts) > 1 else (stdout or "").strip()
         except subprocess.TimeoutExpired:
+            if proc is not None and proc.poll() is None:
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=15)
             raise RuntimeError(f"Codex CLI timeout ({timeout}s) — paket mungkin terlalu besar.")
     else:
         # --bare: skip skills/hooks/CLAUDE.md auto-discovery → output bersih, tidak bocor skill listing
@@ -337,7 +336,7 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         audit_sebelum = audit_path.stat().st_mtime_ns if audit_path.exists() else 0
         prompt = _prompt_pra_reviu(folder, nama_paket, docm_path, jenis)
         output = _run_evaluator(
-            prompt, model=model, timeout=1800,
+            prompt, model=model, timeout=900,
             add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
         )
         setelah = docm_path.stat().st_mtime_ns
@@ -394,7 +393,9 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
-def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_workers=3, jenis_pl="JKK", engine=DEFAULT_ENGINE) -> list[dict]:
+def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL,
+                  max_workers=3, jenis_pl="JKK", engine=DEFAULT_ENGINE,
+                  progress_cb=None) -> list[dict]:
     """
     Evaluasi paralel N paket.
     paket_list: list of {nomor_urut, nama_paket}
@@ -416,6 +417,16 @@ def evaluasi_bulk(paket_list: list[dict], jenis: str, model=DEFAULT_MODEL, max_w
             pool.submit(fn, p["nomor_urut"], p["nama_paket"], model, jenis_pl, p.get("is_ulang", False), engine): p
             for p in paket_list
         }
-        for future in as_completed(futures):
-            results.append(future.result())
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=2, return_when=FIRST_COMPLETED)
+            if not done:
+                if progress_cb:
+                    progress_cb(None, len(results), len(paket_list), "Masih menunggu Codex/Word COM…")
+                continue
+            for future in done:
+                result = future.result()
+                results.append(result)
+                if progress_cb:
+                    progress_cb(result, len(results), len(paket_list), "Selesai diproses")
     return results

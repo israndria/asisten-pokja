@@ -1831,10 +1831,19 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             )
             if _btn_pr and _pr_terpilih:
                 _pr_pb = st.progress(0.0, text="Memulai pra-reviu...")
+                _pr_status = st.empty()
                 _pr_jobs = [{"nomor_urut": r["nomor_urut"], "nama_paket": r["nama_paket"]} for r in _pr_terpilih]
-                _pr_results = _heval.evaluasi_bulk(_pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=3, engine=_pr_engine)
+                def _pr_progress(_result, _done, _total, _message):
+                    if _result:
+                        _pr_status.info(f"Pra-reviu {_done}/{_total}: {_result['nama']} — {_message}")
+                    else:
+                        _pr_status.info(f"Pra-reviu {_done}/{_total}: {_message}")
+                    _pr_pb.progress(_done / _total, text=f"Pra-reviu {_done}/{_total} selesai")
+                _pr_results = _heval.evaluasi_bulk(
+                    _pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=1,
+                    engine=_pr_engine, progress_cb=_pr_progress,
+                )
                 for _pri, _prr in enumerate(_pr_results):
-                    _pr_pb.progress((_pri + 1) / len(_pr_results))
                     if _prr["status"] == "ok":
                         st.success(f"✅ {_prr['nama'][:50]} — selesai")
                         with st.expander(f"Output: {_prr['nama'][:40]}"):
