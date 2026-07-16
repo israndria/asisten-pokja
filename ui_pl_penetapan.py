@@ -155,7 +155,9 @@ def _render_tab10_pl(rows: list[dict], key_prefix: str) -> None:
             st.rerun()
         for item in rows:
             item_code = str(item.get("kode_paket"))
-            label = f"{item.get('nomor_urut') or ''}. {item.get('nama_paket', '?')}".strip()
+            nomor = str(item.get("nomor_urut") or "").strip()
+            label = f"{nomor}. " if nomor else ""
+            label += str(item.get("nama_paket") or "?")
             st.session_state[check_key][item_code] = st.checkbox(
                 label, value=st.session_state[check_key].get(item_code, True),
                 key=f"{key_prefix}_check_{item_code}",
@@ -201,4 +203,3 @@ def _render_tab10_pl(rows: list[dict], key_prefix: str) -> None:
                     except Exception as e:
                         status.write(f"❌ {row.get('kode_paket')}: {e}")
                 status.update(label="Download Summary selesai", state="complete", expanded=False)
-

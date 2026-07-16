@@ -1163,7 +1163,9 @@ def gabung_draft_pl(kode_paket: str, folder_tujuan: str, files_ok: list, progres
     ).maybe_single().execute()
     nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
     nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
-    draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
+    draft_dir = os.path.join(folder_tujuan, "0. Draft Dokumen PPK")
+    os.makedirs(draft_dir, exist_ok=True)
+    draft_path = os.path.join(draft_dir, f"Draft_PL_{nama_clean}.pdf")
     ordered = sorted(files_ok, key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
     return _gabung_pdf_draft(draft_path, ordered, progress_cb)
 

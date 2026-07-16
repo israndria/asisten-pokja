@@ -1059,12 +1059,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     if _pl_active_tab == "1️⃣ Draft Paket PL":
         import os as _pl_os, subprocess as _pl_sp
-        from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
+        from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK, V19_ROOT as _V19_ROOT, POKJA_PYTHON as _POKJA_PYTHON
         _TEMPLATE_DIR_PL    = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - JKK")
         _TEMPLATE_DIR_PL_PK = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - PK")
 
-        _PL_PY     = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "python" / "python.exe")
-        _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
+        _PL_PY     = _POKJA_PYTHON
+        _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
         _pl_rows = _load_draft_pl_cached()
@@ -1199,7 +1199,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _pr_metode_lbl = _pr_metode_raw[:30]
                     else:
                         _pr_metode_lbl = _pr_jenis or "-"
-                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama[:45]}"
+                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama}"
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
@@ -1435,7 +1435,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
                     st.checkbox(
-                        f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_br_chk.get('nama_paket','')}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
@@ -1624,7 +1624,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _rt_bp = st.progress(0.0)
                         for _rt_i, _rt_row in enumerate(_pl_rows_rt_bulk):
                             _rt_kp = _rt_row.get("kode_paket", "")
-                            _rt_nama = _rt_row.get("nama_paket", _rt_kp)[:50]
+                            _rt_nama = _rt_row.get("nama_paket", _rt_kp)
                             _rt_bp.progress((_rt_i + 1) / len(_pl_rows_rt_bulk))
                             _rt_status.update(label=f"[{_rt_i+1}/{len(_pl_rows_rt_bulk)}] {_rt_nama}")
                             try:
@@ -1667,7 +1667,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _dl_bulk_bp = st.progress(0.0)
                         for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
                             _db_kp   = _db_row.get("kode_paket", "")
-                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
+                            _db_nama = _db_row.get("nama_paket", _db_kp)
                             _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
                             _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
                             _db_root = ""
@@ -1725,7 +1725,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _hps_upd_bp = st.progress(0.0)
                         for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
                             _hu_kp   = _hu_row.get("kode_paket", "")
-                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)[:50]
+                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)
                             _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
                             _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
                             try:
@@ -1876,7 +1876,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _col_chk, _col_tgl = st.columns([3, 2])
                     with _col_chk:
                         _kd_chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
+                            f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
                             value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
@@ -1946,7 +1946,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.rerun()
             else:
                 _kd_konfirm_lines = "\n".join(
-                    f"{i+1}. {p['nama_paket'][:55]}  \n"
+                    f"{i+1}. {p['nama_paket']}  \n"
                     f"   📅 {_HARI_NAMA[p['_tgl_acara'].weekday()]}, {p['_tgl_acara'].day} {_BULAN_NAMA[p['_tgl_acara'].month-1]} {p['_tgl_acara'].year}"
                     for i, p in enumerate(_kd_selected)
                 )
@@ -2003,7 +2003,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 lampiran_nama=_lamp_nama,
                             )
                             _kd_hasil.append({
-                                "Paket": _kp["nama_paket"][:50],
+                                "Paket": _kp["nama_paket"],
                                 "Penerima (PPK)": _res.get("penerima", "-"),
                                 "PDF": "✅" if _gen["sukses"] else f"❌ {_gen['pesan']}",
                                 "Kirim": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
@@ -2050,7 +2050,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     for _p in _kd_selected:
                         _tgl_a = _p["_tgl_acara"]
                         st.markdown(
-                            f"- **{_p['nama_paket'][:55]}**  \n"
+                            f"- **{_p['nama_paket']}**  \n"
                             f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
                             f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
                         )
@@ -2093,7 +2093,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         )
                         hasil.append({
                             "kode":   _p["kode_paket"],
-                            "nama":   _p["nama_paket"][:50],
+                            "nama":   _p["nama_paket"],
                             "sukses": _res["ok"],
                             "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
                         })
@@ -2127,7 +2127,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
                     with _bcol_chk:
                         _ba_chk = st.checkbox(
-                            f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:40]}",
+                        f"**{_pp['kode_paket']}** — {_pp['nama_paket']}",
                             value=st.session_state.get(_ba_key, True),
                             key=_ba_key,
                         )
@@ -2192,7 +2192,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _rr in _pljd_rows:
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
+                        f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                         value=st.session_state.get(_key, True),
                         key=_key,
                     )
@@ -2242,7 +2242,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _kjam = f"pljd_jam_{_p['kode_paket']}"
                             _cna, _cdt, _cjm = st.columns([3, 2, 1])
                             with _cna:
-                                st.markdown(f"**{_p['nama_paket'][:35]}**")
+                                st.markdown(f"**{_p['nama_paket']}**")
                             with _cdt:
                                 st.date_input(
                                     "Tgl",
@@ -2270,7 +2270,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _pk_prev = st.selectbox(
                         "Pilih paket buat preview",
                         _pljd_selected,
-                        format_func=lambda _p: _p["nama_paket"][:70],
+                        format_func=lambda _p: _p["nama_paket"],
                         key="pljd_preview_pilih",
                     )
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
@@ -2317,14 +2317,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                         _kp = _p.get("kode_paket")
                         if not _kp:
-                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "kode_paket kosong"})
+                            _hasil.append({"paket": _p['nama_paket'], "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
                             _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil.append({
-                                "paket":  _p['nama_paket'][:40],
+                                "paket":  _p['nama_paket'],
                                 "ok":     _sub["ok"],
                                 "pesan":  f"HTTP {_sub['status']}",
                                 "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
@@ -2349,7 +2349,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 except Exception:
                                     pass
                         except Exception as _e:
-                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": str(_e)[:100]})
+                            _hasil.append({"paket": _p['nama_paket'], "ok": False, "pesan": str(_e)[:100]})
 
                     _prog.empty()
                     _sukses = sum(1 for h in _hasil if h["ok"])
@@ -2367,7 +2367,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _hasil_sukses:
                         with st.expander(f"📅 Lihat Detail Jadwal ({len(_hasil_sukses)} paket)", expanded=True):
                             for _ph in _hasil_sukses:
-                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"][:40] == _ph["paket"]), None)
+                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"] == _ph["paket"]), None)
                                 if not _pk_match:
                                     continue
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
@@ -2380,7 +2380,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
                                 else:
                                     _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
-                                st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
+                                st.markdown(f"**{_pk_match['nama_paket']}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []
                                 for _idx_jad, _jd in enumerate(_jadwal_preview, 1):
@@ -2504,7 +2504,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         if _plsp_chk_key not in st.session_state:
                             st.session_state[_plsp_chk_key] = True
                         _chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
+                            f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             key=_plsp_chk_key,
                         )
                     with _col_file: # JKK tab3 marker
@@ -2612,11 +2612,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
                                 if _r_upall["ok"]:
                                     _cl_upall.table("draft_paket_pl").update({"nomor_dokpil": _no_up}).eq("kode_paket", _kp_up).execute()
-                                    st.success(f"✅ {_rr_up['nama_paket'][:40]} — {_no_up}")
+                                    st.success(f"✅ {_rr_up['nama_paket']} — {_no_up}")
                                 else:
-                                    st.error(f"❌ {_rr_up['nama_paket'][:40]} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
+                                    st.error(f"❌ {_rr_up['nama_paket']} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
                             except Exception as _e_upall:
-                                st.error(f"❌ {_rr_up['nama_paket'][:40]}: {_e_upall}")
+                                st.error(f"❌ {_rr_up['nama_paket']}: {_e_upall}")
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
@@ -2652,7 +2652,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _g_klas_default = _plsp_klas_list.index(_klas_det_g)
 
                         if _g_kode_baru:
-                            st.caption(f"Auto-detect dari **{_first_p['nama_paket'][:40]}**: `{_g_kode_baru}` / `{_g_kode_lama}`")
+                            st.caption(f"Auto-detect dari **{_first_p['nama_paket']}**: `{_g_kode_baru}` / `{_g_kode_lama}`")
 
                         _g_picked_klas = st.selectbox(
                             "Klasifikasi",
@@ -2741,7 +2741,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     }).eq("kode_paket", _p["kode_paket"]).execute()
                                     _ok_sbu += 1
                                 except Exception as _e:
-                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                                    st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
                         st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
@@ -2771,7 +2771,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     }).eq("kode_paket", _p["kode_paket"]).execute()
                                     _ok_c += 1
                                 except Exception as _e:
-                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                                    st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
 
                     st.divider()
@@ -2817,9 +2817,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket'][:30]}: {_e_mb}")
+                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket']}: {_e_mb}")
                             _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
-                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_mb['status']}")
+                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket']} — HTTP {_r_mb['status']}")
 
                     st.divider()
 
@@ -2888,7 +2888,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                 kinerja_text=_ldk_kinerja_text,
                             )
-                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_ldk['status']}")
+                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket']} — HTTP {_r_ldk['status']}")
 
                     st.divider()
 
@@ -2914,7 +2914,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         for _i, _p in enumerate(_plsp_selected):
                             _kp = _p["kode_paket"]
                             _id_nt = _p.get("id_nontender")
-                            _nm = _p["nama_paket"][:40]
+                            _nm = _p["nama_paket"]
                             _prog_sp.progress((_i + 1) / len(_plsp_selected),
                                               text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
 
@@ -3094,7 +3094,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _pp_chk_key not in st.session_state:
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
+                        f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
                         key=_pp_chk_key,
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
                     )
@@ -3110,7 +3110,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     # Tabel ringkas paket terpilih
                     import pandas as _pd2
                     _pp_df = _pd2.DataFrame([{
-                        "Paket": r["nama_paket"][:45],
+                        "Paket": r["nama_paket"],
                         "Penyedia": r.get("nama_penyedia") or "—",
                         "NPWP": r.get("npwp_penyedia") or "—",
                     } for r in _pp_selected])
@@ -3120,7 +3120,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _invalid:
                         st.warning(
                             f"⚠️ {len(_invalid)} paket belum ada NPWP penyedia: "
-                            + ", ".join(r["nama_paket"][:30] for r in _invalid)
+                            + ", ".join(r["nama_paket"] for r in _invalid)
                         )
 
                     _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
@@ -3138,7 +3138,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pp_hasil = []
                             _pp_prog = st.progress(0, text="Mulai pilih penyedia...")
                             for _i_pp, _pp_r in enumerate(_valid_pp):
-                                _pp_nm = _pp_r["nama_paket"][:40]
+                                _pp_nm = _pp_r["nama_paket"]
                                 _pp_prog.progress(
                                     (_i_pp + 1) / len(_valid_pp),
                                     text=f"{_pp_nm} ({_i_pp+1}/{len(_valid_pp)})...",
@@ -3207,7 +3207,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             for _r in _paket_berfolder_umum:
                 _umum_key = f"umum_chk_{_r['kode_paket']}"
                 _umum_chk = st.checkbox(
-                    f"{_r['nama_paket'][:70]}",
+                    f"{_r['nama_paket']}",
                     value=st.session_state.get(_umum_key, True),
                     key=_umum_key,
                 )
@@ -3329,11 +3329,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                             except Exception:
                                 _tgl_fmt = _tgl_kirim[:10]
-                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang} ✅ {_tgl_fmt}"
                         elif _kontrak:
-                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} 🔒 Kontrak"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang} 🔒 Kontrak"
                         else:
-                            _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang}"
                         _col = _bc1 if _bi % 2 == 0 else _bc2
                         _default_chk = _centang_semua or (not _sudah and not _kontrak)
                         if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -3369,7 +3369,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         }
                                     _hasil_batch.append({
                                         "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
-                                        "nama": _bp2["nama_paket"][:40],
+                                        "nama": _bp2["nama_paket"],
                                         "ok": _res["ok"],
                                         "msg": _res["msg"],
                                     })
@@ -3598,7 +3598,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _no8hs = _auto_nomor_pl8(_p8, "hasil")
                 _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
                 with _col_nama:
-                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:55]}**")
+                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')}**")
                 with _col_tgl:
                     if _tgl8:
                         st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
@@ -3666,7 +3666,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _id8l = _k8l  # BA nontender pakai kode_paket
                     _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
                     with _lc1:
-                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
+                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')}")
                     with _lc2:
                         _fl8 = st.file_uploader(
                             "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
@@ -3724,7 +3724,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         import re as _ba_re
 
         # Root folder PL JKK (parent dari semua folder paket)
-        _ba_root = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK"
+        from config import OUTPUT_DIR_PL_JKK as _BA_PL_JKK_ROOT
+        _ba_root = _BA_PL_JKK_ROOT
         _ba_root_in = st.text_input(
             "Folder root PL JKK:",
             value=_ba_root,
@@ -4125,7 +4126,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     if os.path.isdir(_etk_folder8):
                                         _etk8.extract_folder_kualifikasi(_etk_folder8)
                                 except Exception as _etk8_e:
-                                    st.warning(f"⚠ Extract teks {_r8.get('nama_paket','')[:40]}: {_etk8_e}")
+                                    st.warning(f"⚠ Extract teks {_r8.get('nama_paket','')}: {_etk8_e}")
                         _ai_jobs = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
@@ -4285,12 +4286,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
     if _pl_active_tab == "1️⃣ Draft Paket PL":
         import os as _pl_os, subprocess as _pl_sp
-        from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK
+        from config import POKJA_ROOT as _PL_POKJA_ROOT, OUTPUT_DIR_PL_JKK as _PL_DIR_JKK, OUTPUT_DIR_PL_PK as _PL_DIR_PK, V19_ROOT as _V19_ROOT, POKJA_PYTHON as _POKJA_PYTHON
         _TEMPLATE_DIR_PL    = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - JKK")
         _TEMPLATE_DIR_PL_PK = str(__import__("pathlib").Path(_PL_POKJA_ROOT) / "Paket Experiment - Pengadaan Langsung" / "Development - PL - PK")
 
-        _PL_PY     = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "python" / "python.exe")
-        _PL_SCRIPT = str(pathlib.Path(_PL_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110" / "setup_paket_baru.py")
+        _PL_PY     = _POKJA_PYTHON
+        _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
         _pl_rows = _load_draft_pl_cached()
@@ -4425,7 +4426,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _pr_metode_lbl = _pr_metode_raw[:30]
                     else:
                         _pr_metode_lbl = _pr_jenis or "-"
-                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama[:45]}"
+                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama}"
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
@@ -4659,7 +4660,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
                     st.checkbox(
-                        f"{_br_chk.get('nama_paket','')[:60]}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_br_chk.get('nama_paket','')}{_pl_hint_ulang(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
@@ -4845,7 +4846,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _dl_bulk_bp = st.progress(0.0)
                         for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
                             _db_kp   = _db_row.get("kode_paket", "")
-                            _db_nama = _db_row.get("nama_paket", _db_kp)[:50]
+                            _db_nama = _db_row.get("nama_paket", _db_kp)
                             _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
                             _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
                             _db_root = ""
@@ -4903,7 +4904,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _hps_upd_bp = st.progress(0.0)
                         for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
                             _hu_kp   = _hu_row.get("kode_paket", "")
-                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)[:50]
+                            _hu_nama = _hu_row.get("nama_paket", _hu_kp)
                             _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
                             _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
                             try:
@@ -5004,7 +5005,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _col_chk, _col_tgl = st.columns([3, 2])
                     with _col_chk:
                         _kd_chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)}",
+                            f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
                             value=st.session_state.get(_kd_key, True),
                             key=_kd_key,
                         )
@@ -5074,7 +5075,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.rerun()
             else:
                 _kd_konfirm_lines = "\n".join(
-                    f"{i+1}. {p['nama_paket'][:55]}  \n"
+                    f"{i+1}. {p['nama_paket']}  \n"
                     f"   📅 {_HARI_NAMA[p['_tgl_acara'].weekday()]}, {p['_tgl_acara'].day} {_BULAN_NAMA[p['_tgl_acara'].month-1]} {p['_tgl_acara'].year}"
                     for i, p in enumerate(_kd_selected)
                 )
@@ -5131,7 +5132,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 lampiran_nama=_lamp_nama,
                             )
                             _kd_hasil.append({
-                                "Paket": _kp["nama_paket"][:50],
+                                "Paket": _kp["nama_paket"],
                                 "Penerima (PPK)": _res.get("penerima", "-"),
                                 "PDF": "✅" if _gen["sukses"] else f"❌ {_gen['pesan']}",
                                 "Kirim": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
@@ -5178,7 +5179,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     for _p in _kd_selected:
                         _tgl_a = _p["_tgl_acara"]
                         st.markdown(
-                            f"- **{_p['nama_paket'][:55]}**  \n"
+                            f"- **{_p['nama_paket']}**  \n"
                             f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
                             f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
                         )
@@ -5221,7 +5222,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         )
                         hasil.append({
                             "kode":   _p["kode_paket"],
-                            "nama":   _p["nama_paket"][:50],
+                            "nama":   _p["nama_paket"],
                             "sukses": _res["ok"],
                             "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
                         })
@@ -5255,7 +5256,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
                     with _bcol_chk:
                         _ba_chk = st.checkbox(
-                            f"**{_pp['kode_paket']}** — {_pp['nama_paket'][:40]}",
+                        f"**{_pp['kode_paket']}** — {_pp['nama_paket']}",
                             value=st.session_state.get(_ba_key, True),
                             key=_ba_key,
                         )
@@ -5320,7 +5321,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _rr in _pljd_rows:
                     _key = f"pljd_chk_{_rr['kode_paket']}"
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
+                        f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                         value=st.session_state.get(_key, True),
                         key=_key,
                     )
@@ -5370,7 +5371,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _kjam = f"pljd_jam_{_p['kode_paket']}"
                             _cna, _cdt, _cjm = st.columns([3, 2, 1])
                             with _cna:
-                                st.markdown(f"**{_p['nama_paket'][:35]}**")
+                                st.markdown(f"**{_p['nama_paket']}**")
                             with _cdt:
                                 st.date_input(
                                     "Tgl",
@@ -5397,7 +5398,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pk_prev = st.selectbox(
                         "Pilih paket buat preview",
                         _pljd_selected,
-                        format_func=lambda _p: _p["nama_paket"][:70],
+                        format_func=lambda _p: _p["nama_paket"],
                         key="pljd_preview_pilih_pk",
                     )
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
@@ -5445,14 +5446,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                         _kp = _p.get("kode_paket")
                         if not _kp:
-                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": "kode_paket kosong"})
+                            _hasil.append({"paket": _p['nama_paket'], "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
                             _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil.append({
-                                "paket":  _p['nama_paket'][:40],
+                                "paket":  _p['nama_paket'],
                                 "ok":     _sub["ok"],
                                 "pesan":  f"HTTP {_sub['status']}",
                                 "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
@@ -5477,7 +5478,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 except Exception:
                                     pass
                         except Exception as _e:
-                            _hasil.append({"paket": _p['nama_paket'][:40], "ok": False, "pesan": str(_e)[:100]})
+                            _hasil.append({"paket": _p['nama_paket'], "ok": False, "pesan": str(_e)[:100]})
 
                     _prog.empty()
                     _sukses = sum(1 for h in _hasil if h["ok"])
@@ -5495,7 +5496,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _hasil_sukses:
                         with st.expander(f"📅 Lihat Detail Jadwal ({len(_hasil_sukses)} paket)", expanded=True):
                             for _ph in _hasil_sukses:
-                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"][:40] == _ph["paket"]), None)
+                                _pk_match = next((p for p in _pljd_selected if p["nama_paket"] == _ph["paket"]), None)
                                 if not _pk_match:
                                     continue
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
@@ -5508,7 +5509,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
                                 else:
                                     _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
-                                st.markdown(f"**{_pk_match['nama_paket'][:55]}**")
+                                st.markdown(f"**{_pk_match['nama_paket']}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []
                                 for _idx_jad, _jd in enumerate(_jadwal_preview, 1):
@@ -5632,7 +5633,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         if _plsp_chk_key not in st.session_state:
                             st.session_state[_plsp_chk_key] = True
                         _chk = st.checkbox(
-                            f"{_rr['nama_paket'][:55]}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
+                            f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)} ({_rr.get('jenis_pl','?')})",
                             key=_plsp_chk_key,
                         )
                     with _col_file:
@@ -5740,11 +5741,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 )
                                 if _r_upall["ok"]:
                                     _cl_upall.table("draft_paket_pl").update({"nomor_dokpil": _no_up}).eq("kode_paket", _kp_up).execute()
-                                    st.success(f"✅ {_rr_up['nama_paket'][:40]} — {_no_up}")
+                                    st.success(f"✅ {_rr_up['nama_paket']} — {_no_up}")
                                 else:
-                                    st.error(f"❌ {_rr_up['nama_paket'][:40]} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
+                                    st.error(f"❌ {_rr_up['nama_paket']} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
                             except Exception as _e_upall:
-                                st.error(f"❌ {_rr_up['nama_paket'][:40]}: {_e_upall}")
+                                st.error(f"❌ {_rr_up['nama_paket']}: {_e_upall}")
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
@@ -5780,7 +5781,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _g_klas_default = _plsp_klas_list.index(_klas_det_g)
 
                         if _g_kode_baru:
-                            st.caption(f"Auto-detect dari **{_first_p['nama_paket'][:40]}**: `{_g_kode_baru}` / `{_g_kode_lama}`")
+                            st.caption(f"Auto-detect dari **{_first_p['nama_paket']}**: `{_g_kode_baru}` / `{_g_kode_lama}`")
 
                         _g_picked_klas = st.selectbox(
                             "Klasifikasi",
@@ -5869,7 +5870,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     }).eq("kode_paket", _p["kode_paket"]).execute()
                                     _ok_sbu += 1
                                 except Exception as _e:
-                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                                    st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
                         st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
@@ -5899,7 +5900,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     }).eq("kode_paket", _p["kode_paket"]).execute()
                                     _ok_c += 1
                                 except Exception as _e:
-                                    st.error(f"❌ {_p['nama_paket'][:40]}: {_e}")
+                                    st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
 
                     st.divider()
@@ -5945,9 +5946,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket'][:30]}: {_e_mb}")
+                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_p['nama_paket']}: {_e_mb}")
                             _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
-                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_mb['status']}")
+                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_p['nama_paket']} — HTTP {_r_mb['status']}")
 
                     st.divider()
 
@@ -6016,7 +6017,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                 kinerja_text=_ldk_kinerja_text,
                             )
-                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket'][:40]} — HTTP {_r_ldk['status']}")
+                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_p['nama_paket']} — HTTP {_r_ldk['status']}")
 
                     st.divider()
 
@@ -6042,7 +6043,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         for _i, _p in enumerate(_plsp_selected):
                             _kp = _p["kode_paket"]
                             _id_nt = _p.get("id_nontender")
-                            _nm = _p["nama_paket"][:40]
+                            _nm = _p["nama_paket"]
                             _prog_sp.progress((_i + 1) / len(_plsp_selected),
                                               text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
 
@@ -6222,7 +6223,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _pp_chk_key not in st.session_state:
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox(
-                        f"{_rr['nama_paket'][:45]}{_pl_hint_ulang(_rr)}",
+                        f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
                         key=_pp_chk_key,
                         help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}",
                     )
@@ -6238,7 +6239,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     # Tabel ringkas paket terpilih
                     import pandas as _pd2
                     _pp_df = _pd2.DataFrame([{
-                        "Paket": r["nama_paket"][:45],
+                        "Paket": r["nama_paket"],
                         "Penyedia": r.get("nama_penyedia") or "—",
                         "NPWP": r.get("npwp_penyedia") or "—",
                     } for r in _pp_selected])
@@ -6248,7 +6249,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _invalid:
                         st.warning(
                             f"⚠️ {len(_invalid)} paket belum ada NPWP penyedia: "
-                            + ", ".join(r["nama_paket"][:30] for r in _invalid)
+                            + ", ".join(r["nama_paket"] for r in _invalid)
                         )
 
                     _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
@@ -6266,7 +6267,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pp_hasil = []
                             _pp_prog = st.progress(0, text="Mulai pilih penyedia...")
                             for _i_pp, _pp_r in enumerate(_valid_pp):
-                                _pp_nm = _pp_r["nama_paket"][:40]
+                                _pp_nm = _pp_r["nama_paket"]
                                 _pp_prog.progress(
                                     (_i_pp + 1) / len(_valid_pp),
                                     text=f"{_pp_nm} ({_i_pp+1}/{len(_valid_pp)})...",
@@ -6335,7 +6336,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             for _r in _paket_berfolder_umum_pk:
                 _umum_key_pk = f"umum_chk_{_r['kode_paket']}"
                 _umum_chk_pk = st.checkbox(
-                    f"{_r['nama_paket'][:70]}",
+                    f"{_r['nama_paket']}",
                     value=st.session_state.get(_umum_key_pk, True),
                     key=_umum_key_pk,
                 )
@@ -6457,11 +6458,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                             except Exception:
                                 _tgl_fmt = _tgl_kirim[:10]
-                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} ✅ {_tgl_fmt}"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang} ✅ {_tgl_fmt}"
                         elif _kontrak:
-                            _label = f"{_ku} — {_br['nama_paket'][:35]}{_hint_ulang} 🔒 Kontrak"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang} 🔒 Kontrak"
                         else:
-                            _label = f"{_ku} — {_br['nama_paket'][:40]}{_hint_ulang}"
+                            _label = f"{_ku} — {_br['nama_paket']}{_hint_ulang}"
                         _col = _bc1 if _bi % 2 == 0 else _bc2
                         _default_chk = _centang_semua or (not _sudah and not _kontrak)
                         if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -6497,7 +6498,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         }
                                     _hasil_batch.append({
                                         "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
-                                        "nama": _bp2["nama_paket"][:40],
+                                        "nama": _bp2["nama_paket"],
                                         "ok": _res["ok"],
                                         "msg": _res["msg"],
                                     })
@@ -6725,7 +6726,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _no8hs = _auto_nomor_pl8(_p8, "hasil")
                 _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
                 with _col_nama:
-                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')[:55]}**")
+                    st.markdown(f"**{_p8.get('nomor_urut') or ''}. {_p8.get('nama_paket','')}**")
                 with _col_tgl:
                     if _tgl8:
                         st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
@@ -6793,7 +6794,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _id8l = _k8l  # BA nontender pakai kode_paket
                     _lc1, _lc2, _lc3 = st.columns([3, 3, 1])
                     with _lc1:
-                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')[:50]}")
+                        st.caption(f"{_p8l.get('nomor_urut') or ''}. {_p8l.get('nama_paket','')}")
                     with _lc2:
                         _fl8 = st.file_uploader(
                             "PDF", type=["pdf"], key=f"pl8_lain_file_{_k8l}",
@@ -7129,7 +7130,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     if os.path.isdir(_etk_folder8pk):
                                         _etk8pk.extract_folder_kualifikasi(_etk_folder8pk)
                                 except Exception as _etk8pk_e:
-                                    st.warning(f"⚠ Extract teks {_r8pk.get('nama_paket','')[:40]}: {_etk8pk_e}")
+                                    st.warning(f"⚠ Extract teks {_r8pk.get('nama_paket','')}: {_etk8pk_e}")
                         _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
                         if _do_ai_kualifikasi_pk:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
@@ -7269,10 +7270,10 @@ _tender_active_tab = st.radio("Tab Tender", _TENDER_TAB_LABELS, horizontal=True,
 if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
     import inbox_engine
     import os as _os, subprocess as _sp
-    from config import POKJA_ROOT as _POKJA_ROOT, TENDER_ROOT as _TENDER_ROOT
+    from config import POKJA_ROOT as _POKJA_ROOT, TENDER_ROOT as _TENDER_ROOT, V19_ROOT as _V19_ROOT, POKJA_PYTHON as _POKJA_PYTHON
 
-    _PY     = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/python/python.exe"
-    _SCRIPT = "D:/Dokumen/@ POKJA 2026/V19_Scheduler/WPy64-313110/setup_paket_baru.py"
+    _PY     = _POKJA_PYTHON
+    _SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
     _NO_WIN = 0x08000000  # CREATE_NO_WINDOW — cegah jendela hitam ngeblink di Windows
 
     # ── Load data draft_paket ──
@@ -8387,7 +8388,8 @@ if _tender_active_tab == "3️⃣ Setup Paket":
 
             # ── Load/save SBU terakhir ke file ───────────────────────────────────
             import json as _json
-            _SBU_LAST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_last.json")
+            from config import RUNTIME_ROOT as _RUNTIME_ROOT
+            _SBU_LAST_FILE = os.path.join(_RUNTIME_ROOT, "_sbu_last.json")
 
             def _load_sbu_last():
                 try:
@@ -8403,7 +8405,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _SBU_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_sbu_history.json")
+            _SBU_HISTORY_FILE = os.path.join(_RUNTIME_ROOT, "_sbu_history.json")
             _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
 
             def _load_sbu_history():
@@ -9136,11 +9138,11 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
                 import pathlib as _pathlib
                 import os as _os
                 import pandas as _pd
-                from config import POKJA_ROOT as _POKJA_ROOT, SPSE_BASE_URL as _SPSE_BASE_URL
+                from config import V19_ROOT as _V19_ROOT, POKJA_PYTHON as _POKJA_PYTHON, SPSE_BASE_URL as _SPSE_BASE_URL
                 
-                _v19_dir = _pathlib.Path(_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110"
+                _v19_dir = _pathlib.Path(_V19_ROOT)
                 _db_path = _v19_dir / "database_tender.csv"
-                _py_exe = _v19_dir / "python" / "python.exe"
+                _py_exe = _pathlib.Path(_POKJA_PYTHON)
                 _script = _v19_dir / "sync_jadwal.py"
                 _no_win = 0x08000000
                 
@@ -9215,10 +9217,11 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
         if gcal_login_btn:
             import subprocess as _sp
             import pathlib as _pathlib
-            from config import POKJA_ROOT as _POKJA_ROOT
+            from config import V19_ROOT as _V19_ROOT, RUNTIME_ROOT as _RUNTIME_ROOT, POKJA_PYTHON as _POKJA_PYTHON, find_secret as _find_secret
             
-            _v19_dir = _pathlib.Path(_POKJA_ROOT) / "V19_Scheduler" / "WPy64-313110"
-            _py_exe = _v19_dir / "python" / "python.exe"
+            _v19_dir = _pathlib.Path(_V19_ROOT)
+            _py_exe = _pathlib.Path(_POKJA_PYTHON)
+            _credentials_path = _find_secret("credentials.json")
             
             _auth_code = f"""
 import os
@@ -9229,8 +9232,9 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-cred_path = r"{_v19_dir / 'credentials.json'}"
-token_path = r"{_v19_dir / 'token.json'}"
+cred_path = r"{_credentials_path}"
+token_path = r"{_pathlib.Path(_RUNTIME_ROOT) / 'state' / 'token.json'}"
+os.makedirs(os.path.dirname(token_path), exist_ok=True)
 scopes = ['https://www.googleapis.com/auth/calendar']
 
 if os.path.exists(token_path):
@@ -10719,12 +10723,13 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
                 st.session_state[f"dp_chk_{_r['kode_tender']}"] = False
             st.rerun()
         _dp_sel_n = 0
-        for _r in _dp_paket_rows:
+        _dp_check_cols = st.columns(2)
+        for _dp_i, _r in enumerate(_dp_paket_rows):
             _dp_kt = _r["kode_tender"]
             _dp_ck = f"dp_chk_{_dp_kt}"
             if _dp_ck not in st.session_state:
                 st.session_state[_dp_ck] = True
-            if st.checkbox(
+            if _dp_check_cols[_dp_i % 2].checkbox(
                 f"{_r.get('folder_dibuat', _r.get('nama_tender', _dp_kt))}",
                 key=_dp_ck,
                 help=f"{_dp_kt} · status: {_r.get('status_tahap') or '-'}",
@@ -10788,13 +10793,16 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
                 "Aksi per-paket tetap tersedia di expander bawah."
             )
 
-        for _kt, _peserta_list in _dp_by_paket.items():
+        _dp_card_cols = st.columns(2)
+        for _dp_card_i, (_kt, _peserta_list) in enumerate(_dp_by_paket.items()):
             _folder_dibuat = _peserta_list[0].get("folder_dibuat", "")
             _paket_label = _folder_dibuat if _folder_dibuat else _peserta_list[0].get("nama_tender", _kt)
             _folder_paket = _peserta_list[0].get("folder_paket", "")
             _folder_ada = bool(_folder_paket and os.path.isdir(_folder_paket))
 
-            with st.expander(f"**{_paket_label}** · {len(_peserta_list)} peserta", expanded=False):
+            with _dp_card_cols[_dp_card_i % 2].expander(
+                f"**{_paket_label}** · {len(_peserta_list)} peserta", expanded=False
+            ):
                 _dp_s1, _dp_s2, _dp_s3 = st.columns(3)
                 _dp_s1.metric("Peserta", len(_peserta_list))
                 _dp_s2.metric("Folder paket", "✅ Ada" if _folder_ada else "❌ Tidak ada")
