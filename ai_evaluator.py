@@ -10,10 +10,12 @@ Prompt = minimalis (kurir path + trigger).
 Protokol lengkap ada di PROTOKOL_*.md dalam folder paket — AI baca sendiri.
 """
 
+import os
 import subprocess
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from config import POKJA_ROOT
 
 # Evaluator dokumen distandardisasi ke Codex dengan model tetap.
 DEFAULT_ENGINE = "codex"
@@ -21,9 +23,15 @@ CODEX_MODEL = "gpt-5.6-luna"
 CODEX_REASONING_EFFORT = "medium"
 DEFAULT_MODEL = CODEX_MODEL
 
-PL_JKK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung JKK")
-PL_PK_ROOT = Path(r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Pengadaan Langsung PK")
-PATCH_MANUAL_SOP = Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\PANDUAN_PATCH_MANUAL_EVALUASI.md")
+CODEX_BIN = os.environ.get(
+    "POKJA_CODEX_EXE",
+    str(Path.home() / "AppData" / "Local" / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe"),
+)
+
+PL_JKK_ROOT = Path(POKJA_ROOT) / "@ Pejabat Pengadaan 2026" / "@ Pengadaan Langsung JKK"
+PL_PK_ROOT = Path(POKJA_ROOT) / "@ Pejabat Pengadaan 2026" / "@ Pengadaan Langsung PK"
+SOP_ROOT = Path(POKJA_ROOT) / "_SOP Evaluator"
+PATCH_MANUAL_SOP = SOP_ROOT / "PANDUAN_PATCH_MANUAL_EVALUASI.md"
 
 
 def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str = None, is_ulang: bool = False) -> Path:
@@ -78,10 +86,10 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
         aturan = "Jawab dalam Bahasa Indonesia, jangan mengarang file yang tidak ada (tulis ERROR jika tak ditemukan), lalu kerjakan tugas berikut: "
         full_prompt = aturan + prompt
         cwd = str(add_dirs[0]) if add_dirs else None
-        # Sandbox workspace-write agar bisa menulis output file _HASIL_*.md di folder target
-        # Gunakan shell=True di Windows karena codex adalah batch script (.cmd)
+        # Pakai executable Codex asli; alias `codex` dapat menunjuk wrapper Headroom
+        # yang memerlukan sandbox Windows setup dan gagal dari proses Streamlit.
         cmd = [
-            "codex", "exec", "-s", "workspace-write",
+            CODEX_BIN, "exec", "--dangerously-bypass-approvals-and-sandbox",
             "-m", CODEX_MODEL,
             "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
             full_prompt,
@@ -95,7 +103,7 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
                 timeout=timeout,
                 encoding="utf-8",
                 errors="replace",
-                shell=True,
+                shell=False,
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
@@ -157,10 +165,10 @@ def _find_reviu_docm(folder: Path, jenis: str = "tender_pk") -> Path | None:
 
 def _domain_sop(jenis: str) -> Path:
     if jenis == "pl_jkk":
-        return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_PL_JKK.md")
+        return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_PL_JKK.md"
     if jenis == "pl_pk":
-        return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_PL_PK.md")
-    return Path(r"D:\Dokumen\@ POKJA 2026\_SOP Evaluator\EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md")
+        return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_PL_PK.md"
+    return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md"
 
 
 def _prompt_pra_reviu(folder_paket: Path, nama_paket: str, docm_path: Path, jenis: str) -> str:
@@ -312,12 +320,29 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         domain_sop = _domain_sop(jenis)
         if not domain_sop.is_file() or not PATCH_MANUAL_SOP.is_file():
             return {"nama": nama_paket, "status": "error", "output": "", "error": "SOP reviu atau SOP patch tidak ditemukan."}
+        sebelum = docm_path.stat().st_mtime_ns
+        audit_path = folder / "_HASIL_PRA_REVIU_DPP.md"
+        audit_sebelum = audit_path.stat().st_mtime_ns if audit_path.exists() else 0
         prompt = _prompt_pra_reviu(folder, nama_paket, docm_path, jenis)
         output = _run_evaluator(
             prompt, model=model, timeout=1800,
             add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
         )
-        return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
+        setelah = docm_path.stat().st_mtime_ns
+        audit_setelah = audit_path.stat().st_mtime_ns if audit_path.exists() else 0
+        import re as _re
+        _errors = [
+            line.strip(" -*")
+            for line in (output or "").splitlines()
+            if _re.search(r"(?i)\bERROR\b", line)
+        ]
+        if _errors:
+            return {"nama": nama_paket, "status": "error", "output": output, "error": " | ".join(_errors[:3]), "file": str(docm_path)}
+        if setelah == sebelum:
+            return {"nama": nama_paket, "status": "error", "output": output, "error": "DOCM tidak berubah setelah Codex selesai; patch belum terbukti dilakukan.", "file": str(docm_path)}
+        if audit_setelah <= audit_sebelum:
+            return {"nama": nama_paket, "status": "error", "output": output, "error": "DOCM berubah, tetapi _HASIL_PRA_REVIU_DPP.md belum dibuat/diperbarui.", "file": str(docm_path)}
+        return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(docm_path)}
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 

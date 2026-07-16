@@ -1841,6 +1841,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.markdown(_prr["output"][:3000])
                     else:
                         st.error(f"❌ {_prr['nama'][:50]} — {_prr['error'][:200]}")
+                        if _prr.get("output"):
+                            with st.expander(f"Detail pra-reviu: {_prr['nama'][:40]}"):
+                                st.markdown(_prr["output"][:3000])
                 _pr_pb.progress(1.0, text="Selesai.")
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
