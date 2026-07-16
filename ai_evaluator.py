@@ -191,15 +191,22 @@ WAJIB:
 2. Isi jawaban reviu ke cat_* dan rekomendasi ke rekomen_*.
 3. Isi tanggapan_* sebagai DRAFT tanggapan PPK yang logis berdasarkan rekomendasi.
    Tanggapan boleh diedit PPK; jangan menulis seolah-olah sudah disetujui PPK.
-4. Jika CC sudah berisi teks nyata, pertahankan agar edit manual tidak tertimpa.
-   Isi hanya CC yang kosong atau masih placeholder.
-5. Tulis _HASIL_PRA_REVIU_DPP.md di root paket sebagai audit temuan, klarifikasi,
+4. Audit dan isi ulang setiap CC yang sudah ada. Teks lama hanya bahan
+   pembanding, bukan jawaban yang dianggap benar; koreksi, hapus, atau ganti
+   bila tidak sesuai bukti paket.
+5. Jika tag CC wajib belum ada, buat Content Control Rich Text baru pada sel
+   jawaban yang tepat, dengan tag pertanyaan yang sesuai. Jangan membuat
+   pertanyaan/fakta baru tanpa dasar.
+6. Tulis _HASIL_PRA_REVIU_DPP.md di root paket sebagai audit temuan, klarifikasi,
    sumber dokumen, dan daftar CC yang diisi.
-6. Pertahankan VBA, tabel, format, dan struktur DOCM. Verifikasi buka ulang via Word COM.
+7. Pertahankan VBA, tabel, format, dan struktur DOCM. Verifikasi buka ulang via Word COM.
 
-Jangan hanya membuat analisis Markdown; patch file DOCM secara langsung. Jika file
-target atau dokumen sumber wajib tidak ditemukan, tulis ERROR spesifik dan jangan
-mengarang jawaban.
+Jangan hanya membuat analisis Markdown; patch file DOCM secara langsung. Jika
+dokumen sumber tidak ditemukan, tetap isi CC dengan "Tidak ditemukan dalam
+dokumen sumber paket" dan buat rekomendasi/klarifikasi. Catat sebagai temuan di
+audit Markdown, tetapi jangan memakai kata ERROR hanya untuk temuan dokumen
+yang hilang. Jika target DOCM tidak ditemukan atau tidak dapat dibaca, tulis
+ERROR spesifik dan jangan mengarang fakta.
 
 Mulai sekarang."""
 
@@ -266,14 +273,19 @@ di file target. Koreksi/isi jawaban berdasarkan bukti dokumen; jangan mengarang 
 Untuk file DOCM:
 - buat backup unik di folder paket sebelum mengubah file;
 - ungroup/un-nest seluruh Content Control jika ada;
-- buat semua Content Control bertag cat_, rekomen_, atau tanggapan_ bisa diedit
+- audit dan isi ulang semua Content Control bertag cat_, rekomen_, atau tanggapan_
+  berdasarkan pertanyaan dan bukti paket, termasuk CC yang sudah berisi teks;
+  koreksi jawaban lama bila tidak sesuai;
+- buat Content Control Rich Text baru untuk tag wajib yang hilang pada sel
+  jawaban yang tepat, setelah memastikan posisi pertanyaannya;
   (LockContents=False dan LockContentControl=False);
 - isi `tanggapan_*` sebagai DRAFT tanggapan PPK berdasarkan rekomendasi; jangan
   menulis seolah-olah tanggapan tersebut sudah disetujui PPK;
-- jangan menimpa teks nyata yang sudah ada karena mungkin merupakan edit manual user;
+- teks nyata lama bukan bukti benar dan boleh diganti setelah dibandingkan dengan
+  sumber paket; jangan menghapus perubahan manual tanpa membuat backup;
 - pertahankan VBA, format, tabel, dan isi lain yang tidak perlu diubah;
 - simpan file target dan buka ulang melalui Word COM untuk verifikasi;
-- pastikan jumlah CC tetap, seluruh CC tidak terkunci, dan VBA tetap ada.
+- pastikan seluruh tag wajib hadir, seluruh CC tidak terkunci, dan VBA tetap ada.
 
 Setelah selesai, tulis log singkat ke folder paket dengan nama
 PATCH_MANUAL_ISI_REVIU_LOG.md yang memuat file target, backup, jumlah CC sebelum/sesudah,
