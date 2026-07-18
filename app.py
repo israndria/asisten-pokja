@@ -1189,20 +1189,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _pr_status = _pr.get("status", "draft")
                     _pr_folder = bool(_pr.get("folder_dibuat"))
                     _pr_icon   = "✅" if _pr_folder else "📋"
-                    # Label metode singkat + tanda ⚠️ jika Non Konstruksi
+                    # Label ringkas: nomor urut folder, bukan nama metode panjang.
+                    _pr_folder_raw = str(_pr.get("folder_dibuat") or "")
+                    _pr_no_match = re.search(r"^\s*(\d+)", os.path.basename(_pr_folder_raw.rstrip("\\/")))
+                    _pr_nomor = (_pr_no_match.group(1) if _pr_no_match else str(_pr.get("nomor_urut") or "").strip()) or _pr_kode
                     _pr_metode_raw = _pr.get("metode_pengadaan", "") or ""
                     _pr_metode_low = _pr_metode_raw.lower()
-                    if "non konstruksi" in _pr_metode_low or "non konstruksi" in _pr_metode_low.replace(" ", ""):
-                        _pr_metode_lbl = "⚠️ JKK Non-Konstruksi"
-                    elif "konstruksi" in _pr_metode_low:
-                        _pr_metode_lbl = "JKK Konstruksi"
-                    elif "barang" in _pr_metode_low:
-                        _pr_metode_lbl = "PK"
-                    elif _pr_metode_raw:
-                        _pr_metode_lbl = _pr_metode_raw[:30]
-                    else:
-                        _pr_metode_lbl = _pr_jenis or "-"
-                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama}"
+                    _pr_label  = f"{_pr_icon} [{_pr_nomor}] {_pr_nama}"
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
@@ -1276,17 +1269,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
                             import isi_master_data_pl as _imd_pr
                             import kualifikasi_engine_pl as _keng_pr_excel
+                            _pr_excel_status = st.status("📊 Menyiapkan isi ulang Excel...", expanded=True)
+                            _pr_excel_log = _pr_excel_status.empty()
+                            _pr_excel_logs = []
+                            def _pr_excel_cb(_msg):
+                                _pr_excel_logs.append(str(_msg))
+                                _pr_excel_log.code("\n".join(_pr_excel_logs[-20:]))
+                                _pr_excel_status.update(label=f"📊 {str(_msg)[:90]}")
+                            _pr_excel_cb("Mencari folder paket...")
                             _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
                             _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
                             _pr_excel_xlsm = _cari_xlsm_pl(_pr_excel_root) if _pr_excel_root else None
                             if not _pr_excel_xlsm:
-                                st.error("Folder/workbook .xlsm tidak ditemukan.")
+                                _pr_excel_status.update(label="❌ Folder/workbook .xlsm tidak ditemukan.", state="error")
                             else:
-                                with st.spinner("Mengisi @ Master Data + @ Evaluasi..."):
-                                    _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm)
+                                _pr_excel_cb(f"Workbook: {_pr_excel_xlsm}")
+                                _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm, progress_cb=_pr_excel_cb)
                                 if _pr_excel_res.get("ok"):
+                                    _pr_excel_status.update(label="✅ Excel selesai diisi.", state="complete")
                                     st.success(_pr_excel_res.get("pesan", "Excel selesai diisi."))
                                 else:
+                                    _pr_excel_status.update(label="❌ Gagal mengisi Excel.", state="error")
                                     st.error(_pr_excel_res.get("pesan", "Gagal mengisi Excel."))
                         if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
                             import kualifikasi_engine_pl as _keng_pr_dl
@@ -4469,20 +4472,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pr_status = _pr.get("status", "draft")
                     _pr_folder = bool(_pr.get("folder_dibuat"))
                     _pr_icon   = "✅" if _pr_folder else "📋"
-                    # Label metode singkat + tanda ⚠️ jika Non Konstruksi
+                    # Label ringkas: nomor urut folder, bukan nama metode panjang.
+                    _pr_folder_raw = str(_pr.get("folder_dibuat") or "")
+                    _pr_no_match = re.search(r"^\s*(\d+)", os.path.basename(_pr_folder_raw.rstrip("\\/")))
+                    _pr_nomor = (_pr_no_match.group(1) if _pr_no_match else str(_pr.get("nomor_urut") or "").strip()) or _pr_kode
                     _pr_metode_raw = _pr.get("metode_pengadaan", "") or ""
                     _pr_metode_low = _pr_metode_raw.lower()
-                    if "non konstruksi" in _pr_metode_low or "non konstruksi" in _pr_metode_low.replace(" ", ""):
-                        _pr_metode_lbl = "⚠️ JKK Non-Konstruksi"
-                    elif "konstruksi" in _pr_metode_low:
-                        _pr_metode_lbl = "JKK Konstruksi"
-                    elif "barang" in _pr_metode_low:
-                        _pr_metode_lbl = "PK"
-                    elif _pr_metode_raw:
-                        _pr_metode_lbl = _pr_metode_raw[:30]
-                    else:
-                        _pr_metode_lbl = _pr_jenis or "-"
-                    _pr_label  = f"{_pr_icon} [{_pr_metode_lbl}] {_pr_nama}"
+                    _pr_label  = f"{_pr_icon} [{_pr_nomor}] {_pr_nama}"
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
@@ -4557,17 +4553,27 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
                             import isi_master_data_pl as _imd_pr
                             import kualifikasi_engine_pl as _keng_pr_excel
+                            _pr_excel_status = st.status("📊 Menyiapkan isi ulang Excel...", expanded=True)
+                            _pr_excel_log = _pr_excel_status.empty()
+                            _pr_excel_logs = []
+                            def _pr_excel_cb(_msg):
+                                _pr_excel_logs.append(str(_msg))
+                                _pr_excel_log.code("\n".join(_pr_excel_logs[-20:]))
+                                _pr_excel_status.update(label=f"📊 {str(_msg)[:90]}")
+                            _pr_excel_cb("Mencari folder paket...")
                             _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
                             _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
                             _pr_excel_xlsm = _cari_xlsm_pl(_pr_excel_root) if _pr_excel_root else None
                             if not _pr_excel_xlsm:
-                                st.error("Folder/workbook .xlsm tidak ditemukan.")
+                                _pr_excel_status.update(label="❌ Folder/workbook .xlsm tidak ditemukan.", state="error")
                             else:
-                                with st.spinner("Mengisi @ Master Data + @ Evaluasi..."):
-                                    _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm)
+                                _pr_excel_cb(f"Workbook: {_pr_excel_xlsm}")
+                                _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm, progress_cb=_pr_excel_cb)
                                 if _pr_excel_res.get("ok"):
+                                    _pr_excel_status.update(label="✅ Excel selesai diisi.", state="complete")
                                     st.success(_pr_excel_res.get("pesan", "Excel selesai diisi."))
                                 else:
+                                    _pr_excel_status.update(label="❌ Gagal mengisi Excel.", state="error")
                                     st.error(_pr_excel_res.get("pesan", "Gagal mengisi Excel."))
                         if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
                             import kualifikasi_engine_pl as _keng_pr_dl
