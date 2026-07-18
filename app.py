@@ -1269,6 +1269,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error("❌ Gagal ubah metode.")
 
                         _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
+                            import isi_master_data_pl as _imd_pr
+                            import kualifikasi_engine_pl as _keng_pr_excel
+                            _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
+                            _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
+                            _pr_excel_xlsm = _cari_xlsm_pl(_pr_excel_root) if _pr_excel_root else None
+                            if not _pr_excel_xlsm:
+                                st.error("Folder/workbook .xlsm tidak ditemukan.")
+                            else:
+                                with st.spinner("Mengisi @ Master Data + @ Evaluasi..."):
+                                    _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm)
+                                if _pr_excel_res.get("ok"):
+                                    st.success(_pr_excel_res.get("pesan", "Excel selesai diisi."))
+                                else:
+                                    st.error(_pr_excel_res.get("pesan", "Gagal mengisi Excel."))
                         if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
                             import kualifikasi_engine_pl as _keng_pr_dl
                             _pr_dl_fr = _keng_pr_dl.resolve_folder_paket_pl(_pr_kode)
@@ -1318,8 +1333,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(_pr_hr.get("pesan", "-"))
                             else:
                                 st.error("Folder/xlsm tidak ditemukan.")
-                        if _pr_c4.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
-                            pl_engine.hapus_paket_pl(_pr_kode)
+                        if _pr_folder and st.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
+                            import ai_evaluator as _heval_one
+                            with st.spinner("Menjalankan pra-reviu paket..."):
+                                _one_res = _heval_one.evaluasi_bulk(
+                                    [{"nomor_urut": _pr.get("nomor_urut"), "nama_paket": _pr_nama}],
+                                    jenis="pra_reviu", model=None, max_workers=1,
+                                    engine="codex",
+                                )
+                            if _one_res and _one_res[0].get("status") == "ok":
+                                st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
+                            else:
+                                st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
+                        if _pr_folder and _pr_c4.button("🔄 Reset", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                            from config import sb as _sb_reset_one
+                            try:
+                                _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
+                                _load_draft_pl_cached.clear()
+                                st.success(f"✅ Status folder {_pr_nama[:45]} direset.")
+                                st.rerun()
+                            except Exception as _reset_one_e:
+                                st.error(f"Reset gagal: {_reset_one_e}")
                             st.rerun()
 
         # ══════════════════════════════════════════════════════
@@ -1602,6 +1636,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
             _cb_template_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing", value=False, key="pl_cb_template_refresh_existing")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
+            _cb_excel_existing = st.checkbox(
+                "📊 Isi ulang Excel @ Master Data semua paket berfolder",
+                value=False,
+                key="pl_cb_excel_existing",
+            )
+            _cb_reset_existing = st.checkbox(
+                "🔄 Reset status folder semua paket berfolder",
+                value=False,
+                key="pl_cb_reset_existing",
+            )
+            _cb_pra_reviu_bulk = st.checkbox(
+                "🤖 Pra-Reviu + Isi DOCM semua paket berfolder",
+                value=False,
+                key="pl_cb_pra_reviu_bulk",
+            )
 
             if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Refresh template bulk semua paket berfolder
@@ -1753,107 +1802,97 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         if _hps_upd_gagal:
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
 
-            st.divider()
-            st.markdown("#### ↩️ Reset Status Folder")
-            _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-            if _opsi_reset_pl:
-                _label_reset_pl = {
-                    f"{r.get('folder_dibuat')} — {r.get('kode_paket')}": k
-                    for k, r in _opsi_reset_pl.items()
-                }
-                _pilih_reset_pl = st.multiselect(
-                    "Pilih paket yang direset",
-                    list(_label_reset_pl.keys()),
-                    key="pl_reset_folder_select",
-                )
-                _c_reset_sel, _c_reset_all = st.columns(2)
-                if _c_reset_sel.button("Reset Terpilih", key="pl_btn_reset_folder_selected", use_container_width=True, disabled=not _pilih_reset_pl):
-                    from config import sb as _sb_reset
-                    _kodes_reset = [_label_reset_pl[x] for x in _pilih_reset_pl]
+                # Aksi: Isi ulang @ Master Data + @ Evaluasi pada folder existing
+                if _cb_excel_existing:
+                    import kualifikasi_engine_pl as _keng_excel_existing
+                    import isi_master_data_pl as _imd_excel_existing
+                    _pl_excel_existing_rows = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    _excel_existing_ok, _excel_existing_fail = 0, 0
+                    _excel_existing_status = st.status(
+                        f"📊 Isi ulang Excel {len(_pl_excel_existing_rows)} paket...", expanded=True
+                    )
+                    _excel_existing_line = _excel_existing_status.empty()
+                    _excel_existing_bp = st.progress(0.0)
+                    _excel_existing_failures = []
+                    for _xe_i, _xe_row in enumerate(_pl_excel_existing_rows):
+                        _xe_kp = _xe_row.get("kode_paket", "")
+                        _xe_nama = _xe_row.get("nama_paket", _xe_kp)
+                        _excel_existing_status.update(
+                            label=f"[{_xe_i+1}/{len(_pl_excel_existing_rows)}] {_xe_nama}"
+                        )
+                        _excel_existing_bp.progress((_xe_i + 1) / len(_pl_excel_existing_rows))
+                        try:
+                            _xe_fr = _keng_excel_existing.resolve_folder_paket_pl(_xe_kp)
+                            _xe_root = _xe_fr.get("pesan", "") if _xe_fr.get("ok") else ""
+                            _xe_xlsm = _cari_xlsm_pl(_xe_root) if _xe_root and _pl_os.path.isdir(_xe_root) else None
+                            if not _xe_xlsm:
+                                raise ValueError("folder atau workbook .xlsm tidak ditemukan")
+                            _xe_res = _imd_excel_existing.isi_master_data_pl(_xe_kp, _xe_xlsm)
+                            if not _xe_res.get("ok"):
+                                raise ValueError(_xe_res.get("pesan", "macro gagal"))
+                            _excel_existing_ok += 1
+                            _excel_existing_line.write(
+                                f"✅ [{_xe_i+1}] {_xe_nama} → {_xe_res.get('pesan', 'selesai')}"
+                            )
+                        except Exception as _xe_e:
+                            _excel_existing_fail += 1
+                            _excel_existing_failures.append(f"{_xe_nama}: {_xe_e}")
+                            _excel_existing_line.write(f"❌ [{_xe_i+1}] {_xe_nama} → {_xe_e}")
+                    _excel_existing_bp.progress(1.0)
+                    _excel_existing_line.empty()
+                    _excel_existing_status.update(
+                        label=f"✅ Isi ulang Excel selesai: {_excel_existing_ok} sukses, {_excel_existing_fail} gagal",
+                        state="complete",
+                        expanded=_excel_existing_fail > 0,
+                    )
+                    if _excel_existing_failures:
+                        st.warning("Paket gagal:\n" + "\n".join(_excel_existing_failures))
+
+                if _cb_reset_existing:
+                    from config import sb as _sb_reset_bulk
+                    _reset_rows_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
                     try:
-                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
-                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
-                    except Exception as _er_pl:
-                        st.error(f"Reset gagal: {_er_pl}")
-                    _load_draft_pl_cached.clear()
-                    st.rerun()
-                if _c_reset_all.button("Reset Semua", key="pl_btn_reset_folder_all", use_container_width=True):
-                    from config import sb as _sb_reset
-                    _kodes_reset = list(_opsi_reset_pl.keys())
-                    try:
-                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
-                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
-                    except Exception as _er_pl:
-                        st.error(f"Reset gagal: {_er_pl}")
-                    _load_draft_pl_cached.clear()
-                    st.rerun()
-            else:
-                st.info("Tidak ada paket dengan status folder untuk direset.")
+                        _sb_reset_bulk().table("draft_paket_pl").update({"folder_dibuat": None}).in_(
+                            "kode_paket", [r.get("kode_paket") for r in _reset_rows_bulk]
+                        ).execute()
+                        _load_draft_pl_cached.clear()
+                        st.success(f"✅ {len(_reset_rows_bulk)} status folder berhasil direset.")
+                        st.rerun()
+                    except Exception as _reset_bulk_e:
+                        st.error(f"Reset bulk gagal: {_reset_bulk_e}")
 
-
-
-
-        # ── Seksi: Pra-Reviu Dokumen PPK via Hermes AI ───────────────────────
-        st.divider()
-        st.markdown("### 🤖 Pra-Reviu Dokumen PPK")
-        st.caption("Satu tombol untuk mengirim prompt terstandar ke Codex: baca SOP + dokumen PPK, isi jawaban dan draft tanggapan ke DOCM, lalu buat `_HASIL_PRA_REVIU_DPP.md`.")
-
-        _pl_rows_punya_folder = [r for r in _pl_rows if r.get("folder_dibuat")]
-        if not _pl_rows_punya_folder:
-            st.info("Belum ada paket dengan folder. Buat folder dulu di atas.")
-        else:
-            import ai_evaluator as _heval
-            _pr_selected = {}
-            _pr_kodes = [r["kode_paket"] for r in _pl_rows_punya_folder]
-            for _k in _pr_kodes:
-                if f"pr_chk_{_k}" not in st.session_state:
-                    st.session_state[f"pr_chk_{_k}"] = True
-            _pr_bc1, _pr_bc2 = st.columns(2)
-            if _pr_bc1.button("✅ Pilih Semua", key="pr_chk_all", use_container_width=True):
-                for _k in _pr_kodes:
-                    st.session_state[f"pr_chk_{_k}"] = True
-            if _pr_bc2.button("❌ Batal Semua", key="pr_chk_none", use_container_width=True):
-                for _k in _pr_kodes:
-                    st.session_state[f"pr_chk_{_k}"] = False
-            for _rpr in _pl_rows_punya_folder:
-                _kpr = _rpr["kode_paket"]
-                _nomor_urut = _rpr.get('nomor_urut') or ''
-                _lpr = f"{_nomor_urut}. {_rpr.get('nama_paket','?')}" if _nomor_urut else _rpr.get('nama_paket','?')
-                _pr_selected[_kpr] = st.checkbox(_lpr, key=f"pr_chk_{_kpr}")
-            _pr_terpilih = [r for r in _pl_rows_punya_folder if _pr_selected.get(r["kode_paket"])]
-            _pr_engine = "codex"
-            _pr_model = None
-            st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
-            _btn_pr = st.button(
-                f"🤖 Pra-Reviu + Isi DOCM — {len(_pr_terpilih)} paket",
-                key="btn_pra_reviu", disabled=not _pr_terpilih,
-                type="primary", use_container_width=True,
-            )
-            if _btn_pr and _pr_terpilih:
-                _pr_pb = st.progress(0.0, text="Memulai pra-reviu...")
-                _pr_status = st.empty()
-                _pr_jobs = [{"nomor_urut": r["nomor_urut"], "nama_paket": r["nama_paket"]} for r in _pr_terpilih]
-                def _pr_progress(_result, _done, _total, _message):
-                    if _result:
-                        _pr_status.info(f"Pra-reviu {_done}/{_total}: {_result['nama']} — {_message}")
-                    else:
-                        _pr_status.info(f"Pra-reviu {_done}/{_total}: {_message}")
-                    _pr_pb.progress(_done / _total, text=f"Pra-reviu {_done}/{_total} selesai")
-                _pr_results = _heval.evaluasi_bulk(
-                    _pr_jobs, jenis="pra_reviu", model=_pr_model, max_workers=1,
-                    engine=_pr_engine, progress_cb=_pr_progress,
-                )
-                for _pri, _prr in enumerate(_pr_results):
-                    if _prr["status"] == "ok":
-                        st.success(f"✅ {_prr['nama'][:50]} — selesai")
-                        with st.expander(f"Output: {_prr['nama'][:40]}"):
-                            st.markdown(_prr["output"][:3000])
-                    else:
-                        st.error(f"❌ {_prr['nama'][:50]} — {_prr['error'][:200]}")
-                        if _prr.get("output"):
-                            with st.expander(f"Detail pra-reviu: {_prr['nama'][:40]}"):
-                                st.markdown(_prr["output"][:3000])
-                _pr_pb.progress(1.0, text="Selesai.")
+                if _cb_pra_reviu_bulk:
+                    import ai_evaluator as _heval_bulk
+                    _pra_rows_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat")
+                    ]
+                    _pra_jobs_bulk = [
+                        {"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket", "-")}
+                        for r in _pra_rows_bulk
+                    ]
+                    if _pra_jobs_bulk:
+                        _pra_status_bulk = st.status(
+                            f"🤖 Pra-reviu {len(_pra_jobs_bulk)} paket...", expanded=True
+                        )
+                        _pra_line_bulk = _pra_status_bulk.empty()
+                        def _pra_progress_bulk(_result, _done, _total, _message):
+                            _pra_line_bulk.write(f"[{_done}/{_total}] {_message}")
+                        _pra_results_bulk = _heval_bulk.evaluasi_bulk(
+                            _pra_jobs_bulk, jenis="pra_reviu", model=None, max_workers=1,
+                            engine="codex", progress_cb=_pra_progress_bulk,
+                        )
+                        _pra_ok_bulk = sum(1 for r in _pra_results_bulk if r.get("status") == "ok")
+                        _pra_status_bulk.update(
+                            label=f"✅ Pra-reviu selesai: {_pra_ok_bulk} sukses, {len(_pra_results_bulk)-_pra_ok_bulk} gagal",
+                            state="complete", expanded=_pra_ok_bulk != len(_pra_results_bulk),
+                        )
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
@@ -4557,9 +4596,26 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(_pr_hr.get("pesan", "-"))
                             else:
                                 st.error("Folder/xlsm tidak ditemukan.")
-                        if _pr_c4.button("🗑️ Hapus", key=f"pl_hapus_{_pr_kode}", use_container_width=True):
-                            pl_engine.hapus_paket_pl(_pr_kode)
-                            st.rerun()
+                        if _pr_folder and st.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
+                            import ai_evaluator as _heval_one
+                            with st.spinner("Menjalankan pra-reviu paket..."):
+                                _one_res = _heval_one.evaluasi_bulk(
+                                    [{"nomor_urut": _pr.get("nomor_urut"), "nama_paket": _pr_nama}],
+                                    jenis="pra_reviu", model=None, max_workers=1, engine="codex",
+                                )
+                            if _one_res and _one_res[0].get("status") == "ok":
+                                st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
+                            else:
+                                st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
+                        if _pr_folder and _pr_c4.button("🔄 Reset", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                            from config import sb as _sb_reset_one
+                            try:
+                                _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
+                                _load_draft_pl_cached.clear()
+                                st.success(f"✅ Status folder {_pr_nama[:45]} direset.")
+                                st.rerun()
+                            except Exception as _reset_one_e:
+                                st.error(f"Reset gagal: {_reset_one_e}")
 
         # ══════════════════════════════════════════════════════
         # KOLOM KANAN — Buat Folder + Download Dokumen
@@ -4838,6 +4894,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             )
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk_pk")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update_pk")
+            _cb_excel_existing = st.checkbox("📊 Isi ulang Excel @ Master Data semua paket berfolder", value=False, key="pl_cb_excel_existing_pk")
+            _cb_reset_existing = st.checkbox("🔄 Reset status folder semua paket berfolder", value=False, key="pl_cb_reset_existing_pk")
+            _cb_pra_reviu_bulk = st.checkbox("🤖 Pra-Reviu + Isi DOCM semua paket berfolder", value=False, key="pl_cb_pra_reviu_bulk_pk")
 
             if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
@@ -4943,6 +5002,45 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         )
                         if _hps_upd_gagal:
                             st.warning("Paket gagal:\n" + "\n".join(_hps_upd_gagal))
+
+                if _cb_excel_existing:
+                    import isi_master_data_pl as _imd_excel_existing
+                    import kualifikasi_engine_plpk as _keng_excel_existing
+                    _excel_rows = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+                    _ok_x = _fail_x = 0
+                    _st_x = st.status(f"📊 Isi ulang Excel {len(_excel_rows)} paket...", expanded=True)
+                    _ln_x = _st_x.empty()
+                    for _xe_i, _xe_row in enumerate(_excel_rows):
+                        _xe_kp = _xe_row.get("kode_paket", ""); _xe_nm = _xe_row.get("nama_paket", _xe_kp)
+                        try:
+                            _xe_fr = _keng_excel_existing.resolve_folder_paket_pl(_xe_kp)
+                            _xe_root = _xe_fr.get("pesan", "") if _xe_fr.get("ok") else ""
+                            _xe_xlsm = _cari_xlsm_pl(_xe_root) if _xe_root and _pl_os.path.isdir(_xe_root) else None
+                            if not _xe_xlsm: raise ValueError("folder/workbook .xlsm tidak ditemukan")
+                            _xe_res = _imd_excel_existing.isi_master_data_pl(_xe_kp, _xe_xlsm)
+                            if not _xe_res.get("ok"): raise ValueError(_xe_res.get("pesan", "macro gagal"))
+                            _ok_x += 1; _ln_x.write(f"✅ {_xe_nm}")
+                        except Exception as _xe_e:
+                            _fail_x += 1; _ln_x.write(f"❌ {_xe_nm} — {_xe_e}")
+                    _st_x.update(label=f"📊 Isi ulang Excel selesai: ✅ {_ok_x}, ❌ {_fail_x}", state="complete", expanded=_fail_x > 0)
+
+                if _cb_reset_existing:
+                    from config import sb as _sb_reset_bulk
+                    _reset_rows_bulk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+                    try:
+                        _sb_reset_bulk().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", [r.get("kode_paket") for r in _reset_rows_bulk]).execute()
+                        _load_draft_pl_cached.clear(); st.success(f"✅ {len(_reset_rows_bulk)} status folder berhasil direset."); st.rerun()
+                    except Exception as _reset_bulk_e:
+                        st.error(f"Reset bulk gagal: {_reset_bulk_e}")
+
+                if _cb_pra_reviu_bulk:
+                    import ai_evaluator as _heval_bulk
+                    _pra_rows_bulk = [r for r in _pl_rows if r.get("kode_paket") and r.get("folder_dibuat")]
+                    _pra_jobs_bulk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket", "-")} for r in _pra_rows_bulk]
+                    if _pra_jobs_bulk:
+                        _pra_res = _heval_bulk.evaluasi_bulk(_pra_jobs_bulk, jenis="pra_reviu", model=None, max_workers=1, engine="codex")
+                        _pra_ok = sum(1 for r in _pra_res if r.get("status") == "ok")
+                        st.success(f"🤖 Pra-reviu selesai: ✅ {_pra_ok}, ❌ {len(_pra_res)-_pra_ok}")
 
             st.divider()
             st.markdown("#### ↩️ Reset Status Folder")
