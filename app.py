@@ -16,6 +16,37 @@ import streamlit as st
 APP_VERSION = "v2026.07.18"
 
 _PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_undangan_dates.json"
+_PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sbu_history.json"
+
+
+def _load_pl_sbu_history() -> list[dict[str, str]]:
+    """Load histori SBU custom PL; format lama berupa string tetap didukung."""
+    try:
+        raw = json.loads(_PL_SBU_HISTORY_PATH.read_text(encoding="utf-8"))
+        result = []
+        for item in raw if isinstance(raw, list) else []:
+            if isinstance(item, dict):
+                baru, lama = str(item.get("baru") or "").strip(), str(item.get("lama") or "").strip()
+            else:
+                baru, lama = str(item).strip(), ""
+            if baru and not any(x["baru"] == baru and x["lama"] == lama for x in result):
+                result.append({"baru": baru, "lama": lama})
+        return result[:20]
+    except (OSError, TypeError, ValueError):
+        return []
+
+
+def _save_pl_sbu_history(baru: str, lama: str = "") -> None:
+    baru, lama = str(baru or "").strip(), str(lama or "").strip()
+    if not baru:
+        return
+    history = [x for x in _load_pl_sbu_history() if x["baru"] != baru or x["lama"] != lama]
+    history.insert(0, {"baru": baru, "lama": lama})
+    try:
+        _PL_SBU_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PL_SBU_HISTORY_PATH.write_text(json.dumps(history[:20], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _load_last_pl_invitation_dates() -> dict[str, str]:
@@ -2184,7 +2215,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pljd_rows = _load_draft_pl_cached()
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
-        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_jkk")
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -2313,7 +2343,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0 or not _gcal_ok,
+                    disabled=len(_pljd_selected) == 0,
                     key="pljd_submit_btn",
                 )
 
@@ -2473,6 +2503,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for r in _gcalpl_results
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
+        st.divider()
+        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_jkk")
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     if _pl_active_tab == "3️⃣ Setup Paket":
@@ -2645,7 +2677,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.markdown("#### 🏗️ Seksi 1 — SBU Global")
                     _sbu_global_aktif = st.toggle(
                         "SBU Global (apply 1 SBU ke semua paket terpilih)",
-                        value=st.session_state.get("plsp_sbu_global_aktif", True),
+                        value=st.session_state.get("plsp_sbu_global_aktif", False),
                         key="plsp_sbu_global_aktif",
                     )
                     if _sbu_global_aktif:
@@ -2760,19 +2792,30 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
-                        st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
-                        _sbu_baru_global = st.text_input(
-                            "SBU Baru (teks bebas)",
-                            key="plsp_custom_sbu_baru",
-                            placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
-                        ) or None
-                        _sbu_lama_global = st.text_input(
-                            "SBU Lama (teks bebas, opsional)",
-                            key="plsp_custom_sbu_lama",
-                            placeholder="Kosongkan jika tidak dipersyaratkan",
-                        ) or None
+                        st.caption("ℹ️ Mode custom — pilih SBU yang pernah dipakai atau input baru.")
+                        _pl_sbu_hist = _load_pl_sbu_history()
+                        _pl_sbu_new = "✏️ Input SBU baru"
+                        _pl_sbu_opts = [f"{x['baru'][:100]}" for x in _pl_sbu_hist] + [_pl_sbu_new]
+                        _pl_sbu_pick = st.selectbox("SBU Custom — histori", _pl_sbu_opts or [_pl_sbu_new], key="plsp_custom_sbu_pick")
+                        _pl_sbu_idx = _pl_sbu_opts.index(_pl_sbu_pick) if _pl_sbu_pick in _pl_sbu_opts else len(_pl_sbu_hist)
+                        if _pl_sbu_idx < len(_pl_sbu_hist):
+                            _pl_sbu_selected = _pl_sbu_hist[_pl_sbu_idx]
+                            _sbu_baru_global = _pl_sbu_selected["baru"]
+                            _sbu_lama_global = _pl_sbu_selected["lama"] or None
+                            st.caption(f"🔹 Baru: `{_sbu_baru_global}`")
+                            if _sbu_lama_global:
+                                st.caption(f"🔸 Lama: `{_sbu_lama_global}`")
+                        else:
+                            _sbu_baru_global = st.text_input(
+                                "SBU Baru (teks bebas)", key="plsp_custom_sbu_baru",
+                                placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
+                            ) or None
+                            _sbu_lama_global = st.text_input(
+                                "SBU Lama (teks bebas, opsional)", key="plsp_custom_sbu_lama",
+                                placeholder="Kosongkan jika tidak dipersyaratkan",
+                            ) or None
                         if st.button(
-                            f"💾 Simpan SBU Custom ke {len(_plsp_selected)} paket",
+                            f"💾 Simpan SBU Custom + POST LDK ke {len(_plsp_selected)} paket",
                             key="plsp_save_sbu_custom_btn", use_container_width=True,
                             disabled=not _sbu_baru_global,
                         ):
@@ -2788,22 +2831,31 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _ok_c += 1
                                 except Exception as _e:
                                     st.error(f"❌ {_p['nama_paket']}: {_e}")
+                            _save_pl_sbu_history(_sbu_baru_global, _sbu_lama_global or "")
                             st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
+                            import ldk_config as _ldk_cfg_custom_jkk
+                            for _p in _plsp_selected:
+                                try:
+                                    _r_custom_ldk = _depl_jkk.submit_ldk_pl(
+                                        _p["kode_paket"],
+                                        sbu_baru=_sbu_baru_global or "",
+                                        sbu_lama=_sbu_lama_global or "",
+                                        kinerja_text=_ldk_cfg_custom_jkk.KINERJA_PENYEDIA_JKK,
+                                    )
+                                    st.write(f"{'✅' if _r_custom_ldk['ok'] else '❌'} {_p['nama_paket']} — POST LDK HTTP {_r_custom_ldk['status']}")
+                                except Exception as _e_ldk_custom:
+                                    st.error(f"❌ {_p['nama_paket']} — POST LDK gagal: {_e_ldk_custom}")
 
                     st.divider()
 
                     # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
                     st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
 
-                    _tgl_dokpil_default = datetime.now().date()
-                    if _plsp_selected:
-                        _tgl_db = _plsp_selected[0].get("tgl_dokpil")
-                        if _tgl_db:
-                            try:
-                                from datetime import date as _date
-                                _tgl_dokpil_default = _date.fromisoformat(str(_tgl_db)[:10])
-                            except Exception:
-                                pass
+                    _tgl_dokpil_today = datetime.now().date()
+                    if st.session_state.get("plsp_tgl_dokpil_session_date") != _tgl_dokpil_today:
+                        st.session_state["plsp_tgl_dokpil"] = _tgl_dokpil_today
+                        st.session_state["plsp_tgl_dokpil_session_date"] = _tgl_dokpil_today
+                    _tgl_dokpil_default = st.session_state.get("plsp_tgl_dokpil") or _tgl_dokpil_today
                     _plsp_tgl_dokpil = st.date_input(
                         "Tanggal Dokpil",
                         value=_tgl_dokpil_default,
@@ -5271,7 +5323,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _pljd_rows = _load_draft_pl_cached()
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
-        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_pk")
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -5400,7 +5451,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0 or not _gcal_ok_pk,
+                    disabled=len(_pljd_selected) == 0,
                     key="pljd_submit_btn_pk",
                 )
 
@@ -5560,6 +5611,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for r in _gcalpl_results
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
+        st.divider()
+        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_pk")
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     if _pl_active_tab == "3️⃣ Setup Paket":
@@ -5732,7 +5785,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.markdown("#### 🏗️ Seksi 1 — SBU Global")
                     _sbu_global_aktif = st.toggle(
                         "SBU Global (apply 1 SBU ke semua paket terpilih)",
-                        value=st.session_state.get("pk_sbu_global_aktif", True),
+                        value=st.session_state.get("pk_sbu_global_aktif", False),
                         key="pk_sbu_global_aktif",
                     )
                     if _sbu_global_aktif:
@@ -5847,19 +5900,30 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(f"❌ {_p['nama_paket']}: {_e}")
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
-                        st.caption("ℹ️ Mode custom — teks SBU diisi manual, apply ke semua paket terpilih.")
-                        _sbu_baru_global = st.text_input(
-                            "SBU Baru (teks bebas)",
-                            key="pk_custom_sbu_baru",
-                            placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
-                        ) or None
-                        _sbu_lama_global = st.text_input(
-                            "SBU Lama (teks bebas, opsional)",
-                            key="pk_custom_sbu_lama",
-                            placeholder="Kosongkan jika tidak dipersyaratkan",
-                        ) or None
+                        st.caption("ℹ️ Mode custom — pilih SBU yang pernah dipakai atau input baru.")
+                        _pk_sbu_hist = _load_pl_sbu_history()
+                        _pk_sbu_new = "✏️ Input SBU baru"
+                        _pk_sbu_opts = [f"{x['baru'][:100]}" for x in _pk_sbu_hist] + [_pk_sbu_new]
+                        _pk_sbu_pick = st.selectbox("SBU Custom — histori", _pk_sbu_opts or [_pk_sbu_new], key="pk_custom_sbu_pick")
+                        _pk_sbu_idx = _pk_sbu_opts.index(_pk_sbu_pick) if _pk_sbu_pick in _pk_sbu_opts else len(_pk_sbu_hist)
+                        if _pk_sbu_idx < len(_pk_sbu_hist):
+                            _pk_sbu_selected = _pk_sbu_hist[_pk_sbu_idx]
+                            _sbu_baru_global = _pk_sbu_selected["baru"]
+                            _sbu_lama_global = _pk_sbu_selected["lama"] or None
+                            st.caption(f"🔹 Baru: `{_sbu_baru_global}`")
+                            if _sbu_lama_global:
+                                st.caption(f"🔸 Lama: `{_sbu_lama_global}`")
+                        else:
+                            _sbu_baru_global = st.text_input(
+                                "SBU Baru (teks bebas)", key="pk_custom_sbu_baru",
+                                placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
+                            ) or None
+                            _sbu_lama_global = st.text_input(
+                                "SBU Lama (teks bebas, opsional)", key="pk_custom_sbu_lama",
+                                placeholder="Kosongkan jika tidak dipersyaratkan",
+                            ) or None
                         if st.button(
-                            f"💾 Simpan SBU Custom ke {len(_plsp_selected)} paket",
+                            f"💾 Simpan SBU Custom + POST LDK ke {len(_plsp_selected)} paket",
                             key="pk_save_sbu_custom_btn", use_container_width=True,
                             disabled=not _sbu_baru_global,
                         ):
@@ -5875,22 +5939,31 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _ok_c += 1
                                 except Exception as _e:
                                     st.error(f"❌ {_p['nama_paket']}: {_e}")
+                            _save_pl_sbu_history(_sbu_baru_global, _sbu_lama_global or "")
                             st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
+                            import ldk_config as _ldk_cfg_custom_pk
+                            for _p in _plsp_selected:
+                                try:
+                                    _r_custom_ldk = _depl_pk.submit_ldk_pl(
+                                        _p["kode_paket"],
+                                        sbu_baru=_sbu_baru_global or "",
+                                        sbu_lama=_sbu_lama_global or "",
+                                        kinerja_text=_ldk_cfg_custom_pk.KINERJA_PENYEDIA_PK,
+                                    )
+                                    st.write(f"{'✅' if _r_custom_ldk['ok'] else '❌'} {_p['nama_paket']} — POST LDK HTTP {_r_custom_ldk['status']}")
+                                except Exception as _e_ldk_custom:
+                                    st.error(f"❌ {_p['nama_paket']} — POST LDK gagal: {_e_ldk_custom}")
 
                     st.divider()
 
                     # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
                     st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
 
-                    _tgl_dokpil_default = datetime.now().date()
-                    if _plsp_selected:
-                        _tgl_db = _plsp_selected[0].get("tgl_dokpil")
-                        if _tgl_db:
-                            try:
-                                from datetime import date as _date
-                                _tgl_dokpil_default = _date.fromisoformat(str(_tgl_db)[:10])
-                            except Exception:
-                                pass
+                    _tgl_dokpil_today = datetime.now().date()
+                    if st.session_state.get("plsp_tgl_dokpil_session_date") != _tgl_dokpil_today:
+                        st.session_state["plsp_tgl_dokpil"] = _tgl_dokpil_today
+                        st.session_state["plsp_tgl_dokpil_session_date"] = _tgl_dokpil_today
+                    _tgl_dokpil_default = st.session_state.get("plsp_tgl_dokpil") or _tgl_dokpil_today
                     _plsp_tgl_dokpil = st.date_input(
                         "Tanggal Dokpil",
                         value=_tgl_dokpil_default,
