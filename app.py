@@ -2,6 +2,7 @@
 
 import os
 import glob as _glob_mod
+import json
 import pathlib
 import re
 import shutil
@@ -13,6 +14,38 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 APP_VERSION = "v2026.07.18"
+
+_PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_undangan_dates.json"
+
+
+def _load_last_pl_invitation_dates() -> dict[str, str]:
+    """Load tanggal undangan terakhir per kode paket; file rusak dianggap kosong."""
+    try:
+        data = json.loads(_PL_UNDANGAN_DATES_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _last_pl_invitation_date(kode_paket: str) -> date | None:
+    raw = _load_last_pl_invitation_dates().get(str(kode_paket))
+    try:
+        return date.fromisoformat(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
+    """Simpan tanggal hanya setelah kirim sukses; gagal simpan tidak mengganggu UI."""
+    try:
+        _PL_UNDANGAN_DATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        data = _load_last_pl_invitation_dates()
+        data[str(kode_paket)] = tanggal.isoformat()
+        tmp = _PL_UNDANGAN_DATES_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(_PL_UNDANGAN_DATES_PATH)
+    except (OSError, TypeError, ValueError):
+        pass
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk
 from ui_pl_jadwal import _render_ubah_jadwal_pl
@@ -1961,7 +1994,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.caption("Tanggal Undangan / BA Reviu")
                         _kd_tgl_acara = st.date_input(
                             "Tanggal Acara",
-                            value=st.session_state.get(_kd_tgl_key, datetime.now().date()),
+                            value=st.session_state.get(_kd_tgl_key)
+                            or _last_pl_invitation_date(_rr["kode_paket"])
+                            or datetime.now().date(),
                             format="DD/MM/YYYY",
                             key=_kd_tgl_key,
                             label_visibility="collapsed",
@@ -2085,6 +2120,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 "PDF": "✅" if _gen["sukses"] else f"❌ {_gen['pesan']}",
                                 "Kirim": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
                             })
+                            if _res.get("sukses"):
+                                _save_last_pl_invitation_date(_kp["kode_paket"], _kd_tgl_a)
 
                         _kd_progress.empty()
                         _kd_ok = sum(1 for h in _kd_hasil if h["Kirim"] == "✅")
@@ -5044,7 +5081,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.caption("Tanggal Undangan / BA Reviu")
                         _kd_tgl_acara = st.date_input(
                             "Tanggal Acara",
-                            value=st.session_state.get(_kd_tgl_key, datetime.now().date()),
+                            value=st.session_state.get(_kd_tgl_key)
+                            or _last_pl_invitation_date(_rr["kode_paket"])
+                            or datetime.now().date(),
                             format="DD/MM/YYYY",
                             key=_kd_tgl_key,
                             label_visibility="collapsed",
@@ -5168,6 +5207,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 "PDF": "✅" if _gen["sukses"] else f"❌ {_gen['pesan']}",
                                 "Kirim": "✅" if _res["sukses"] else f"❌ {_res['pesan']}",
                             })
+                            if _res.get("sukses"):
+                                _save_last_pl_invitation_date(_kp["kode_paket"], _kd_tgl_a)
 
                         _kd_progress.empty()
                         _kd_ok = sum(1 for h in _kd_hasil if h["Kirim"] == "✅")
