@@ -43,4 +43,6 @@ _debug_pilih_penyedia/
 /mbm_*.png
 secret_spse.txt
 data/pokja.db
+data/pl_sbu_history.json
+data/pl_undangan_dates.json
 /.tokensave/
