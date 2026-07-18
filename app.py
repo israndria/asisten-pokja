@@ -1271,7 +1271,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 else:
                                     st.error("❌ Gagal ubah metode.")
 
-                        _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        # Aksi paket: tiga operasi utama satu baris; aksi panjang di baris kedua.
+                        _pr_c1, _pr_c2, _pr_c3 = st.columns([1.5, 1.1, 1.1])
                         if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
                             import isi_master_data_pl as _imd_pr
                             import kualifikasi_engine_pl as _keng_pr_excel
@@ -1336,7 +1337,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(_pr_hr.get("pesan", "-"))
                             else:
                                 st.error("Folder/xlsm tidak ditemukan.")
-                        if _pr_folder and st.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
+                        _pr_r1, _pr_r2 = st.columns([1, 1])
+                        if _pr_folder and _pr_r2.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
                             import ai_evaluator as _heval_one
                             with st.spinner("Menjalankan pra-reviu paket..."):
                                 _one_res = _heval_one.evaluasi_bulk(
@@ -1348,7 +1350,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
                             else:
                                 st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
-                        if _pr_folder and _pr_c4.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                        if _pr_folder and _pr_r1.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
                             from config import sb as _sb_reset_one
                             try:
                                 _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
@@ -4549,7 +4551,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 else:
                                     st.error("❌ Gagal ubah metode.")
 
-                        _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        # Aksi paket: tiga operasi utama satu baris; aksi panjang di baris kedua.
+                        _pr_c1, _pr_c2, _pr_c3 = st.columns([1.5, 1.1, 1.1])
                         # Isi ulang workbook yang sudah ada tanpa membuat folder baru.
                         if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
                             import isi_master_data_pl as _imd_pr
@@ -4615,7 +4618,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error(_pr_hr.get("pesan", "-"))
                             else:
                                 st.error("Folder/xlsm tidak ditemukan.")
-                        if _pr_folder and st.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
+                        _pr_r1, _pr_r2 = st.columns([1, 1])
+                        if _pr_folder and _pr_r2.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
                             import ai_evaluator as _heval_one
                             with st.spinner("Menjalankan pra-reviu paket..."):
                                 _one_res = _heval_one.evaluasi_bulk(
@@ -4626,7 +4630,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
                             else:
                                 st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
-                        if _pr_folder and _pr_c4.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                        if _pr_folder and _pr_r1.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
                             from config import sb as _sb_reset_one
                             try:
                                 _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
