@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
+
+APP_VERSION = "v2026.07.18"
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk
 from ui_pl_jadwal import _render_ubah_jadwal_pl
@@ -423,16 +425,17 @@ if _is_dark:
 # Kontrol login diringkas dalam popover agar header tidak menjadi kolom vertikal.
 if "header_login_role" not in st.session_state:
     st.session_state["header_login_role"] = st.session_state.get("sidebar_login_role", "PP")
-_login_popover = st.popover("🔐 Login / SPSE", use_container_width=True)
+_login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container_width=True)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 
-# Auto-detect role dari CDP kalau session baru tapi Brave masih aktif (misal F5 refresh)
-# Guard: cek CDP max 1x per session — get_url() mahal kalau Brave tidak aktif
-if not _spse_role and not st.session_state.get("_cdp_role_checked"):
-    st.session_state["_cdp_role_checked"] = True
+# Auto-detect role dari CDP kalau session baru tapi Brave masih aktif (misal F5 refresh).
+# Retry periodik agar kegagalan sesaat saat Brave/SPSE masih loading tidak mematikan watchdog.
+_cdp_role_last_check = st.session_state.get("_cdp_role_last_check", 0.0)
+if not _spse_role and (time.time() - _cdp_role_last_check >= 30):
+    st.session_state["_cdp_role_last_check"] = time.time()
     try:
         import spse_browser as _sb_detect
         import spse_login as _sl_detect

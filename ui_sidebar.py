@@ -1,11 +1,26 @@
 """Reusable sidebar and display UI for Asisten Pokja."""
 
 import os
+import logging
 
 import streamlit as st
 
 from config import SPSE_BASE_URL
 import spse_browser
+
+
+def _friendly_login_error(exc: Exception) -> str:
+    """Ubah error teknis login menjadi petunjuk singkat untuk user."""
+    msg = str(exc or "").lower()
+    if "captcha" in msg or "ditolak" in msg:
+        return "CAPTCHA ditolak atau tidak terbaca. Coba gunakan CAPTCHA manual."
+    if "cdp" in msg or "connection" in msg or "connect" in msg:
+        return "Brave/CDP terputus. Pastikan Brave POKJA aktif, lalu coba lagi."
+    if "timeout" in msg or "timed out" in msg:
+        return "Login melewati batas waktu. Pastikan Brave dan SPSE siap, lalu coba lagi."
+    if "credential" in msg or "secret" in msg or "password" in msg:
+        return "Kredensial role belum lengkap. Periksa secret_spse.env."
+    return "Login gagal. Periksa Brave, SPSE, dan kredensial role, lalu coba lagi."
 
 
 @st.cache_data(show_spinner=False)
@@ -314,11 +329,10 @@ def _sidebar_login_form():
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun(scope="app")
             except Exception as e:
-                import traceback
+                logging.exception("SPSE auto-login gagal")
                 st.session_state["login_failed"] = True
                 st.session_state["login_failed_role"] = _login_role
-                st.error(f"Gagal: {e}")
-                st.code(traceback.format_exc())
+                st.error(_friendly_login_error(e))
 
     # Tombol retry — muncul kalau login gagal & browser masih di loginpass
     if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
@@ -344,9 +358,8 @@ def _sidebar_login_form():
                 st.success(f"✅ Login berhasil sebagai {_retry_role}!")
                 st.rerun(scope="app")
             except Exception as e2:
-                import traceback
-                st.error(f"Retry gagal: {e2}")
-                st.code(traceback.format_exc())
+                logging.exception("SPSE retry login gagal")
+                st.error(_friendly_login_error(e2))
 
         _manual_captcha = st.text_input(
             "CAPTCHA terlihat di Brave",
@@ -379,4 +392,3 @@ def _sidebar_login_form():
                     st.rerun(scope="app")
                 except Exception as e3:
                     st.error(f"Login manual gagal: {e3}")
-

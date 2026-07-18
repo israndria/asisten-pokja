@@ -88,29 +88,39 @@ def _run(coro, timeout=60):
 # ============================================================
 import builtins as _builtins
 if not hasattr(_builtins, "_spse_refresh_state"):
-    _builtins._spse_refresh_state = {"event": threading.Event(), "thread": None}
+    _builtins._spse_refresh_state = {
+        "event": threading.Event(), "thread": None,
+        "last_refresh": None, "last_error": None, "stopped_reason": None,
+    }
 
 def _refresh_worker(interval_menit: int):
     import time
     state = _builtins._spse_refresh_state
     while not state["event"].is_set():
         for _ in range(interval_menit * 60 // 5):
-            if state["event"].is_set():
+            if state["event"].wait(timeout=5):
                 return
-            time.sleep(5)
         if state["event"].is_set():
             return
         if not _cek_cdp_aktif():
-            break
+            state["stopped_reason"] = "CDP tidak aktif; menunggu Brave tersambung kembali"
+            if state["event"].wait(timeout=15):
+                return
+            continue
         for _attempt in range(2):
             try:
                 if refresh_browser():
+                    state["last_refresh"] = time.time()
+                    state["last_error"] = None
+                    state["stopped_reason"] = None
                     break
-            except Exception:
+                state["last_error"] = "Tidak ada tab SPSE pada rute aman"
+            except Exception as exc:
+                state["last_error"] = str(exc)[:200]
                 if _attempt == 0:
                     time.sleep(1)
 
-def mulai_auto_refresh(interval_menit: int = 10):
+def mulai_auto_refresh(interval_menit: int = 5):
     state = _builtins._spse_refresh_state
     t = state.get("thread")
     if t and t.is_alive():
