@@ -1904,7 +1904,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
-        _kd_col_list, _kd_col_detail = st.columns([3, 2])
+        # Satu kanvas penuh: daftar paket juga menjadi tempat upload BA Reviu.
+        _kd_col_list = st.container()
 
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
@@ -1929,10 +1930,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.rerun()
 
                 _kd_selected = []
+                import upload_ba_reviu_pl as _ubrpl
+                def _do_upload_ba_pl(paket_list, tgl=None):
+                    hasil = []
+                    prog = st.progress(0, text="Memulai upload...")
+                    for _i, _p in enumerate(paket_list):
+                        prog.progress((_i + 1) / len(paket_list), text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...")
+                        _tgl_ba = _p.get("_tgl_acara") or tgl or datetime.now().date()
+                        _res = _ubrpl.upload_ba_reviu_pl(
+                            kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(),
+                            file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"),
+                        )
+                        hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
+                    prog.empty()
+                    _ok = sum(1 for h in hasil if h["sukses"])
+                    st.success(f"✅ {_ok} BA Reviu berhasil diupload!") if _ok == len(hasil) else st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
+                    st.dataframe(hasil, use_container_width=True, hide_index=True)
+
                 for _rr in _pl_rows_kd:
                     _kd_key     = f"kd_chk_{_rr['kode_paket']}"
                     _kd_tgl_key = f"kd_tgl_acara_{_rr['kode_paket']}"
-                    _col_chk, _col_tgl = st.columns([3, 2])
+                    _col_chk, _col_tgl, _col_ba = st.columns([3, 2, 3])
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
@@ -1940,6 +1958,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             key=_kd_key,
                         )
                     with _col_tgl:
+                        st.caption("Tanggal Undangan / BA Reviu")
                         _kd_tgl_acara = st.date_input(
                             "Tanggal Acara",
                             value=st.session_state.get(_kd_tgl_key, datetime.now().date()),
@@ -1950,6 +1969,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.caption(f"{_HARI_NAMA[_kd_tgl_acara.weekday()]}, {_kd_tgl_acara.day} {_BULAN_NAMA[_kd_tgl_acara.month-1]} {_kd_tgl_acara.year}")
                         if _kd_tgl_acara in _LIBUR_MAP:
                             st.caption(f"⚠️ {_LIBUR_MAP[_kd_tgl_acara]}")
+                    with _col_ba:
+                        _ba_fkey = f"plba_file_{_rr['kode_paket']}"
+                        _ba_up = st.file_uploader("BA Reviu PDF (opsional)", type=["pdf"], key=_ba_fkey)
                     if _kd_chk:
                         _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara})
 
@@ -1981,12 +2003,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _kd_d in sorted(d for d in _LIBUR_MAP if d >= _kd_hari_ini):
                     st.write(f"• {_HARI_NAMA[_kd_d.weekday()]}, {_kd_d.day} {_BULAN_NAMA[_kd_d.month-1]} {_kd_d.year} — {_LIBUR_MAP[_kd_d]}")
 
-            _kd_tempat = st.text_area(
-                "Tempat",
-                value=pl_kirimpesan_engine.DEFAULT_TEMPAT,
-                key="kd_tempat",
-                height=100,
-            )
+            _kd_tempat = pl_kirimpesan_engine.DEFAULT_TEMPAT
+            st.caption(f"📍 Tempat: {_kd_tempat}")
 
             st.divider()
             st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
@@ -2100,121 +2118,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.session_state["kd_konfirmasi"] = False
                         st.rerun()
 
-        with _kd_col_detail:
-            if False:  # Hide preview sesuai permintaan
-                st.markdown("### Preview")
-            if _kd_selected:
-                if False:
-                    st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
-                    for _p in _kd_selected:
-                        _tgl_a = _p["_tgl_acara"]
-                        st.markdown(
-                            f"- **{_p['nama_paket']}**  \n"
-                            f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
-                            f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
-                        )
-            else:
-                st.info("Pilih paket di sebelah kiri.")
-
-            st.divider()
-            st.markdown("### 3. Upload BA Reviu DPP")
-            st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
-
-            import upload_ba_reviu_pl as _ubrpl
-            _pl_rows_ba = _load_draft_pl_cached()
-            _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
-            _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
-            if not _pl_rows_ba:
-                st.info("⚠️ Belum ada paket PL.")
-            else:
-                # Tanggal BA — di atas daftar paket
-                _ba_pl_tgl = st.date_input(
-                    "Tanggal BA Reviu",
-                    value=datetime.now().date(),
-                    key="plba_tgl",
-                    format="DD/MM/YYYY",
-                )
-                st.caption(f"{_HARI_NAMA[_ba_pl_tgl.weekday()]}, {_ba_pl_tgl.day} {_BULAN_NAMA[_ba_pl_tgl.month-1]} {_ba_pl_tgl.year}")
-
-                def _do_upload_ba_pl(paket_list, tgl):
-                    hasil = []
-                    prog = st.progress(0, text="Memulai upload...")
-                    for _i, _p in enumerate(paket_list):
-                        prog.progress(
-                            (_i + 1) / len(paket_list),
-                            text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...",
-                        )
-                        _res = _ubrpl.upload_ba_reviu_pl(
-                            kode_paket=_p["kode_paket"],
-                            file_bytes=_p["_ba_file"].getvalue(),
-                            file_name=_p["_ba_file"].name,
-                            tgl_ba=tgl.strftime("%d-%m-%Y"),
-                        )
-                        hasil.append({
-                            "kode":   _p["kode_paket"],
-                            "nama":   _p["nama_paket"],
-                            "sukses": _res["ok"],
-                            "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
-                        })
-                    prog.empty()
-                    _ok = sum(1 for h in hasil if h["sukses"])
-                    _fail = len(hasil) - _ok
-                    if _fail == 0:
-                        st.success(f"✅ {_ok} BA Reviu berhasil diupload!")
-                    else:
-                        st.warning(f"⚠️ {_ok} berhasil, {_fail} gagal.")
-                    st.dataframe(hasil, use_container_width=True, hide_index=True)
-
-                # Centang Semua / Hapus Semua
-                _ba_col_sel, _ba_col_clr, _ = st.columns([2, 2, 2])
-                with _ba_col_sel:
-                    if st.button("☑️ Centang Semua", key="plba_sel_all", use_container_width=True):
-                        for _pp2 in _pl_rows_ba:
-                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = True
-                        st.rerun()
-                with _ba_col_clr:
-                    if st.button("🔲 Hapus Semua", key="plba_clr_all", use_container_width=True):
-                        for _pp2 in _pl_rows_ba:
-                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = False
-                        st.rerun()
-
-                # Daftar paket — per baris: checkbox + file uploader + tombol upload per paket
-                _ba_pl_selected = []
-                for _pp in _pl_rows_ba:
-                    _ba_key  = f"plba_chk_{_pp['kode_paket']}"
-                    _ba_fkey = f"plba_file_{_pp['kode_paket']}"
-                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
-                    with _bcol_chk:
-                        _ba_chk = st.checkbox(
-                        f"**{_pp['kode_paket']}** — {_pp['nama_paket']}",
-                            value=st.session_state.get(_ba_key, True),
-                            key=_ba_key,
-                        )
-                    with _bcol_file:
-                        _ba_up = st.file_uploader(
-                            "BA Reviu",
-                            type=["pdf"],
-                            key=_ba_fkey,
-                            label_visibility="collapsed",
-                        )
-                        if _ba_up:
-                            st.caption(f"📋 {_ba_up.name}")
-                    with _bcol_btn:
-                        if _ba_up and st.button("📤", key=f"plba_up1_{_pp['kode_paket']}", help="Upload paket ini"):
-                            _do_upload_ba_pl([{**_pp, "_ba_file": _ba_up}], _ba_pl_tgl)
-                    if _ba_chk:
-                        _ba_pl_selected.append({**_pp, "_ba_file": _ba_up})
-
-                # Tombol upload semua yang sudah centang + ada file
-                _ba_pl_valid = [_p for _p in _ba_pl_selected if _p.get("_ba_file")]
-                if st.button(
-                    f"📤 Upload Semua BA Reviu ({len(_ba_pl_valid)} file)",
-                    key="plba_upload",
-                    type="primary",
-                    disabled=len(_ba_pl_valid) == 0,
-                    use_container_width=True,
-                ):
-                    _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
+            # BA memakai tanggal acara masing-masing paket; unggah setelah
+            # memilih paket dan/atau mengirim undangan.
+            _ba_pl_valid = [
+                {**_pp, "_ba_file": st.session_state.get(f"plba_file_{_pp['kode_paket']}")}
+                for _pp in _kd_selected
+                if st.session_state.get(f"plba_file_{_pp['kode_paket']}")
+            ]
+            if st.button(
+                f"📄 Upload BA Reviu DPP ({len(_ba_pl_valid)} file)",
+                key="plba_upload_selected",
+                type="secondary",
+                disabled=not _ba_pl_valid,
+                use_container_width=True,
+            ):
+                _do_upload_ba_pl(_ba_pl_valid)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
     if _pl_active_tab == "5️⃣ Buat Jadwal":
@@ -5073,7 +4991,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
-        _kd_col_list, _kd_col_detail = st.columns([3, 2])
+        # Satu kanvas penuh: daftar paket juga menjadi tempat upload BA Reviu.
+        _kd_col_list = st.container()
 
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
@@ -5098,10 +5017,23 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.rerun()
 
                 _kd_selected = []
+                import upload_ba_reviu_pl as _ubrpl
+                def _do_upload_ba_pl(paket_list, tgl=None):
+                    hasil = []
+                    prog = st.progress(0, text="Memulai upload...")
+                    for _i, _p in enumerate(paket_list):
+                        prog.progress((_i + 1) / len(paket_list), text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...")
+                        _tgl_ba = _p.get("_tgl_acara") or tgl or datetime.now().date()
+                        _res = _ubrpl.upload_ba_reviu_pl(kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(), file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"))
+                        hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
+                    prog.empty()
+                    _ok = sum(1 for h in hasil if h["sukses"])
+                    st.success(f"✅ {_ok} BA Reviu berhasil diupload!") if _ok == len(hasil) else st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
+                    st.dataframe(hasil, use_container_width=True, hide_index=True)
                 for _rr in _pl_rows_kd:
                     _kd_key     = f"kd_chk_{_rr['kode_paket']}"
                     _kd_tgl_key = f"kd_tgl_acara_{_rr['kode_paket']}"
-                    _col_chk, _col_tgl = st.columns([3, 2])
+                    _col_chk, _col_tgl, _col_ba = st.columns([3, 2, 3])
                     with _col_chk:
                         _kd_chk = st.checkbox(
                             f"{_rr['nama_paket']}{_pl_hint_ulang(_rr)}",
@@ -5109,6 +5041,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             key=_kd_key,
                         )
                     with _col_tgl:
+                        st.caption("Tanggal Undangan / BA Reviu")
                         _kd_tgl_acara = st.date_input(
                             "Tanggal Acara",
                             value=st.session_state.get(_kd_tgl_key, datetime.now().date()),
@@ -5119,6 +5052,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.caption(f"{_HARI_NAMA[_kd_tgl_acara.weekday()]}, {_kd_tgl_acara.day} {_BULAN_NAMA[_kd_tgl_acara.month-1]} {_kd_tgl_acara.year}")
                         if _kd_tgl_acara in _LIBUR_MAP:
                             st.caption(f"⚠️ {_LIBUR_MAP[_kd_tgl_acara]}")
+                    with _col_ba:
+                        _ba_fkey = f"plba_file_{_rr['kode_paket']}"
+                        _ba_up = st.file_uploader("BA Reviu PDF (opsional)", type=["pdf"], key=_ba_fkey)
                     if _kd_chk:
                         _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara})
 
@@ -5150,12 +5086,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _kd_d in sorted(d for d in _LIBUR_MAP if d >= _kd_hari_ini):
                     st.write(f"• {_HARI_NAMA[_kd_d.weekday()]}, {_kd_d.day} {_BULAN_NAMA[_kd_d.month-1]} {_kd_d.year} — {_LIBUR_MAP[_kd_d]}")
 
-            _kd_tempat = st.text_area(
-                "Tempat",
-                value=pl_kirimpesan_engine.DEFAULT_TEMPAT,
-                key="kd_tempat",
-                height=100,
-            )
+            _kd_tempat = pl_kirimpesan_engine.DEFAULT_TEMPAT
+            st.caption(f"📍 Tempat: {_kd_tempat}")
 
             st.divider()
             st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
@@ -5269,121 +5201,19 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.session_state["kd_konfirmasi"] = False
                         st.rerun()
 
-        with _kd_col_detail:
-            if False:  # Hide preview sesuai permintaan
-                st.markdown("### Preview")
-            if _kd_selected:
-                if False:
-                    st.caption(f"**{len(_kd_selected)} paket** akan dikirim undangan DPP")
-                    for _p in _kd_selected:
-                        _tgl_a = _p["_tgl_acara"]
-                        st.markdown(
-                            f"- **{_p['nama_paket']}**  \n"
-                            f"  📅 {_HARI_NAMA[_tgl_a.weekday()]}, {_tgl_a.day} {_BULAN_NAMA[_tgl_a.month-1]} {_tgl_a.year}  \n"
-                            f"  🏢 PPK: {_p.get('nama_ppk', '-')}"
-                        )
-            else:
-                st.info("Pilih paket di sebelah kiri.")
-
-            st.divider()
-            st.markdown("### 3. Upload BA Reviu DPP")
-            st.caption("Upload BA Hasil Reviu Dokumen Persiapan Pemilihan setelah PPK tandatangan.")
-
-            import upload_ba_reviu_pl as _ubrpl
-            _pl_rows_ba = _load_draft_pl_cached()
-            _pl_rows_ba, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_ba)
-            _pl_rows_ba = [r for r in _pl_rows_ba if not pl_engine.is_paket_selesai(r)]
-            if not _pl_rows_ba:
-                st.info("⚠️ Belum ada paket PL.")
-            else:
-                # Tanggal BA — di atas daftar paket
-                _ba_pl_tgl = st.date_input(
-                    "Tanggal BA Reviu",
-                    value=datetime.now().date(),
-                    key="plba_tgl",
-                    format="DD/MM/YYYY",
-                )
-                st.caption(f"{_HARI_NAMA[_ba_pl_tgl.weekday()]}, {_ba_pl_tgl.day} {_BULAN_NAMA[_ba_pl_tgl.month-1]} {_ba_pl_tgl.year}")
-
-                def _do_upload_ba_pl(paket_list, tgl):
-                    hasil = []
-                    prog = st.progress(0, text="Memulai upload...")
-                    for _i, _p in enumerate(paket_list):
-                        prog.progress(
-                            (_i + 1) / len(paket_list),
-                            text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...",
-                        )
-                        _res = _ubrpl.upload_ba_reviu_pl(
-                            kode_paket=_p["kode_paket"],
-                            file_bytes=_p["_ba_file"].getvalue(),
-                            file_name=_p["_ba_file"].name,
-                            tgl_ba=tgl.strftime("%d-%m-%Y"),
-                        )
-                        hasil.append({
-                            "kode":   _p["kode_paket"],
-                            "nama":   _p["nama_paket"],
-                            "sukses": _res["ok"],
-                            "pesan":  f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?"),
-                        })
-                    prog.empty()
-                    _ok = sum(1 for h in hasil if h["sukses"])
-                    _fail = len(hasil) - _ok
-                    if _fail == 0:
-                        st.success(f"✅ {_ok} BA Reviu berhasil diupload!")
-                    else:
-                        st.warning(f"⚠️ {_ok} berhasil, {_fail} gagal.")
-                    st.dataframe(hasil, use_container_width=True, hide_index=True)
-
-                # Centang Semua / Hapus Semua
-                _ba_col_sel, _ba_col_clr, _ = st.columns([2, 2, 2])
-                with _ba_col_sel:
-                    if st.button("☑️ Centang Semua", key="plba_sel_all", use_container_width=True):
-                        for _pp2 in _pl_rows_ba:
-                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = True
-                        st.rerun()
-                with _ba_col_clr:
-                    if st.button("🔲 Hapus Semua", key="plba_clr_all", use_container_width=True):
-                        for _pp2 in _pl_rows_ba:
-                            st.session_state[f"plba_chk_{_pp2['kode_paket']}"] = False
-                        st.rerun()
-
-                # Daftar paket — per baris: checkbox + file uploader + tombol upload per paket
-                _ba_pl_selected = []
-                for _pp in _pl_rows_ba:
-                    _ba_key  = f"plba_chk_{_pp['kode_paket']}"
-                    _ba_fkey = f"plba_file_{_pp['kode_paket']}"
-                    _bcol_chk, _bcol_file, _bcol_btn = st.columns([2, 5, 1])
-                    with _bcol_chk:
-                        _ba_chk = st.checkbox(
-                        f"**{_pp['kode_paket']}** — {_pp['nama_paket']}",
-                            value=st.session_state.get(_ba_key, True),
-                            key=_ba_key,
-                        )
-                    with _bcol_file:
-                        _ba_up = st.file_uploader(
-                            "BA Reviu",
-                            type=["pdf"],
-                            key=_ba_fkey,
-                            label_visibility="collapsed",
-                        )
-                        if _ba_up:
-                            st.caption(f"📋 {_ba_up.name}")
-                    with _bcol_btn:
-                        if _ba_up and st.button("📤", key=f"plba_up1_{_pp['kode_paket']}", help="Upload paket ini"):
-                            _do_upload_ba_pl([{**_pp, "_ba_file": _ba_up}], _ba_pl_tgl)
-                    if _ba_chk:
-                        _ba_pl_selected.append({**_pp, "_ba_file": _ba_up})
-
-                # Tombol upload semua yang sudah centang + ada file
-                _ba_pl_valid = [_p for _p in _ba_pl_selected if _p.get("_ba_file")]
-                if st.button(
-                    f"📤 Upload Semua BA Reviu ({len(_ba_pl_valid)} file)",
-                    key="plba_upload",
-                    type="primary",
-                    disabled=len(_ba_pl_valid) == 0,
-                    use_container_width=True,
-                ):
-                    _do_upload_ba_pl(_ba_pl_valid, _ba_pl_tgl)
+            _ba_pl_valid = [
+                {**_pp, "_ba_file": st.session_state.get(f"plba_file_{_pp['kode_paket']}")}
+                for _pp in _kd_selected
+                if st.session_state.get(f"plba_file_{_pp['kode_paket']}")
+            ]
+            if st.button(
+                f"📄 Upload BA Reviu DPP ({len(_ba_pl_valid)} file)",
+                key="plba_upload_selected",
+                type="secondary",
+                disabled=not _ba_pl_valid,
+                use_container_width=True,
+            ):
+                _do_upload_ba_pl(_ba_pl_valid)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
     if _pl_active_tab == "5️⃣ Buat Jadwal":
