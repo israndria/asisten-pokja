@@ -1345,7 +1345,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
                             else:
                                 st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
-                        if _pr_folder and _pr_c4.button("🔄 Reset", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                        if _pr_folder and _pr_c4.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
                             from config import sb as _sb_reset_one
                             try:
                                 _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
@@ -1628,7 +1628,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Refresh / Re-Parse Dokumen")
+            st.markdown("#### 4. Sinkronisasi & Pemutakhiran Paket Existing")
             st.caption(
                 "⚠️ **Sudah dijalankan otomatis saat Buat Folder** (jika checkbox Download dicentang). "
                 "Gunakan tombol ini **hanya** jika ada perubahan dokumen dari PPK atau ingin refresh ulang."
@@ -1652,7 +1652,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 key="pl_cb_pra_reviu_bulk",
             )
 
-            if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder"):
+            if st.button("▶ Jalankan Operasi Terpilih", use_container_width=True, key="btn_update_data_folder"):
                 # Aksi: Refresh template bulk semua paket berfolder
                 if _cb_template_refresh:
                     import kualifikasi_engine_pl as _keng_pl_rt
@@ -4547,6 +4547,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     st.error("❌ Gagal ubah metode.")
 
                         _pr_c1, _pr_c2, _pr_c3, _pr_c4 = st.columns([2, 1, 1, 1])
+                        # Isi ulang workbook yang sudah ada tanpa membuat folder baru.
+                        if _pr_folder and _pr_c1.button("📊 Isi Excel", key=f"pl_excel_{_pr_kode}", use_container_width=True):
+                            import isi_master_data_pl as _imd_pr
+                            import kualifikasi_engine_pl as _keng_pr_excel
+                            _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
+                            _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
+                            _pr_excel_xlsm = _cari_xlsm_pl(_pr_excel_root) if _pr_excel_root else None
+                            if not _pr_excel_xlsm:
+                                st.error("Folder/workbook .xlsm tidak ditemukan.")
+                            else:
+                                with st.spinner("Mengisi @ Master Data + @ Evaluasi..."):
+                                    _pr_excel_res = _imd_pr.isi_master_data_pl(_pr_kode, _pr_excel_xlsm)
+                                if _pr_excel_res.get("ok"):
+                                    st.success(_pr_excel_res.get("pesan", "Excel selesai diisi."))
+                                else:
+                                    st.error(_pr_excel_res.get("pesan", "Gagal mengisi Excel."))
                         if _pr_folder and _pr_c2.button("📦 Unduh", key=f"pl_dl_{_pr_kode}", use_container_width=True):
                             import kualifikasi_engine_pl as _keng_pr_dl
                             _pr_dl_fr = _keng_pr_dl.resolve_folder_paket_pl(_pr_kode)
@@ -4607,7 +4623,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 st.success(f"✅ Pra-reviu {_pr_nama[:50]} selesai.")
                             else:
                                 st.error((_one_res[0].get("error") if _one_res else "Pra-reviu gagal")[:300])
-                        if _pr_folder and _pr_c4.button("🔄 Reset", key=f"pl_reset_{_pr_kode}", use_container_width=True):
+                        if _pr_folder and _pr_c4.button("🔄 Reset status folder", key=f"pl_reset_{_pr_kode}", use_container_width=True):
                             from config import sb as _sb_reset_one
                             try:
                                 _sb_reset_one().table("draft_paket_pl").update({"folder_dibuat": None}).eq("kode_paket", _pr_kode).execute()
@@ -4887,7 +4903,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.button("📁 Buat Folder Terpilih (0 paket)", disabled=True, use_container_width=True, key="pl_btn_buat_terpilih_disabled_pk")
             # ── #4: Update Data Folder (Re-download + Reset) ─────────────────
             st.divider()
-            st.markdown("#### 4. Refresh / Re-Parse Dokumen")
+            st.markdown("#### 4. Sinkronisasi & Pemutakhiran Paket Existing")
             st.caption(
                 "⚠️ **Sudah dijalankan otomatis saat Buat Folder** (jika checkbox Download dicentang). "
                 "Gunakan tombol ini **hanya** jika ada perubahan dokumen dari PPK atau ingin refresh ulang."
@@ -4898,7 +4914,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _cb_reset_existing = st.checkbox("🔄 Reset status folder semua paket berfolder", value=False, key="pl_cb_reset_existing_pk")
             _cb_pra_reviu_bulk = st.checkbox("🤖 Pra-Reviu + Isi DOCM semua paket berfolder", value=False, key="pl_cb_pra_reviu_bulk_pk")
 
-            if st.button("🔄 Refresh / Re-Parse Dokumen", use_container_width=True, key="btn_update_data_folder_pk"):
+            if st.button("▶ Jalankan Operasi Terpilih", use_container_width=True, key="btn_update_data_folder_pk"):
                 # Aksi: Download dokumen bulk semua paket berfolder
                 if _cb_dl_dok_bulk:
                     import kualifikasi_engine_plpk as _keng_pl_dl
@@ -5041,46 +5057,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _pra_res = _heval_bulk.evaluasi_bulk(_pra_jobs_bulk, jenis="pra_reviu", model=None, max_workers=1, engine="codex")
                         _pra_ok = sum(1 for r in _pra_res if r.get("status") == "ok")
                         st.success(f"🤖 Pra-reviu selesai: ✅ {_pra_ok}, ❌ {len(_pra_res)-_pra_ok}")
-
-            st.divider()
-            st.markdown("#### ↩️ Reset Status Folder")
-            _opsi_reset_pl = {r.get("kode_paket"): r for r in _pl_rows if r.get("folder_dibuat") and r.get("kode_paket")}
-            if _opsi_reset_pl:
-                _label_reset_pl = {
-                    f"{r.get('folder_dibuat')} — {r.get('kode_paket')}": k
-                    for k, r in _opsi_reset_pl.items()
-                }
-                _pilih_reset_pl = st.multiselect(
-                    "Pilih paket yang direset",
-                    list(_label_reset_pl.keys()),
-                    key="pl_reset_folder_select_pk",
-                )
-                _c_reset_sel, _c_reset_all = st.columns(2)
-                if _c_reset_sel.button("Reset Terpilih", key="pl_btn_reset_folder_selected_pk", use_container_width=True, disabled=not _pilih_reset_pl):
-                    from config import sb as _sb_reset
-                    _kodes_reset = [_label_reset_pl[x] for x in _pilih_reset_pl]
-                    try:
-                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
-                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
-                    except Exception as _er_pl:
-                        st.error(f"Reset gagal: {_er_pl}")
-                    _load_draft_pl_cached.clear()
-                    st.rerun()
-                if _c_reset_all.button("Reset Semua", key="pl_btn_reset_folder_all_pk", use_container_width=True):
-                    from config import sb as _sb_reset
-                    _kodes_reset = list(_opsi_reset_pl.keys())
-                    try:
-                        _sb_reset().table("draft_paket_pl").update({"folder_dibuat": None}).in_("kode_paket", _kodes_reset).execute()
-                        st.success(f"✅ {len(_kodes_reset)} paket berhasil direset.")
-                    except Exception as _er_pl:
-                        st.error(f"Reset gagal: {_er_pl}")
-                    _load_draft_pl_cached.clear()
-                    st.rerun()
-            else:
-                st.info("Tidak ada paket dengan status folder untuk direset.")
-
-
-
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
     if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
