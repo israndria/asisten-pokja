@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
-APP_VERSION = "v2026.07.19"
+APP_VERSION = "v2026.07.19.a"
 
 _PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_undangan_dates.json"
 _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sbu_history.json"
