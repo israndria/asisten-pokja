@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 import pl_engine
+from pl_ui_helpers import _pl_label
 
 
 def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
@@ -19,7 +20,7 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
     codes = st.multiselect(
         "Paket yang diubah",
         list(by_code),
-        format_func=lambda k: f"{k} — {by_code[k].get('nama_paket', '')[:60]}",
+        format_func=lambda k: f"{k} — {_pl_label(by_code[k])[:70]}",
         key=f"{prefix}_codes",
     )
     if not codes:
@@ -86,7 +87,7 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
                 else:
                     mulai, selesai = perubahan[i]
             usulan.append({"nama": i + 1, "mulai": mulai, "selesai": selesai})
-            preview.append({"Paket": code, "Tahap": tahap[i], "Mulai": mulai.strftime("%d-%m-%Y %H:%M"), "Selesai": selesai.strftime("%d-%m-%Y %H:%M")})
+            preview.append({"Paket": _pl_label(by_code[code]), "Tahap": tahap[i], "Mulai": mulai.strftime("%d-%m-%Y %H:%M"), "Selesai": selesai.strftime("%d-%m-%Y %H:%M")})
         semua_usulan[code] = usulan
 
     import pandas as _pd_edit
@@ -137,4 +138,3 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
                 hasil.append((code, False, str(e)[:180]))
         for code, ok, msg in hasil:
             st.success(f"✅ {code} — {msg}") if ok else st.error(f"❌ {code} — {msg}")
-

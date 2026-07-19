@@ -30,6 +30,39 @@ _BULAN_INDONESIA = {
 }
 
 
+def _hydrate_nomor_urut_folder(rows: list[dict]) -> list[dict]:
+    """Isi nomor urut display dari prefix folder fisik untuk row lama.
+
+    Tidak menulis balik ke Supabase; hanya melengkapi row yang nomor_urut-nya
+    kosong agar seluruh tab tetap menampilkan nomor folder yang sebenarnya.
+    """
+    try:
+        from config import OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK, sanitasi_nama_folder
+        roots = (OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK)
+        folders = []
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for name in os.listdir(root):
+                path = os.path.join(root, name)
+                m = re.match(r"^\s*(\d+)\.\s*(.*)$", name)
+                if os.path.isdir(path) and m:
+                    label = re.sub(r"^PL(?:JKK|PK)\s*-\s*", "", m.group(2), flags=re.I)
+                    folders.append((int(m.group(1)), set(sanitasi_nama_folder(label).lower().split())))
+        for row in rows:
+            if row.get("nomor_urut"):
+                continue
+            words = set(sanitasi_nama_folder(row.get("nama_paket") or "").lower().split())
+            if not words:
+                continue
+            best = max(folders, key=lambda item: len(words & item[1]) / max(len(words), 1), default=None)
+            if best and len(words & best[1]) / max(len(words), 1) >= 0.6:
+                row["nomor_urut"] = best[0]
+    except Exception:
+        pass
+    return rows
+
+
 def _normalisasi_tanggal_excel(value) -> str:
     """Normalisasi C21 Excel ke ISO agar bisa dipakai UI dan SPSE."""
     if isinstance(value, datetime):
@@ -108,7 +141,13 @@ def load_draft_pl() -> list[dict]:
             .execute()
             .data or []
         )
-        return [_enrich_manual_excel_pl(row) for row in rows]
+        rows = _hydrate_nomor_urut_folder(rows)
+        hasil = [_enrich_manual_excel_pl(row) for row in rows]
+        for row in hasil:
+            if row.get("nama_ppk"):
+                row["nama_ppk"] = _lookup_nama_ppk_lengkap(row["nama_ppk"])
+            row["lokasi"] = "Kabupaten Tapin"
+        return hasil
     except Exception as e:
         return []
 
@@ -499,6 +538,38 @@ def _parse_nama_ppk_dari_view(html: str) -> str:
     return ""
 
 
+@lru_cache(maxsize=128)
+def _lookup_nama_ppk_lengkap(nama_ppk: str) -> str:
+    """Enrich nama PPK SPSE (sering tanpa gelar) dari master_kpa.
+
+    Tidak membuat tabel baru: master_kpa sudah menjadi sumber referensi SK/NIP
+    dan memuat nama resmi beserta gelar. Jika tidak ada kecocokan, nama SPSE
+    dikembalikan apa adanya.
+    """
+    nama_asli = str(nama_ppk or "").strip()
+    if not nama_asli:
+        return ""
+    nama_dasar = nama_asli.split(",", 1)[0].strip()
+    try:
+        rows = (
+            _sb().table("master_kpa")
+            .select("nama")
+            .ilike("nama", f"%{nama_dasar}%")
+            .limit(10)
+            .execute()
+            .data or []
+        )
+        dasar_norm = re.sub(r"\s+", " ", nama_dasar).casefold()
+        for row in rows:
+            kandidat = str(row.get("nama") or "").strip()
+            kandidat_dasar = re.sub(r"\s+", " ", kandidat.split(",", 1)[0]).casefold()
+            if kandidat_dasar == dasar_norm:
+                return kandidat
+    except Exception:
+        pass
+    return nama_asli
+
+
 def _scrape_viewdraftpl(kode_paket: str, headers: dict, base_url: str) -> dict:
     """Scrape sumber_anggaran + lokasi dari /nontender/{kode}/viewdraftpl."""
     import requests
@@ -649,7 +720,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         except Exception:
             pass
 
-        # 2c. Fetch sumber_anggaran + lokasi dari viewdraftpl
+        # 2c. Fetch sumber_anggaran dari viewdraftpl (lokasi selalu hardcode)
         viewdraft = _scrape_viewdraftpl(kode_paket, headers, base_url)
 
         # 3. Deteksi jenis PL (dari metode, fallback nama)
@@ -664,6 +735,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_pl":          jenis_pl,
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
+            "lokasi":            "Kabupaten Tapin",
             "status":            status_spse.lower() if status_spse else "draft",
             "is_ulang":          is_ulang,
             "tahap_spse":        tahap_map.get(kode_paket),  # None jika belum ada tahapan
@@ -671,13 +743,11 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         }
 
         if nama_ppk:
-            data["nama_ppk"] = nama_ppk
+            data["nama_ppk"] = _lookup_nama_ppk_lengkap(nama_ppk)
         if _hps_live.get("nilai_pagu"):
             data["nilai_pagu"] = _hps_live["nilai_pagu"]
         if viewdraft.get("sumber_anggaran"):
             data["sumber_anggaran"] = viewdraft["sumber_anggaran"]
-        if viewdraft.get("lokasi"):
-            data["lokasi"] = viewdraft["lokasi"]
 
         try:
             _sb().table("draft_paket_pl").upsert(data, on_conflict="kode_paket").execute()

@@ -233,6 +233,19 @@ def _pl_hint_ulang(row: dict) -> str:
         return " (PL - Ulang)"
     return " (PL - Ulang)" if _pl_paket_ulang(row) else ""
 
+
+def _pl_label(row: dict) -> str:
+    """Label tampilan paket PL yang konsisten di seluruh tab.
+
+    Nomor urut hanya untuk display; nama_paket asli tetap dipakai untuk
+    resolusi folder, payload SPSE, dan pencocokan database.
+    """
+    nama = str(row.get("nama_paket") or row.get("kode_paket") or "-").strip()
+    nomor = str(row.get("nomor_urut") or "").strip()
+    if nomor and not nama.startswith(f"{nomor}."):
+        nama = f"{nomor}. {nama}"
+    return nama + _pl_hint_ulang(row)
+
 def _cari_xlsm_pl(folder):
     """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
     try:

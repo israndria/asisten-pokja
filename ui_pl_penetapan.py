@@ -3,6 +3,7 @@
 import streamlit as st
 
 import spse_browser
+from pl_ui_helpers import _pl_label
 
 
 def _render_pl_negosiasi_penetapan_legacy(selected_rows: list[dict], key_prefix: str) -> None:
@@ -19,7 +20,7 @@ def _render_pl_negosiasi_penetapan_legacy(selected_rows: list[dict], key_prefix:
     else:
         kode = st.selectbox("Paket", paket_options, key=f"{key_prefix}_neg_package")
     row = next((r for r in selected_rows if str(r.get("kode_paket")) == kode), {})
-    st.caption(row.get("nama_paket", ""))
+    st.caption(_pl_label(row))
     cookie = spse_browser.get_spse_cookies()
 
     participant_key = f"{key_prefix}_neg_participants"
@@ -155,13 +156,13 @@ def _render_tab10_pl(rows: list[dict], key_prefix: str) -> None:
             st.rerun()
         for item in rows:
             item_code = str(item.get("kode_paket"))
-            nomor = str(item.get("nomor_urut") or "").strip()
-            label = f"{nomor}. " if nomor else ""
-            label += str(item.get("nama_paket") or "?")
+            label = _pl_label(item)
+            _check_key = f"{key_prefix}_check_{item_code}_v19"
             st.session_state[check_key][item_code] = st.checkbox(
-                label, value=st.session_state[check_key].get(item_code, True),
-                key=f"{key_prefix}_check_{item_code}",
+                "", value=st.session_state[check_key].get(item_code, True),
+                key=_check_key, label_visibility="collapsed",
             )
+            st.markdown(f"**{label}**")
 
     selected_rows = [r for r in rows if st.session_state[check_key].get(str(r.get("kode_paket")))]
     with right:

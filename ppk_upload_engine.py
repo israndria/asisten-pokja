@@ -725,6 +725,18 @@ def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
 
 PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
 
+
+def folder_number(folder_name: str) -> int | None:
+    """Ambil nomor urut dari prefix folder PPK, mis. ``9. Nama`` → 9."""
+    m = re.match(r"^\s*(\d+)\s*\.\s*", str(folder_name or ""))
+    return int(m.group(1)) if m else None
+
+
+def next_folder_number(subfolders: list[str] | None = None) -> int:
+    """Nomor paket berikutnya berdasarkan folder fisik PPK, bukan jumlah API."""
+    folders = subfolders if subfolders is not None else list_subfolder_ppk()
+    return max((folder_number(f) or 0 for f in folders), default=0) + 1
+
 FILE_PREFIX_MAP = {
     "1.":  "kak",      # KAK / Spesifikasi Teknis
     "9.":  "kak",      # List Personil (masuk KAK)

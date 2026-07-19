@@ -258,22 +258,22 @@ def parse_nd_penyedia(pdf_path: str) -> dict:
     out = {"nama_penyedia": "", "npwp_penyedia": ""}
 
     # Nama: coba "Nama Calon Penyedia" dulu, fallback "Nama Perusahaan"
-    m_nama = re.search(r"Nama\s+Calon\s+Penyedia\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
+    m_nama = re.search(r"Nama\s*Calon\s*Penyedia\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
     if not m_nama:
-        m_nama = re.search(r"Nama\s+Perusahaan\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
+        m_nama = re.search(r"Nama\s*Perusahaan\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
     if m_nama:
         out["nama_penyedia"] = m_nama.group(1).strip()
 
     # NPWP: coba "Nomor NPWP" (inline/baris pisah), fallback "NPWP Perusahaan"
     # Format angka dengan/tanpa titik-strip: 72.112.192.9-731.000 atau 0826618548735000
-    _npwp_pat = r"[\d.\-]{10,25}"
+    _npwp_pat = r"[\d.\-\s]{10,30}"
     m_npwp = re.search(
-        r"Nomor\s+NPWP\s*[:\n\r]+\s*(" + _npwp_pat + r")",
+        r"Nomor\s*NPWP\s*[:\n\r]+\s*(" + _npwp_pat + r")",
         teks, re.IGNORECASE | re.DOTALL,
     )
     if not m_npwp:
         m_npwp = re.search(
-            r"NPWP\s+Perusahaan\s*:\s*(" + _npwp_pat + r")",
+            r"NPWP\s*Perusahaan\s*:\s*(" + _npwp_pat + r")",
             teks, re.IGNORECASE,
         )
     if m_npwp:
@@ -366,14 +366,14 @@ def parse_draft_pl(pdf_path: str) -> dict:
     }
 
     m_nama = re.search(
-        r"Nama\s+Perusahaan\s*:\s*(.+?)(?:\n|$)",
+        r"Nama\s*Perusahaan\s*:\s*(.+?)(?:\n|$)",
         teks, re.IGNORECASE,
     )
     if m_nama:
         out["nama_penyedia"] = m_nama.group(1).strip()
 
     m_npwp = re.search(
-        r"NPWP\s+Perusahaan\s*:\s*([0-9.\-\s]+)",
+        r"NPWP\s*Perusahaan\s*:\s*([0-9.\-\s]+)",
         teks, re.IGNORECASE,
     )
     if m_npwp:
