@@ -256,17 +256,15 @@ def _baca_master_data_pl(row: dict) -> dict:
         xlsm = _cari_xlsm_pl(folder) if folder else None
         if not xlsm:
             return {}
-        from openpyxl import load_workbook
-        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
-        try:
-            ws = wb["@ Master Data"]
-            return {
-                "kode_unik": str(ws["F2"].value or "").strip(),
-                "nomor_dokpil": str(ws["C20"].value or "").strip(),
-                "tgl_dokpil": pl_engine._normalisasi_tanggal_excel(ws["C21"].value),
-            }
-        finally:
-            wb.close()
+        stat = os.stat(xlsm)
+        kode_unik, nomor_dokpil, tgl_dokpil = pl_engine.read_master_data_cached(
+            xlsm, stat.st_mtime_ns, stat.st_size
+        )
+        return {
+            "kode_unik": kode_unik,
+            "nomor_dokpil": nomor_dokpil,
+            "tgl_dokpil": tgl_dokpil,
+        }
     except Exception:
         return {}
 

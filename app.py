@@ -160,19 +160,27 @@ def _enrich_kode_unik_tender_excel(paket: dict) -> tuple[str, str, str]:
         )
         if not candidates:
             return "", kode_db, "workbook tidak ditemukan"
-        from openpyxl import load_workbook
         path = _ku_os.path.join(folder, candidates[0])
-        wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
-        try:
-            ws = wb["@ Master Data"]
-            kode_excel = str(ws["G2"].value or "").strip()
-        finally:
-            wb.close()
+        stat = _ku_os.stat(path)
+        kode_excel = _read_tender_master_data_cached(
+            path, stat.st_mtime_ns, stat.st_size
+        )
         if kode_excel:
             return kode_excel, kode_db, "excel" if kode_excel == kode_db else "beda"
         return "", kode_db, "G2 kosong"
     except Exception as exc:
         return "", kode_db, f"gagal baca Excel: {exc}"
+
+
+@st.cache_data(ttl=300)
+def _read_tender_master_data_cached(path: str, mtime_ns: int, size: int) -> str:
+    """Baca G2 workbook Tender sekali per versi file."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
+    try:
+        return str(wb["@ Master Data"]["G2"].value or "").strip()
+    finally:
+        wb.close()
 
 
 def _enrich_kode_unik_pl_excel(row: dict) -> str:
@@ -588,7 +596,10 @@ with _login_popover:
                                if k.startswith(("ppk_detail_", "ppk_dpa_", "pl_dpa_"))
                                or k in ("ppk_dpa_pool", "pl_dpa_pool")]:
                         st.session_state.pop(_k, None)
-                    st.cache_data.clear()
+                    _load_draft_paket_cached.clear()
+                    _load_draft_pl_cached.clear()
+                    _fetch_peserta_pl_cached.clear()
+                    _fetch_status_semua_paket_cached.clear()
                     st.rerun()
             _role_emoji = {"PP": "🏛️", "POKJA": "👥", "PPK": "📝", "E-Katalog": "🛒"}.get(_role_label, "🌐")
             st.success(f"{_role_emoji} Login sebagai **{_role_label}**")
@@ -877,7 +888,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             for _k in list(st.session_state.keys()):
                 if _k.startswith("ppk_versi_") or _k.startswith("ppk_bulk"):
                     del st.session_state[_k]
-            st.cache_data.clear()
+            _load_paket_ppk.clear()
             st.rerun()
 
         with st.spinner("Memuat daftar paket dari SPSE..."):

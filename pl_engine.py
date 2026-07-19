@@ -6,6 +6,7 @@ Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 
 import os
 import re
+from functools import lru_cache
 from datetime import date, datetime, timezone
 from config import sb as _sb
 
@@ -59,15 +60,10 @@ def _enrich_manual_excel_pl(row: dict) -> dict:
         )
         if not xlsm:
             return row
-        from openpyxl import load_workbook
-        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
-        try:
-            ws = wb["@ Master Data"]
-            kode_unik = str(ws["F2"].value or "").strip()
-            nomor_dokpil = str(ws["C20"].value or "").strip()
-            tgl_dokpil = _normalisasi_tanggal_excel(ws["C21"].value)
-        finally:
-            wb.close()
+        stat = os.stat(xlsm)
+        kode_unik, nomor_dokpil, tgl_dokpil = read_master_data_cached(
+            xlsm, stat.st_mtime_ns, stat.st_size
+        )
         if kode_unik:
             row["kode_unik"] = kode_unik
         if nomor_dokpil:
@@ -77,6 +73,26 @@ def _enrich_manual_excel_pl(row: dict) -> dict:
     except Exception:
         pass
     return row
+
+
+@lru_cache(maxsize=256)
+def read_master_data_cached(xlsm: str, mtime_ns: int, size: int) -> tuple[str, str, str]:
+    """Baca field Master Data sekali per versi file workbook.
+
+    Key menyertakan mtime + size, jadi edit workbook otomatis menghasilkan
+    cache key baru tanpa mengubah source-of-truth Excel.
+    """
+    from openpyxl import load_workbook
+    wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
+    try:
+        ws = wb["@ Master Data"]
+        return (
+            str(ws["F2"].value or "").strip(),
+            str(ws["C20"].value or "").strip(),
+            _normalisasi_tanggal_excel(ws["C21"].value),
+        )
+    finally:
+        wb.close()
 
 
 def load_draft_pl() -> list[dict]:
