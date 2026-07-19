@@ -16,7 +16,8 @@ Format event GCal PL:
 import os
 import json
 import re
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,6 +28,34 @@ TOKEN_PATH = os.path.join(
 )
 CALENDAR_ID = "primary"
 TZ = "Asia/Jakarta"
+
+_TOKEN_CHECK_CACHE = {"key": None, "until": 0.0, "ok": False}
+
+
+def _parse_token_expiry(value):
+    """Konversi expiry token.json (RFC3339 string) ke datetime aware."""
+    if not value or isinstance(value, datetime):
+        return value
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        # google-auth membandingkan expiry dengan utcnow() naive.
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _token_cache_key():
+    try:
+        stat = os.stat(TOKEN_PATH)
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _cache_token_result(ok: bool, ttl: float = 60.0) -> bool:
+    _TOKEN_CHECK_CACHE.update(key=_token_cache_key(), until=time.monotonic() + ttl, ok=ok)
+    return ok
 
 # Mapping index tahap → kolom Supabase yang di-upsert
 # index 0-based sesuai urutan 5 tahap
@@ -59,6 +88,7 @@ def _build_service():
         client_id=token_data.get("client_id"),
         client_secret=token_data.get("client_secret"),
         scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/calendar"]),
+        expiry=_parse_token_expiry(token_data.get("expiry")),
     )
 
     if creds.expired and creds.refresh_token:
@@ -76,8 +106,14 @@ def check_gcal_token() -> bool:
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
-    if not os.path.exists(TOKEN_PATH):
-        return False
+    token_key = _token_cache_key()
+    if token_key is None:
+        return _cache_token_result(False, ttl=15.0)
+    if (
+        _TOKEN_CHECK_CACHE.get("key") == token_key
+        and time.monotonic() < _TOKEN_CHECK_CACHE.get("until", 0.0)
+    ):
+        return bool(_TOKEN_CHECK_CACHE.get("ok"))
     try:
         with open(TOKEN_PATH, "r") as f:
             token_data = json.load(f)
@@ -88,17 +124,18 @@ def check_gcal_token() -> bool:
             client_id=token_data.get("client_id"),
             client_secret=token_data.get("client_secret"),
             scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/calendar"]),
+            expiry=_parse_token_expiry(token_data.get("expiry")),
         )
-        if creds.refresh_token:
+        if creds.valid:
+            return _cache_token_result(True)
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
             with open(TOKEN_PATH, "w") as f:
                 f.write(creds.to_json())
-            return True
-        if creds.valid:
-            return True
+            return _cache_token_result(True)
     except Exception:
         pass
-    return False
+    return _cache_token_result(False, ttl=15.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

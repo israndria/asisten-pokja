@@ -3,6 +3,7 @@
 import os
 import pathlib
 import re
+from functools import lru_cache
 
 import pl_engine
 
@@ -200,6 +201,23 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         log(_tb.format_exc()[-300:])
     return res
 
+@lru_cache(maxsize=16)
+def _pl_ulang_folder_words(root: str, root_mtime_ns: int) -> tuple[frozenset[str], ...]:
+    """Index folder PL-Ulang sekali per perubahan direktori root."""
+    result = []
+    try:
+        for folder_name in os.listdir(root):
+            folder_lower = folder_name.lower()
+            if "(pl - ulang)" not in folder_lower:
+                continue
+            folder_path = os.path.join(root, folder_name)
+            if os.path.isdir(folder_path):
+                result.append(frozenset(folder_lower.split()))
+    except OSError:
+        pass
+    return tuple(result)
+
+
 def _pl_paket_ulang(row: dict) -> bool:
     """True jika ADA folder paket PL bersuffix '(PL - Ulang)' untuk paket ini.
     Scan root langsung (bukan _resolve_folder_pl) agar tak salah resolve ke folder lama
@@ -214,13 +232,8 @@ def _pl_paket_ulang(row: dict) -> bool:
         words = set(sanitasi_nama_folder(row.get("nama_paket") or "").lower().split())
         if not words:
             return False
-        for f in os.listdir(root):
-            if not os.path.isdir(os.path.join(root, f)):
-                continue
-            fl = f.lower()
-            if "(pl - ulang)" in fl and words <= set(fl.split()):
-                return True
-        return False
+        root_mtime_ns = os.stat(root).st_mtime_ns
+        return any(words <= folder_words for folder_words in _pl_ulang_folder_words(root, root_mtime_ns))
     except Exception:
         return False
 

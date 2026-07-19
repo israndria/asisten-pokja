@@ -169,6 +169,49 @@ def _boleh_auto_refresh(url: str) -> bool:
         }
     )
 
+
+def _url_spse_score(url: str, title: str = "") -> int:
+    """Beri skor tab SPSE agar tab loginpass/root tidak mengalahkan sesi aktif.
+
+    CDP ``/json`` tidak memberi penanda tab foreground. Urutan list juga tidak
+    sama dengan tab yang sedang dilihat user, sehingga pemilihan berdasarkan
+    ``tabs[0]`` bisa salah dan UI terlihat logout padahal sesi masih aktif.
+    """
+    from urllib.parse import urlsplit
+
+    base = urlsplit(SPSE_BASE_URL)
+    current = urlsplit(url or "")
+    if current.scheme not in {"http", "https"} or current.netloc != base.netloc:
+        return -1
+    base_path = base.path.rstrip("/")
+    path = current.path.rstrip("/")
+    if path == base_path or any(path.endswith(suffix) for suffix in ("/login", "/loginpass", "/logout")):
+        return 1  # tetap dipakai jika memang hanya halaman login yang ada
+
+    score = 50
+    if path.endswith("/home"):
+        score += 20
+    if any(part in path for part in ("/paket", "/nontender", "/lelang", "/dokumen", "/jadwal")):
+        score += 20
+    title_lower = (title or "").lower()
+    if any(marker in title_lower for marker in ("pejabat pengadaan", "pokja", "ppk")):
+        score += 10
+    return score
+
+
+def _pilih_tab_spse(tabs: list[dict]) -> dict | None:
+    """Pilih tab SPSE paling mungkin sudah login, tanpa bergantung urutan CDP."""
+    candidates = [
+        tab for tab in tabs
+        if _url_spse_score(tab.get("url", ""), tab.get("title", "")) >= 0
+    ]
+    if not candidates:
+        return None
+    return max(
+        enumerate(candidates),
+        key=lambda pair: (_url_spse_score(pair[1].get("url", ""), pair[1].get("title", "")), -pair[0]),
+    )[1]
+
 # File/folder yang di-clone dari profil asli (tanpa cache)
 _CLONE_FILES = [
     "Bookmarks", "Bookmarks.bak", "Preferences", "Secure Preferences",
@@ -288,9 +331,19 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
             await cdp_session.detach()
     except Exception:
         pass
-    # Pakai tab yang sudah ada (tab pertama/aktif), jangan buka tab baru saat reconnect
+    # Pakai tab SPSE paling relevan. Urutan ``context.pages`` bukan urutan tab
+    # foreground dan bisa menempatkan loginpass/root di posisi pertama.
     if _get_ctx().pages:
-        _set_page(_get_ctx().pages[0])
+        _page_candidates = [
+            {"page": page, "url": page.url, "title": ""}
+            for page in _get_ctx().pages
+            if not page.is_closed()
+        ]
+        _page_candidates.sort(
+            key=lambda item: _url_spse_score(item["url"], item["title"]),
+            reverse=True,
+        )
+        _set_page(_page_candidates[0]["page"] if _page_candidates else _get_ctx().pages[0])
     else:
         _set_page(await _get_ctx().new_page())
     if navigate and url:
@@ -1028,7 +1081,9 @@ def get_url() -> str:
     if not tabs:
         return ""
     # Cari tab yang sedang aktif (focused) atau pakai tab pertama
-    active = next((t for t in tabs if t.get("url", "").startswith("http")), None)
+    # Prioritaskan tab SPSE yang sudah authenticated; urutan CDP bukan urutan
+    # tab foreground sehingga tab loginpass/root bisa muncul lebih dahulu.
+    active = _pilih_tab_spse(tabs)
     return active.get("url", "") if active else ""
 
 

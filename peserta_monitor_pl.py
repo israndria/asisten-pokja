@@ -6,6 +6,7 @@ Pakai endpoint public SPSE — tidak butuh login.
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _SPSE_BASE = "https://spse.inaproc.id/tapinkab"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -38,7 +39,16 @@ def fetch_status_semua_paket(kode_list: List[str]) -> Dict[str, Dict]:
     Fetch jumlah peserta untuk semua paket sekaligus.
     Return: {kode_nontender: {"jumlah": int, "error": str|None}}
     """
+    kode_unik = list(dict.fromkeys(str(k) for k in kode_list if k))
     hasil = {}
-    for kode in kode_list:
-        hasil[kode] = fetch_jumlah_peserta_pl(kode)
+    if not kode_unik:
+        return hasil
+    with ThreadPoolExecutor(max_workers=min(6, len(kode_unik))) as pool:
+        futures = {pool.submit(fetch_jumlah_peserta_pl, kode): kode for kode in kode_unik}
+        for future in as_completed(futures):
+            kode = futures[future]
+            try:
+                hasil[kode] = future.result()
+            except Exception as exc:
+                hasil[kode] = {"jumlah": 0, "error": str(exc)}
     return hasil

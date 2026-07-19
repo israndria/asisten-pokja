@@ -150,7 +150,12 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     return result
 
 
-def _enrich_kode_unik_tender_excel(paket: dict) -> tuple[str, str, str]:
+def _enrich_kode_unik_tender_excel(
+    paket: dict,
+    *,
+    folder_dibuat: str | None = None,
+    skip_folder_lookup: bool = False,
+) -> tuple[str, str, str]:
     """Baca G2 workbook Tender sebagai source of truth, tanpa menyimpan XLSM.
 
     Return: (kode_excel, kode_db, status). Status dipakai UI untuk memberi
@@ -161,13 +166,16 @@ def _enrich_kode_unik_tender_excel(paket: dict) -> tuple[str, str, str]:
         from config import TENDER_ROOT as _KU_TENDER_ROOT, sb as _KU_SB
         import os as _ku_os
         import re as _ku_re
-        rows = (
-            _KU_SB().table("draft_paket")
-            .select("folder_dibuat")
-            .eq("kode_tender", str(paket.get("kode") or paket.get("id_lelang") or ""))
-            .limit(1).execute().data or []
-        )
-        folder_name = str((rows[0] if rows else {}).get("folder_dibuat") or "").strip()
+        if skip_folder_lookup:
+            folder_name = str(folder_dibuat or "").strip()
+        else:
+            rows = (
+                _KU_SB().table("draft_paket")
+                .select("folder_dibuat")
+                .eq("kode_tender", str(paket.get("kode") or paket.get("id_lelang") or ""))
+                .limit(1).execute().data or []
+            )
+            folder_name = str((rows[0] if rows else {}).get("folder_dibuat") or "").strip()
         if not folder_name:
             return "", kode_db, "folder tidak ditemukan"
         folder_name = _ku_re.sub(r'[/\\:*?"<>|]', "-", folder_name).strip()
@@ -296,6 +304,45 @@ def _fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
         return _pm_c.fetch_status_semua_paket(list(kode_tuple))
     except Exception:
         return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _parse_jadwal_pl_cached(kode_paket: str) -> list:
+    """Cache fallback jadwal SPSE agar Tab 9 tidak GET ulang tiap rerun."""
+    try:
+        import gcal_pl_helper as _gph
+        return _gph.parse_jadwal_pl_dari_spse(kode_paket) or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_verifikasi_pl_rows_cached() -> tuple[list[dict], str]:
+    """Cache query daftar paket Tab 8; invalidasi alami 60 detik."""
+    try:
+        rows = pl_engine._sb().table("draft_paket_pl").select(
+            "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, "
+            "npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, "
+            "status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
+        ).order("kode_paket").execute().data or []
+        return rows, ""
+    except Exception as exc:
+        return [], str(exc)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _get_jadwal_penjelasan_gcal_cached() -> dict:
+    """Cache daftar jadwal penjelasan agar rerun checkbox tidak hit API GCal."""
+    try:
+        return penjelasan_engine.get_jadwal_dari_gcalendar() or {}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_peserta_tender_cached(kode_lelang: str) -> list:
+    """Cache GET peserta Tender agar rerun tidak mengulang request SPSE."""
+    return kualifikasi_engine.fetch_peserta_by_id_lelang(kode_lelang) or []
 
 
 @st.cache_data(ttl=3600)
@@ -1290,6 +1337,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
 
+            _pl_peserta_map = _fetch_status_semua_paket_cached(
+                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
+            )
+
             if not _pl_filtered:
                 st.info("Belum ada paket PL. Klik 'Serap dari SPSE' atau tambah manual.")
             else:
@@ -1314,7 +1365,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
                         _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
-                            _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
+                            _pr_jml_peserta = _pl_peserta_map.get(_pr_id_nt, {}).get("jumlah", -1)
                             if _pr_jml_peserta > 0:
                                 st.success(f"✅ {_pr_jml_peserta} peserta sudah mendaftar")
                             elif _pr_jml_peserta == 0:
@@ -3353,13 +3404,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
 
         # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
-        _verif_rows = []
-        try:
-            _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
-            ).order("kode_paket").execute().data or []
-        except Exception as _ev_err:
-            st.error(f"Gagal load paket PL: {_ev_err}")
+        _verif_rows, _verif_load_error = _load_verifikasi_pl_rows_cached()
+        if _verif_load_error:
+            st.error(f"Gagal load paket PL: {_verif_load_error}")
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
@@ -3580,8 +3627,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 except Exception:
                     pass
             try:
-                import gcal_pl_helper as _gph8
-                _jd = _gph8.parse_jadwal_pl_dari_spse(_row.get("kode_paket", ""))
+                _jd = _parse_jadwal_pl_cached(_row.get("kode_paket", ""))
                 if _jd and len(_jd) > 2:
                     return _jd[2]["selesai"].date()
             except Exception:
@@ -4524,6 +4570,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
 
+            _pl_peserta_map = _fetch_status_semua_paket_cached(
+                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
+            )
+
             if not _pl_filtered:
                 st.info("Belum ada paket PL. Klik 'Serap dari SPSE' atau tambah manual.")
             else:
@@ -4548,7 +4598,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
                         _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
-                            _pr_jml_peserta = _fetch_peserta_pl_cached(_pr_id_nt)
+                            _pr_jml_peserta = _pl_peserta_map.get(_pr_id_nt, {}).get("jumlah", -1)
                             if _pr_jml_peserta > 0:
                                 st.success(f"✅ {_pr_jml_peserta} peserta sudah mendaftar")
                             elif _pr_jml_peserta == 0:
@@ -6467,13 +6517,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
 
         # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
-        _verif_rows = []
-        try:
-            _verif_rows = pl_engine._sb().table("draft_paket_pl").select(
-                "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
-            ).order("kode_paket").execute().data or []
-        except Exception as _ev_err:
-            st.error(f"Gagal load paket PL: {_ev_err}")
+        _verif_rows, _verif_load_error = _load_verifikasi_pl_rows_cached()
+        if _verif_load_error:
+            st.error(f"Gagal load paket PL: {_verif_load_error}")
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
@@ -6693,8 +6739,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 except Exception:
                     pass
             try:
-                import gcal_pl_helper as _gph8
-                _jd = _gph8.parse_jadwal_pl_dari_spse(_row.get("kode_paket", ""))
+                _jd = _parse_jadwal_pl_cached(_row.get("kode_paket", ""))
                 if _jd and len(_jd) > 2:
                     return _jd[2]["selesai"].date()
             except Exception:
@@ -8948,7 +8993,7 @@ if _tender_active_tab == "4️⃣ Pemberian Penjelasan":
         # ── Preview jadwal GCal per paket terpilih ─────────────────────────
         if pj_selected:
             with st.spinner("Baca jadwal dari Google Calendar..."):
-                jadwal_gcal = penjelasan_engine.get_jadwal_dari_gcalendar()
+                jadwal_gcal = _get_jadwal_penjelasan_gcal_cached()
             now_pj = datetime.now(TZ_WIB)
 
             for p in pj_selected:
@@ -9786,7 +9831,15 @@ if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
             # Source of truth Tender: baca G2 workbook sebelum nomor BA dibuat.
             _ba_kode_mismatch = []
             for _p_ba in ba_selected:
-                _kode_xl, _kode_db, _kode_src = _enrich_kode_unik_tender_excel(_p_ba)
+                # Paket hasil sinkronisasi sudah membawa folder_dibuat. Hindari
+                # query Supabase per baris; fallback lookup tetap tersedia untuk
+                # row legacy yang belum memiliki metadata folder.
+                _has_folder_meta = "folder_dibuat" in _p_ba
+                _kode_xl, _kode_db, _kode_src = _enrich_kode_unik_tender_excel(
+                    _p_ba,
+                    folder_dibuat=_p_ba.get("folder_dibuat"),
+                    skip_folder_lookup=_has_folder_meta,
+                )
                 if _kode_xl:
                     _p_ba["kode_unik"] = _kode_xl
                 if _kode_src == "beda":
@@ -10090,7 +10143,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             with st.spinner(f"Memuat peserta {len(_kl_perlu_fetch)} paket..."):
                 for _kl_fp in _kl_perlu_fetch:
                     _kl_id = _kl_fp.get("id_lelang") or _kl_fp["kode"]
-                    st.session_state[f"kl_peserta_{_kl_fp['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
+                    st.session_state[f"kl_peserta_{_kl_fp['kode']}"] = _fetch_peserta_tender_cached(_kl_id)
 
     _kl_col1, _kl_col2 = st.columns([2, 3])
 
@@ -10815,21 +10868,13 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
         st.success(st.session_state.pop("dp_notif"))
 
     # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
-    _dp_paket_rows = []
-    try:
-        from config import sb as _sb_dp_shared
-        _dp_r_shared = _sb_dp_shared().table("draft_paket").select(
-            "kode_tender,nama_tender,folder_dibuat,status_tahap"
-        ).not_.is_("folder_dibuat", "null").execute()
-        _dp_paket_rows = [
-            _r for _r in (_dp_r_shared.data or [])
-            if _r.get("folder_dibuat")
-            and not _is_tender_excluded(_r)
-            and not _is_tender_selesai(_r)
-        ]
-        _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
-    except Exception as _dp_shared_e:
-        st.warning(f"⚠️ Gagal memuat daftar paket: {_dp_shared_e}")
+    _dp_paket_rows = [
+        _r for _r in _load_draft_paket_cached()
+        if _r.get("folder_dibuat")
+        and not _is_tender_excluded(_r)
+        and not _is_tender_selesai(_r)
+    ]
+    _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
 
     st.divider()
     st.markdown("#### 2. Pilih Paket")

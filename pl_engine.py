@@ -7,7 +7,7 @@ Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 import os
 import re
 from functools import lru_cache
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from config import sb as _sb
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
@@ -69,11 +69,124 @@ def _normalisasi_tanggal_excel(value) -> str:
         return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    # XML worksheet menyimpan tanggal sebagai serial Excel (bukan datetime).
+    # C21 memang field tanggal; konversi serial umum tanpa membuka workbook.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            serial = float(value)
+            if 1 <= serial <= 100000:
+                return (datetime(1899, 12, 30) + timedelta(days=serial)).date().isoformat()
+        except (OverflowError, ValueError):
+            pass
     text = str(value or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        try:
+            serial = float(text)
+            if 1 <= serial <= 100000:
+                return (datetime(1899, 12, 30) + timedelta(days=serial)).date().isoformat()
+        except (OverflowError, ValueError):
+            pass
+    iso = re.match(r"^(\d{4}-\d{2}-\d{2})(?:[T ]|$)", text)
+    if iso:
+        return iso.group(1)
     m = re.fullmatch(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", text)
     if m and m.group(2).lower() in _BULAN_INDONESIA:
         return date(int(m.group(3)), _BULAN_INDONESIA[m.group(2).lower()], int(m.group(1))).isoformat()
     return text
+
+
+def _read_master_data_xml(xlsm: str) -> tuple[str, str, str]:
+    """Baca tiga sel Master Data langsung dari XML XLSM (tanpa OpenPyXL)."""
+    import posixpath
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    with zipfile.ZipFile(xlsm, "r") as zf:
+        names = set(zf.namelist())
+        workbook_path = "xl/workbook.xml"
+        rels_path = "xl/_rels/workbook.xml.rels"
+        if workbook_path not in names or rels_path not in names:
+            raise ValueError("Workbook XML tidak lengkap")
+
+        workbook = ET.fromstring(zf.read(workbook_path))
+        sheet_rel_id = ""
+        for node in workbook.iter():
+            if local(node.tag) == "sheet" and node.attrib.get("name") == "@ Master Data":
+                sheet_rel_id = next(
+                    (value for key, value in node.attrib.items() if local(key) == "id"),
+                    "",
+                )
+                break
+        if not sheet_rel_id:
+            raise KeyError("Sheet @ Master Data tidak ditemukan")
+
+        rels = ET.fromstring(zf.read(rels_path))
+        target = ""
+        for node in rels.iter():
+            rel_id = next((value for key, value in node.attrib.items() if local(key) == "Id"), "")
+            if local(node.tag) != "Relationship" or rel_id != sheet_rel_id:
+                continue
+            target = node.attrib.get("Target", "")
+            break
+        if not target:
+            raise KeyError("Relasi worksheet Master Data tidak ditemukan")
+        target = target.lstrip("/")
+        if not target.startswith("xl/"):
+            target = posixpath.join("xl", target)
+        target = posixpath.normpath(target)
+        if not target.startswith("xl/") or target not in names:
+            raise ValueError(f"Worksheet XML tidak valid: {target}")
+
+        shared_strings = []
+        shared_path = "xl/sharedStrings.xml"
+        if shared_path in names:
+            shared_root = ET.fromstring(zf.read(shared_path))
+            for si in shared_root.iter():
+                if local(si.tag) == "si":
+                    shared_strings.append("".join(
+                        (text.text or "")
+                        for text in si.iter()
+                        if local(text.tag) == "t"
+                    ))
+
+        sheet_root = ET.fromstring(zf.read(target))
+        cells = {}
+        wanted = {"F2", "C20", "C21"}
+        for cell in sheet_root.iter():
+            if local(cell.tag) != "c" or cell.attrib.get("r") not in wanted:
+                continue
+            cell_type = cell.attrib.get("t", "")
+            value_node = next((child for child in cell if local(child.tag) == "v"), None)
+            inline_node = next((child for child in cell if local(child.tag) == "is"), None)
+            if cell_type == "inlineStr" and inline_node is not None:
+                value = "".join(
+                    (text.text or "")
+                    for text in inline_node.iter()
+                    if local(text.tag) == "t"
+                )
+            elif value_node is None:
+                value = ""
+            else:
+                raw = value_node.text or ""
+                if cell_type == "s":
+                    try:
+                        value = shared_strings[int(raw)]
+                    except (ValueError, IndexError):
+                        value = ""
+                elif cell_type == "b":
+                    value = raw == "1"
+                else:
+                    value = raw
+            cells[cell.attrib["r"]] = value
+
+        return (
+            str(cells.get("F2") or "").strip(),
+            str(cells.get("C20") or "").strip(),
+            _normalisasi_tanggal_excel(cells.get("C21")),
+        )
 
 
 def _enrich_manual_excel_pl(row: dict) -> dict:
@@ -115,17 +228,21 @@ def read_master_data_cached(xlsm: str, mtime_ns: int, size: int) -> tuple[str, s
     Key menyertakan mtime + size, jadi edit workbook otomatis menghasilkan
     cache key baru tanpa mengubah source-of-truth Excel.
     """
-    from openpyxl import load_workbook
-    wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
     try:
-        ws = wb["@ Master Data"]
-        return (
-            str(ws["F2"].value or "").strip(),
-            str(ws["C20"].value or "").strip(),
-            _normalisasi_tanggal_excel(ws["C21"].value),
-        )
-    finally:
-        wb.close()
+        return _read_master_data_xml(xlsm)
+    except Exception:
+        # Fallback kompatibilitas untuk workbook XML non-standar/corrupt.
+        from openpyxl import load_workbook
+        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=False)
+        try:
+            ws = wb["@ Master Data"]
+            return (
+                str(ws["F2"].value or "").strip(),
+                str(ws["C20"].value or "").strip(),
+                _normalisasi_tanggal_excel(ws["C21"].value),
+            )
+        finally:
+            wb.close()
 
 
 def load_draft_pl() -> list[dict]:
