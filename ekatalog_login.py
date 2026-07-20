@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from playwright.async_api import async_playwright
+from config import find_secret
 
 _LOGIN_URL = (
     "https://daftar-akun.inaproc.id/id/login"
@@ -14,7 +15,7 @@ _SESSION_TTL = 3600 * 8  # 8 jam
 
 
 def _baca_credentials() -> tuple[str, str]:
-    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_spse.env")
+    env_file = str(find_secret("secret_spse.env"))
     env = {}
     with open(env_file) as f:
         for line in f:

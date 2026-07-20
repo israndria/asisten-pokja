@@ -19,12 +19,13 @@ import tempfile
 import base64
 from pathlib import Path
 from typing import Literal
+from config import find_secret
 
 # ============================================================
 # Load credentials — SEKALI saat import, tidak di-cache di state
 # ============================================================
 
-_ENV_PATH = Path(__file__).parent / "secret_spse.env"
+_ENV_PATH = find_secret("secret_spse.env")
 _ROLE_FILE = Path(__file__).parent / ".browser_session" / "last_role.txt"
 
 
@@ -239,7 +240,7 @@ def _ocr_captcha_gemini(img_bytes: bytes) -> str:
     from pathlib import Path
 
     # Load API key dari secret_spse.env
-    env_path = Path(__file__).parent / "secret_spse.env"
+    env_path = _ENV_PATH
     api_key = None
     if env_path.exists():
         for line in env_path.read_text().splitlines():

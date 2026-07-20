@@ -44,7 +44,8 @@ Output:"""
 
 
 def _load_gemini_key() -> str:
-    env_path = Path(__file__).parent / "secret_spse.env"
+    from config import find_secret
+    env_path = find_secret("secret_spse.env")
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.startswith("GEMINI_API_KEY="):
