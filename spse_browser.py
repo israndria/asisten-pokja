@@ -383,6 +383,10 @@ async def _buka_tab_baru_async(url: str):
     page = await _get_ctx().new_page()
     await page.goto(url, wait_until="domcontentloaded", timeout=20000)
     await page.wait_for_timeout(3000)  # tunggu JS/Cloudflare hydrate
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
     return page
 
 

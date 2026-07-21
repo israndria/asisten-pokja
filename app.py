@@ -136,6 +136,16 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     draft_list = st.session_state.get("global_paket_draft", {}).get("paket", [])
     aktif_list = st.session_state.get("global_paket_aktif", {}).get("paket", [])
     tahap_map = st.session_state.get("tender_tahap_map", {})
+    # DataTables SPSE tidak membawa nomor folder; ambil metadata lokal/cache DB.
+    _folder_meta = {}
+    try:
+        _folder_meta = {
+            str(r.get("kode_tender")): r
+            for r in _load_draft_paket_cached()
+            if r.get("kode_tender")
+        }
+    except Exception:
+        pass
     seen, result = set(), []
     for p in draft_list + aktif_list:
         if p["kode"] not in seen:
@@ -146,7 +156,12 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
                 tahap = tahap_map.get(p["kode"]) or p.get("status") or ""
                 if _is_tender_selesai({"status": tahap}):
                     continue
-            result.append(p)
+            _meta = _folder_meta.get(str(p["kode"]), {})
+            result.append({
+                **p,
+                "nomor_urut": p.get("nomor_urut") or _meta.get("nomor_urut") or "",
+                "folder_dibuat": p.get("folder_dibuat") or _meta.get("folder_dibuat") or "",
+            })
     return result
 
 
@@ -10119,6 +10134,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                     "nama": r["nama_tender"] or r["kode_tender"],
                     "id_lelang": r["kode_tender"],
                     "pokja": r.get("kode_pokja") or "",
+                    "nomor_urut": r.get("nomor_urut") or "",
                     "status": "aktif",
                     "tanggal": "",
                 }
@@ -10153,6 +10169,15 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                     st.session_state[f"kl_peserta_{_kl_fp['kode']}"] = _fetch_peserta_tender_cached(_kl_id)
 
     _kl_col1, _kl_col2 = st.columns([2, 3])
+
+    def _kl_paket_label(p: dict) -> str:
+        """Label Seksi 2: nomor folder/urut + nama paket penuh; tanpa kode tender."""
+        nomor = str(p.get("nomor_urut") or "").strip()
+        if not nomor:
+            _folder_match = re.match(r"^\s*(\d+)\s*\.\s*", str(p.get("folder_dibuat") or ""))
+            nomor = _folder_match.group(1) if _folder_match else ""
+        nama = str(p.get("nama") or p.get("nama_tender") or p.get("kode") or "-").strip()
+        return f"{nomor}. {nama}" if nomor else nama
 
     with _kl_col1:
         st.markdown("#### 1. Pilih Paket")
@@ -10203,9 +10228,9 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                 _kl_ada_terpilih = True
                 kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
                 if kl_res_p is None:
-                    st.caption(f"⏳ {p['kode']} — menunggu fetch...")
+                    st.caption(f"⏳ {_kl_paket_label(p)} — menunggu fetch...")
                 elif not kl_res_p["ok"]:
-                    st.warning(f"❌ {p['kode']}: {kl_res_p['pesan']}")
+                    st.warning(f"❌ {_kl_paket_label(p)}: {kl_res_p['pesan']}")
                     if st.button("🔄 Retry", key=f"kl_retry_{p['kode']}"):
                         _kl_id = p.get("id_lelang") or p["kode"]
                         with st.spinner("..."):
@@ -10215,7 +10240,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                     n_p = len(kl_res_p["peserta"])
                     _kl_limit = min(3, n_p) if _kl_hanya_top3 else n_p
                     _kl_badge = f"Top {_kl_limit} dari {n_p}" if (_kl_hanya_top3 and n_p > 3) else str(n_p)
-                    with st.expander(f"**{p['kode']}** — {_kl_badge} peserta", expanded=True):
+                    with st.expander(f"**{_kl_paket_label(p)}** — {_kl_badge} peserta", expanded=True):
                         c1, c2, c3, c4 = st.columns(4)
                         with c1:
                             if st.button("👀 Peserta", key=f"kl_refresh_peserta_{p['kode']}", use_container_width=True,

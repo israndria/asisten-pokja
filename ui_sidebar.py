@@ -300,13 +300,15 @@ def _sidebar_login_form():
                 _login_logs: list[str] = []
 
                 with st.spinner("Meluncurkan Brave SPSE..."):
-                    spse_browser.launch_chrome_dengan_cdp()
-                    # Tunggu CDP ready (max 15 detik)
-                    import time as _t
-                    for _i in range(15):
-                        _t.sleep(1)
-                        if spse_browser._cek_cdp_aktif():
-                            break
+                    # Pakai CDP existing bila sudah aktif; jangan launch instance kedua.
+                    if not spse_browser._cek_cdp_aktif():
+                        spse_browser.launch_chrome_dengan_cdp()
+                        # Tunggu CDP ready (max 15 detik)
+                        import time as _t
+                        for _i in range(15):
+                            _t.sleep(1)
+                            if spse_browser._cek_cdp_aktif():
+                                break
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
 
@@ -324,6 +326,8 @@ def _sidebar_login_form():
 
                 # Connect CDP setelah login berhasil
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+                # Tampilkan tab SPSE otomatis; user tidak perlu klik Buka SPSE lagi.
+                spse_browser.buka_tab_baru(SPSE_BASE_URL.rstrip("/") + "/home")
                 st.session_state["spse_role"] = _login_role
                 spse_browser.mulai_auto_refresh()
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
