@@ -582,7 +582,16 @@ def enrich_paket_supabase(paket_list: list[dict], tahap_map: dict | None = None)
         for p in paket_list:
             sb_row = lookup.get(p["id_lelang"], {})
             p["kode_unik"] = sb_row.get("kode_unik") or ""
-            p["kode_pokja"] = sb_row.get("kode_pokja") or ""
+            _db_kode_pokja = str(sb_row.get("kode_pokja") or "").strip()
+            _spse_kode_pokja = str(p.get("pokja") or "").strip()
+            p["kode_pokja"] = _db_kode_pokja or _spse_kode_pokja
+            if p["kode_pokja"] and not _db_kode_pokja and sb_row:
+                try:
+                    _sb().table("draft_paket").update(
+                        {"kode_pokja": p["kode_pokja"]}
+                    ).eq("kode_tender", p["id_lelang"]).execute()
+                except Exception:
+                    pass
             # Upsert status_tahap ke Supabase — hanya kalau paket ada di DB dan tahap_map tersedia
             if tahap_map is not None and p["id_lelang"] in lookup:
                 tahap = tahap_map.get(p["id_lelang"]) or p.get("status") or ""
