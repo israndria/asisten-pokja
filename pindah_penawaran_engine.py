@@ -248,6 +248,42 @@ def pindah_dan_gabung(item: dict, dest_dir: str, log=None) -> dict:
 GABUNGAN_SUBFOLDER = "1. Dokumen Gabungan"
 
 
+def cari_dokumen_lengkap(folder_paket: str) -> list[str]:
+    """Cari DokFull hasil gabungan yang valid untuk sumber Evaluasi AI."""
+    root = os.path.join(folder_paket, GABUNGAN_SUBFOLDER)
+    if not os.path.isdir(root):
+        return []
+    hasil = []
+    for dirpath, _, filenames in os.walk(root):
+        for nama in filenames:
+            if nama.startswith("1. DokFull_") and nama.endswith(".pdf"):
+                path = os.path.join(dirpath, nama)
+                try:
+                    if os.path.getsize(path) > 0:
+                        hasil.append(path)
+                except OSError:
+                    continue
+    return sorted(hasil)
+
+
+def cari_checklist_kualifikasi(folder_paket: str) -> list[str]:
+    """Cari checklist kualifikasi SPSE untuk sumber utama admin/kualifikasi."""
+    root = os.path.join(folder_paket, "1. Dokumen Kualifikasi")
+    if not os.path.isdir(root):
+        return []
+    hasil = []
+    for dirpath, _, filenames in os.walk(root):
+        for nama in filenames:
+            if nama.lower().startswith("checklist_kualifikasi_") and nama.lower().endswith(".pdf"):
+                path = os.path.join(dirpath, nama)
+                try:
+                    if os.path.getsize(path) > 0:
+                        hasil.append(path)
+                except OSError:
+                    continue
+    return sorted(hasil)
+
+
 def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
     """
     Gabung DoktekFull + DokkualifFull per peserta → 1. Dokumen Gabungan/{urutan}. {nama}/1. DokFull_{nama}_{pokja}.pdf

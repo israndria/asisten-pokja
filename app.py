@@ -10827,6 +10827,8 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             # Auto-tampil dari data Supabase yang sudah ada (tanpa sync folder)
             _render_konflik_dashboard(trigger_sync_doktek=False)
 
+    # Evaluasi AI dipusatkan di Tab 6 agar DokFull menjadi sumber tunggal.
+    if False:
         st.divider()
         st.markdown("#### 🤖 Evaluasi AI (Codex) — Tender")
         st.caption("Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium · Membaca dokumen Tender dan menulis output `.md`. Paralel per paket.")
@@ -11179,7 +11181,7 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
     # ── Seksi 3: Gabung Dok Lengkap (independen dari Scan Apendo) ─────────────
     st.divider()
     st.markdown("#### 3. Gabung Dokumen Lengkap")
-    st.caption("Gabung `DoktekFull` + `DokkualifFull` per peserta → `1. Dokumen Gabungan/`. Tidak perlu Scan Apendo dulu.")
+    st.caption("Gabung `DoktekFull` + `DokkualifFull` → `1. Dokumen Gabungan/1. DokFull_*.pdf`. Evaluasi AI membaca DokFull ini sebagai sumber gabungan kualifikasi + penawaran.")
 
     # Gabung/evaluasi dokumen penawaran hanya untuk paket yang sudah masuk
     # tahap Pembukaan atau sesudahnya. Draft tidak boleh ikut aksi bulk.
@@ -11236,18 +11238,27 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
         st.divider()
 
-        def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket):
+        def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket, dokfull_paths, checklist_paths):
+            _dokfull_list = "\n".join(f"- `{p}`" for p in dokfull_paths)
+            _checklist_list = "\n".join(f"- `{p}`" for p in checklist_paths) or "- TIDAK DITEMUKAN"
             return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
 
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
 
+SUMBER DOKUMEN UTAMA — WAJIB
+Untuk administrasi dan kualifikasi, gunakan checklist SPSE berikut:
+{_checklist_list}
+Untuk teknis dan harga, gunakan PDF gabungan berikut:
+{_dokfull_list}
+Ikuti strategi hybrid dalam PROTOKOL_EVALUASI_AI.md. Buka PDF spesifik/pecahan
+hanya untuk verifikasi tertarget jika ada konflik, scan buruk, atau bukti detail
+belum cukup. Jika sumber tidak ada, tandai TIDAK ADA dan jangan mengarang.
+
 Langkah:
 1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
 2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
-3. Evaluasi semua penyedia yang ditemukan pada `1. Dokumen Penawaran/`,
-   `1. Dokumen Gabungan/`, dan/atau `8. Dokumen Kualifikasi/` paket ini.
-   Prioritaskan file gabungan per peserta; gunakan file pecahan hanya sebagai fallback.
+3. Baca setiap checklist dan DokFull, satu peserta per file, tanpa mencampur data.
 4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
 
 Jangan mengubah Excel, DOCM, Supabase, SPSE, atau dokumen sumber. Pertahankan bagian
@@ -11270,8 +11281,12 @@ Mulai sekarang."""
                 for _gp_ai in _gab_ai_bulk:
                     _gp_ai_folder = os.path.join(_TENDER_ROOT_GAB, _gp_ai["folder_dibuat"])
                     try:
+                        _dokfull_ai = _pe.cari_dokumen_lengkap(_gp_ai_folder)
+                        _checklist_ai = _pe.cari_checklist_kualifikasi(_gp_ai_folder)
+                        if not _dokfull_ai:
+                            raise RuntimeError("DokFull belum tersedia di 1. Dokumen Gabungan; jalankan Gabung Dokumen Lengkap terlebih dahulu.")
                         _prompt_ai = _prompt_evaluasi_tender_apendo(
-                            _gp_ai_folder, _gp_ai.get("folder_dibuat", _gp_ai["kode_tender"])
+                            _gp_ai_folder, _gp_ai.get("folder_dibuat", _gp_ai["kode_tender"]), _dokfull_ai, _checklist_ai
                         )
                         _out_ai = _heval_bulk._run_evaluator(
                             _prompt_ai, model=None, add_dirs=[_gp_ai_folder], engine="codex"
@@ -11315,7 +11330,11 @@ Mulai sekarang."""
                     import ai_evaluator as _heval_ap
                     with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
                         try:
-                            _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label)
+                            _dokfull_ap = _pe.cari_dokumen_lengkap(_gp_folder)
+                            _checklist_ap = _pe.cari_checklist_kualifikasi(_gp_folder)
+                            if not _dokfull_ap:
+                                raise RuntimeError("DokFull belum tersedia di 1. Dokumen Gabungan; jalankan Gabung Dokumen Lengkap terlebih dahulu.")
+                            _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label, _dokfull_ap, _checklist_ap)
                             _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=None, add_dirs=[_gp_folder], engine="codex")
                             _hasil_ap = os.path.join(_gp_folder, "_HASIL_EVALUASI_PK.md")
                             _missing_ap = _validasi_hasil_evaluasi_tender(_hasil_ap)
