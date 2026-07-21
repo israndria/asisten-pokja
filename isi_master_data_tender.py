@@ -303,15 +303,20 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
     pdf = _cari_draft_pdf(folder, str(row_data.get("kode_pokja") or ""))
     if pdf:
         _log(f"Parse PDF: {pdf.name}")
-        script = Path(__file__).resolve().parents[1] / "V19_Scheduler" / "WPy64-313110" / "parse_reviu.py"
-        res = subprocess.run(
-            [sys.executable, str(script), str(pdf), str(folder), str(row_data.get("bidang") or ""), str(row_data.get("nama_tender") or "")],
-            capture_output=True, text=True, timeout=120,
-        )
-        if res.returncode != 0:
-            return {"ok": False, "pesan": (res.stderr or res.stdout or "parse_reviu gagal")[-500:]}
-        data = json.loads((folder / "_parse_reviu.json").read_text(encoding="utf-8"))
-        _isi_metadata_fallback(kode_tender, row_data, data, pdf, _log)
+        from config import V19_ROOT as _v19_root
+        script = Path(_v19_root) / "parse_reviu.py"
+        try:
+            res = subprocess.run(
+                [sys.executable, str(script), str(pdf), str(folder), str(row_data.get("bidang") or ""), str(row_data.get("nama_tender") or "")],
+                capture_output=True, text=True, timeout=120,
+            )
+            if res.returncode != 0:
+                _log(f"WARN parse_reviu gagal: {(res.stderr or res.stdout or 'error')[-300:]}")
+            else:
+                data = json.loads((folder / "_parse_reviu.json").read_text(encoding="utf-8"))
+                _isi_metadata_fallback(kode_tender, row_data, data, pdf, _log)
+        except subprocess.TimeoutExpired:
+            _log("WARN parse_reviu timeout — data utama tetap diisi dari draft_paket")
     else:
         _log("WARN Draft_Pokja PDF tidak ditemukan")
 
@@ -330,6 +335,12 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
                 pass
         wb = xl.Workbooks.Open(str(xlsm), UpdateLinks=0)
         ws = wb.Sheets("@ Master Data")
+
+        # Template dapat membawa nilai paket donor; kosongkan semua field data
+        # sebelum menulis data paket target agar tidak ada identitas stale.
+        _clear_rows = set(INPUT_ROWS.values()) | set(REVIU_ROWS.values()) | set(DOKPIL_ROWS.values())
+        for _row in _clear_rows:
+            ws.Cells(_row, 3).Value = ""
 
         for key, row in INPUT_ROWS.items():
             v = _hari_angka(row_data.get(key)) if key == "jangka_waktu" else row_data.get(key)
