@@ -7772,7 +7772,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state[_ck] = True
                 _pk = str(_r.get("kode_pokja") or "").strip()
                 st.checkbox(
-                    f"{_t_plan.get(_kt, {}).get('nomor_urut', '')}. {str(_r.get('nama_tender',''))[:55]} — Pokja {_pk}",
+                    f"{_t_plan.get(_kt, {}).get('nomor_urut', '')}. {str(_r.get('nama_tender',''))} — Pokja {_pk}",
                     key=_ck,
                     help=f"Kode unik: {_t_plan.get(_kt, {}).get('kode_unik', '...')}",
                 )
@@ -8224,7 +8224,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             _fd = _r.get("folder_dibuat", "")
             _tpath = _os.path.join(_TENDER_ROOT, _fd) if _fd else ""
             _ada = bool(_tpath and _os.path.exists(_tpath))
-            with st.expander(f"✅ [Pokja {_pk}] {_nm_display[:60]}"):
+            with st.expander(f"✅ [Pokja {_pk}] {_nm_display}"):
                 st.caption(f"`{_kt}` | Folder: {'✅ ada' if _ada else '⚠️ tidak ditemukan'}")
                 if not _ada:
                     st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
