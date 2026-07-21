@@ -7471,6 +7471,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
 
         if st.button("🚀 Serap Data Paket", type="primary", use_container_width=True, key="btn_serap_tender_gabung"):
+            _tender_rows_dirty = False
             # Aksi 1: Update Inbox
             if _cb_serap_inbox:
                 _pb = st.progress(0.0)
@@ -7495,6 +7496,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     else:
                         _st.warning("Tidak ada pesan Delegasi Pokja baru.")
                     _load_draft_paket_cached.clear()
+                    _tender_rows_dirty = True
                 except Exception as e:
                     st.error(f"Gagal serap inbox: {e}")
 
@@ -7512,8 +7514,13 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state["global_paket_aktif"] = _ga_r
                     kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
                     _load_draft_paket_cached.clear()
+                    _tender_rows_dirty = True
                 st.toast("✅ Data paket SPSE tersinkronkan!", icon="🔄")
                 st.success(f"Draft: {len(_gd_r.get('paket',[]))} paket | Aktif: {len(_ga_r.get('paket',[]))} paket")
+
+            # Sinkronkan sumber daftar folder dengan data yang baru diserap.
+            if _tender_rows_dirty:
+                _draft_rows = _load_draft_paket_cached()
 
         # Info cache ringkas
         import os as _os_sync
