@@ -10186,6 +10186,7 @@ if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
 
 if _tender_active_tab == "5️⃣ Download Kualifikasi":
     # ── Auto-fetch paket dari Supabase (tanpa CDP/Chrome) ────────────────────
+    _kl_source_paket = None
     if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
         try:
             from config import sb as _sb_kl
@@ -10207,26 +10208,31 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                 }
                 for r in _kl_rows
             ]
-            # Masuk ke global_paket_aktif agar tab lain yang juga pakai session ini tidak terpengaruh
-            st.session_state["global_paket_aktif"] = {
-                "sukses": True,
-                "paket": _kl_paket_mapped,
-                "pesan": f"{len(_kl_paket_mapped)} paket dari Supabase",
-            }
-            # global_paket_draft kosong (draft belum tentu ada di Supabase)
-            if "global_paket_draft" not in st.session_state:
-                st.session_state["global_paket_draft"] = {"sukses": True, "paket": [], "pesan": ""}
+            # Sumber lokal Tab 5; jangan menimpa global state yang dipakai Tab 0/tab lain.
+            _kl_source_paket = _kl_paket_mapped
         except Exception as _kl_fe:
             st.warning(f"⚠️ Gagal memuat paket dari Supabase: {_kl_fe}. Coba klik 'Sinkronkan Paket' di Tab 0.")
 
-    # ── Pre-render: fetch semua paket yang dicek tapi belum ada datanya ────────
-    if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+    def _kl_get_paket_gabungan() -> list[dict]:
+        return _kl_source_paket if _kl_source_paket is not None else _get_paket_gabungan()
+
+    _kl_has_source = _kl_source_paket is not None or (
+        "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state
+    )
+    _kl_source_list = [
+        p for p in _kl_get_paket_gabungan() if p.get("kode") != "00000000000"
+    ]
+    _kl_auto_check = 0 < len(_kl_source_list) <= 20
+    if _kl_auto_check:
+        for _kl_auto_p in _kl_source_list:
+            st.session_state.setdefault(f"kl_chk_v3_{_kl_auto_p['kode']}", True)
+
+    # ── Pre-render: fetch hanya paket yang dipilih user ────────────────────────
+    if _kl_has_source:
         _kl_perlu_fetch = [
-            p for p in _get_paket_gabungan()
+            p for p in _kl_get_paket_gabungan()
             if p.get("kode") != "00000000000"
-            # Default checkbox paket = tercentang; widget baru dibuat beberapa
-            # baris di bawah, jadi jangan menganggap key yang belum ada False.
-            and st.session_state.get(f"kl_chk_{p['kode']}", True)
+            and st.session_state.get(f"kl_chk_v3_{p['kode']}", False)
             and f"kl_peserta_{p['kode']}" not in st.session_state
         ]
         if _kl_perlu_fetch:
@@ -10248,11 +10254,11 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
     with _kl_col1:
         st.markdown("#### 1. Pilih Paket")
-        if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
+        if not _kl_has_source:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
             _kl_paket_list = sorted(
-                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
+                [p for p in _kl_get_paket_gabungan() if p.get("kode") != "00000000000"],
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
@@ -10261,9 +10267,9 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             else:
                 st.caption(f"📋 {len(_kl_paket_list)} paket — centang satu atau lebih:")
                 for p in _kl_paket_list:
-                    _kl_chk_key = f"kl_chk_{p['kode']}"
+                    _kl_chk_key = f"kl_chk_v3_{p['kode']}"
                     if _kl_chk_key not in st.session_state:
-                        st.session_state[_kl_chk_key] = True
+                        st.session_state[_kl_chk_key] = _kl_auto_check
                     _checked = st.checkbox(
                         f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
                         key=_kl_chk_key,
@@ -10275,13 +10281,13 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
             st.markdown("#### 2. Peserta per Paket")
         _kl_hanya_top3 = st.checkbox("✅ Hanya 3 peserta teratas (harga terendah)", value=True, key="kl_hanya_top3")
 
-        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+        if _kl_has_source:
             _kl_paket_list2 = sorted(
-                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
+                [p for p in _kl_get_paket_gabungan() if p.get("kode") != "00000000000"],
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
-            _kl_paket_aktif_opsi = [p for p in _kl_paket_list2 if st.session_state.get(f"kl_chk_{p['kode']}", False)]
+            _kl_paket_aktif_opsi = [p for p in _kl_paket_list2 if st.session_state.get(f"kl_chk_v3_{p['kode']}", False)]
             _kl_kode_aktif = None
             if _kl_paket_aktif_opsi:
                 st.caption("Paket tercentang ditampilkan sekaligus. Pilih peserta di masing-masing paket.")
@@ -10290,7 +10296,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
             _kl_ada_terpilih = False
             for p in _kl_paket_list2:
-                if not st.session_state.get(f"kl_chk_{p['kode']}", False):
+                if not st.session_state.get(f"kl_chk_v3_{p['kode']}", False):
                     continue
                 _kl_ada_terpilih = True
                 kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
@@ -10347,14 +10353,14 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
         # ── Ringkasan paket terpilih + status folder ───────────────────────────
         _kl_paket_dipilih = []
-        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
+        if _kl_has_source:
             _kl_all_list = sorted(
-                [p for p in _get_paket_gabungan() if p.get("kode") != "00000000000"],
+                [p for p in _kl_get_paket_gabungan() if p.get("kode") != "00000000000"],
                 key=lambda p: p.get("tanggal", ""),
                 reverse=True,
             )
             for p in _kl_all_list:
-                if not st.session_state.get(f"kl_chk_{p['kode']}", False):
+                if not st.session_state.get(f"kl_chk_v3_{p['kode']}", False):
                     continue
                 kl_res_p = st.session_state.get(f"kl_peserta_{p['kode']}")
                 if not kl_res_p or not kl_res_p["ok"]:
@@ -10430,7 +10436,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
                 def _log_cb(msg):
                     log_lines.append(msg)
-                    log_area.code("\n".join(log_lines[-30:]))
+                    log_area.code("\n".join(log_lines))
 
                 progress = st.progress(0, text="Memulai...")
                 _total_paket = len(items_to_run)
@@ -10552,6 +10558,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                             _log_cb(f"✅ [{kode_tender}] {len(rows)} peserta tersimpan ke Supabase.")
 
                             # Tulis langsung ke Excel folder paket
+                            _excel_path = None
                             if do_excel and folder_out:
                                 try:
                                     # folder_out = .../{folder_paket}/1. Dokumen Kualifikasi
@@ -10575,17 +10582,33 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                                 except Exception as _e_xl:
                                     _log_cb(f"⚠️ [{kode_tender}] Error tulis Excel: {_e_xl}")
 
-                            # Harga Penawaran — scrape hanya peserta dari KK Evaluasi (presisi)
-                            try:
-                                import penawaran_engine
-                                _hp_peserta = [{"peserta_id": ps.get("kualifikasi_id", ""), "nama_peserta": ps.get("nama", "")}
-                                               for ps in peserta_list if ps.get("kualifikasi_id")]
-                                hasil_hp = penawaran_engine.scrape_dan_upsert_semua(
-                                    kode_tender, progress_cb=_log_cb, peserta_override=_hp_peserta or None)
-                                _log_cb(f"✅ [{kode_tender}] HP: {hasil_hp['peserta']} peserta, {hasil_hp['items']} item"
-                                        if hasil_hp["peserta"] > 0 else f"⚠️ [{kode_tender}] HP: belum ada penawaran")
-                            except Exception as e_hp:
-                                _log_cb(f"⚠️ [{kode_tender}] HP error: {e_hp}")
+                            # Harga Penawaran — scrape SPSE langsung ke Sheet 6 Excel.
+                            if do_excel and _excel_path:
+                                try:
+                                    import penawaran_engine
+                                    _hp_peserta = [
+                                        {"peserta_id": ps.get("kualifikasi_id", ""),
+                                         "nama_peserta": ps.get("nama", "")}
+                                        for ps in peserta_list if ps.get("kualifikasi_id")
+                                    ]
+                                    hasil_hp = penawaran_engine.scrape_penawaran_ke_excel(
+                                        kode_tender, _excel_path, progress_cb=_log_cb,
+                                        peserta_override=_hp_peserta or None,
+                                    )
+                                    if hasil_hp["peserta"] > 0:
+                                        _log_cb(
+                                            f"✅ [{kode_tender}] Penawaran harga langsung ke Sheet 6: "
+                                            f"{hasil_hp['peserta']} peserta"
+                                        )
+                                        _pru = penawaran_engine.update_rumus_penawaran_72(
+                                            _excel_path, progress_cb=_log_cb
+                                        )
+                                        if _pru.get("ok"):
+                                            _log_cb(f"  Rumus 7.2 diperbarui: {_pru['rows_updated']} baris")
+                                    else:
+                                        _log_cb(f"⚠️ [{kode_tender}] Penawaran harga: {hasil_hp.get('errors', ['kosong'])}")
+                                except Exception as e_hp:
+                                    _log_cb(f"⚠️ [{kode_tender}] Penawaran harga → Excel error: {e_hp}")
 
                             try:
                                 import identitas_engine
@@ -10622,7 +10645,7 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
                 _parts = []
                 if do_download: _parts.append("dokumen didownload")
                 if do_kk: _parts.append("KK Evaluasi tersimpan")
-                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Buka Excel → **Muat Harga Penawaran**, **Muat Input BA** (jika perlu).")
+                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Harga penawaran sudah ditulis langsung ke Sheet 6 Excel; lanjutkan **Muat Input BA** jika perlu.")
 
             # Tampilkan status folder tiap paket
             _kl_semua_folder_ok = True
@@ -10663,12 +10686,17 @@ if _tender_active_tab == "5️⃣ Download Kualifikasi":
 
             # ── Opsi aksi ──────────────────────────────────────────────────────
             _kl_do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="kl_opt_download")
-            _kl_do_kk = st.checkbox("📝 Parse KK Evaluasi → tulis Excel folder paket", value=True, key="kl_opt_kk")
-            _kl_do_excel = _kl_do_kk  # Excel selalu ikut parse (parse wajib utk isi Excel); Supabase upsert otomatis
+            _kl_do_kk = st.checkbox(
+                "📝 Parse KK + Penawaran Harga → tulis langsung ke Excel paket",
+                value=True,
+                key="kl_opt_kk",
+                help="Ambil data KK dan rincian harga dari SPSE lalu tulis langsung ke workbook paket; tidak memakai Supabase sebagai perantara harga.",
+            )
+            _kl_do_excel = _kl_do_kk  # Excel selalu ikut parse; harga ditulis langsung ke Sheet 6
 
             _kl_btn_label = []
             if _kl_do_download: _kl_btn_label.append("Download")
-            if _kl_do_kk: _kl_btn_label.append("Parse → Excel")
+            if _kl_do_kk: _kl_btn_label.append("Parse KK + Harga → Excel")
             _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
 
             # Tombol global memproses semua paket terpilih; tombol per paket tetap tersedia.
@@ -10856,7 +10884,7 @@ Mulai evaluasi sekarang."""
 
         _ai_eval_engine_t = "codex"
         _ai_eval_model_t = None
-        _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
+        _ai_t_selected_kode = [p["kode"] for p in _kl_paket_list if st.session_state.get(f"kl_chk_v3_{p['kode']}", False)] if "_kl_paket_list" in dir() else []
         _btn_ai_eval_t = st.button(
             f"🤖 Jalankan Evaluasi AI — {len(_ai_t_selected_kode)} paket",
             key="tkual_btn_ai_eval", use_container_width=True,

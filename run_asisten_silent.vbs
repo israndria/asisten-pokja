@@ -20,8 +20,8 @@ Else
     cmd = """" & python & """ -m streamlit run """ & appPy & """"
     cmd = cmd & " --server.port " & port
     cmd = cmd & " --server.headless true"
-    cmd = cmd & " --server.runOnSave true"
-    cmd = cmd & " --server.fileWatcherType poll"
+    cmd = cmd & " --server.runOnSave false"
+    cmd = cmd & " --server.fileWatcherType none"
     cmd = cmd & " --browser.gatherUsageStats false"
     shell.Run cmd, 0, False
 End If
