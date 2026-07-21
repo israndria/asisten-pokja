@@ -27,6 +27,31 @@ def _find_pdf(folder: str, *keywords: str) -> str | None:
     return None
 
 
+def _parse_peralatan_lines(text: str) -> list[str]:
+    """Fallback untuk PDF native/OCR yang tabelnya tidak terdeteksi."""
+    hasil = []
+    for raw in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not re.match(r"^[|Il\[({]*\s*\d+\s+", line):
+            continue
+        line = re.sub(r"^[|Il\[({]*\s*\d+\s+", "", line)
+        # OCR sering membaca Unit sebagai Unt/Une dan Set sebagai SSet.
+        line = re.sub(r"\b(\d+)\s*(?:Unt|Une|Unlt)\b", r"\1 Unit", line, flags=re.I)
+        line = re.sub(r"\b(\d+)\s*SSet\b", r"\1 Set", line, flags=re.I)
+        match = re.match(
+            r"(.+?)\s+(\d+(?:[.,]\d+)?\s*(?:unit|set|buah|pcs|buah/unit))\b",
+            line,
+            flags=re.I,
+        )
+        if not match:
+            continue
+        nama = re.sub(r"\s+", " ", match.group(1)).strip(" |:-")
+        jumlah = re.sub(r"\s+", " ", match.group(2)).strip()
+        if nama and not any(k in nama.upper() for k in ("PERALATAN UTAMA", "NAMA PERALATAN")):
+            hasil.append(f"{nama} ({jumlah})")
+    return hasil[:6]
+
+
 def parse_peralatan(pdf_path: str) -> list[str]:
     """
     Parse daftar peralatan dari PDF 04E.
@@ -74,6 +99,9 @@ def parse_peralatan(pdf_path: str) -> list[str]:
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
+                # Sebagian PDF native hanya punya text layer tanpa garis tabel.
+                if not alat_list:
+                    alat_list = _parse_peralatan_lines(page.extract_text() or "")
                 if alat_list:
                     break
                 tables = page.extract_tables()
@@ -132,6 +160,34 @@ def parse_peralatan(pdf_path: str) -> list[str]:
                         break
     except Exception:
         pass
+
+    # PDF scan/image-only: render halaman pertama, hilangkan garis tabel,
+    # lalu OCR hanya sebagai fallback terakhir.
+    if not alat_list:
+        try:
+            import fitz
+            import cv2
+            import numpy as np
+            import pytesseract
+
+            page = fitz.open(pdf_path)[0]
+            pix = page.get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+            image = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1]
+            hline = cv2.morphologyEx(
+                255 - binary, cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1)),
+            )
+            vline = cv2.morphologyEx(
+                255 - binary, cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50)),
+            )
+            clean = cv2.bitwise_or(binary, cv2.bitwise_or(hline, vline))
+            raw_ocr = pytesseract.image_to_string(clean, config="--psm 6")
+            alat_list = _parse_peralatan_lines(raw_ocr)
+        except Exception:
+            pass
     return alat_list[:6]
 
 
@@ -247,7 +303,7 @@ def parse_dan_upsert(
     # Cari PDF peralatan
     pdf_alat = _find_pdf(folder_peserta, "04e", "peralatan utama", "peralatan")
     # Cari PDF personel
-    pdf_personel = _find_pdf(folder_peserta, "04d", "personel", "personil")
+    pdf_personel = _find_pdf(folder_peserta, "04d", "personel", "personil", "tenaga teknis")
 
     alat_list = []
     personel_list = []
@@ -255,6 +311,8 @@ def parse_dan_upsert(
     if pdf_alat:
         log(f"  Parse peralatan: {os.path.basename(pdf_alat)}")
         alat_list = parse_peralatan(pdf_alat)
+        if not alat_list:
+            log("PDF peralatan ditemukan tetapi belum terbaca otomatis; data tidak diubah")
         log(f"  → {len(alat_list)} alat: {alat_list}")
     else:
         log("  ⚠️ PDF peralatan (04E) tidak ditemukan")
@@ -262,12 +320,19 @@ def parse_dan_upsert(
     if pdf_personel:
         log(f"  Parse personel: {os.path.basename(pdf_personel)}")
         personel_list = parse_personel(pdf_personel)
+        if not personel_list:
+            log("PDF personel ditemukan tetapi belum terbaca otomatis; data tidak diubah")
         log(f"  → {len(personel_list)} personel: {personel_list}")
     else:
         log("  ⚠️ PDF personel (04D) tidak ditemukan")
 
     if not alat_list and not personel_list:
-        return {"ok": False, "personel": [], "alat": [], "pesan": "PDF tidak ditemukan atau kosong"}
+        pesan = (
+            "PDF ditemukan tetapi belum terbaca otomatis"
+            if pdf_alat or pdf_personel
+            else "PDF teknis tidak ditemukan"
+        )
+        return {"ok": False, "personel": [], "alat": [], "pesan": pesan}
 
     # Format label: "1. Alat A, 2. Alat B"
     def _label_list(items):

@@ -22,10 +22,10 @@ from datetime import datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-TOKEN_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "V19_Scheduler", "WPy64-313110", "token.json",
-)
+from config import RUNTIME_ROOT
+
+# State OAuth per-PC; gunakan lokasi runtime yang sama dengan app utama.
+TOKEN_PATH = os.path.normpath(os.path.join(RUNTIME_ROOT, "state", "token.json"))
 CALENDAR_ID = "primary"
 TZ = "Asia/Jakarta"
 

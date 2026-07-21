@@ -4,9 +4,11 @@ import os
 import json
 from datetime import datetime, date
 
-_BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "V19_Scheduler", "WPy64-313110")
-TOKEN_PATH = os.path.normpath(os.path.join(_BASE, "token.json"))
-CRED_PATH  = os.path.normpath(os.path.join(_BASE, "credentials.json"))
+from config import RUNTIME_ROOT, find_secret
+
+# State OAuth per-PC; jangan menunjuk folder legacy/Google Drive.
+TOKEN_PATH = os.path.normpath(os.path.join(RUNTIME_ROOT, "state", "token.json"))
+CRED_PATH = str(find_secret("credentials.json"))
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -30,7 +32,9 @@ _TAHAP_KEYWORD = {
     "evaluasi":        "Evaluasi Administrasi, Kualifikasi, Teknis, dan Harga",
     "hasil_pemilihan": "Penetapan Pemenang",
     "negosiasi":       "Pembuktian Kualifikasi",
-    "pembukaan":       "Pembukaan Penawaran",
+    # Judul event Tender mengikuti tahap SPSE lengkap. Format lama
+    # "Pembukaan Penawaran" tetap ditangani sebagai fallback di bawah.
+    "pembukaan":       "Pembukaan Dokumen Penawaran",
 }
 
 # Untuk evaluasi, ambil tanggal END (hari terakhir); sisanya ambil START
@@ -122,6 +126,11 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
     for jenis_key, keyword in _TAHAP_KEYWORD.items():
         kw_lower = keyword.lower()
         matched = [e for e in paket_events if kw_lower in e.get("summary", "").lower()]
+        if jenis_key == "pembukaan" and not matched:
+            matched = [
+                e for e in paket_events
+                if "pembukaan penawaran" in e.get("summary", "").lower()
+            ]
         if not matched:
             continue
 

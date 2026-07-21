@@ -276,14 +276,26 @@ def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
     ok_count = 0
     gagal = []
 
-    # Iterasi subfolder peserta di Dokumen Penawaran (format: "{urutan}. {nama}")
+    # Iterasi peserta dalam dua format:
+    # - nested: 1. Dokumen Penawaran/{urutan}. {nama}/1. DoktekFull_*.pdf
+    # - flat:   1. Dokumen Penawaran/1. DoktekFull_*.pdf
+    peserta_entries = []
     for entry in sorted(os.listdir(folder_penawaran)):
         sub_penawaran = os.path.join(folder_penawaran, entry)
-        if not os.path.isdir(sub_penawaran):
-            continue
+        if os.path.isdir(sub_penawaran):
+            peserta_entries.append((entry, sub_penawaran, None))
+        elif entry.startswith("1. DoktekFull_") and entry.endswith(".pdf"):
+            # Format flat tidak menyimpan nama peserta sebagai folder.
+            # Ambil nama dari filename dan buang suffix kode pokja.
+            nama = entry[len("1. DoktekFull_"):-len(".pdf")]
+            if "_" in nama:
+                nama = nama.rsplit("_", 1)[0]
+            peserta_entries.append((f"1. {nama}", folder_penawaran, os.path.join(folder_penawaran, entry)))
+
+    for entry, sub_penawaran, direct_doktek in peserta_entries:
 
         # Cari DoktekFull_*.pdf
-        doktek = next(
+        doktek = direct_doktek or next(
             (os.path.join(sub_penawaran, f) for f in os.listdir(sub_penawaran)
              if f.startswith("1. DoktekFull_") and f.endswith(".pdf")),
             None,

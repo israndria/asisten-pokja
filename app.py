@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -257,6 +258,29 @@ def _is_tender_selesai(p: dict) -> bool:
     status = str(p.get("status") or "").lower()
     return any(k in status for k in _TENDER_SELESAI_KW)
 
+
+_TENDER_SUDAH_PEMBUKAAN_KW = (
+    "pembukaan",
+    "evaluasi",
+    "klarifikasi",
+    "negosiasi",
+    "masa sanggah",
+    "penetapan",
+    "pemenang",
+    "penandatanganan",
+)
+
+
+def _is_tender_sudah_pembukaan(p: dict) -> bool:
+    """True jika paket sudah masuk pembukaan penawaran atau tahap sesudahnya."""
+    tahap = str(p.get("status_tahap") or "").strip().lower()
+    if tahap:
+        return any(k in tahap for k in _TENDER_SUDAH_PEMBUKAAN_KW)
+    # Jika status_tahap belum tersimpan, jangan izinkan paket masuk secara
+    # spekulatif. Tab ini memindahkan dokumen penawaran; tahap harus terbukti.
+    status = str(p.get("status") or "").strip().lower()
+    return bool(status) and "draft" not in status
+
 from config import SPSE_BASE_URL
 import spse_browser
 import ldk_engine
@@ -383,11 +407,54 @@ _TENDER_EXCLUDE_KODES = {
 def _load_draft_paket_cached() -> list:
     """Load semua draft_paket sekali, cache 60 detik. Dipakai lintas tab.
     Invalidasi via _load_draft_paket_cached.clear() setelah mutasi draft_paket."""
+    def _cache_path():
+        from config import STATE_DIR
+        return os.path.join(STATE_DIR, "draft_paket_cache.sqlite3")
+
+    def _save_local(rows):
+        try:
+            with sqlite3.connect(_cache_path(), timeout=5) as conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS draft_paket_cache "
+                    "(id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_paket_cache (id, payload) VALUES (1, ?)",
+                    (json.dumps(rows, ensure_ascii=False),),
+                )
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            pass
+
+    def _load_local():
+        try:
+            with sqlite3.connect(_cache_path(), timeout=5) as conn:
+                raw = conn.execute(
+                    "SELECT payload FROM draft_paket_cache WHERE id = 1"
+                ).fetchone()
+            rows = json.loads(raw[0]) if raw else []
+            return rows if isinstance(rows, list) else []
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return []
+
     try:
         rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+        _save_local(rows)
         return [r for r in rows if not _is_tender_excluded(r)]
     except Exception:
-        return []
+        # Supabase client dicache lintas rerun; koneksi HTTP pool bisa stale
+        # setelah idle. Refresh client sekali agar gangguan sesaat tidak
+        # membuat seluruh daftar paket terlihat kosong.
+        try:
+            inbox_engine._sb.clear()
+        except Exception:
+            pass
+        try:
+            rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+            _save_local(rows)
+            return [r for r in rows if not _is_tender_excluded(r)]
+        except Exception:
+            rows = _load_local()
+            return [r for r in rows if not _is_tender_excluded(r)]
 
 
 @st.cache_data(ttl=60)
@@ -10883,6 +10950,7 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
     _dp_items = [
         _item for _item in _dp_items_raw
         if not _is_tender_selesai(_item)
+        and _is_tender_sudah_pembukaan(_item)
     ]
 
     with _dp_col_info:
@@ -10900,16 +10968,29 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
         st.success(st.session_state.pop("dp_notif"))
 
     # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
-    _dp_paket_rows = [
+    _dp_paket_candidates = [
         _r for _r in _load_draft_paket_cached()
         if _r.get("folder_dibuat")
         and not _is_tender_excluded(_r)
         and not _is_tender_selesai(_r)
     ]
+    _dp_paket_rows = [
+        _r for _r in _dp_paket_candidates
+        if _is_tender_sudah_pembukaan(_r)
+    ]
+    _dp_paket_pra_pembukaan = [
+        _r for _r in _dp_paket_candidates
+        if not _is_tender_sudah_pembukaan(_r)
+    ]
     _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
 
     st.divider()
     st.markdown("#### 2. Pilih Paket")
+    if _dp_paket_pra_pembukaan:
+        st.info(
+            f"⏭️ {len(_dp_paket_pra_pembukaan)} paket disembunyikan karena belum sampai "
+            "Pembukaan Dokumen Penawaran."
+        )
     if _dp_paket_rows:
         _dp_sel_c1, _dp_sel_c2, _dp_sel_c3 = st.columns([1, 1, 3])
         if _dp_sel_c1.button("✅ Pilih Semua", key="dp_pilih_semua", use_container_width=True):
@@ -11072,6 +11153,8 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
     st.markdown("#### 3. Gabung Dokumen Lengkap")
     st.caption("Gabung `DoktekFull` + `DokkualifFull` per peserta → `1. Dokumen Gabungan/`. Tidak perlu Scan Apendo dulu.")
 
+    # Gabung/evaluasi dokumen penawaran hanya untuk paket yang sudah masuk
+    # tahap Pembukaan atau sesudahnya. Draft tidak boleh ikut aksi bulk.
     _gab_paket_list = _dp_paket_rows
 
     if _gab_paket_list:
@@ -11081,24 +11164,48 @@ if _tender_active_tab == "6️⃣ Dokumen Penawaran":
             if os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
             or os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
         ]
+        # Pilihan Section 3 independen dari pilihan Section 2, tetapi daftar
+        # paketnya tetap dibatasi ke tahap pasca-pembukaan.
+        for _gp in _gab_valid:
+            _gab_ck_key = f"gab2_chk_{_gp['kode_tender']}"
+            if _gab_ck_key not in st.session_state:
+                st.session_state[_gab_ck_key] = True
+        _gab_pick_all, _gab_pick_none = st.columns(2)
+        if _gab_pick_all.button("✅ Pilih Semua", key="gab2_pilih_semua", use_container_width=True):
+            for _gp in _gab_valid:
+                st.session_state[f"gab2_chk_{_gp['kode_tender']}"] = True
+            st.rerun()
+        if _gab_pick_none.button("❌ Batal Semua", key="gab2_batal_semua", use_container_width=True):
+            for _gp in _gab_valid:
+                st.session_state[f"gab2_chk_{_gp['kode_tender']}"] = False
+            st.rerun()
+        _gab_selected_kodes = {
+            _gp["kode_tender"] for _gp in _gab_valid
+            if st.session_state.get(f"gab2_chk_{_gp['kode_tender']}", False)
+        }
         _gab_c1, _gab_c2 = st.columns([1, 3])
+        _gab_bulk = [r for r in _gab_valid if r["kode_tender"] in _gab_selected_kodes]
         with _gab_c1:
-            _gab_bulk = [r for r in _gab_valid if r["kode_tender"] in _dp_selected_kodes]
-            if st.button("📎 Gabung Paket Terpilih", key="gab2_semua", type="primary", use_container_width=True,
-                         disabled=not _gab_bulk):
-                _gab_all_log = st.empty()
-                _gab_all_lines = []
-                _gab_all_ok = 0
-                for _gp in _gab_bulk:
-                    _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
-                    def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
-                        _lines.append(m)
-                        _area.code("\n".join(_lines[-20:]))
-                    _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
-                    _gab_all_ok += _r["ok"]
-                st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
+            _gab_run_bulk = st.button(
+                "📎 Gabung Paket Terpilih", key="gab2_semua", type="primary",
+                use_container_width=True, disabled=not _gab_bulk,
+            )
         with _gab_c2:
             st.caption(f"{len(_gab_valid)} paket valid · {len(_gab_bulk)} terpilih untuk aksi bulk.")
+        if _gab_run_bulk:
+            _gab_all_log = st.empty()
+            _gab_all_lines = []
+            _gab_all_ok = 0
+            for _gp in _gab_bulk:
+                _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
+                _gab_all_lines.append(f"📦 Paket: {_gp.get('folder_dibuat', _gp['kode_tender'])}")
+                _gab_all_log.code("\n".join(_gab_all_lines[-40:]))
+                def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
+                    _lines.append(f"  {m}")
+                    _area.code("\n".join(_lines[-40:]))
+                _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
+                _gab_all_ok += _r["ok"]
+            st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
         st.divider()
 
         def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket):
@@ -11121,7 +11228,7 @@ Administrasi, Teknis, Kualifikasi, Flag Audit/Klarifikasi, dan Kesimpulan Akhir.
 
 Mulai sekarang."""
 
-        _gab_ai_bulk = [r for r in _gab_valid if r["kode_tender"] in _dp_selected_kodes]
+        _gab_ai_bulk = [r for r in _gab_valid if r["kode_tender"] in _gab_selected_kodes]
         if st.button(
             "🤖 Evaluasi AI Paket Terpilih",
             key="gab2_ai_bulk",
@@ -11160,7 +11267,7 @@ Mulai sekarang."""
             _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
             _gp_c1, _gp_c2, _gp_c3 = st.columns([3, 1, 1])
             with _gp_c1:
-                st.markdown(f"**{_gp_label}**")
+                st.checkbox(_gp_label, key=f"gab2_chk_{_gp['kode_tender']}")
             with _gp_c2:
                 if st.button("📎 Gabung", key=f"gab2_{_gp['kode_tender']}", use_container_width=True):
                     _gab2_log = []
@@ -11225,17 +11332,33 @@ Mulai sekarang."""
                 value=True,
                 key="iba_do_gcal",
             )
+            if _iba_do_gcal:
+                try:
+                    import gcal_pl_helper as _iba_gcal_check
+                    if not _iba_gcal_check.check_gcal_token():
+                        st.warning("🔐 Token Google Calendar perlu login ulang.")
+                        if st.button("🔑 Login Ulang Google Calendar", key="iba_gcal_reauth", use_container_width=True):
+                            import gcal_helper as _iba_gcal_helper
+                            with st.spinner("Menunggu login Google..."):
+                                _iba_gcal_helper.generate_token()
+                            st.success("✅ Token Google Calendar diperbarui.")
+                            st.rerun()
+                except Exception as _iba_gcal_check_err:
+                    st.caption(f"⚠️ Cek token GCal gagal: {_iba_gcal_check_err}")
 
         # Fungsi proses (dipakai per-paket maupun global)
-        def _proses_input_ba(kode_tender, nama_tender, folder_kualifikasi, xlsm_path, do_teknis, do_gcal):
+        def _proses_input_ba(
+            kode_tender, nama_tender, folder_kualifikasi, xlsm_path,
+            do_teknis, do_gcal, log_area=None, shared_log_lines=None,
+        ):
             """Isi sheet '0. Input BA' untuk satu paket."""
-            log_area = st.empty()
-            log_lines = []
+            log_area = log_area if log_area is not None else st.empty()
+            log_lines = shared_log_lines if shared_log_lines is not None else []
 
             def _log_cb(msg):
                 log_lines.append(msg)
                 try:
-                    log_area.code("\n".join(log_lines[-30:]))
+                    log_area.code("\n".join(log_lines))
                 except Exception:
                     pass
 
@@ -11265,6 +11388,12 @@ Mulai sekarang."""
                     else:
                         _log_cb(f"  ⚠️ Folder '1. Dokumen Penawaran' tidak ada — skip parse teknis")
 
+                    if not _sub_penawaran:
+                        _log_cb(
+                            "  ℹ️ Struktur Dokumen Penawaran flat; resolver akan mencari "
+                            "file teknis di root karena peserta tunggal."
+                        )
+
                     def _cari_folder_peserta(nama):
                         """Cari subfolder yang namanya cocok peserta (abaikan prefix nomor)."""
                         _nrm = re.sub(r'[\s.,]+', '', re.sub(r'[\\/:*?"<>|]', "", nama)).lower()
@@ -11280,8 +11409,11 @@ Mulai sekarang."""
                         _pid = _ps_id_row.get("peserta_id", "")
                         _pnama = _ps_id_row.get("nama_perusahaan", "")
                         _folder_ps = _cari_folder_peserta(_pnama)
+                        if not _folder_ps and not _sub_penawaran and len(_ps_ids) == 1:
+                            _folder_ps = _folder_penawaran
                         if not _folder_ps:
-                            _log_cb(f"  ⚠️ Folder teknis {_pnama} tidak ketemu, skip")
+                            if _sub_penawaran:
+                                _log_cb(f"  ⚠️ Folder teknis {_pnama} tidak cocok, skip parse")
                             continue
                         try:
                             _res_dt = _dte.parse_dan_upsert(
@@ -11411,7 +11543,11 @@ Mulai sekarang."""
                     _gcal_hasil = gcal_helper.get_tanggal_ba_dari_gcal(nama_tender)
                     tgl_pembukaan  = _gcal_hasil.get("pembukaan")
                     tgl_pembuktian = _gcal_hasil.get("negosiasi")
-                    _log_cb(f"  GCal pembukaan={tgl_pembukaan} pembuktian={tgl_pembuktian}")
+                    _log_cb(
+                        "  GCal: "
+                        f"pembukaan={tgl_pembukaan or 'tidak ditemukan'}, "
+                        f"pembuktian={tgl_pembuktian or 'tidak ditemukan'}"
+                    )
                 except Exception as _e_gc:
                     _log_cb(f"  ⚠️ GCal error (token expired?): {_e_gc} — tanggal diisi manual")
 
@@ -11453,32 +11589,37 @@ Mulai sekarang."""
         _iba_bulk = [r for r in _iba_paket_list if r["kode_tender"] in _dp_selected_kodes]
         _iba_bulk_c1, _iba_bulk_c2 = st.columns([1, 3])
         with _iba_bulk_c1:
-            if st.button(
+            _iba_run_bulk = st.button(
                 "▶ Input BA Paket Terpilih",
                 key="iba_bulk_selected",
                 type="primary",
                 use_container_width=True,
                 disabled=not _iba_bulk,
-            ):
-                _iba_bulk_ok, _iba_bulk_skip = 0, 0
-                for _iba_selected in _iba_bulk:
-                    _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_selected)
-                    if not _iba_xlsm:
-                        _iba_bulk_skip += 1
-                        st.warning(f"⚠️ {_tender_display_label(_iba_selected)[:60]} — xlsm tidak ditemukan.")
-                        continue
-                    _proses_input_ba(
-                        _iba_selected["kode_tender"],
-                        _iba_selected.get("nama_tender", _iba_selected["kode_tender"]),
-                        _iba_folder_kual,
-                        _iba_xlsm,
-                        st.session_state.get("iba_do_teknis", True),
-                        st.session_state.get("iba_do_gcal", True),
-                    )
-                    _iba_bulk_ok += 1
-                st.info(f"Input BA selesai: {_iba_bulk_ok} diproses, {_iba_bulk_skip} dilewati.")
+            )
         with _iba_bulk_c2:
             st.caption(f"{len(_iba_bulk)} paket terpilih untuk input BA.")
+        if _iba_run_bulk:
+            _iba_bulk_log_area = st.empty()
+            _iba_bulk_log_lines = []
+            _iba_bulk_ok, _iba_bulk_skip = 0, 0
+            for _iba_selected in _iba_bulk:
+                _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_selected)
+                if not _iba_xlsm:
+                    _iba_bulk_skip += 1
+                    st.warning(f"⚠️ {_tender_display_label(_iba_selected)[:60]} — xlsm tidak ditemukan.")
+                    continue
+                _proses_input_ba(
+                    _iba_selected["kode_tender"],
+                    _iba_selected.get("nama_tender", _iba_selected["kode_tender"]),
+                    _iba_folder_kual,
+                    _iba_xlsm,
+                    st.session_state.get("iba_do_teknis", True),
+                    st.session_state.get("iba_do_gcal", True),
+                    log_area=_iba_bulk_log_area,
+                    shared_log_lines=_iba_bulk_log_lines,
+                )
+                _iba_bulk_ok += 1
+            st.info(f"Input BA selesai: {_iba_bulk_ok} diproses, {_iba_bulk_skip} dilewati.")
 
         # Tombol per-paket
         st.divider()
