@@ -1,4 +1,4 @@
-"""Scrape harga penawaran peserta dari SPSE → upsert ke Supabase tabel harga_penawaran."""
+"""Scrape harga penawaran peserta dari SPSE → tulis langsung ke Excel."""
 
 import os
 import re
@@ -167,12 +167,60 @@ _SHEET_PENAWARAN = "6. Harga Penawaran"
 # Kolom awal tiap blok peserta (0-based: 0=A, 9=J, 18=S)
 _BLOK_START_COLS = [0, 9, 18]  # A, J, S
 _BLOK_LEBAR = 8  # kolom A-H, J-Q, S-Z
+_TOTAL_ROW = 200  # baris ringkasan; sengaja di luar area item normal
 
 # Header kolom dalam satu blok (urutan tetap)
 _BLOK_HEADERS = [
     "No", "Jenis Barang/Jasa", "Satuan", "Volume",
     "Harga Satuan (Rp)", "Pajak (%)", "Nilai Pajak", "Total",
 ]
+
+
+def _sync_harga_input_ba_from_sheet6(wb, progress_cb=None):
+    """Jadikan Sheet 6 sumber harga untuk Sheet 0, berdasarkan nama peserta.
+
+    Sheet 0 tidak boleh menerima angka harga dari parser/DB lama.  Harga
+    penawaran diambil dari jumlah kolom Total pada blok peserta di Sheet 6.
+    Pencocokan berdasarkan nama, bukan posisi kolom, agar sorting peserta di
+    Sheet 6 tidak dapat menukar harga antar peserta.
+    """
+    def _log(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    ws0 = wb.Sheets("0. Input BA")
+    ws6 = wb.Sheets(_SHEET_PENAWARAN)
+    try:
+        ws0.Unprotect()
+    except Exception:
+        pass
+
+    # Sheet 6: nama blok A1/J1/S1, total setelah pajak H/Q/Z.
+    for col in range(3, 6):  # C:E pada Sheet 0
+        nama = ws0.Cells(7, col).Value
+        if not nama:
+            ws0.Cells(11, col).Value = None
+            ws0.Cells(12, col).Value = None
+            continue
+
+        # Formula berbasis nama; tidak bergantung urutan/ranking peserta.
+        formula = "=IFERROR(IF($%s$7='6. Harga Penawaran'!$A$1,'6. Harga Penawaran'!$H$%d,IF($%s$7='6. Harga Penawaran'!$J$1,'6. Harga Penawaran'!$Q$%d,IF($%s$7='6. Harga Penawaran'!$S$1,'6. Harga Penawaran'!$Z$%d,\"-\"))),\"-\")" % (
+            chr(64 + col), _TOTAL_ROW,
+            chr(64 + col), _TOTAL_ROW,
+            chr(64 + col), _TOTAL_ROW,
+        )
+        ws0.Cells(11, col).Formula = formula
+        # Belum ada kolom harga terkoreksi di Sheet 6. Default sama dengan
+        # penawaran; operator tetap dapat mengganti baris 12 bila ada koreksi.
+        ws0.Cells(12, col).Formula = "=%s11" % chr(64 + col)
+        ws0.Cells(11, col).NumberFormat = '#,##0.00'
+        ws0.Cells(12, col).NumberFormat = '#,##0.00'
+        _log(f"  Harga {nama}: Sheet 0 <- Sheet 6 (berdasarkan nama)")
+
+    _log("✅ Sheet 0 harga tersinkron dari Sheet 6; tidak memakai nilai parser/DB.")
 
 
 def _col_idx_to_letter(col_0based: int) -> str:
@@ -272,6 +320,14 @@ def _tulis_penawaran_ke_sheet(xl_ws, peserta_data: list, progress_cb=None):
                 xl_ws.Cells(baris, col1 + 7).NumberFormat = '#.##0,00'
 
             baris += 1
+
+    # Total SPSE ditulis eksplisit agar pembulatan per-item tidak mengubah
+    # angka resmi (contoh selisih 0,02 rupiah pada cvrantingutamamakmur).
+    for blok_idx, peserta in enumerate(peserta_data[:3]):
+        col_start = _BLOK_START_COLS[blok_idx]
+        xl_ws.Cells(_TOTAL_ROW, col_start + 2).Value = "TOTAL PENAWARAN SPSE"
+        xl_ws.Cells(_TOTAL_ROW, col_start + 8).Value = peserta.get("total_penawaran") or 0
+        xl_ws.Cells(_TOTAL_ROW, col_start + 8).NumberFormat = '#,##0.00'
 
 
 def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
@@ -380,6 +436,10 @@ def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
             pass
 
         _tulis_penawaran_ke_sheet(ws, top_peserta, progress_cb=progress_cb)
+
+        # Harga total di Sheet 0 harus selalu mengikuti rincian Sheet 6 yang
+        # baru saja ditulis. Ini mencegah angka stale dari workbook/template.
+        _sync_harga_input_ba_from_sheet6(wb, progress_cb=progress_cb)
 
         wb.Save()
         _log("Tersimpan.")
