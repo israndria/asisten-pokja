@@ -7493,8 +7493,8 @@ _TENDER_TAB_LABELS = [
     "0️⃣ Persiapan Draft Paket",
     "1️⃣ Kirim Undangan DPP", "2️⃣ Buat Jadwal",
     "3️⃣ Setup Paket", "4️⃣ Pemberian Penjelasan",
-    "5️⃣ Download Kualifikasi", "6️⃣ Dokumen Penawaran",
-    "7️⃣ Upload & Cetak 5 BA",
+    "5️⃣ Undangan Pembuktian Kualifikasi", "6️⃣ Download Kualifikasi",
+    "7️⃣ Dokumen Penawaran", "8️⃣ Upload & Cetak 5 BA",
 ]
 _tender_active_tab = st.radio("Tab Tender", _TENDER_TAB_LABELS, horizontal=True, key="tender_active_tab")
 
@@ -9873,11 +9873,11 @@ if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
                 hide_index=True,
             )
 
-# Tab 5: Upload & Cetak 5 BA
+# Tab 8: Upload & Cetak 5 BA
 
 # ============================================================
 
-if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
+if _tender_active_tab == "8️⃣ Upload & Cetak 5 BA":
 
     ba_selected = []
 
@@ -10181,10 +10181,293 @@ if _tender_active_tab == "7️⃣ Upload & Cetak 5 BA":
             st.divider()
 
 # ============================================================
+# Tab 5: Undangan Pembuktian Kualifikasi Tender
+# ============================================================
+
+if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
+    import undangan_pembuktian_tender as _upt
+
+    st.markdown("### 5️⃣ Undangan Pembuktian Kualifikasi")
+    st.caption(
+        "Pilih peserta dari hasil evaluasi SPSE. Undangan hanya dikirim setelah "
+        "Administrasi, Kualifikasi, Teknis, dan Harga berstatus LULUS."
+    )
+
+    # Sumber daftar mengikuti Tab 6: baca metadata lokal/DB draft_paket,
+    # bukan global session cache yang bisa tertinggal setelah Sinkronkan Paket.
+    _upt_all_rows = None
+    try:
+        from config import sb as _sb_upt
+        _upt_db_rows = _sb_upt().table("draft_paket").select(
+            "kode_tender,nama_tender,kode_pokja,nomor_urut,folder_dibuat"
+        ).order("nomor_urut").execute().data or []
+        _upt_all_rows = [
+            {
+                "kode": r.get("kode_tender"),
+                "nama": r.get("nama_tender") or r.get("kode_tender"),
+                "id_lelang": r.get("kode_tender"),
+                "pokja": r.get("kode_pokja") or "",
+                "nomor_urut": r.get("nomor_urut") or "",
+                "folder_dibuat": r.get("folder_dibuat") or "",
+                "status": "aktif",
+                "tanggal": "",
+            }
+            for r in _upt_db_rows
+            if r.get("kode_tender")
+        ]
+    except Exception:
+        _upt_all_rows = _get_paket_gabungan()
+    _upt_all_rows = [p for p in (_upt_all_rows or []) if p.get("kode") and p.get("kode") != "00000000000"]
+    _upt_all_rows = [p for p in _upt_all_rows if not _is_tender_excluded(p)]
+    _upt_all_rows = sorted(_upt_all_rows, key=lambda p: str(p.get("tanggal", "")), reverse=True)
+
+    # Tab 5 hanya menampilkan paket yang sudah memiliki event tahap evaluasi
+    # di GCal. Query event dilakukan sekali per sesi, bukan satu request per paket.
+    _upt_source_key = tuple(str(p.get("kode")) for p in _upt_all_rows)
+    if (
+        st.session_state.get("upt_gcal_source_key") != _upt_source_key
+        or st.session_state.get("upt_gcal_filter_version") != 3
+    ):
+        with st.spinner("Membaca jadwal evaluasi dari Google Calendar..."):
+            st.session_state["upt_gcal_result"] = _upt.fetch_paket_evaluasi_gcal(_upt_all_rows)
+            st.session_state["upt_gcal_rows"] = st.session_state["upt_gcal_result"].get("paket", [])
+            st.session_state["upt_gcal_source_key"] = _upt_source_key
+            st.session_state["upt_gcal_filter_version"] = 3
+    _upt_gcal_result = st.session_state.get("upt_gcal_result", {})
+    _upt_rows = st.session_state.get("upt_gcal_rows", [])
+
+    # Auto-check semua paket yang lolos filter GCal saat sumber berubah.
+    # Tombol Kosongkan tetap memungkinkan user membatalkan pilihan manual.
+    _upt_selection_key = tuple(str(p.get("kode")) for p in _upt_rows)
+    if st.session_state.get("upt_selected_source_key") != _upt_selection_key:
+        st.session_state["upt_selected_packages"] = {str(p["kode"]) for p in _upt_rows}
+        st.session_state["upt_selected_source_key"] = _upt_selection_key
+    elif "upt_selected_packages" not in st.session_state:
+        st.session_state["upt_selected_packages"] = {str(p["kode"]) for p in _upt_rows}
+
+    with st.expander("1. Pilih Paket", expanded=True):
+        _urg1, _urg2 = st.columns([1, 3])
+        with _urg1:
+            if st.button("🔄 Muat ulang GCal", key="upt_reload_gcal", use_container_width=True):
+                with st.spinner("Membaca ulang jadwal evaluasi GCal..."):
+                    st.session_state["upt_gcal_result"] = _upt.fetch_paket_evaluasi_gcal(_upt_all_rows)
+                    st.session_state["upt_gcal_rows"] = st.session_state["upt_gcal_result"].get("paket", [])
+                    st.session_state["upt_gcal_filter_version"] = 3
+                st.rerun()
+        with _urg2:
+            if _upt_gcal_result.get("ok"):
+                st.caption(f"📅 {_upt_gcal_result.get('pesan', '')}")
+            else:
+                st.warning(f"GCal tidak dapat dibaca: {_upt_gcal_result.get('pesan', 'error')}")
+        if not _upt_rows:
+            st.info("Belum ada paket yang memiliki event tahap evaluasi di Google Calendar.")
+        else:
+            st.caption(f"📋 {len(_upt_rows)} paket — centang satu atau lebih:")
+            _u1, _u2 = st.columns(2)
+            with _u1:
+                if st.button("✅ Pilih semua paket", key="upt_all_pkg", use_container_width=True):
+                    st.session_state["upt_selected_packages"] = {str(p["kode"]) for p in _upt_rows}
+                    st.rerun()
+            with _u2:
+                if st.button("⬜ Kosongkan", key="upt_none_pkg", use_container_width=True):
+                    st.session_state["upt_selected_packages"] = set()
+                    st.rerun()
+            for _up in _upt_rows:
+                _uk = str(_up["kode"])
+                _uc = st.checkbox(
+                    f"{_pokja_label(_up)[:70]}  \n_📅 Evaluasi: {_up.get('tgl_evaluasi_gcal') or '-'} · Pembuktian: {_up.get('tgl_pembuktian_gcal') or '-'}_",
+                    value=_uk in st.session_state["upt_selected_packages"],
+                    key=f"upt_pkg_{_uk}",
+                )
+                if _uc:
+                    st.session_state["upt_selected_packages"].add(_uk)
+                else:
+                    st.session_state["upt_selected_packages"].discard(_uk)
+
+    _upt_selected = [_p for _p in _upt_rows if str(_p["kode"]) in st.session_state["upt_selected_packages"]]
+    # Seperti Tab 6, status peserta dimuat otomatis untuk paket yang terpilih.
+    # Tetap tersedia tombol manual untuk refresh setelah perubahan di SPSE.
+    _upt_status_missing = [
+        _p for _p in _upt_selected
+        if f"upt_status_{_p['kode']}" not in st.session_state
+        or st.session_state.get("upt_status_filter_version") != 2
+    ]
+    if _upt_status_missing:
+        with st.spinner(f"Memuat peserta {len(_upt_status_missing)} paket dari SPSE..."):
+            for _up in _upt_status_missing:
+                st.session_state[f"upt_status_{_up['kode']}"] = _upt.fetch_evaluasi_paket(str(_up["kode"]))
+            st.session_state["upt_status_filter_version"] = 2
+    _u3, _u4 = st.columns([1, 3])
+    with _u3:
+        if st.button(
+            f"🔄 Muat status SPSE ({len(_upt_selected)})",
+            key="upt_load_status",
+            type="primary",
+            use_container_width=True,
+            disabled=not _upt_selected,
+        ):
+            with st.spinner("Membaca status evaluasi dari SPSE..."):
+                for _up in _upt_selected:
+                    st.session_state[f"upt_status_{_up['kode']}"] = _upt.fetch_evaluasi_paket(str(_up["kode"]))
+                st.session_state["upt_status_filter_version"] = 2
+            st.rerun()
+    with _u4:
+        st.caption("Status tidak dimuat massal. Pilih paket lalu klik Muat status SPSE.")
+
+    _upt_targets = []
+    if _upt_selected:
+        st.markdown("#### 2. Peserta & Status Evaluasi")
+        st.caption("Paket terpilih otomatis masuk target. Atur jadwal undangan di sini.")
+        _ud1, _ud2 = st.columns(2)
+        with _ud1:
+            _upt_tgl = st.date_input("Tanggal mulai", value=datetime.now().date(), format="DD/MM/YYYY", key="upt_tgl_mulai")
+            _upt_jam_mulai = st.time_input("Jam mulai", value=datetime.strptime("09:00", "%H:%M").time(), key="upt_jam_mulai")
+        with _ud2:
+            _upt_tgl_selesai = st.date_input("Tanggal selesai", value=datetime.now().date(), format="DD/MM/YYYY", key="upt_tgl_selesai")
+            _upt_jam_selesai = st.time_input("Jam selesai", value=datetime.strptime("15:00", "%H:%M").time(), key="upt_jam_selesai")
+        for _up in _upt_selected:
+            _uk = str(_up["kode"])
+            _ur = st.session_state.get(f"upt_status_{_uk}")
+            if not _ur:
+                st.info(f"{_pokja_label(_up)} — klik Muat status SPSE.")
+                continue
+            if not _ur.get("ok"):
+                st.error(f"{_pokja_label(_up)}: {_ur.get('pesan')}")
+                continue
+            with st.expander(f"{_pokja_label(_up)} — {_ur.get('pesan')}", expanded=True):
+                for _ui, _ps in enumerate(_ur.get("peserta", []), 1):
+                    _st = _ps.get("status", {})
+                    _eligible = all(_st.get(x) == "lulus" for x in ("A", "K", "T", "H"))
+                    _status_text = " | ".join(f"{x}: {_st.get(x, 'belum').upper()}" for x in ("A", "K", "T", "H"))
+                    _pc1, _pc2 = st.columns([5, 1])
+                    with _pc1:
+                        _pick = st.checkbox(
+                            f"{_ui}. {_ps.get('nama')} — {_status_text}",
+                            value=True,
+                            key=f"upt_ps_v2_{_uk}_{_ps.get('peserta_id')}",
+                        )
+                    with _pc2:
+                        if st.button(
+                            "✅ Sudah LULUS" if _eligible else "▶ Evaluasi",
+                            key=f"upt_eval_one_{_uk}_{_ps.get('peserta_id')}",
+                            use_container_width=True,
+                            disabled=_eligible,
+                            help="Evaluasi Administrasi → Kualifikasi → Teknis → Harga melalui endpoint SPSE.",
+                        ):
+                            st.session_state["upt_eval_pending"] = {"paket": _up, "peserta": _ps}
+                            st.rerun()
+                    if _pick:
+                        _upt_targets.append({"paket": _up, "peserta": _ps})
+
+    _upt_pending = st.session_state.get("upt_eval_pending")
+    if _upt_pending:
+        _pp = _upt_pending["paket"]
+        _pps = _upt_pending["peserta"]
+        st.warning(
+            f"Konfirmasi evaluasi **{_pps.get('nama')}** pada {_pokja_label(_pp)} "
+            "untuk tahap Administrasi → Kualifikasi → Teknis → Harga."
+        )
+        _py, _pn = st.columns(2)
+        with _py:
+            if st.button("✅ Ya, evaluasi peserta ini", key="upt_eval_one_yes", type="primary", use_container_width=True):
+                _logs_one = [f"=== {_pp.get('kode')} | {_pps.get('nama')} ==="]
+                _log_one_area = st.empty()
+                _log_one_area.code("\n".join(_logs_one))
+                _ev_one = _upt.evaluasi_lulus_otomatis(
+                    str(_pp["kode"]), str(_pps["peserta_id"]),
+                    progress_cb=lambda msg: (_logs_one.append(msg), _log_one_area.code("\n".join(_logs_one))),
+                )
+                _logs_one.append(("✅ " if _ev_one.get("ok") else "❌ ") + _ev_one.get("pesan", ""))
+                st.session_state[f"upt_status_{_pp['kode']}"] = _upt.fetch_evaluasi_paket(str(_pp["kode"]))
+                st.session_state["upt_eval_pending"] = None
+                st.session_state["upt_eval_one_log"] = _logs_one
+                st.rerun()
+        with _pn:
+            if st.button("Batal", key="upt_eval_one_no", use_container_width=True):
+                st.session_state["upt_eval_pending"] = None
+                st.rerun()
+
+    if st.session_state.get("upt_eval_one_log"):
+        with st.expander("📋 Log evaluasi peserta terakhir", expanded=True):
+            st.code("\n".join(st.session_state["upt_eval_one_log"]))
+
+    if _upt_targets:
+        _upt_tempat = (
+            "Kantor UKPBJ Kabupaten Tapin, Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, "
+            "Kecamatan Tapin Utara, Rantau, Kabupaten Tapin. Kode Pos : 71111"
+        )
+        _upt_dibawa = (
+            "Dokumen (asli dan copy) sebagaimana disampaikan dalam penawaran dan pada isian "
+            "kualifikasi serta dokumen/data dukungnya"
+        )
+        _upt_hadir = (
+            "1. Direksi yang namanya ada dalam akta pendirian/perubahan atau pihak yang sah "
+            "menurut akta pendirian/perubahan; 2. Penerima kuasa dari direksi yang nama penerima "
+            "kuasanya tercantum dalam akta pendirian/perubahan; 3. Pihak lain yang bukan direksi "
+            "dapat menghadiri pembuktian kualifikasi selama berstatus sebagai tenaga kerja tetap "
+            "(yang dibuktikan dengan bukti lapor/potong pajak PPh Pasal 21 Form 1721 atau Form "
+            "1721-A1) dan memperoleh kuasa dari Direksi yang namanya ada dalam akta "
+            "pendirian/perubahan atau pihak yang sah menurut akta pendirian/perusahaan; 4. Kepala "
+            "Cabang perusahaan yang diangkat oleh kantor pusat yang dibuktikan dengan dokumen otentik."
+        )
+        # Evaluasi sekarang dilakukan lewat tombol per peserta; pengiriman undangan
+        # tidak lagi menjalankan evaluasi otomatis sebagai efek samping.
+        _upt_auto = False
+        st.warning("Undangan yang sudah terkirim tidak dapat dihapus dari SPSE.")
+        if st.button(
+            f"📨 Siapkan {len(_upt_targets)} undangan",
+            key="upt_prepare_send",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state["upt_confirm_send"] = True
+            st.rerun()
+
+        if st.session_state.get("upt_confirm_send"):
+            st.error(
+                f"Konfirmasi: {len(_upt_targets)} peserta akan diproses. "
+                "Jika opsi otomatis aktif, checklist evaluasi dapat ditulis ke SPSE terlebih dahulu."
+            )
+            _yc, _nc = st.columns(2)
+            with _yc:
+                if st.button("✅ Ya, proses & kirim", key="upt_confirm_yes", type="primary", use_container_width=True):
+                    st.session_state["upt_confirm_send"] = False
+                    _logs = []
+                    _log_area = st.empty()
+                    def _upt_log(msg):
+                        _logs.append(msg)
+                        _log_area.code("\n".join(_logs))
+                    for _ti in _upt_targets:
+                        _tp = _ti["paket"]
+                        _ps = _ti["peserta"]
+                        _uk = str(_tp["kode"])
+                        _pid = str(_ps["peserta_id"])
+                        _upt_log(f"=== {_uk} | {_ps.get('nama')} ===")
+                        if _upt_auto:
+                            _ev = _upt.evaluasi_lulus_otomatis(_uk, _pid, progress_cb=_upt_log)
+                            if not _ev.get("ok"):
+                                _upt_log(f"❌ Evaluasi gagal: {_ev.get('pesan')}")
+                                continue
+                        _check = _upt.fetch_evaluasi_paket(_uk)
+                        _fresh = next((x for x in _check.get("peserta", []) if x["peserta_id"] == _pid), None)
+                        if not _fresh or not all(_fresh.get("status", {}).get(x) == "lulus" for x in ("A", "K", "T", "H")):
+                            _upt_log("⏭️ Skip: A/K/T/H belum seluruhnya LULUS di SPSE.")
+                            continue
+                        _waktu = f"{_upt_tgl:%d-%m-%Y} {_upt_jam_mulai:%H:%M}"
+                        _sampai = f"{_upt_tgl_selesai:%d-%m-%Y} {_upt_jam_selesai:%H:%M}"
+                        _iv = _upt.kirim_undangan_pembuktian(_pid, _waktu, _sampai, _upt_tempat, _upt_dibawa, _upt_hadir)
+                        _upt_log(("✅ " if _iv.get("ok") else "❌ ") + _iv.get("pesan", ""))
+                    st.success("Proses undangan selesai. Muat ulang status SPSE untuk memverifikasi hasil.")
+            with _nc:
+                if st.button("Batal", key="upt_confirm_no", use_container_width=True):
+                    st.session_state["upt_confirm_send"] = False
+                    st.rerun()
+
+# ============================================================
 # Tab 6: Download Dokumen Kualifikasi
 # ============================================================
 
-if _tender_active_tab == "5️⃣ Download Kualifikasi":
+if _tender_active_tab == "6️⃣ Download Kualifikasi":
     # ── Auto-fetch paket dari Supabase (tanpa CDP/Chrome) ────────────────────
     _kl_source_paket = None
     if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
@@ -10946,10 +11229,10 @@ Mulai evaluasi sekarang."""
 # Tab 7: Dokumen Penawaran — Pindah File ke Folder Paket
 # ============================================================
 
-if _tender_active_tab == "6️⃣ Dokumen Penawaran":
+if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     import pindah_penawaran_engine as _pe
 
-    st.markdown("### 6️⃣ Dokumen Penawaran")
+    st.markdown("### 7️⃣ Dokumen Penawaran")
     st.caption(
         "Alur kerja: scan hasil decrypt Apendo → pindahkan/gabung dokumen → evaluasi dan input BA."
     )
