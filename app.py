@@ -7925,7 +7925,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 import shutil as _t_shutil
                                 _t_eval_files = [
                                     "PROTOKOL_EVALUASI_AI.md",
-                                    "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md",
+                                    "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md",
                                 ]
                                 _t_draft_eval_files = [
                                     "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md",
@@ -11129,7 +11129,7 @@ PREFLIGHT WAJIB — berhenti dengan ERROR jika gagal
 1. Pastikan folder paket di atas benar dan dapat dibaca.
 2. Baca PROTOKOL_EVALUASI_AI.md dari folder paket/5. Evaluator Kualifikasi & Teknis/.
    Jika tidak ada, gunakan master root _SOP Evaluator/PROTOKOL_EVALUASI_AI.md.
-3. Baca evaluator spesifik: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md,
+3. Baca evaluator spesifik: EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md,
    prioritaskan salinan di folder paket/5. Evaluator Kualifikasi & Teknis/.
 4. Pastikan Dokpil tersedia. Prioritaskan `3. Dokpil Full PK v1.docx`, `dokpil_*.pdf`,
    dan dokumen pemilihan di root paket/subfolder `2. Rancangan Kontrak/`.
@@ -11144,8 +11144,9 @@ ATURAN EVALUASI WAJIB
 2. Evaluasi setiap penyedia satu per satu, maksimal 3 peserta utama jika tersedia.
    Sebutkan daftar penyedia yang ditemukan dan jangan diam-diam melewati peserta.
    Jangan mencampur nama, nilai, atau bukti antar peserta.
-3. Gunakan bukti dokumen lokal saja; jangan menjadikan Supabase/Excel sebagai bukti
-   evaluasi. Jika dokumen tidak ada, tulis TIDAK ADA.
+3. Gunakan bukti dokumen lokal saja untuk administrasi/teknis/kualifikasi; untuk angka
+   harga, Sheet `6. Harga Penawaran` adalah sumber rekonsiliasi resmi dan wajib
+   dicocokkan dengan SPSE serta DokFull. Jika dokumen/data tidak ada, tulis TIDAK ADA.
 4. Ikuti protokol anti-false-positive: cari seluruh dokumen sebelum menyimpulkan tidak ada;
    ragu = FLAG KLARIFIKASI, bukan gugur otomatis.
 5. Untuk setiap temuan, cite nama file + halaman/section + kutipan singkat.
@@ -11156,12 +11157,13 @@ ATURAN EVALUASI WAJIB
 
 OUTPUT WAJIB
 - Tulis _HASIL_EVALUASI_PK.md di ROOT folder paket (bukan subfolder).
-- Isi hasil per peserta: Administrasi, Teknis, Kualifikasi, Flag Audit, dan Kesimpulan Akhir.
+- Isi hasil per peserta: Administrasi, Teknis, Kualifikasi, Harga, Flag Audit, dan
+  Kesimpulan Akhir E2E.
 - Pertahankan bagian `<!-- ANALISIS MANUAL -->` jika file output sudah ada; jangan timpa
   analisis manual user.
 - Setelah menulis, buka ulang/cek file output dan pastikan tidak kosong.
 - Pastikan output memuat: ekstraksi persyaratan Dokpil, evaluasi Administrasi, Teknis,
-  Kualifikasi, Flag Audit/Klarifikasi, dan Kesimpulan Akhir per peserta.
+  Kualifikasi, Harga, Flag Audit/Klarifikasi, dan Kesimpulan Akhir E2E per peserta.
 - Jika file sumber, protokol, atau output gagal dibuat, tulis ERROR yang spesifik dan
   jangan menyatakan evaluasi berhasil.
 
@@ -11521,9 +11523,64 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
         st.divider()
 
+        def _harga_sheet6_tender(folder_paket):
+            """Baca total final Sheet 6 via Excel COM; read-only, tanpa mengubah XLSM."""
+            import glob as _glob_harga
+            _xlsm = (
+                _glob_harga.glob(os.path.join(folder_paket, "0. BA*.xlsm"))
+                or _glob_harga.glob(os.path.join(folder_paket, "*.xlsm"))
+            )
+            if not _xlsm:
+                return ["- TIDAK DITEMUKAN: workbook .xlsm"]
+            _xl_harga = _wb_harga = None
+            _out_harga = []
+            try:
+                import win32com.client as _wc_harga, pythoncom as _pyc_harga
+                _pyc_harga.CoInitialize()
+                _xl_harga = _wc_harga.DispatchEx("Excel.Application")
+                _xl_harga.Visible = False
+                _xl_harga.DisplayAlerts = False
+                _wb_harga = _xl_harga.Workbooks.Open(
+                    _xlsm[0], ReadOnly=True, UpdateLinks=0,
+                    IgnoreReadOnlyRecommended=True,
+                )
+                _ws_harga = _wb_harga.Worksheets("6. Harga Penawaran")
+                _used_rows = _ws_harga.UsedRange.Rows.Count
+                for _start in (1, 10, 19):
+                    _nama = str(_ws_harga.Cells(1, _start).Value or "").strip()
+                    if not _nama:
+                        continue
+                    _total = None
+                    for _row in range(1, _used_rows + 1):
+                        _label = str(_ws_harga.Cells(_row, _start + 1).Value or "").strip().upper()
+                        if _label == "TOTAL PENAWARAN SPSE":
+                            _total = _ws_harga.Cells(_row, _start + 7).Value
+                            break
+                    if _total is None:
+                        _out_harga.append(f"- {_nama}: TOTAL PENAWARAN SPSE TIDAK DITEMUKAN")
+                    else:
+                        _out_harga.append(f"- {_nama}: Rp {_total:,.2f} (Sheet 6, total penawaran SPSE)")
+                return _out_harga or ["- Sheet 6 kosong"]
+            except Exception as _harga_err:
+                return [f"- GAGAL MEMBACA SHEET 6 VIA COM: {_harga_err}"]
+            finally:
+                try:
+                    if _wb_harga is not None:
+                        _wb_harga.Close(False)
+                    if _xl_harga is not None:
+                        _xl_harga.Quit()
+                except Exception:
+                    pass
+                try:
+                    import pythoncom as _pyc_harga_cleanup
+                    _pyc_harga_cleanup.CoUninitialize()
+                except Exception:
+                    pass
+
         def _prompt_evaluasi_tender_apendo(folder_paket, nama_paket, dokfull_paths, checklist_paths):
             _dokfull_list = "\n".join(f"- `{p}`" for p in dokfull_paths)
             _checklist_list = "\n".join(f"- `{p}`" for p in checklist_paths) or "- TIDAK DITEMUKAN"
+            _harga_sheet6 = "\n".join(_harga_sheet6_tender(folder_paket))
             return f"""Lakukan evaluasi penawaran (pascakualifikasi) untuk paket tender berikut.
 
 Nama paket: {nama_paket}
@@ -11534,15 +11591,23 @@ Untuk administrasi dan kualifikasi, gunakan checklist SPSE berikut:
 {_checklist_list}
 Untuk teknis dan harga, gunakan PDF gabungan berikut:
 {_dokfull_list}
+ANGKA HARGA OTORITATIF DARI EXCEL — JANGAN DIGANTI DENGAN ANGKA LAIN
+Sheet `6. Harga Penawaran` sudah diisi langsung dari SPSE. Gunakan total berikut
+untuk evaluasi harga dan perhitungan persentase terhadap HPS:
+{_harga_sheet6}
+Jika angka pada DokFull atau sumber lain berbeda, catat sebagai konflik data dan
+gunakan angka Sheet 6 untuk evaluasi harga; jangan mengambil angka parser lama.
 Ikuti strategi hybrid dalam PROTOKOL_EVALUASI_AI.md. Buka PDF spesifik/pecahan
 hanya untuk verifikasi tertarget jika ada konflik, scan buruk, atau bukti detail
 belum cukup. Jika sumber tidak ada, tandai TIDAK ADA dan jangan mengarang.
 
 Langkah:
 1. Baca file PROTOKOL_EVALUASI_AI.md di folder paket (atau subfolder evaluator jika ada).
-2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md.
+2. Ikuti seluruh instruksi dalam protokol tersebut — evaluator yang dipakai: EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md.
 3. Baca setiap checklist dan DokFull, satu peserta per file, tanpa mencampur data.
-4. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
+4. Evaluasi harga berdasarkan angka Sheet 6 yang disediakan di atas; tampilkan
+   nominal, persentase HPS, dan status harga terpisah dari administrasi/teknis/kualifikasi.
+5. Output: _HASIL_EVALUASI_PK.md di ROOT folder paket.
 
 Jangan mengubah Excel, DOCM, Supabase, SPSE, atau dokumen sumber. Pertahankan bagian
 `<!-- ANALISIS MANUAL -->` jika output sudah ada. Output wajib memuat ekstraksi Dokpil,

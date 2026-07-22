@@ -97,7 +97,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             elif jenis_pl == "PK":
                 _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_PL_PK.md"]
             else:
-                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_TENDER_PK_PASCAKUALIFIKASI.md"]
+                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md"]
             _copied = []
             _ppk_dir = _o.path.join(target, "0. Draft Dokumen PPK")
             _o.makedirs(_ppk_dir, exist_ok=True)
