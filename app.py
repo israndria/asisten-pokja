@@ -11919,29 +11919,49 @@ Mulai sekarang."""
             # ── 3. Dokumen penawaran ─────────────────────────────────────────────────
             dokpen = None
             try:
-                from config import sb as _sb_dp
-                _dp_r = _sb_dp().table("dokumen_penawaran").select("*").eq(
-                    "kode_tender", kode_tender
-                ).limit(1).execute()
-                if _dp_r.data:
-                    dokpen = _dp_r.data[0]
-                    _log_cb(f"  Dokpen: daftar={dokpen.get('jml_daftar')} kirim={dokpen.get('jml_kirim')}")
+                # Source of truth untuk angka BA harus snapshot SPSE terbaru.
+                # Supabase hanya cache; memakai cache langsung pernah membuat
+                # C26:C29 berisi angka dari scrape lama.
+                from identitas_engine import scrape_dokumen_penawaran
+                dokpen = scrape_dokumen_penawaran(kode_tender)
+                _log_cb(
+                    "  Dokpen SPSE live: "
+                    f"daftar={dokpen.get('jml_daftar')} "
+                    f"kirim={dokpen.get('jml_kirim')} "
+                    f"tidak_kirim={dokpen.get('jml_tidak_kirim')} "
+                    f"tidak_lengkap={dokpen.get('jml_tidak_lengkap')} "
+                    f"tidak_dibuka={dokpen.get('jml_tidak_dapat_dibuka')}"
+                )
+                # Cache hanya untuk histori/layar lain; kegagalan cache tidak
+                # boleh menggagalkan penulisan Excel yang sudah punya snapshot.
+                try:
+                    from identitas_engine import upsert_dokumen_penawaran
+                    upsert_dokumen_penawaran(kode_tender, dokpen)
+                except Exception as _e_cache:
+                    _log_cb(f"  ⚠️ Cache dokpen gagal diperbarui: {_e_cache}")
             except Exception as _e_dp:
-                _log_cb(f"  ⚠️ Gagal ambil dokpen: {_e_dp}")
+                _log_cb(f"  ❌ Gagal mengambil dokumen penawaran langsung dari SPSE: {_e_dp}")
+                _log_cb("  ⚠️ Excel tidak diisi dengan cache lama agar tidak menghasilkan BA stale.")
+            if dokpen is None:
+                _log_cb("  ⛔ Input BA dihentikan untuk paket ini; ulangi setelah sesi SPSE tersedia.")
+                return
 
             # ── 4. (Opsional) Tanggal dari Google Calendar ───────────────────────────
             tgl_pembukaan = None
             tgl_pembuktian = None
+            tgl_penetapan = None
             if do_gcal:
                 try:
                     import gcal_helper
                     _gcal_hasil = gcal_helper.get_tanggal_ba_dari_gcal(nama_tender)
                     tgl_pembukaan  = _gcal_hasil.get("pembukaan")
                     tgl_pembuktian = _gcal_hasil.get("negosiasi")
+                    tgl_penetapan  = _gcal_hasil.get("hasil_pemilihan") or _gcal_hasil.get("evaluasi")
                     _log_cb(
                         "  GCal: "
                         f"pembukaan={tgl_pembukaan or 'tidak ditemukan'}, "
-                        f"pembuktian={tgl_pembuktian or 'tidak ditemukan'}"
+                        f"pembuktian={tgl_pembuktian or 'tidak ditemukan'}, "
+                        f"penetapan={tgl_penetapan or 'tidak ditemukan'}"
                     )
                 except Exception as _e_gc:
                     _log_cb(f"  ⚠️ GCal error (token expired?): {_e_gc} — tanggal diisi manual")
@@ -11957,6 +11977,7 @@ Mulai sekarang."""
                 dokpen,
                 tgl_pembukaan,
                 tgl_pembuktian,
+                tgl_penetapan,
                 skp_rows,
                 _log_cb,
             )

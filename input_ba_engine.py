@@ -11,6 +11,7 @@ import os
 # ── Konstanta baris sheet "0. Input BA" ─────────────────────────────────────
 ROW_TGL_PEMBUKAAN  = 3
 ROW_TGL_PEMBUKTIAN = 4
+CELL_TGL_PENETAPAN = "G2"  # helper tanggal khusus BA Penetapan Pemenang
 
 # Per peserta (kolom C=3, D=4, E=5)
 ROW_NAMA_PERUSAHAAN = 7
@@ -69,6 +70,7 @@ def fill_input_ba(
     dokpen: dict | None,
     tgl_pembukaan,
     tgl_pembuktian,
+    tgl_penetapan=None,
     skp_rows: list | None = None,
     progress_cb=None,
 ) -> dict:
@@ -84,6 +86,7 @@ def fill_input_ba(
                         jml_tidak_lengkap, jml_tidak_dapat_dibuka
         tgl_pembukaan : datetime.date atau None
         tgl_pembuktian: datetime.date atau None
+        tgl_penetapan : datetime.date atau None; khusus BA Penetapan Pemenang
         skp_rows      : list dict per peserta (urut sama dgn peserta_rows) atau None.
                         Key: skp_catatan (int JP — jumlah pekerjaan berjalan), skp (int), hasil (str "Memenuhi"/"Tidak Memenuhi")
         progress_cb   : callback(msg: str) — opsional
@@ -181,6 +184,17 @@ def fill_input_ba(
                 cell_hari2 = ws.Cells(ROW_TGL_PEMBUKTIAN, 4)
                 cell_hari2.NumberFormat = "@"
                 cell_hari2.Value = _HARI_ID[tgl_pembuktian.weekday()]
+
+        # Penetapan tidak selalu berlangsung pada hari pembuktian. Simpan di
+        # helper terpisah agar BA Pembuktian/Klarifikasi tetap memakai C4.
+        if tgl_penetapan is not None:
+            _log(f"  Mengisi tanggal penetapan: {tgl_penetapan}")
+            cell_pen = ws.Cells(2, 7)  # G2
+            cell_pen.NumberFormat = "dd mmmm yyyy"
+            # Tulis serial Excel, bukan datetime COM, agar timezone WITA tidak
+            # menggeser 27 Juli menjadi 26 Juli 16:00.
+            _d_pen = tgl_penetapan.date() if isinstance(tgl_penetapan, datetime.datetime) else tgl_penetapan
+            cell_pen.Value = (_d_pen - datetime.date(1899, 12, 30)).days
 
         # ── Identitas peserta (kolom C/D/E per urutan) ───────────────────────
         for urutan, p in enumerate(peserta_rows[:3], 1):

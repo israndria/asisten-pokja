@@ -21,42 +21,88 @@ def _headers() -> dict:
     }
 
 
+def _nama_tanpa_gelar(value: str) -> str:
+    """Hilangkan gelar/sufiks setelah koma dari nama direktur.
+
+    SPSE sering mengembalikan nama seperti ``NAMA, GELAR AKADEMIK``.
+    Untuk dokumen BA cukup gunakan nama sebelum koma; nama perusahaan dan
+    field identitas lain tidak melalui normalisasi ini.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text.split(",", 1)[0].strip() if "," in text else text
+
+
 # ──────────────────────────────────────────────
 # 1. Scrape /penawaran → dokumen_penawaran
 # ──────────────────────────────────────────────
 
 def scrape_dokumen_penawaran(kode_tender: str) -> dict:
     """
-    GET /peserta/{kode_tender}/penawaran → hitung jumlah peserta daftar/kirim.
-    Return: {"jml_daftar": int, "jml_kirim": int, "jml_tidak_kirim": int}
+    GET /peserta/{kode_tender}/penawaran → hitung statistik dokumen dari SPSE.
+
+    ``jml_kirim`` berarti peserta dengan dokumen administrasi/teknis dan
+    harga sama-sama berstatus Dikirim serta link rincian tersedia. Peserta
+    lain masuk ``jml_tidak_lengkap``; ini mengikuti format BA yang dipakai
+    workbook tender saat ini.
     """
     url = f"{SPSE_BASE_URL}peserta/{kode_tender}/penawaran"
     resp = requests.get(url, headers=_headers(), timeout=15)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
-    tbl = soup.find("table")
+    tbl = next(
+        (
+            table for table in soup.find_all("table")
+            if "Nama Penyedia" in table.get_text(" ", strip=True)
+            and "Status Penawaran" in table.get_text(" ", strip=True)
+        ),
+        None,
+    )
     if not tbl:
-        return {"jml_daftar": 0, "jml_kirim": 0, "jml_tidak_kirim": 0}
+        return {
+            "jml_daftar": 0,
+            "jml_kirim": 0,
+            "jml_tidak_kirim": 0,
+            "jml_tidak_lengkap": 0,
+            "jml_tidak_dapat_dibuka": 0,
+        }
 
     rows = tbl.find_all("tr")
     jml_daftar = 0
     jml_kirim = 0
+    jml_tidak_dapat_dibuka = 0
 
     for row in rows:
         cells = row.find_all("td")
         if len(cells) < 10:
             continue
         jml_daftar += 1
-        # Kolom "Administrasi dan Teknis" status (index ~9)
-        status_adm = cells[9].get_text(strip=True) if len(cells) > 9 else ""
-        if "Dikirim" in status_adm:
-            jml_kirim += 1
+        # Kolom status: Administrasi/Teknis=index 9, Harga=index 10.
+        status_adm = cells[9].get_text(" ", strip=True)
+        status_harga = cells[10].get_text(" ", strip=True) if len(cells) > 10 else ""
+        lengkap = "Dikirim" in status_adm and "Dikirim" in status_harga
+        if lengkap:
+            # Link rincian menjadi indikator konservatif bahwa dokumen dapat
+            # dibuka dari sisi Pokja; halaman SPSE tidak memiliki label gagal
+            # buka yang eksplisit.
+            links = [a.get("href", "") for a in row.find_all("a", href=True)]
+            ada_rincian = any("rincian_adminteknis" in h for h in links) and any(
+                "rincian_penawaran" in h for h in links
+            )
+            if ada_rincian:
+                jml_kirim += 1
+            else:
+                jml_tidak_dapat_dibuka += 1
+
+    jml_tidak_kirim = jml_daftar - jml_kirim
+    jml_tidak_lengkap = jml_daftar - jml_kirim
 
     return {
         "jml_daftar":      jml_daftar,
         "jml_kirim":       jml_kirim,
-        "jml_tidak_kirim": jml_daftar - jml_kirim,
+        "jml_tidak_kirim": jml_tidak_kirim,
+        "jml_tidak_lengkap": jml_tidak_lengkap,
+        "jml_tidak_dapat_dibuka": jml_tidak_dapat_dibuka,
     }
 
 
@@ -66,6 +112,8 @@ def upsert_dokumen_penawaran(kode_tender: str, data: dict) -> None:
         "jml_daftar":      data["jml_daftar"],
         "jml_kirim":       data["jml_kirim"],
         "jml_tidak_kirim": data["jml_tidak_kirim"],
+        "jml_tidak_lengkap": data.get("jml_tidak_lengkap", data["jml_tidak_kirim"]),
+        "jml_tidak_dapat_dibuka": data.get("jml_tidak_dapat_dibuka", 0),
     }).execute()
 
 
@@ -122,13 +170,13 @@ def scrape_preview(peserta_id: str) -> dict:
                 nama  = cells[0].get_text(strip=True)
                 status = cells[6].get_text(strip=True)
                 if "Pemilik" in status or "Direktur" in status:
-                    result["nama_direktur"] = nama
+                    result["nama_direktur"] = _nama_tanpa_gelar(nama)
                     break
         # Fallback: ambil baris pertama jika tidak ada Pemilik
         if not result["nama_direktur"] and len(rows) > 1:
             cells = rows[1].find_all("td")
             if cells:
-                result["nama_direktur"] = cells[0].get_text(strip=True)
+                result["nama_direktur"] = _nama_tanpa_gelar(cells[0].get_text(strip=True))
 
     return result
 
