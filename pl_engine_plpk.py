@@ -24,14 +24,13 @@ STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
 
 
 def load_draft_pl() -> list[dict]:
-    """Ambil paket PL PK (jenis_pl=PK, jenis_kontrak=Harga Satuan), urut terbaru dulu."""
+    """Ambil semua paket pekerjaan konstruksi (jenis_pl=PK), urut terbaru dulu."""
     try:
         return (
             _sb()
             .table("draft_paket_pl")
             .select("*")
             .eq("jenis_pl", "PK")
-            .eq("jenis_kontrak", "Harga Satuan")
             .order("diambil_pada", desc=True)
             .execute()
             .data or []

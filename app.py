@@ -458,9 +458,13 @@ def _load_draft_paket_cached() -> list:
 
 
 @st.cache_data(ttl=60)
-def _load_draft_pl_cached() -> list:
-    """Cache load_draft_pl() 60 detik. Invalidasi via .clear() setelah mutasi draft_paket_pl."""
-    rows = pl_engine.load_draft_pl()
+def _load_draft_pl_cached(engine_kind: str = "JKK") -> list:
+    """Cache loader PL terpisah per jenis engine (JKK/PK)."""
+    if str(engine_kind).upper() == "PK":
+        import pl_engine_plpk as _engine
+    else:
+        import pl_engine as _engine
+    rows = _engine.load_draft_pl()
     hydrate = getattr(_pl_display_engine, "_hydrate_nomor_urut_folder", None)
     return hydrate(rows) if hydrate and any(not r.get("nomor_urut") for r in rows) else rows
 
@@ -4520,6 +4524,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     import pl_engine_plpk as pl_engine
+    import pl_engine as _pl_engine_utils
     _PL_TAB_LABELS = [
         "1️⃣ Draft Paket PL",
         "2️⃣ Kirim Undangan DPP",
@@ -4549,7 +4554,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        _pl_rows = _load_draft_pl_cached()
+        _pl_rows = _load_draft_pl_cached("PK")
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
         _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
@@ -4611,7 +4616,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         # Invalidasi cache agar hasil serap SPSE langsung terbaca.
                         _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
-                        _pl_rows = _load_draft_pl_cached()
+                        _pl_rows = _load_draft_pl_cached("PK")
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
 
@@ -4918,8 +4923,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             # Plan: pre-compute nama folder per paket
             _pl_no_offset = {
-                _PL_DIR_JKK: pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
-                _PL_DIR_PK:  pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
+                _PL_DIR_JKK: _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_JKK),
+                _PL_DIR_PK:  _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_PK),
             }
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
@@ -4930,7 +4935,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _bno0  = _pl_no_offset[_bout_base0] + _bi0
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
-                _bnm_folder0 = pl_engine.truncate_nama_folder(_bout_base0, _bnm_folder0)
+                _bnm_folder0 = _pl_engine_utils.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
@@ -5281,7 +5286,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
 
-            _pl_rows_kd = _load_draft_pl_cached()
+            _pl_rows_kd = _load_draft_pl_cached("PK")
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
             _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
             _kd_selected = []
@@ -5514,7 +5519,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         import jadwal_engine_pl as _jepl
         _libur_map_pl = _LIBUR_MAP
 
-        _pljd_rows = _load_draft_pl_cached()
+        _pljd_rows = _load_draft_pl_cached("PK")
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
         if not _pljd_rows:
@@ -5821,7 +5826,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _depl = _depl_pk  # alias — sudah di-import top-level
 
-        _plsp_rows = _load_draft_pl_cached()
+        _plsp_rows = _load_draft_pl_cached("PK")
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
         _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
         if not _plsp_rows:
@@ -6433,7 +6438,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.warning("\n".join(_ref_res_pk["errors"][:5]))
             _load_draft_pl_cached.clear()
             st.rerun()
-        _pp_rows = _load_draft_pl_cached()
+        _pp_rows = _load_draft_pl_cached("PK")
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
         if _pp_rows:
@@ -6764,7 +6769,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Load paket PL — filter paket selesai
         _pl8_rows = []
         try:
-            _raw8 = _load_draft_pl_cached()
+            _raw8 = _load_draft_pl_cached("PK")
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
             _pl8_kode_status = []
@@ -7084,7 +7089,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                _raw7 = _load_draft_pl_cached()
+                _raw7 = _load_draft_pl_cached("PK")
                 _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
                 _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
                 st.session_state["pl7_rows"] = _raw7
@@ -7262,7 +7267,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # Selalu normalisasi daftar di sini. Tab Evaluasi dapat dibuka langsung,
         # tanpa lebih dulu merender Tab Download Kualifikasi.
-        _raw8 = _load_draft_pl_cached()
+        _raw8 = _load_draft_pl_cached("PK")
         _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
         _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
         if _pl8_dup_n:
@@ -7484,7 +7489,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _rrb8(st, _ringkasan8)
 
     if _pl_active_tab == "🔟 Penetapan Pemenang":
-        _raw10 = _load_draft_pl_cached()
+        _raw10 = _load_draft_pl_cached("PK")
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
         _rows10 = [r for r in _raw10 if not pl_engine.is_paket_selesai(r)]
         _render_tab10_pl(_rows10, "pl10pk")
