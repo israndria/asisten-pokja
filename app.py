@@ -6125,6 +6125,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         _p["kode_paket"],
                                         sbu_baru=_sbu_baru_global or "",
                                         sbu_lama=_sbu_lama_global or "",
+                                        centang_admin_ckm_ids=["401", "402", "403", "404"],
+                                        teknis_centang_ckm_ids=["437", "438", "439"],
                                         kinerja_text=_ldk_cfg_custom_pk.KINERJA_PENYEDIA_PK,
                                     )
                                     st.write(f"{'✅' if _r_custom_ldk['ok'] else '❌'} {_pl_label(_p)} — POST LDK HTTP {_r_custom_ldk['status']}")

@@ -66,12 +66,15 @@ def scrap_ldk_context(kode_paket: str) -> dict:
     admin_items  = {}  # idx -> {"chk_id": "...", "ckm_id": "..."}
     teknis_items = {}
     ijin_items   = {}  # idx -> chk_id (untuk override ijin existing)
+    hidden_fields = {}
     checked_admin_ids = []
     checked_teknis_ids = []
 
     for inp in form.find_all("input"):
         n = inp.get("name", "")
         v = inp.get("value", "")
+        if inp.get("type") == "hidden" and n and n != "authenticityToken":
+            hidden_fields[n] = v
         m = _re.match(r"^(syaratAdmin|syaratTeknis|ijin)\[(\d+)\]\.(chk_id|ckm_id)$", n)
         if not m:
             continue
@@ -104,6 +107,8 @@ def scrap_ldk_context(kode_paket: str) -> dict:
         "admin_list":   admin_list,       # list of dict {chk_id, ckm_id}
         "teknis_list":  teknis_list,
         "ijin_chk_ids": ijin_chk_ids,     # list of chk_id existing (untuk override)
+        "ijin_rows":    ijin_items,       # index -> chk_id; row baru bisa tidak punya chk_id
+        "hidden_fields": hidden_fields,   # hidden native form, termasuk number1 + checklist_* semua row
         # Backward compat (jangan dipakai utk submit yg butuh chk_id):
         "admin_ids":    [d.get("ckm_id", "") for d in admin_list],
         "teknis_ids":   [d.get("ckm_id", "") for d in teknis_list],
@@ -229,19 +234,10 @@ def submit_ldk_pl(
     """
     Submit form LDK PLPK dengan ID checklist dari form live SPSE.
 
-    CKM IDs BAWAAN prod JKK Konstruksi (verified 2026-05-18):
-      - Admin idx 0-5: 413, 414, 415, 416, 422, 423
-        413=KSWP, 414=Kapasitas hukum (Akta), 415=Pakta Integritas, 416=Surat Pernyataan
-        422/423=SKIP (ada di DB tapi tidak dicentang untuk JKK Konstruksi)
-      - Teknis idx 0-4: 433, 434, 435, 436, 996
-        433=Pengalaman ≥1 JKK, 434=Pengalaman sejenis, 435=Pengalaman sejenis 10thn,
-        436=Dispensasi penyedia kecil <3thn, 996=Kinerja Penyedia (custom)
-        ⚠️ idx 2+3 (435/436) chk_id="" (row baru) — server auto assign setelah submit
-
-    DEFAULT centang:
-      - centang_admin_indices=[0,1,2,3] → centang 413/414/415/416, SKIP 422/423
-      - teknis_centang_indices=[0,1] → HANYA centang 433 (Pengalaman) + 434 (Pengalaman sejenis)
-      - kinerja_text → tambah custom row ckm_id=996
+    Struktur live PLPK konstruksi yang diverifikasi via CDP:
+      - Admin: 401–404 (default inti), 410–411 (opsional)
+      - Teknis: 437–441; pilihan UI paket ini 437/438/439
+      - kinerja_text: tambah row resmi via struktur native ckm_id=996
 
     UPDATE ijin[1] klasifikasi:
       Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), server SPSE TIDAK bisa
@@ -254,25 +250,41 @@ def submit_ldk_pl(
     _base = (base_url or SPSE_BASE_URL).rstrip("/") + "/"
 
     ctx = scrap_ldk_context(kode_paket)
-    payload = {"authenticityToken": ctx["csrf"]}
+    # Mulai dari hidden fields native SPSE. Jangan hanya mengirim row yang dicentang:
+    # server membutuhkan checklist_kualifikasi_* untuk seluruh row dan number1.
+    payload = dict(ctx.get("hidden_fields", {}))
+    payload["authenticityToken"] = ctx["csrf"]
 
     # ── IJIN USAHA ────────────────────────────────────────────────
     # Struktur izin PLPK berbeda dari JKK. Jangan mengirim label jasa
     # konsultansi ke paket pekerjaan konstruksi.
-    ijin_existing_ids = ctx.get("ijin_chk_ids", [])
-    izin_list = [{
-        "jenis_izin": "Perizinan berusaha sesuai bidang pekerjaan",
-        "klasifikasi": "",
-    }]
-    if sbu_baru and sbu_lama:
-        izin_list[0]["klasifikasi"] = f"a) {sbu_baru} atau; b) {sbu_lama}."
-    else:
-        izin_list[0]["klasifikasi"] = sbu_baru or sbu_lama or ""
+    izin_text = (
+        "Memiliki izin berusaha di bidang Jasa Konsultansi Konstruksi; "
+        "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi; "
+        "b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum "
+        "terverifikasi, peserta menyampaikan NIB, Sertifikat Standar belum terverifikasi "
+        "dan tangkapan layar laman OSS yang mencantumkan bahwa Sertifikat Standar sedang "
+        "menunggu verifikasi;"
+    )
+    sbu_text = sbu_baru or sbu_lama or ""
+    izin_list = [
+        {
+            "jenis_izin": "Izin Usaha di bidang Jasa Pekerjaan Konstruksi",
+            "klasifikasi": izin_text,
+        },
+        {
+            "jenis_izin": "Sertifikat Badan Usaha SBU",
+            "klasifikasi": sbu_text,
+        },
+    ]
     if izin_extra:
         izin_list.extend(izin_extra)
 
+    ijin_rows = ctx.get("ijin_rows", {})
     for i, ij in enumerate(izin_list):
-        payload[f"ijin[{i}].chk_id"] = ijin_existing_ids[i] if i < len(ijin_existing_ids) else ""
+        # Row existing punya hidden chk_id; row hasil tombol Tambah Izin tidak.
+        if i in ijin_rows:
+            payload[f"ijin[{i}].chk_id"] = ijin_rows[i]
         payload[f"ijin[{i}].chk_nama"] = ij["jenis_izin"]
         payload[f"ijin[{i}].chk_klasifikasi"] = ij["klasifikasi"]
 
