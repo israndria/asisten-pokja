@@ -1382,6 +1382,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         # Invalidasi cache agar hasil serap SPSE langsung terbaca.
                         _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
+                        # Cache JKK dipisahkan dari cache PK.
                         _pl_rows = _load_draft_pl_cached()
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
@@ -1503,7 +1504,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pr_metode_pilihan = st.selectbox(
                                 "Target metode:",
                                 list(pl_engine.METODE_PL_MAP.keys()),
-                                index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                                 index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
                                 key=f"pl_ubah_metode_target_{_pr_kode}",
                             )
                             _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
@@ -1570,15 +1571,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     if _pr_kak_u:
                                         pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
                                         st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
-                                try:
-                                    _pr_dl_src = _template_dir_pl_jkk(_pr, _TEMPLATE_DIR_PL) if _pr_jenis != "PK" else _TEMPLATE_DIR_PL_PK
-                                    _pr_xl_logs = _proses_excel_paket_pl(
-                                        _pr_dl_root, _pr_kode, _pr_jenis, True,
-                                        _pr_dl_src, _TEMPLATE_DIR_PL_PK,
-                                    )
-                                    st.code("\n".join(_pr_xl_logs))
-                                except Exception as _pr_xl_e:
-                                    st.warning(f"⚠ Refresh Excel: {_pr_xl_e}")
+                                # Unduh hanya memperbarui dokumen SPSE dan metadata KAK.
+                                # Pengisian workbook sengaja tetap eksklusif di tombol Isi Excel.
                                 _load_draft_pl_cached.clear()
                                 st.rerun()
                         if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
@@ -1634,7 +1628,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _pl_metode_bulk = st.selectbox(
                         "Target metode:",
                         list(pl_engine.METODE_PL_MAP.keys()),
-                        index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                         index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
                         key="pl_ubah_metode_bulk_target",
                     )
                     _pl_kat_id_bulk, _pl_pilih_val_bulk = pl_engine.METODE_PL_MAP[_pl_metode_bulk]
@@ -1676,8 +1670,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = False
             _pl_extract_teks = False
-            if "pl_cb_isi_excel" not in st.session_state:
+            if not st.session_state.get("pl_cb_isi_excel_default_v2"):
                 st.session_state["pl_cb_isi_excel"] = True
+                st.session_state["pl_cb_isi_excel_default_v2"] = True
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
@@ -1690,10 +1685,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             # Plan: pre-compute nama folder per paket
             # Deteksi nomor tertinggi yang sudah ada di masing-masing output_base
-            _pl_no_offset = {
-                _PL_DIR_JKK: pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
-                _PL_DIR_PK:  pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
-            }
+            _pl_no_global = max(
+                pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
+                pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
+            )
+            _pl_no_offset = {_PL_DIR_JKK: _pl_no_global, _PL_DIR_PK: _pl_no_global}
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
@@ -2765,9 +2761,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     from datetime import date as _date
                                     _tgl_prev = _date.fromisoformat(str(_tgl_db))
                                 except Exception:
-                                    _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                    _tgl_prev = datetime.now().date()
                             else:
-                                _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                _tgl_prev = datetime.now().date()
                             # Nomor: dari DB → fallback generate
                             _no_prev = _rr.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                 nama_paket=_rr["nama_paket"],
@@ -2831,9 +2827,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     from datetime import date as _date2
                                     _tgl_up = _date2.fromisoformat(str(_tgl_db_up))
                                 except Exception:
-                                    _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                    _tgl_up = datetime.now().date()
                             else:
-                                _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                _tgl_up = datetime.now().date()
                             # Nomor dari DB, fallback generate
                             _no_up = _rr_up.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                 nama_paket=_rr_up["nama_paket"],
@@ -3041,25 +3037,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     st.divider()
 
-                    # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
-                    st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
-
-                    _tgl_dokpil_today = datetime.now().date()
-                    if st.session_state.get("plsp_tgl_dokpil_session_date") != _tgl_dokpil_today:
-                        st.session_state["plsp_tgl_dokpil"] = _tgl_dokpil_today
-                        st.session_state["plsp_tgl_dokpil_session_date"] = _tgl_dokpil_today
-                    _tgl_dokpil_default = st.session_state.get("plsp_tgl_dokpil") or _tgl_dokpil_today
-                    _plsp_tgl_dokpil = st.date_input(
-                        "Tanggal Dokpil",
-                        value=_tgl_dokpil_default,
-                        key="plsp_tgl_dokpil",
-                        format="DD/MM/YYYY",
-                    )
-                    st.caption(
-                        f"{_HARI_NAMA[_plsp_tgl_dokpil.weekday()]}, "
-                        f"{_plsp_tgl_dokpil.day} {_BULAN_NAMA[_plsp_tgl_dokpil.month-1]} "
-                        f"{_plsp_tgl_dokpil.year}"
-                    )
+                    # ── SEKSI 2: Masa Berlaku ────────────────────────────────
+                    st.markdown("#### 📅 Seksi 2 — Masa Berlaku Penawaran")
+                    st.caption("Tanggal Dokpil diisi langsung pada panel Excel @ Master Data → INPUT TANGGAL DOKPIL.")
 
                     _ldk_masa_berlaku = st.number_input(
                         "Masa Berlaku Penawaran (hari)",
@@ -3067,18 +3047,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Tanggal Dokpil + Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
                         for _p in _plsp_selected:
-                            # Simpan tgl_dokpil ke Supabase agar Isi Data PL bisa baca
                             try:
                                 _client_mb.table("draft_paket_pl").update({
-                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
                                     "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_pl_label(_p)}: {_e_mb}")
+                                st.warning(f"⚠️ Gagal simpan masa berlaku {_pl_label(_p)}: {_e_mb}")
                             _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
                             st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_pl_label(_p)} — HTTP {_r_mb['status']}")
 
@@ -3179,10 +3157,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _prog_sp.progress((_i + 1) / len(_plsp_selected),
                                               text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
 
-                            # 0. Simpan tgl_dokpil + SBU global ke Supabase
+                            # 0. Simpan SBU global ke Supabase; tanggal Dokpil berasal dari Excel
                             try:
                                 _client_sp.table("draft_paket_pl").update({
-                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
                                     "sbu_baru": _sbu_baru_global if _sbu_baru_global is not None else (_p.get("sbu_baru") or ""),
                                     "sbu_lama": _sbu_lama_global if _sbu_lama_global is not None else (_p.get("sbu_lama") or ""),
                                 }).eq("kode_paket", _kp).execute()
@@ -3241,6 +3218,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _dokpil_file = _p.get("_dokpil_file")
                             if _dokpil_file and _id_nt:
                                 try:
+                                    _tgl_excel = _p.get("tgl_dokpil")
+                                    if _tgl_excel:
+                                        from datetime import date as _date_excel
+                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
+                                    else:
+                                        _tgl_excel = datetime.now().date()
                                     # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
                                     _kode_unik = _p.get("kode_unik") or ""
                                     _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
@@ -3248,7 +3231,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         nama_paket=_p["nama_paket"],
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
-                                        tahun=_plsp_tgl_dokpil.year,
+                                        tahun=_tgl_excel.year,
                                         paket_ulang=_pl_paket_ulang(_p),
                                         nomor_urut=_p.get("nomor_urut"),
                                     )
@@ -3257,7 +3240,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         file_bytes=_dokpil_file.getvalue(),
                                         file_name=_dokpil_file.name,
                                         nomor_dokpil=_nomor_dokpil,
-                                        tgl_dokpil=_plsp_tgl_dokpil.strftime("%d-%m-%Y"),
+                                        tgl_dokpil=_tgl_excel.strftime("%d-%m-%Y"),
                                     )
                                     _hasil_sp.append({
                                         "paket": _nm, "step": "Upload Dokpil",
@@ -4737,7 +4720,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pr_metode_pilihan = st.selectbox(
                                 "Target metode:",
                                 list(pl_engine.METODE_PL_MAP.keys()),
-                                index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                                 index=list(pl_engine.METODE_PL_MAP.keys()).index("Pekerjaan Konstruksi — PL"),
                                 key=f"pl_ubah_metode_target_{_pr_kode}",
                             )
                             _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
@@ -4805,15 +4788,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     if _pr_kak_u:
                                         pl_engine.simpan_paket_pl({"kode_paket": _pr_kode, **_pr_kak_u})
                                         st.info(f"📋 KAK: {', '.join(_pr_kak_u.keys())}")
-                                try:
-                                    _pr_dl_src = _template_dir_pl_jkk(_pr, _TEMPLATE_DIR_PL) if _pr_jenis != "PK" else _TEMPLATE_DIR_PL_PK
-                                    _pr_xl_logs = _proses_excel_paket_pl(
-                                        _pr_dl_root, _pr_kode, _pr_jenis, True,
-                                        _pr_dl_src, _TEMPLATE_DIR_PL_PK,
-                                    )
-                                    st.code("\n".join(_pr_xl_logs))
-                                except Exception as _pr_xl_e:
-                                    st.warning(f"⚠ Refresh Excel: {_pr_xl_e}")
+                                # Unduh hanya memperbarui dokumen SPSE dan metadata KAK.
+                                # Pengisian workbook sengaja tetap eksklusif di tombol Isi Excel.
                                 _load_draft_pl_cached.clear()
                                 st.rerun()
                         if _pr_folder and _pr_c3.button("💰 HPS", key=f"pl_hps_{_pr_kode}", use_container_width=True):
@@ -4867,7 +4843,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pl_metode_bulk = st.selectbox(
                         "Target metode:",
                         list(pl_engine.METODE_PL_MAP.keys()),
-                        index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                         index=list(pl_engine.METODE_PL_MAP.keys()).index("Pekerjaan Konstruksi — PL"),
                         key="pk_ubah_metode_bulk_target",
                     )
                     _pl_kat_id_bulk, _pl_pilih_val_bulk = pl_engine.METODE_PL_MAP[_pl_metode_bulk]
@@ -4909,8 +4885,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl_pk")
             _pl_rt_refresh = False
             _pl_extract_teks = False
-            if "pl_cb_isi_excel_pk" not in st.session_state:
+            if not st.session_state.get("pl_cb_isi_excel_pk_default_v2"):
                 st.session_state["pl_cb_isi_excel_pk"] = True
+                st.session_state["pl_cb_isi_excel_pk_default_v2"] = True
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel_pk")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
@@ -4922,10 +4899,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ]
 
             # Plan: pre-compute nama folder per paket
-            _pl_no_offset = {
-                _PL_DIR_JKK: _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_JKK),
-                _PL_DIR_PK:  _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_PK),
-            }
+            _pl_no_global = max(
+                _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_JKK),
+                _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_PK),
+            )
+            _pl_no_offset = {_PL_DIR_JKK: _pl_no_global, _PL_DIR_PK: _pl_no_global}
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
@@ -5879,9 +5857,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     from datetime import date as _date
                                     _tgl_prev = _date.fromisoformat(str(_tgl_db))
                                 except Exception:
-                                    _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                    _tgl_prev = datetime.now().date()
                             else:
-                                _tgl_prev = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                _tgl_prev = datetime.now().date()
                             # Nomor: dari DB → fallback generate
                             _no_prev = _rr.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                 nama_paket=_rr["nama_paket"],
@@ -5945,9 +5923,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     from datetime import date as _date2
                                     _tgl_up = _date2.fromisoformat(str(_tgl_db_up))
                                 except Exception:
-                                    _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                    _tgl_up = datetime.now().date()
                             else:
-                                _tgl_up = st.session_state.get("plsp_tgl_dokpil") or datetime.now().date()
+                                _tgl_up = datetime.now().date()
                             # Nomor dari DB, fallback generate
                             _no_up = _rr_up.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
                                 nama_paket=_rr_up["nama_paket"],
@@ -6155,25 +6133,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     st.divider()
 
-                    # ── SEKSI 2: Tanggal Dokpil & Masa Berlaku ────────────────
-                    st.markdown("#### 📅 Seksi 2 — Tanggal Dokpil & Masa Berlaku Penawaran")
-
-                    _tgl_dokpil_today = datetime.now().date()
-                    if st.session_state.get("plsp_tgl_dokpil_session_date") != _tgl_dokpil_today:
-                        st.session_state["plsp_tgl_dokpil"] = _tgl_dokpil_today
-                        st.session_state["plsp_tgl_dokpil_session_date"] = _tgl_dokpil_today
-                    _tgl_dokpil_default = st.session_state.get("plsp_tgl_dokpil") or _tgl_dokpil_today
-                    _plsp_tgl_dokpil = st.date_input(
-                        "Tanggal Dokpil",
-                        value=_tgl_dokpil_default,
-                        key="plsp_tgl_dokpil",
-                        format="DD/MM/YYYY",
-                    )
-                    st.caption(
-                        f"{_HARI_NAMA[_plsp_tgl_dokpil.weekday()]}, "
-                        f"{_plsp_tgl_dokpil.day} {_BULAN_NAMA[_plsp_tgl_dokpil.month-1]} "
-                        f"{_plsp_tgl_dokpil.year}"
-                    )
+                    # ── SEKSI 2: Masa Berlaku ────────────────────────────────
+                    st.markdown("#### 📅 Seksi 2 — Masa Berlaku Penawaran")
+                    st.caption("Tanggal Dokpil diisi langsung pada panel Excel @ Master Data → INPUT TANGGAL DOKPIL.")
 
                     _ldk_masa_berlaku = st.number_input(
                         "Masa Berlaku Penawaran (hari)",
@@ -6181,18 +6143,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Tanggal Dokpil + Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
                         for _p in _plsp_selected:
-                            # Simpan tgl_dokpil ke Supabase agar Isi Data PL bisa baca
                             try:
                                 _client_mb.table("draft_paket_pl").update({
-                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
                                     "masa_berlaku": int(_ldk_masa_berlaku),
                                 }).eq("kode_paket", _p["kode_paket"]).execute()
                             except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan tgl_dokpil {_pl_label(_p)}: {_e_mb}")
+                                st.warning(f"⚠️ Gagal simpan masa berlaku {_pl_label(_p)}: {_e_mb}")
                             _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
                             st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_pl_label(_p)} — HTTP {_r_mb['status']}")
 
@@ -6202,35 +6162,36 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.markdown("#### 📋 Seksi 3 — Dokumen Kualifikasi (LDK)")
                     st.caption("ℹ️ Di-submit ke SPSE bagian Persyaratan Kualifikasi (LDK).")
 
-                    st.markdown("**Syarat Administrasi** *(default: centang idx 0-3, skip 422/423)*")
+                    st.markdown("**Syarat Administrasi PLPK** *(ID mengikuti skema PLPK SPSE)*")
                     _ADMIN_LABEL = {
-                        "413": "413 — KSWP (Wajib Pajak)",
-                        "414": "414 — Kapasitas Hukum (Akta Pendirian)",
-                        "415": "415 — Pakta Integritas",
-                        "416": "416 — Surat Pernyataan Peserta",
-                        "422": "422 — (skip default)",
-                        "423": "423 — (skip default)",
+                        "401": "401 — Persyaratan administrasi",
+                        "402": "402 — Persyaratan administrasi",
+                        "403": "403 — Persyaratan administrasi",
+                        "404": "404 — Persyaratan administrasi",
+                        "410": "410 — Persyaratan administrasi tambahan",
+                        "411": "411 — Persyaratan administrasi tambahan",
                     }
                     _ldk_centang_admin_ckm_ids = []
                     _cols_adm = st.columns(2)
                     for _idx_iter, (_cid, _lbl) in enumerate(_ADMIN_LABEL.items()):
                         with _cols_adm[_idx_iter % 2]:
-                            _default_adm = _cid in ("413", "414", "415", "416")
+                            _default_adm = _cid in ("401", "402", "403", "404")
                             if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_cid_{_cid}"):
                                 _ldk_centang_admin_ckm_ids.append(_cid)
 
-                    st.markdown("**Syarat Teknis JKK Konstruksi** *(default: centang 0+1)*")
+                    st.markdown("**Syarat Teknis PLPK** *(ID mengikuti skema PLPK SPSE)*")
                     _TEKNIS_LABEL = {
-                        "433": "433 — Pengalaman ≥1 JKK 4thn terakhir",
-                        "434": "434 — Pengalaman pekerjaan sejenis",
-                        "435": "435 — Pengalaman sejenis 10thn terakhir",
-                        "436": "436 — Dispensasi penyedia kecil baru <3thn",
+                        "437": "437 — Persyaratan teknis",
+                        "438": "438 — Persyaratan teknis",
+                        "439": "439 — Persyaratan teknis",
+                        "440": "440 — Persyaratan teknis",
+                        "441": "441 — Persyaratan teknis",
                     }
                     _ldk_teknis_ckm_ids = []
                     _cols_tk = st.columns(2)
                     for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
                         with _cols_tk[_idx_iter % 2]:
-                            _default = True
+                            _default = _cid in ("437", "438", "439")
                             if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
                                 _ldk_teknis_ckm_ids.append(_cid)
 
@@ -6240,8 +6201,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _ldk_kinerja_text = _ldk_cfg_pl.KINERJA_PENYEDIA_JKK if _jenis_pl_paket == "JKK" else _ldk_cfg_pl.KINERJA_PENYEDIA_PK
 
                     st.caption(
-                        "ℹ️ Default: admin all + teknis idx 0+1 (Pengalaman + Dispensasi). "
-                        "NPWP/Akta/Pakta auto by sistem. Kinerja Penyedia wajib dikirim otomatis."
+                        "ℹ️ PLPK mengikuti checklist Tender PK: admin inti 401–404, teknis inti 437–439. "
+                        "ID tambahan 410–411/440–441 opsional. Kinerja Penyedia wajib dikirim otomatis."
                     )
 
                     if st.button("📋 Submit Dokumen Kualifikasi (LDK)", key="plsp_btn_ldk", use_container_width=True):
@@ -6293,10 +6254,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _prog_sp.progress((_i + 1) / len(_plsp_selected),
                                               text=f"{_nm} ({_i+1}/{len(_plsp_selected)})...")
 
-                            # 0. Simpan tgl_dokpil + SBU global ke Supabase
+                            # 0. Simpan SBU global ke Supabase; tanggal Dokpil berasal dari Excel
                             try:
                                 _client_sp.table("draft_paket_pl").update({
-                                    "tgl_dokpil": _plsp_tgl_dokpil.isoformat(),
                                     "sbu_baru": _sbu_baru_global if _sbu_baru_global is not None else (_p.get("sbu_baru") or ""),
                                     "sbu_lama": _sbu_lama_global if _sbu_lama_global is not None else (_p.get("sbu_lama") or ""),
                                 }).eq("kode_paket", _kp).execute()
@@ -6355,6 +6315,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _dokpil_file = _p.get("_dokpil_file")
                             if _dokpil_file and _id_nt:
                                 try:
+                                    _tgl_excel = _p.get("tgl_dokpil")
+                                    if _tgl_excel:
+                                        from datetime import date as _date_excel
+                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
+                                    else:
+                                        _tgl_excel = datetime.now().date()
                                     # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
                                     _kode_unik = _p.get("kode_unik") or ""
                                     _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
@@ -6362,7 +6328,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         nama_paket=_p["nama_paket"],
                                         kode_unik=_kode_unik,
                                         skpd_singkat=_skpd_singkat,
-                                        tahun=_plsp_tgl_dokpil.year,
+                                        tahun=_tgl_excel.year,
                                         paket_ulang=_pl_paket_ulang(_p),
                                         nomor_urut=_p.get("nomor_urut"),
                                     )
@@ -6371,7 +6337,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         file_bytes=_dokpil_file.getvalue(),
                                         file_name=_dokpil_file.name,
                                         nomor_dokpil=_nomor_dokpil,
-                                        tgl_dokpil=_plsp_tgl_dokpil.strftime("%d-%m-%Y"),
+                                        tgl_dokpil=_tgl_excel.strftime("%d-%m-%Y"),
                                     )
                                     _hasil_sp.append({
                                         "paket": _nm, "step": "Upload Dokpil",

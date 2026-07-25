@@ -138,7 +138,9 @@ def fetch_paket_ppk() -> list[dict]:
     ok, val, err = _cdp_eval(js, timeout=20)
     if not ok:
         return []
-    return val or []
+    rows = val or []
+    # Tab PPK hanya menampilkan paket aktif berstatus Draft.
+    return [p for p in rows if str(p.get("status", "")).strip().lower() == "draft"]
 
 def fetch_detail_paket(kode_paket: str) -> dict:
     """

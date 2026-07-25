@@ -220,6 +220,15 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     errors = []
     scraped = 0
 
+    # Tahap real di SPSE dipakai untuk mencegah POST setup ke paket selesai.
+    # Reuse parser JKK karena endpoint/status PP memang shared.
+    try:
+        from pl_engine import _fetch_tahap_spse
+        tahap_map = _fetch_tahap_spse(cookie_str, base_url, log_fn=log_fn)
+    except Exception as exc:
+        tahap_map = {}
+        log(f"  [WARN] Tahap real SPSE tidak terbaca: {exc}")
+
     for row in rows:
         id_paket_internal = str(row[0])  # ID paket-level (kolom 0), bukan untuk kirim verifikasi
         nama_paket   = row[1]
@@ -250,6 +259,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         hps_str = ""
         _hps_live = {}
         metode_pengadaan = ""
+        viewdraft = {}
         edit_html = ""
         try:
             r_edit = requests.get(
@@ -261,6 +271,12 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             metode_pengadaan = _parse_metode_pengadaan_dari_edit(edit_html)
         except Exception as e:
             errors.append(f"{kode_paket}: gagal fetch edit — {e}")
+
+        try:
+            from pl_engine import _scrape_viewdraftpl
+            viewdraft = _scrape_viewdraftpl(kode_paket, headers, base_url)
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal fetch viewdraft — {e}")
 
         # HPS/Pagu wajib berasal dari halaman HPS live, bukan nilai stale di edit.
         try:
@@ -283,8 +299,14 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
             "status":            status_spse.lower() if status_spse else "draft",
+            "tahap_spse":        tahap_map.get(kode_paket),
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
+
+        if viewdraft.get("sumber_anggaran"):
+            data["sumber_anggaran"] = viewdraft["sumber_anggaran"]
+        if viewdraft.get("lokasi"):
+            data["lokasi"] = viewdraft["lokasi"]
 
         if _hps_live.get("nilai_pagu"):
             data["nilai_pagu"] = _hps_live["nilai_pagu"]
@@ -298,9 +320,14 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     log(f"Selesai: {scraped} paket disimpan, {len(errors)} error")
 
     # 4. Auto set Usaha Kecil (kualifikasiId=21) untuk semua paket
-    log("Auto set Usaha Kecil untuk semua paket...")
-    kode_list = [str(row[5]) for row in rows]
-    for kode in kode_list:
+    log("Set Usaha Kecil hanya untuk paket berstatus Draft...")
+    for row in rows:
+        kode = str(row[5])
+        status = str(row[2] or "").lower()
+        tahap = str(tahap_map.get(kode) or "").lower()
+        if "draft" not in status or any(k in tahap for k in _TAHAP_SELESAI_KEYWORDS):
+            log(f"  Skip kualifikasi {kode}: status={status or '-'}, tahap={tahap or '-'}")
+            continue
         ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
         log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
 
@@ -358,6 +385,12 @@ METODE_PL_MAP = {
     "Jasa Lainnya — PL":                 (3, 6),
     "PK Terintegrasi — PL":              (7, 25),
 }
+
+
+def umumkan_paket_pl(kode_paket: str, cookie_str: str) -> dict:
+    """Umumkan paket PK memakai endpoint shared non-tender yang sudah teruji."""
+    from pl_engine import umumkan_paket_pl as _umumkan
+    return _umumkan(kode_paket, cookie_str)
 
 
 def ubah_metode_pl(

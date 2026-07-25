@@ -190,7 +190,7 @@ def _read_master_data_xml(xlsm: str) -> tuple[str, str, str]:
 
 
 def _enrich_manual_excel_pl(row: dict) -> dict:
-    """Excel F2/C20 menang atas cache Supabase untuk nomor surat PL."""
+    """Excel Master Data menjadi sumber utama metadata surat PL."""
     try:
         from parse_kak_pl import _resolve_folder_pl
         folder, _ = _resolve_folder_pl(
@@ -214,8 +214,9 @@ def _enrich_manual_excel_pl(row: dict) -> dict:
             row["kode_unik"] = kode_unik
         if nomor_dokpil:
             row["nomor_dokpil"] = nomor_dokpil
-        if tgl_dokpil:
-            row["tgl_dokpil"] = tgl_dokpil
+        # Tanggal kosong di Excel sengaja menimpa cache Supabase: user wajib
+        # mengisi panel INPUT TANGGAL DOKPIL sebelum upload/merge dokumen.
+        row["tgl_dokpil"] = tgl_dokpil
     except Exception:
         pass
     return row

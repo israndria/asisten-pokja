@@ -66,6 +66,8 @@ def scrap_ldk_context(kode_paket: str) -> dict:
     admin_items  = {}  # idx -> {"chk_id": "...", "ckm_id": "..."}
     teknis_items = {}
     ijin_items   = {}  # idx -> chk_id (untuk override ijin existing)
+    checked_admin_ids = []
+    checked_teknis_ids = []
 
     for inp in form.find_all("input"):
         n = inp.get("name", "")
@@ -82,6 +84,11 @@ def scrap_ldk_context(kode_paket: str) -> dict:
                 ijin_items[idx] = v
         else:
             bucket.setdefault(idx, {})[field] = v
+            if field == "ckm_id" and inp.has_attr("checked"):
+                if prefix == "syaratAdmin":
+                    checked_admin_ids.append(v)
+                elif prefix == "syaratTeknis":
+                    checked_teknis_ids.append(v)
 
     # Convert ke list ordered by idx
     def _ordered(items: dict) -> list:
@@ -100,6 +107,8 @@ def scrap_ldk_context(kode_paket: str) -> dict:
         # Backward compat (jangan dipakai utk submit yg butuh chk_id):
         "admin_ids":    [d.get("ckm_id", "") for d in admin_list],
         "teknis_ids":   [d.get("ckm_id", "") for d in teknis_list],
+        "checked_admin_ids": checked_admin_ids,
+        "checked_teknis_ids": checked_teknis_ids,
         "url_submit":   f"{BASE}/dokumennontender/{kode_paket}/ldksubmitbaru",
         "url_form":     url,
     }
@@ -128,6 +137,7 @@ def scrap_checklist_context(kode_paket: str) -> dict:
     admin_map  = {}
     syarat_map = {}
     harga_map  = {}
+    disabled_ckm_ids = set()
 
     for inp in form.find_all("input"):
         name = inp.get("name", "")
@@ -138,6 +148,8 @@ def scrap_checklist_context(kode_paket: str) -> dict:
         prefix, idx, field = m.group(1), int(m.group(2)), m.group(3)
         bucket = {"syaratAdmin": admin_map, "syarat": syarat_map, "syaratHarga": harga_map}[prefix]
         bucket.setdefault(idx, {"chk_id": "", "ckm_id": ""})[field] = val
+        if field == "ckm_id" and inp.get("type") == "checkbox" and inp.has_attr("disabled"):
+            disabled_ckm_ids.add(val)
 
     def _ol(d):
         return [d[k] for k in sorted(d)]
@@ -152,6 +164,7 @@ def scrap_checklist_context(kode_paket: str) -> dict:
         "admin_items":  admin_items,
         "syarat_items": syarat_items,
         "harga_items":  harga_items,
+        "disabled_ckm_ids": disabled_ckm_ids,
         # Backward compat:
         "admin_ids":    [d["ckm_id"] for d in admin_items],
         "syarat_ids":   [d["ckm_id"] for d in syarat_items],
@@ -214,7 +227,7 @@ def submit_ldk_pl(
     base_url: str = "",
 ) -> dict:
     """
-    Submit form LDK PL (JKK Konstruksi).
+    Submit form LDK PLPK dengan ID checklist dari form live SPSE.
 
     CKM IDs BAWAAN prod JKK Konstruksi (verified 2026-05-18):
       - Admin idx 0-5: 413, 414, 415, 416, 422, 423
@@ -244,20 +257,34 @@ def submit_ldk_pl(
     payload = {"authenticityToken": ctx["csrf"]}
 
     # ── IJIN USAHA ────────────────────────────────────────────────
-    izin_list = build_izin_usaha_jkk(sbu_baru, sbu_lama)
+    # Struktur izin PLPK berbeda dari JKK. Jangan mengirim label jasa
+    # konsultansi ke paket pekerjaan konstruksi.
+    ijin_existing_ids = ctx.get("ijin_chk_ids", [])
+    izin_list = [{
+        "jenis_izin": "Perizinan berusaha sesuai bidang pekerjaan",
+        "klasifikasi": "",
+    }]
+    if sbu_baru and sbu_lama:
+        izin_list[0]["klasifikasi"] = f"a) {sbu_baru} atau; b) {sbu_lama}."
+    else:
+        izin_list[0]["klasifikasi"] = sbu_baru or sbu_lama or ""
     if izin_extra:
         izin_list.extend(izin_extra)
 
-    ijin_existing_ids = ctx.get("ijin_chk_ids", [])
     for i, ij in enumerate(izin_list):
         payload[f"ijin[{i}].chk_id"] = ijin_existing_ids[i] if i < len(ijin_existing_ids) else ""
         payload[f"ijin[{i}].chk_nama"] = ij["jenis_izin"]
         payload[f"ijin[{i}].chk_klasifikasi"] = ij["klasifikasi"]
 
     # ── SYARAT ADMINISTRASI ───────────────────────────────────────
-    # Default: centang 413/414/415/416
-    if centang_admin_ckm_ids is None:
-        centang_admin_ckm_ids = ["413", "414", "415", "416"]
+    valid_admin = {str(x.get("ckm_id", "")) for x in ctx["admin_list"]}
+    requested_admin = {str(x) for x in (centang_admin_ckm_ids or [])}
+    if not requested_admin & valid_admin:
+        centang_admin_ckm_ids = ctx.get("checked_admin_ids") or [
+            str(x.get("ckm_id")) for x in ctx["admin_list"][:4]
+        ]
+    else:
+        centang_admin_ckm_ids = [str(x) for x in requested_admin if str(x) in valid_admin]
 
     for i, item in enumerate(ctx["admin_list"]):
         chk_id = item.get("chk_id", "")
@@ -268,9 +295,14 @@ def submit_ldk_pl(
             payload[f"checklist_kualifikasi_administrasi_ckm_id[{i}]"] = ckm_id
 
     # ── SYARAT TEKNIS ─────────────────────────────────────────────
-    # Default centang 433 (Pengalaman) + 434 (Pekerjaan Sejenis).
-    if teknis_centang_ckm_ids is None:
-        teknis_centang_ckm_ids = ["433", "434"]
+    valid_teknis = {str(x.get("ckm_id", "")) for x in ctx["teknis_list"]}
+    requested_teknis = {str(x) for x in (teknis_centang_ckm_ids or [])}
+    if not requested_teknis & valid_teknis:
+        teknis_centang_ckm_ids = ctx.get("checked_teknis_ids") or [
+            str(x.get("ckm_id")) for x in ctx["teknis_list"][:2]
+        ]
+    else:
+        teknis_centang_ckm_ids = [str(x) for x in requested_teknis if str(x) in valid_teknis]
 
     # Logika Kinerja (996): Cek apakah sudah ada di teknis_list
     kinerja_exists = False
@@ -327,8 +359,7 @@ def submit_ldk_pl(
     # klasifikasi tidak bisa diubah via requests POST (server revert ke nilai lama).
     # Wajib pakai browser real (CDP) untuk update teks ke hanya SBU 2020.
     if ok and not sbu_lama and sbu_baru and len(ijin_existing_ids) >= 2:
-        # Teks target dari build_izin_usaha_jkk (sbu_lama="") — row[1].klasifikasi
-        klas_target = build_izin_usaha_jkk(sbu_baru, "")[1]["klasifikasi"]
+        klas_target = izin_list[0].get("klasifikasi", "")
         try:
             import spse_browser as _sb
             cdp_result = _sb.update_ijin_sbu_via_playwright(
@@ -393,26 +424,29 @@ def submit_checklist_pl(
 ) -> dict:
     """
     Submit checklist dokumen penawaran.
-    JKK ckm_id (verified):
-      - Admin: 16 (Masa Berlaku), 18 (Surat Penawaran)
-      - Syarat (teknis): 39 (Metodologi), 40 (Pengalaman Perush), 41 (Kualif TA)
-      - Harga: 19 (DKH), 31 (AHS), 127 (Remunerasi)
-    Default: centang semua.
+    PLPK memakai aturan checklist Tender PK yang sudah dipakai di app:
+      - Administrasi: item terkunci dibiarkan dikelola sistem; KSO tidak dicentang.
+      - Teknis: ckm_id 341 (peralatan), 342 (personel), 344 (RKK).
+      - Harga: semua item yang tersedia (live PK saat ini 347 dan 348).
+    ID row/chk_id tetap selalu diambil dari form live.
     """
     ctx = scrap_checklist_context(kode_paket)
     payload = {"authenticityToken": ctx["csrf"]}
 
+    selected_admin_ids = set()
+    selected_teknis_ids = {"341", "342", "344"}
+
     for i, item in enumerate(ctx["admin_items"]):
         payload[f"syaratAdmin[{i}].chk_id"] = item["chk_id"]
-        if centang_admin_all:
+        if centang_admin_all and item["ckm_id"] in selected_admin_ids and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
             payload[f"syaratAdmin[{i}].ckm_id"] = item["ckm_id"]
     for i, item in enumerate(ctx["syarat_items"]):
         payload[f"syarat[{i}].chk_id"] = item["chk_id"]
-        if centang_syarat_all:
+        if centang_syarat_all and item["ckm_id"] in selected_teknis_ids and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
             payload[f"syarat[{i}].ckm_id"] = item["ckm_id"]
     for i, item in enumerate(ctx["harga_items"]):
         payload[f"syaratHarga[{i}].chk_id"] = item["chk_id"]
-        if centang_harga_all:
+        if centang_harga_all and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
             payload[f"syaratHarga[{i}].ckm_id"] = item["ckm_id"]
 
     rp = requests.post(
