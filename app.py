@@ -1132,10 +1132,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
                 if st.checkbox("📁 Upload dari Folder", key=f"chk_folder_{_kode}"):
                     with st.container(border=True):
-                        # 2 cara input folder
                         _input_mode = st.radio(
                             "Cara pilih folder:",
-                            ["📂 Pilih dari daftar", "⌨️ Ketik path manual"],
+                            ["📂 Pilih dari daftar", "⌨️ Paste path manual"],
                             horizontal=True,
                             key=f"foldermode_{_kode}",
                         )
@@ -1157,17 +1156,22 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                 _selected_folder = os.path.join(_ppk_up.PPK_PL_BASE, _sel)
                         else:
                             _path_input = st.text_input(
-                                "Path folder:",
-                                value=(_auto_match and os.path.join(_ppk_up.PPK_PL_BASE, _auto_match)) or _ppk_up.PPK_PL_BASE,
+                                "Paste path folder:",
+                                value=(_auto_match and os.path.join(_ppk_up.PPK_PL_BASE, _auto_match)) or "",
                                 key=f"folderpath_{_kode}",
+                                placeholder=r"D:\path\ke\folder paket",
                             )
-                            if _path_input and os.path.isdir(_path_input):
-                                _selected_folder = _path_input
-                            elif _path_input:
+                            # Path dari Explorer sering ikut membawa tanda kutip.
+                            _path_clean = os.path.expandvars(
+                                _path_input.strip().strip('"').strip("'").strip()
+                            ) if _path_input else ""
+                            if _path_clean and os.path.isdir(_path_clean):
+                                _selected_folder = os.path.normpath(_path_clean)
+                            elif _path_clean:
                                 st.warning("⚠️ Path tidak valid atau bukan folder.")
 
                         if _selected_folder:
-                            _preview = _ppk_up.scan_folder(_selected_folder)
+                            _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True)
                             if _preview:
                                 _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}
                                 st.markdown("**Preview file yang akan diupload:**")
@@ -1184,6 +1188,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                         kode_paket=_kode,
                                         folder_path=_selected_folder,
                                         log_fn=_flog,
+                                        pdf_only=True,
                                     )
                                     # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):

@@ -750,7 +750,7 @@ FILE_PREFIX_MAP = {
     # 7. HPS, 10. Survey — tidak diupload
 }
 
-def scan_folder(folder_path: str) -> list[dict]:
+def scan_folder(folder_path: str, pdf_only: bool = False) -> list[dict]:
     """
     Scan folder → return list file yang akan diupload.
     [{"path": str, "nama": str, "jenis": str, "mime": str}]
@@ -763,6 +763,8 @@ def scan_folder(folder_path: str) -> list[dict]:
     for fname in sorted(os.listdir(folder_path)):
         fpath = os.path.join(folder_path, fname)
         if not os.path.isfile(fpath):
+            continue
+        if pdf_only and os.path.splitext(fname)[1].lower() != ".pdf":
             continue
         jenis = None
         for prefix, j in FILE_PREFIX_MAP.items():
@@ -843,6 +845,7 @@ def upload_dari_folder(
     kode_paket: str,
     folder_path: str,
     log_fn=None,
+    pdf_only: bool = False,
 ) -> dict:
     """
     Upload semua file yang cocok dari folder ke SPSE.
@@ -851,7 +854,7 @@ def upload_dari_folder(
     def _log(msg):
         if log_fn: log_fn(msg)
 
-    files = scan_folder(folder_path)
+    files = scan_folder(folder_path, pdf_only=pdf_only)
     if not files:
         return {"results": [], "total_ok": 0, "total_err": 0, "error": "Tidak ada file yang cocok di folder ini."}
 
