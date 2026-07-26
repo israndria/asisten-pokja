@@ -7855,7 +7855,13 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 from streamlit.runtime.scriptrunner import get_script_run_ctx as _get_ctx
                 _ctx_bulk = _get_ctx()
                 _bp2 = st.progress(0.0)
-                _bulk_status = st.status(f"📁 Memproses {len(_t_terpilih)} paket terpilih...", expanded=True)
+                # Status proses dibuat ringkas. Jika dibuka expanded, seluruh log
+                # live tampil di atas sisa layout halaman dan terlihat seperti
+                # halaman kedua/"bayangan" saat operasi folder masih berjalan.
+                _bulk_status = st.status(
+                    f"📁 Memproses {len(_t_terpilih)} paket terpilih...",
+                    expanded=False,
+                )
                 _bulk_status_line = _bulk_status.empty()
                 _ok, _fail = 0, 0
                 _bulk_semua_log = {}
