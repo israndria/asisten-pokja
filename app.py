@@ -521,10 +521,47 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
     _xs.sort(key=lambda f: (not f.lower().startswith("0. bapk"), f))
     xlsm = os.path.join(target_dir, _xs[0])
 
+    def _master_data_terisi(_app):
+        """Pastikan COM benar-benar menulis workbook, bukan hanya return ok."""
+        _own_app = _app is None
+        _wb_check = None
+        try:
+            if _own_app:
+                import win32com.client as _wc_check
+                _app = _wc_check.DispatchEx("Excel.Application")
+                _app.Visible = False
+                _app.DisplayAlerts = False
+            _wb_check = _app.Workbooks.Open(xlsm, UpdateLinks=0, ReadOnly=True)
+            _ws_check = _wb_check.Sheets("@ Master Data")
+            # C4=kode tender dan C5=nama paket adalah sentinel wajib.
+            return bool(_ws_check.Cells(4, 3).Value and _ws_check.Cells(5, 3).Value)
+        except Exception:
+            return False
+        finally:
+            if _wb_check is not None:
+                try:
+                    _wb_check.Close(False)
+                except Exception:
+                    pass
+            if _own_app and _app is not None:
+                try:
+                    _app.Quit()
+                except Exception:
+                    pass
+
     try:
         _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=xl, row_data=row_data)
+        if _res.get("ok") and xl is not None and not _master_data_terisi(xl):
+            # Excel instance reuse dapat menyimpan workbook tanpa menerapkan
+            # perubahan pada sebagian mesin. Ulangi sekali dengan COM instance
+            # dedicated agar bulk create tidak menghasilkan Excel kosong.
+            logs.append("WARN Master Data: hasil COM bersama kosong — retry Excel dedicated")
+            _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=None, row_data=row_data)
         if _res.get("ok"):
-            logs.append("Master Data Tender: terisi otomatis")
+            if not _master_data_terisi(xl):
+                logs.append("WARN Master Data: COM sukses tetapi sentinel masih kosong")
+            else:
+                logs.append("Master Data Tender: terisi otomatis")
         else:
             logs.append(f"WARN Master Data Tender: {_res.get('pesan', '-')}")
     except Exception as _e:
