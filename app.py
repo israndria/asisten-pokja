@@ -13,6 +13,21 @@ import time
 from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
+from ui_state import activate_mode
+from pl_data_ui import (
+    fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
+    fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
+    load_draft_pl_cached as _load_draft_pl_cached,
+    load_verifikasi_pl_rows_cached as _load_verifikasi_pl_rows_cached,
+    parse_jadwal_pl_cached as _parse_jadwal_pl_cached,
+)
+from ui_pl_pk import (
+    PLPK_TAB_LABELS,
+    active_rows as active_plpk_rows,
+    get_engine as get_plpk_engine,
+    render_download_actions,
+)
+from ui_pl_common import render_package_selection
 
 APP_VERSION = "v2026.07.19.a"
 
@@ -324,51 +339,6 @@ import sbu_picker as _sp_global
 
 
 
-@st.cache_data(ttl=300)
-def _fetch_peserta_pl_cached(kode_nontender: str) -> int:
-    """Fetch jumlah peserta paket PL (non-tender). Cache 5 menit."""
-    try:
-        import peserta_monitor_pl as _pm_pl_fn
-        hasil = _pm_pl_fn.fetch_jumlah_peserta_pl(kode_nontender)
-        return hasil.get("jumlah", 0)
-    except Exception:
-        return -1
-
-
-@st.cache_data(ttl=300)
-def _fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
-    """Fetch status peserta semua paket sekaligus. Cache 5 menit."""
-    try:
-        import peserta_monitor_pl as _pm_c
-        return _pm_c.fetch_status_semua_paket(list(kode_tuple))
-    except Exception:
-        return {}
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _parse_jadwal_pl_cached(kode_paket: str) -> list:
-    """Cache fallback jadwal SPSE agar Tab 9 tidak GET ulang tiap rerun."""
-    try:
-        import gcal_pl_helper as _gph
-        return _gph.parse_jadwal_pl_dari_spse(kode_paket) or []
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _load_verifikasi_pl_rows_cached() -> tuple[list[dict], str]:
-    """Cache query daftar paket Tab 8; invalidasi alami 60 detik."""
-    try:
-        rows = pl_engine._sb().table("draft_paket_pl").select(
-            "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, "
-            "npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, "
-            "status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
-        ).order("kode_paket").execute().data or []
-        return rows, ""
-    except Exception as exc:
-        return [], str(exc)
-
-
 @st.cache_data(ttl=30, show_spinner=False)
 def _get_jadwal_penjelasan_gcal_cached() -> dict:
     """Cache daftar jadwal penjelasan agar rerun checkbox tidak hit API GCal."""
@@ -455,18 +425,6 @@ def _load_draft_paket_cached() -> list:
         except Exception:
             rows = _load_local()
             return [r for r in rows if not _is_tender_excluded(r)]
-
-
-@st.cache_data(ttl=60)
-def _load_draft_pl_cached(engine_kind: str = "JKK") -> list:
-    """Cache loader PL terpisah per jenis engine (JKK/PK)."""
-    if str(engine_kind).upper() == "PK":
-        import pl_engine_plpk as _engine
-    else:
-        import pl_engine as _engine
-    rows = _engine.load_draft_pl()
-    hydrate = getattr(_pl_display_engine, "_hydrate_nomor_urut_folder", None)
-    return hydrate(rows) if hydrate and any(not r.get("nomor_urut") for r in rows) else rows
 
 
 @st.cache_data(ttl=3600)
@@ -853,6 +811,7 @@ if _spse_role:
             key="radio_app_mode",
         )
         st.session_state["app_mode"] = _selected_mode
+        activate_mode(_selected_mode)
 
     st.divider()
 else:
@@ -4138,36 +4097,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             with _pl7c1:
                 st.markdown("#### Pilih Paket")
-                if "pl7_checked" not in st.session_state:
-                    st.session_state["pl7_checked"] = {}
-
-                _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
-                for _k in _pl7_kodes:
-                    if f"pl7_chk_{_k}" not in st.session_state:
-                        st.session_state[f"pl7_chk_{_k}"] = True
-                _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
-                # Pilih Semua / Batal Semua — hanya set state, TIDAK fetch CDP
-                if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
-                    for _k in _pl7_kodes:
-                        st.session_state[f"pl7_chk_{_k}"] = True
-                        st.session_state["pl7_checked"][_k] = True
-                if _pl7_btn_col2.button("❌ Batal Semua", key="pl7_deselect_all", use_container_width=True):
-                    for _k in _pl7_kodes:
-                        st.session_state[f"pl7_chk_{_k}"] = False
-                        st.session_state["pl7_checked"][_k] = False
-
-                for _rpl7 in _pl7_rows:
-                    _kpl7 = _rpl7["kode_paket"]
-                    _nomor7 = _rpl7.get("nomor_urut") or ""
-                    _label7 = _pl_label(_rpl7)
-                    _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
-                    st.session_state["pl7_checked"][_kpl7] = _chk7
+                _pl7_selected_rows = render_package_selection(st, _pl7_rows, _pl_label, prefix="pl7")
 
             with _pl7c2:
                 st.markdown("#### Aksi")
 
-                _pl7_selected_kodes = [k for k in _pl7_kodes if st.session_state["pl7_checked"].get(k)]
-                _pl7_selected_rows  = [r for r in _pl7_rows if r["kode_paket"] in _pl7_selected_kodes]
                 _n_paket7 = len(_pl7_selected_rows)
 
                 if not _pl7_selected_rows:
@@ -4543,22 +4477,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.stop()
 
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
-    import pl_engine_plpk as pl_engine
+    pl_engine = get_plpk_engine()
     import pl_engine as _pl_engine_utils
-    _PL_TAB_LABELS = [
-        "1️⃣ Draft Paket PL",
-        "2️⃣ Kirim Undangan DPP",
-        "3️⃣ Setup Paket",
-        "4️⃣ Pilih Penyedia & Umumkan",
-        "5️⃣ Buat Jadwal",
-        "6️⃣ Download Kualifikasi",
-        "7️⃣ Evaluasi & Teknis/Biaya",
-        "8️⃣ Kirim Verifikasi",
-        "9️⃣ Upload BA PL",
-        "🔟 Penetapan Pemenang",
-        "📄 Import DPA",
-    ]
-    _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
+    _pl_active_tab = st.radio("Tab PL", PLPK_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
+    _is_plpk_tab6 = _pl_active_tab == "6️⃣ Download Kualifikasi"
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
@@ -6614,7 +6536,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
 
         # Dropdown paket — gabung draft_pl + aktif_pl (dedup by id_nontender)
-        _verif_rows, _verif_load_error = _load_verifikasi_pl_rows_cached()
+        _verif_rows, _verif_load_error = _load_verifikasi_pl_rows_cached("PK")
         if _verif_load_error:
             st.error(f"Gagal load paket PL: {_verif_load_error}")
 
@@ -7094,10 +7016,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # Cache paket list di session state — hindari query Supabase tiap render
         if "pl7_rows" not in st.session_state:
             try:
-                _raw7 = _load_draft_pl_cached("PK")
-                _raw7, _ = pl_engine.buang_duplikat_paket_lama(_raw7)
-                _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
-                st.session_state["pl7_rows"] = _raw7
+                st.session_state["pl7_rows"], _pl7_dup_n = active_plpk_rows(_load_draft_pl_cached, pl_engine)
+                if _pl7_dup_n:
+                    st.caption(f"♻️ {_pl7_dup_n} row lama duplikat disembunyikan otomatis.")
             except Exception as _e7:
                 st.session_state["pl7_rows"] = []
                 st.error(f"Gagal load paket PL: {_e7}")
@@ -7113,39 +7034,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             with _pl7c1:
                 st.markdown("#### Pilih Paket")
-                if "pl7_checked" not in st.session_state:
-                    st.session_state["pl7_checked"] = {}
-
-                _pl7_kodes = [r["kode_paket"] for r in _pl7_rows]
-                for _k in _pl7_kodes:
-                    if f"pl7_chk_{_k}" not in st.session_state:
-                        st.session_state[f"pl7_chk_{_k}"] = True
-                _pl7_btn_col1, _pl7_btn_col2 = st.columns(2)
-                # Pilih Semua / Batal Semua — hanya set state, TIDAK fetch CDP
-                if _pl7_btn_col1.button("✅ Pilih Semua", key="pl7_select_all", use_container_width=True):
-                    for _k in _pl7_kodes:
-                        st.session_state[f"pl7_chk_{_k}"] = True
-                        st.session_state["pl7_checked"][_k] = True
-                if _pl7_btn_col2.button("❌ Batal Semua", key="pl7_deselect_all", use_container_width=True):
-                    for _k in _pl7_kodes:
-                        st.session_state[f"pl7_chk_{_k}"] = False
-                        st.session_state["pl7_checked"][_k] = False
-
-                for _rpl7 in _pl7_rows:
-                    _kpl7 = _rpl7["kode_paket"]
-                    _nomor7 = _rpl7.get("nomor_urut") or ""
-                    _label7 = _pl_label(_rpl7)
-                    _chk7 = st.checkbox(_label7, key=f"pl7_chk_{_kpl7}")
-                    st.session_state["pl7_checked"][_kpl7] = _chk7
+                _pl7_selected_rows = render_package_selection(st, _pl7_rows, _pl_label, prefix="pl7")
 
             with _pl7c2:
                 st.markdown("#### Aksi")
 
-                _pl7_selected_kodes = [k for k in _pl7_kodes if st.session_state["pl7_checked"].get(k)]
-                _pl7_selected_rows  = [r for r in _pl7_rows if r["kode_paket"] in _pl7_selected_kodes]
                 _n_paket7 = len(_pl7_selected_rows)
 
-                if not _pl7_selected_rows:
+                if locals().get("_is_plpk_tab6", False):
+                    render_download_actions(
+                        st, _pl7_selected_rows, _ke_pl_pk, _he_pl_pk, _pl_label
+                    )
+                elif not _pl7_selected_rows:
                     st.info("Centang minimal 1 paket di kiri.")
                 else:
                     st.markdown(f"**{_n_paket7} paket** dipilih")
@@ -7272,9 +7172,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # Selalu normalisasi daftar di sini. Tab Evaluasi dapat dibuka langsung,
         # tanpa lebih dulu merender Tab Download Kualifikasi.
-        _raw8 = _load_draft_pl_cached("PK")
-        _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
-        _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+        _pl8_rows, _pl8_dup_n = active_plpk_rows(_load_draft_pl_cached, pl_engine)
         if _pl8_dup_n:
             st.caption(f"♻️ {_pl8_dup_n} row lama duplikat disembunyikan otomatis.")
 
