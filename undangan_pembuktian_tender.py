@@ -291,12 +291,17 @@ def kirim_undangan_pembuktian(
     is_online: bool = False,
     link_pembuktian: str = "",
 ) -> dict:
-    """Kirim pesan jenis 18 ke satu peserta setelah A/K/T/H LULUS."""
+    """Kirim undangan pembuktian jenis 8 setelah A/K/T/H LULUS.
+
+    Di SPSE, jenis halaman ``18`` adalah Klarifikasi Administrasi,
+    Kualifikasi, Teknis, dan Harga. Undangan Pembuktian Kualifikasi memakai
+    jenis halaman ``8``.
+    """
     cookie = spse_browser.get_spse_cookies()
     if not cookie:
         return {"ok": False, "pesan": "Cookie SPSE kosong — login dulu."}
     base = SPSE_BASE_URL.rstrip("/")
-    form_url = f"{base}/kirim_pesan/{peserta_id}/18"
+    form_url = f"{base}/kirim_pesan/{peserta_id}/8"
     try:
         r = requests.get(form_url, headers=_headers(cookie, f"{base}/evaluasi/{peserta_id}/detail"), timeout=20)
         r.raise_for_status()
@@ -309,8 +314,8 @@ def kirim_undangan_pembuktian(
         action = _resolve_spse_action(base, action)
         fields = {
             "authenticityToken": token,
-            # Form SPSE memakai tipe pesan 2 = UNDANGAN; 18 adalah jenis
-            # halaman undangan pembuktian, bukan value select tipe_pesan.
+            # Form SPSE memakai tipe pesan 2 = UNDANGAN; 8 adalah jenis
+            # halaman Undangan Pembuktian Kualifikasi.
             "tipe_pesan": "2",
             "waktu": waktu,
             "sampai": sampai,
@@ -323,7 +328,7 @@ def kirim_undangan_pembuktian(
         }
         resp = requests.post(
             action,
-            params={"jenisUndangan": "18", "id": str(peserta_id)},
+            params={"jenisUndangan": "8", "id": str(peserta_id)},
             files=[(n, (None, v)) for n, v in fields.items()],
             headers=_headers(cookie, form_url),
             timeout=30,
