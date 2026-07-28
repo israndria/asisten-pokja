@@ -8089,7 +8089,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 _paket_log.append(f"⚠ Snapshot/download gagal: {_se}")
                         else:
                             _fail += 1
-                            _paket_log.append(f"❌ Gagal buat folder: {_r2.stderr[:100]}")
+                            _stderr_setup = (_r2.stderr or _r2.stdout or "Tanpa detail error").strip()
+                            _paket_log.append(f"❌ Gagal buat folder:\n{_stderr_setup[-4000:]}")
                     except _sp.TimeoutExpired:
                         _fail += 1
                         _paket_log.append("❌ Timeout buat folder")
