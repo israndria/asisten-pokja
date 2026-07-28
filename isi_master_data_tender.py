@@ -411,6 +411,15 @@ def proses_master_data_tender(
         return {"ok": False, "pesan": "kode_tender kosong"}
 
     if row_data:
+        row_data = dict(row_data)
+        # Kode argumen adalah identitas otoritatif create-folder. Jangan pernah
+        # mengosongkan template bila payload metadata ternyata tidak lengkap.
+        row_data["kode_tender"] = str(kode_tender)
+        if not str(row_data.get("nama_tender") or "").strip():
+            return {
+                "ok": False,
+                "pesan": "nama_tender kosong; @ Master Data tidak diubah",
+            }
         return _proses_com_direct(kode_tender, excel_path, row_data, progress_cb, xl=xl)
 
     import pythoncom

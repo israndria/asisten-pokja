@@ -310,8 +310,33 @@ def _read_tender_identity_cached(path: str, mtime_ns: int, size: int) -> tuple[s
         wb.close()
 
 
+def _tender_folder_identity_valid(folder_name: str, kode_tender: str) -> bool:
+    """True bila workbook utama folder menyimpan kode tender target di C4."""
+    try:
+        from config import TENDER_ROOT as _root
+        _kode_digits = re.sub(r"\D", "", str(kode_tender or ""))
+        if not (_kode_digits and folder_name):
+            return False
+        _folder = os.path.join(_root, folder_name)
+        if not os.path.isdir(_folder):
+            return False
+        for _f in os.listdir(_folder):
+            if not (_f.lower().endswith(".xlsm") and ".bak_" not in _f.lower()):
+                continue
+            _path = os.path.join(_folder, _f)
+            _stat = os.stat(_path)
+            _kode_file, _ = _read_tender_identity_cached(
+                _path, _stat.st_mtime_ns, _stat.st_size
+            )
+            if re.sub(r"\D", "", _kode_file) == _kode_digits:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _find_tender_folder_local(kode_tender: str, kode_pokja: str = "", nama: str = "") -> str:
-    """Cari folder Tender yang sudah ada di disk saat metadata DB belum lengkap."""
+    """Cari folder Tender valid di disk saat metadata DB belum lengkap."""
     try:
         from config import TENDER_ROOT as _root
         _kode_digits = re.sub(r"\D", "", str(kode_tender or ""))
@@ -321,13 +346,15 @@ def _find_tender_folder_local(kode_tender: str, kode_pokja: str = "", nama: str 
             d for d in os.listdir(_root)
             if os.path.isdir(os.path.join(_root, d)) and "backup" not in d.lower()
         ]
-        # Folder kerja dibuat dengan suffix Pokja; ini juga mencakup workbook
-        # yang C4-nya belum pernah diisi (mis. paket 034/035).
+        # Nama/Pokja hanya kandidat lokasi. Jangan menganggap folder berhasil
+        # bila workbook masih kosong; biarkan create-folder berikutnya retry.
         for _d in _dirs:
             _dn = re.sub(r"[^a-z0-9]+", "", _d.lower())
-            if _pokja_digits and re.search(r"pokja0*" + _pokja_digits, _dn):
-                return _d
-            if _nama_norm and (_nama_norm in _dn or _dn in _nama_norm):
+            _nama_match = _nama_norm and (_nama_norm in _dn or _dn in _nama_norm)
+            _pokja_match = _pokja_digits and re.search(r"pokja0*" + _pokja_digits, _dn)
+            if (_nama_match or _pokja_match) and (
+                not _kode_digits or _tender_folder_identity_valid(_d, kode_tender)
+            ):
                 return _d
         # Identitas workbook menjadi fallback paling akurat untuk paket tanpa
         # nomor Pokja di metadata SPSE.
@@ -607,7 +634,7 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
     xlsm = os.path.join(target_dir, _xs[0])
 
     def _master_data_terisi(_app):
-        """Pastikan COM benar-benar menulis workbook, bukan hanya return ok."""
+        """Pastikan workbook menyimpan identitas paket target, bukan sekadar non-kosong."""
         _own_app = _app is None
         _wb_check = None
         try:
@@ -618,8 +645,10 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
                 _app.DisplayAlerts = False
             _wb_check = _app.Workbooks.Open(xlsm, UpdateLinks=0, ReadOnly=True)
             _ws_check = _wb_check.Sheets("@ Master Data")
-            # C4=kode tender dan C5=nama paket adalah sentinel wajib.
-            return bool(_ws_check.Cells(4, 3).Value and _ws_check.Cells(5, 3).Value)
+            _kode_excel = re.sub(r"\D", "", str(_ws_check.Cells(4, 3).Value or ""))
+            _kode_target = re.sub(r"\D", "", str(kode_tender or ""))
+            _nama_excel = str(_ws_check.Cells(5, 3).Value or "").strip()
+            return bool(_kode_target and _kode_excel == _kode_target and _nama_excel)
         except Exception:
             return False
         finally:
@@ -643,7 +672,9 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
             logs.append("WARN Master Data: hasil COM bersama kosong — retry Excel dedicated")
             _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=None, row_data=row_data)
         if _res.get("ok"):
-            if not _master_data_terisi(xl):
+            # Verifikasi final memakai instance baru agar tidak membaca cache
+            # workbook dari COM bulk yang sebelumnya melihat file kosong.
+            if not _master_data_terisi(None):
                 logs.append("WARN Master Data: COM sukses tetapi sentinel masih kosong")
             else:
                 logs.append("Master Data Tender: terisi otomatis")
@@ -7677,9 +7708,14 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             st.balloons()
         if "_folder_bulk_created" in st.session_state:
             _bulk_msg = st.session_state.pop("_folder_bulk_created")
-            st.toast(_bulk_msg, icon="📁")
-            st.success(f"✅ {_bulk_msg}")
-            st.balloons()
+            _bulk_error = st.session_state.pop("_folder_bulk_had_error", False)
+            if _bulk_error:
+                st.toast(_bulk_msg, icon="⚠️")
+                st.warning(f"⚠️ {_bulk_msg} — buka log detail")
+            else:
+                st.toast(_bulk_msg, icon="📁")
+                st.success(f"✅ {_bulk_msg}")
+                st.balloons()
 
         _tahun_skrg = str(datetime.now().year)
         _rows_tahun_ini = [_r for _r in _draft_rows if _tahun_skrg in str(_r.get("nomor_pp") or "")]
@@ -7839,9 +7875,15 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             except (ValueError, TypeError):
                 return False
 
-        # Sinkronkan status folder dari disk sebagai fallback ketika row
-        # Supabase belum memiliki folder_dibuat atau paket belum ada di DB.
+        # Folder di DB belum dianggap sehat bila workbook tidak menyimpan C4
+        # paket target. Tampilkan kembali sebagai "belum" agar create-folder
+        # dapat retry folder existing tanpa scrub data.
         for _r_local in _draft_rows:
+            _folder_db = _r_local.get("folder_dibuat")
+            if _folder_db and not _tender_folder_identity_valid(
+                str(_folder_db), str(_r_local.get("kode_tender") or "")
+            ):
+                _r_local["folder_dibuat"] = None
             if not _r_local.get("folder_dibuat"):
                 _folder_local = _find_tender_folder_local(
                     _r_local.get("kode_tender"),
@@ -7945,20 +7987,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 _bulk_status_line = _bulk_status.empty()
                 _ok, _fail = 0, 0
                 _bulk_semua_log = {}
-                # Buka Excel COM 1× untuk semua paket (reuse, hemat cold-start)
-                import win32com.client as _wc_bulk, pythoncom as _pyc_bulk
-                _pyc_bulk.CoInitialize()
-                _xl_bulk = None
-                try:
-                    _xl_bulk = _wc_bulk.DispatchEx("Excel.Application")
-                    _xl_bulk.Visible = False
-                    _xl_bulk.DisplayAlerts = False
-                    try:
-                        _xl_bulk.AutomationSecurity = 1
-                    except Exception:
-                        pass
-                except Exception:
-                    _xl_bulk = None  # fallback: tiap paket buka sendiri
                 try:
                   for _i, _bp in enumerate(_t_terpilih):
                     _bp2.progress((_i + 1) / len(_t_terpilih))
@@ -7968,9 +7996,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     try:
                         _r2 = _sp.run([_PY, _SCRIPT, "--output-dir", _TENDER_ROOT, _nf],
                                       capture_output=True, text=True, timeout=60,
-                                      creationflags=_NO_WIN)
+                                       creationflags=_NO_WIN)
                         if _r2.returncode == 0:
-                            _ok += 1
                             _paket_log.append("✅ Folder dibuat")
                             # Simpan kode_unik ke Supabase
                             _ku_val = _bp.get("kode_unik")
@@ -8017,28 +8044,43 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     _paket_log.append("⚠ Evaluator: tidak ada file ditemukan di master _SOP Evaluator")
                             except Exception as _t_eval_e:
                                 _paket_log.append(f"⚠ Evaluator copy: {_t_eval_e}")
-                            try:
-                                inbox_engine._sb().table("draft_paket").update({
-                                    "nomor_urut": _bp["nomor_urut"],
-                                    "folder_dibuat": _nf,
-                                    "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
-                                }).eq("kode_tender", _bp["kode_tender"]).execute()
-                                _load_draft_paket_cached.clear()
-                            except Exception:
-                                pass
-                            # Jalankan aksi tercentang (download/HPS/penawaran)
+                            # Download dulu agar Draft_Pokja tersedia untuk parser.
+                            # HPS sengaja dijalankan setelah Master Data supaya
+                            # dua instance COM tidak berebut workbook.
                             def _line_cb(_log=_paket_log):
                                 _bulk_status_line.code("\n".join(_log[-10:]))
                             _jalankan_aksi_tender(
                                 _bp["kode_tender"], _bp.get("id_pesan"), _bp.get("kode_pokja"),
-                                _bp_target, _t_cb_dl, _t_cb_hps, False,
+                                _bp_target, _t_cb_dl, False, False,
                                 st_ctx=_ctx_bulk, log=_paket_log,
                                 line_cb=_line_cb,
                             )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
-                            # Isi @ Master Data Excel via COM
-                            _excel_t_logs = _proses_excel_paket_tender(_bp_target, _bp["kode_tender"], xl=_xl_bulk, row_data=_bp.get("row"))
+                            # Dedicated COM per paket lebih lambat sedikit, tetapi
+                            # menghindari cache/lock workbook pada batch panjang.
+                            _excel_row = {
+                                **(_bp.get("row") or {}),
+                                "kode_unik": _bp.get("kode_unik") or "",
+                            }
+                            _excel_t_logs = _proses_excel_paket_tender(
+                                _bp_target,
+                                _bp["kode_tender"],
+                                xl=None,
+                                row_data=_excel_row,
+                            )
                             _paket_log.extend(_excel_t_logs)
+                            _md_ok = "Master Data Tender: terisi otomatis" in _excel_t_logs
+                            if not _md_ok:
+                                _paket_log.append(
+                                    "❌ Folder belum disahkan: @ Master Data gagal/identitas tidak cocok"
+                                )
+                            elif _t_cb_hps:
+                                _jalankan_aksi_tender(
+                                    _bp["kode_tender"], _bp.get("id_pesan"), _bp.get("kode_pokja"),
+                                    _bp_target, False, True, False,
+                                    st_ctx=_ctx_bulk, log=_paket_log,
+                                    line_cb=_line_cb,
+                                )
                             _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             _lamp_ok, _lamp_msg = _generate_lampiran_undangan_dpp_preview(_bp["kode_tender"])
                             _paket_log.append(
@@ -8087,6 +8129,20 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     )
                             except Exception as _se:
                                 _paket_log.append(f"⚠ Snapshot/download gagal: {_se}")
+                            if _md_ok:
+                                try:
+                                    inbox_engine._sb().table("draft_paket").update({
+                                        "nomor_urut": _bp["nomor_urut"],
+                                        "folder_dibuat": _nf,
+                                        "folder_dibuat_pada": datetime.now(_tz2.utc).isoformat(),
+                                    }).eq("kode_tender", _bp["kode_tender"]).execute()
+                                    _load_draft_paket_cached.clear()
+                                    _ok += 1
+                                except Exception as _db_err:
+                                    _fail += 1
+                                    _paket_log.append(f"❌ Gagal simpan status folder: {_db_err}")
+                            else:
+                                _fail += 1
                         else:
                             _fail += 1
                             _stderr_setup = (_r2.stderr or _r2.stdout or "Tanpa detail error").strip()
@@ -8096,19 +8152,17 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                         _paket_log.append("❌ Timeout buat folder")
                     _bulk_semua_log[_nf] = _paket_log
                 finally:
-                    # Tutup Excel 1× walau ada paket gagal
-                    if _xl_bulk is not None:
-                        try:
-                            _xl_bulk.Quit()
-                        except Exception:
-                            pass
-                    try:
-                        _pyc_bulk.CoUninitialize()
-                    except Exception:
-                        pass
+                    pass
 
-                _bulk_status.update(label=f"✅ {_ok} folder berhasil, ❌ {_fail} gagal", state="complete", expanded=True)
+                _bulk_status.update(
+                    label=f"✅ {_ok} folder berhasil, ❌ {_fail} gagal",
+                    state="error" if _fail else "complete",
+                    expanded=True,
+                )
                 st.session_state["_folder_bulk_created"] = f"{_ok} folder berhasil, {_fail} gagal"
+                st.session_state["_folder_bulk_had_error"] = bool(_fail)
+                st.session_state["_folder_bulk_last_summary"] = st.session_state["_folder_bulk_created"]
+                st.session_state["_folder_bulk_last_error"] = bool(_fail)
                 st.session_state["_folder_bulk_log"] = dict(_bulk_semua_log)
                 st.rerun()
         else:
@@ -8122,7 +8176,11 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             )
 
         if st.session_state.get("_folder_bulk_log"):
-            st.success(f"✅ Hasil terakhir: {st.session_state.get('_folder_bulk_created', '')}")
+            _hasil_bulk = st.session_state.get("_folder_bulk_last_summary", "")
+            if st.session_state.get("_folder_bulk_last_error"):
+                st.warning(f"⚠️ Hasil terakhir: {_hasil_bulk}")
+            else:
+                st.success(f"✅ Hasil terakhir: {_hasil_bulk}")
             with st.expander("📋 Log detail per paket (hasil terakhir)", expanded=True):
                 for _nf, _logs in st.session_state["_folder_bulk_log"].items():
                     st.markdown(f"**{_nf[:70]}**")
