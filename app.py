@@ -634,34 +634,31 @@ def _proses_excel_paket_tender(target_dir, kode_tender, xl=None, row_data=None):
     xlsm = os.path.join(target_dir, _xs[0])
 
     def _master_data_terisi(_app):
-        """Pastikan workbook menyimpan identitas paket target, bukan sekadar non-kosong."""
-        _own_app = _app is None
-        _wb_check = None
-        try:
-            if _own_app:
-                import win32com.client as _wc_check
-                _app = _wc_check.DispatchEx("Excel.Application")
-                _app.Visible = False
-                _app.DisplayAlerts = False
-            _wb_check = _app.Workbooks.Open(xlsm, UpdateLinks=0, ReadOnly=True)
-            _ws_check = _wb_check.Sheets("@ Master Data")
-            _kode_excel = re.sub(r"\D", "", str(_ws_check.Cells(4, 3).Value or ""))
-            _kode_target = re.sub(r"\D", "", str(kode_tender or ""))
-            _nama_excel = str(_ws_check.Cells(5, 3).Value or "").strip()
-            return bool(_kode_target and _kode_excel == _kode_target and _nama_excel)
-        except Exception:
-            return False
-        finally:
-            if _wb_check is not None:
-                try:
-                    _wb_check.Close(False)
-                except Exception:
-                    pass
-            if _own_app and _app is not None:
-                try:
-                    _app.Quit()
-                except Exception:
-                    pass
+        """Validasi file yang sudah tersimpan di disk, bukan cache COM Excel."""
+        _kode_target = re.sub(r"\D", "", str(kode_tender or ""))
+        for _attempt in range(8):
+            _wb_check = None
+            try:
+                from openpyxl import load_workbook as _load_wb_check
+                _wb_check = _load_wb_check(
+                    xlsm, read_only=True, data_only=True, keep_vba=True
+                )
+                _ws_check = _wb_check["@ Master Data"]
+                _kode_excel = re.sub(r"\D", "", str(_ws_check["C4"].value or ""))
+                _nama_excel = str(_ws_check["C5"].value or "").strip()
+                if _kode_target and _kode_excel == _kode_target and _nama_excel:
+                    return True
+            except Exception:
+                pass
+            finally:
+                if _wb_check is not None:
+                    try:
+                        _wb_check.close()
+                    except Exception:
+                        pass
+            if _attempt < 7:
+                time.sleep(0.5)
+        return False
 
     try:
         _res = _imd_t.proses_master_data_tender(kode_tender, xlsm, xl=xl, row_data=row_data)
