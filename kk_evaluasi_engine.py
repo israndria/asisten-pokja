@@ -274,7 +274,10 @@ def fill_kk_evaluasi(
             pemilik = data.get("pemilik", [])
             _set(_ROW["pemilik_label"], col, "Memenuhi" if pemilik else "")
             for pi, pk_row in enumerate([47, 48, 49, 50]):
-                _set(pk_row, col, pemilik[pi] if pi < len(pemilik) else "-")
+                # Slot pemilik yang tidak ada harus benar-benar kosong.
+                # Placeholder "-"/blank yang ditranspose Excel dapat muncul
+                # sebagai 0 di sheet satu_data dan ikut tercetak di Word.
+                _set(pk_row, col, pemilik[pi] if pi < len(pemilik) else "")
 
             # Syarat 7: SIKaP/Kinerja
             kinerja_ada = data.get("kinerja_ada", False)
