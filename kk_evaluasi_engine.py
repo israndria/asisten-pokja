@@ -94,6 +94,16 @@ def _ms_tms(data: dict) -> str:
     return "MS"
 
 
+def _format_kinerja(nilai, kategori) -> str:
+    """Normalisasi tampilan nilai kinerja tanpa tanda kurung kosong/ganda."""
+    value = str(nilai or "").strip()
+    value = re.sub(r"\s*\(\s*\)\s*$", "", value).strip()
+    kat = str(kategori or "").strip()
+    if kat and kat not in {"-", "()"} and f"({kat})".lower() not in value.lower():
+        value = f"{value} ({kat})" if value else kat
+    return value
+
+
 def fill_kk_evaluasi(
     excel_path: str,
     semua_peserta: list[dict],
@@ -285,8 +295,7 @@ def fill_kk_evaluasi(
             if kinerja_ada:
                 nilai_display = data.get("kinerja_nilai", "-")
                 kat = data.get("kinerja_kategori", "")
-                _set(_ROW["kinerja_nilai"], col,
-                     f"{nilai_display} ({kat})" if kat and kat != "-" else nilai_display)
+                _set(_ROW["kinerja_nilai"], col, _format_kinerja(nilai_display, kat))
             else:
                 _set(_ROW["kinerja_nilai"], col, "-")
 
