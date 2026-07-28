@@ -17,8 +17,7 @@ If Len(shell.Environment("Process")("POKJA_V19_ROOT")) = 0 Then _
     shell.Environment("Process")("POKJA_V19_ROOT") = fso.GetAbsolutePathName(appDir & "\..\procurement_core")
 If Len(shell.Environment("Process")("POKJA_DRIVE_ROOT")) = 0 Then _
     shell.Environment("Process")("POKJA_DRIVE_ROOT") = "C:\POKJA2026"
-If Len(shell.Environment("Process")("POKJA_SECRET_ROOT")) = 0 Then _
-    shell.Environment("Process")("POKJA_SECRET_ROOT") = fso.GetAbsolutePathName(appDir & "\..\Secrets")
+shell.Environment("Process")("POKJA_SECRET_ROOT") = fso.GetAbsolutePathName(appDir & "\..\Secrets")
 shell.CurrentDirectory = appDir
 If Not fso.FileExists(appDir & "\ui_dpa.py") Then WScript.Quit
 

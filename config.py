@@ -98,6 +98,7 @@ for _runtime_dir in (RUNTIME_ROOT, DOWNLOAD_DIR, BROWSER_SESSION_DIR, STATE_DIR,
 def find_secret(filename: str) -> pathlib.Path:
     """Return lokasi secret lokal; jangan membaca secret dari Google Drive."""
     candidates = [
+        pathlib.Path(CODE_ROOT) / "Secrets" / filename,
         pathlib.Path(SECRET_ROOT) / filename,
         pathlib.Path(BASE_DIR) / filename,
         pathlib.Path(V19_ROOT) / filename,
@@ -137,5 +138,9 @@ def sb():
     from supabase import create_client
     from dotenv import load_dotenv
     env_path = find_secret("secret_supabase.env")
-    load_dotenv(env_path)
-    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    load_dotenv(env_path, override=True)
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip().strip('"')
+    supabase_key = os.environ.get("SUPABASE_KEY", "").strip().strip('"')
+    if not supabase_url or not supabase_key:
+        raise RuntimeError(f"Secret Supabase tidak lengkap: {env_path}")
+    return create_client(supabase_url, supabase_key)
