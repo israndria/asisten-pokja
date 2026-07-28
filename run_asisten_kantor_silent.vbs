@@ -18,7 +18,7 @@ If Len(shell.Environment("Process")("POKJA_V19_ROOT")) = 0 Then _
 If Len(shell.Environment("Process")("POKJA_DRIVE_ROOT")) = 0 Then _
     shell.Environment("Process")("POKJA_DRIVE_ROOT") = "C:\POKJA2026"
 If Len(shell.Environment("Process")("POKJA_SECRET_ROOT")) = 0 Then _
-    shell.Environment("Process")("POKJA_SECRET_ROOT") = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\POKJA2026\Secrets"
+    shell.Environment("Process")("POKJA_SECRET_ROOT") = fso.GetAbsolutePathName(appDir & "\..\Secrets")
 shell.CurrentDirectory = appDir
 If Not fso.FileExists(appDir & "\ui_dpa.py") Then WScript.Quit
 
@@ -32,8 +32,8 @@ Else
     cmd = """" & python & """ -m streamlit run """ & appPy & """"
     cmd = cmd & " --server.port " & port
     cmd = cmd & " --server.headless true"
-    cmd = cmd & " --server.runOnSave false"
-    cmd = cmd & " --server.fileWatcherType none"
+    cmd = cmd & " --server.runOnSave true"
+    cmd = cmd & " --server.fileWatcherType auto"
     cmd = cmd & " --browser.gatherUsageStats false"
     shell.Run cmd, 0, False
 End If

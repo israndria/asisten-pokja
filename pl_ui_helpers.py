@@ -126,7 +126,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         if cfg["dl_dokumen"] and kode:
             # 3. Download dokumen SPSE (cookie di-pass, merge ditunda → serial pasca-pool)
             if not cookie_str:
-                log("❌ Download error: Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
+                log("❌ Download error: Cookie SPSE kosong — buka Brave SPSE dan login ulang.")
             else:
                 try:
                     _emit("⬇️ mulai download")

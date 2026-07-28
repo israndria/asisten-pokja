@@ -134,7 +134,9 @@ def ambil_token_dari_browser(progress_cb=None) -> str:
                     _log(f"OK Token URL ditemukan: {token_url[:60]}...")
                     return token_url
         finally:
-            browser.close()
+            # connect_over_cdp memakai browser milik user. Jangan panggil
+            # browser.close() karena dapat menutup seluruh Brave beserta tab
+            # SPSE; cukup putuskan client Playwright-nya.
             pw.stop()
 
         _log("INFO Token URL lt17 tidak ditemukan di tab Chrome")
@@ -167,7 +169,8 @@ def simpan_session_dari_browser(progress_cb=None) -> str:
                         _log(f"OK SPSE_SESSION disimpan ({spse[:16]}...)")
                         return spse
         finally:
-            browser.close()
+            # Brave adalah browser milik user, bukan resource engine Apendo.
+            # Hentikan koneksi Playwright saja agar CDP tetap hidup.
             pw.stop()
 
         _log("INFO SPSE_SESSION tidak ditemukan di browser")

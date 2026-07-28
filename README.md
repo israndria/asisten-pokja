@@ -37,7 +37,7 @@ Two complete procurement workflows, each fully automated end-to-end:
 
 ## Key Technical Features
 
-- **Chrome CDP integration** — drives an already-logged-in Chrome session via DevTools Protocol; no credential storage needed
+- **Brave CDP integration** — drives an already-logged-in Brave session via DevTools Protocol; no credential storage needed
 - **COM automation** — reads/writes Excel workbooks and merges Word templates directly via `win32com`
 - **Supabase backend** — stores package data, vendor identities, SBU classifications, and evaluation results
 - **PDF parsing** — extracts vendor qualification data (SBU certificates, personnel CVs, equipment lists) from uploaded PDFs using `pdfplumber`
@@ -48,7 +48,7 @@ Two complete procurement workflows, each fully automated end-to-end:
 ## Architecture
 
 ```
-Chrome (logged-in SPSE session)
+Brave (logged-in SPSE session)
   ↕ CDP port 9222
 Playwright / requests + cookies
   ↕
@@ -64,7 +64,7 @@ app.py (Streamlit UI)
 
 - Windows only (COM automation requires Excel + Word)
 - Python 3.10+
-- Google Chrome with active SPSE login session
+- Brave with active SPSE login session
 - Microsoft Excel + Word installed
 - Supabase project (for data storage)
 
@@ -80,7 +80,7 @@ streamlit run app.py
 # Runs on http://localhost:8502
 ```
 
-Requires Chrome open and logged in to your SPSE instance before launching.
+Requires Brave open and logged in to your SPSE instance before launching.
 
 ## Context
 

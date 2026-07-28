@@ -59,7 +59,7 @@ def ambil_list_inbox() -> list[dict]:
     """
     cookie = spse_browser.get_spse_cookies()
     if not cookie:
-        raise RuntimeError("Cookie SPSE kosong — buka Chrome SPSE dan login ulang dulu.")
+        raise RuntimeError("Cookie SPSE kosong — buka Brave SPSE dan login ulang dulu.")
     token = _ambil_authenticity_token()
     if not token:
         raise RuntimeError("authenticityToken tidak ditemukan — pastikan sudah login")
@@ -887,7 +887,7 @@ def download_dokumen_paket(
       - Dokumen SPSE: spek, docsskk, uploaduraian, lainnya (pure requests)
 
     Setelah download, buat 1 PDF gabungan: Draft_Pokja_{kode_pokja}.pdf
-    Butuh cookie dari Chrome SPSE yang aktif.
+    Butuh cookie dari Brave SPSE yang aktif.
     Return: {"ok": [...], "skip": [...], "error": [...], "draft_pdf": str}
     """
     import urllib.parse
@@ -903,7 +903,7 @@ def download_dokumen_paket(
 
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        log("❌ Cookie SPSE kosong — buka Chrome SPSE dan login ulang dulu.")
+        log("❌ Cookie SPSE kosong — buka Brave SPSE dan login ulang dulu.")
         hasil["error"].append("Cookie SPSE kosong — silakan login di browser")
         return hasil
 
@@ -1130,7 +1130,7 @@ def download_dokumen_paket(
         others_f = [f for f in all_pdf if f not in inbox_f]
         files_didownload = inbox_f + others_f
         if not files_didownload:
-            log("❌ FOLDER KOSONG — Chrome CDP tidak aktif saat download. Jalankan ulang setelah Chrome dibuka.")
+            log("❌ FOLDER KOSONG — Brave CDP tidak aktif saat download. Jalankan ulang setelah Brave dibuka.")
             hasil["error"].append("CDP tidak aktif, folder kosong, Draft tidak terbuat")
             return hasil
 

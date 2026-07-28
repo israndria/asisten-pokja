@@ -1183,7 +1183,7 @@ def download_dokumen_paket_pl(
     if not cookie_str:
         cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        hasil["error"].append("Cookie SPSE kosong — buka Chrome SPSE dan login ulang.")
+        hasil["error"].append("Cookie SPSE kosong — buka Brave SPSE dan login ulang.")
         return hasil
 
     hdrs = {

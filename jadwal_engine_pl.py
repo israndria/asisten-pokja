@@ -177,7 +177,7 @@ def scrap_hidden_fields_pl(kode_paket: str) -> dict:
     """GET /jadwalnontender/{kode_paket}/list — scrap hidden fields + CSRF."""
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        raise RuntimeError("Cookie SPSE kosong — login PP di Chrome dulu.")
+        raise RuntimeError("Cookie SPSE kosong — login PP di Brave dulu.")
 
     url = f"{BASE}/jadwalnontender/{kode_paket}/list"
     r = requests.get(url, headers={**HDRS, "Cookie": cookie_str}, timeout=20)

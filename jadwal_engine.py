@@ -371,13 +371,13 @@ def scrap_hidden_fields(paket_id: str) -> dict | None:
     """
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
-        raise RuntimeError("Cookie SPSE tidak ditemukan. Pastikan Chrome sudah login SPSE.")
+        raise RuntimeError("Cookie SPSE tidak ditemukan. Pastikan Brave sudah login SPSE.")
 
     url = f"{BASE_URL}/jadwal/{paket_id}/list"
     resp = requests.get(url, headers={**HEADERS_BASE, "Cookie": cookie_str}, timeout=20)
 
     if resp.status_code == 302 or "login" in resp.url.lower():
-        raise RuntimeError("Session SPSE expired. Silakan login ulang di Chrome.")
+        raise RuntimeError("Session SPSE expired. Silakan login ulang di Brave.")
     if resp.status_code != 200:
         raise RuntimeError(f"Gagal akses halaman jadwal: HTTP {resp.status_code}")
 
@@ -514,7 +514,7 @@ def auto_fill_jadwal(paket_id: str, tgl_mulai: datetime) -> dict:
     """
     scraped = scrap_hidden_fields(paket_id)
     if not scraped:
-        raise RuntimeError("Gagal scrap hidden fields. Pastikan Chrome sudah login SPSE.")
+        raise RuntimeError("Gagal scrap hidden fields. Pastikan Brave sudah login SPSE.")
     if not scraped.get("csrf"):
         raise RuntimeError("CSRF token tidak ditemukan. Pastikan sudah login di SPSE.")
 

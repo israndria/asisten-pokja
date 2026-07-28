@@ -352,7 +352,7 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
 
 
 def _cek_cdp_aktif() -> bool:
-    """Cek apakah Chrome sudah listen di CDP port."""
+    """Cek apakah Brave sudah listen di CDP port."""
     import socket
     try:
         s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=1)
@@ -363,15 +363,15 @@ def _cek_cdp_aktif() -> bool:
 
 
 def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
-    """Connect ke Chrome SPSE via CDP.
+    """Connect ke Brave SPSE via CDP.
     navigate=True  : buka tab baru dan navigasi ke url (untuk koneksi manual)
     navigate=False : hanya connect, pakai tab yang sudah ada (untuk auto-reconnect cepat)
-    Chrome harus sudah dibuka via 'Buka Chrome SPSE.bat' terlebih dahulu.
+    Brave harus sudah dibuka via launcher Brave CDP terlebih dahulu.
     """
     if not _cek_cdp_aktif():
         raise RuntimeError(
             "Brave SPSE belum terbuka. "
-            "Brave harus sudah dibuka via 'Buka Brave POKJA.bat' terlebih dahulu."
+            "Buka Brave dengan remote debugging port 9222 terlebih dahulu."
         )
     return _run(_connect_cdp_async(url, navigate=navigate))
 

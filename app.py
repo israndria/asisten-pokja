@@ -200,33 +200,89 @@ def _enrich_kode_unik_tender_excel(
         if skip_folder_lookup:
             folder_name = str(folder_dibuat or "").strip()
         else:
-            rows = (
-                _KU_SB().table("draft_paket")
-                .select("folder_dibuat")
-                .eq("kode_tender", str(paket.get("kode") or paket.get("id_lelang") or ""))
-                .limit(1).execute().data or []
-            )
-            folder_name = str((rows[0] if rows else {}).get("folder_dibuat") or "").strip()
-        if not folder_name:
-            return "", kode_db, "folder tidak ditemukan"
-        folder_name = _ku_re.sub(r'[/\\:*?"<>|]', "-", folder_name).strip()
-        folder = _ku_os.path.join(_KU_TENDER_ROOT, folder_name)
-        candidates = sorted(
-            p for p in _ku_os.listdir(folder)
-            if p.lower().endswith(".xlsm")
-            and "backup" not in p.lower()
-            and ".bak_" not in p.lower()
-        )
-        if not candidates:
-            return "", kode_db, "workbook tidak ditemukan"
-        path = _ku_os.path.join(folder, candidates[0])
-        stat = _ku_os.stat(path)
-        kode_excel = _read_tender_master_data_cached(
-            path, stat.st_mtime_ns, stat.st_size
-        )
-        if kode_excel:
-            return kode_excel, kode_db, "excel" if kode_excel == kode_db else "beda"
-        return "", kode_db, "G2 kosong"
+            # Supabase hanya sumber metadata tambahan. Credential bisa belum
+            # tersedia di PC kantor; jangan hentikan resolver Excel karenanya.
+            try:
+                rows = (
+                    _KU_SB().table("draft_paket")
+                    .select("folder_dibuat")
+                    .eq("kode_tender", str(paket.get("kode") or paket.get("id_lelang") or ""))
+                    .limit(1).execute().data or []
+                )
+                folder_name = str((rows[0] if rows else {}).get("folder_dibuat") or "").strip()
+            except Exception:
+                folder_name = ""
+        # Metadata folder bisa kosong/stale di cache lama. Susun kandidat dari
+        # DB terlebih dahulu, lalu fallback ke nama paket/Pokja di disk.
+        _folder_names = [folder_name] if folder_name else []
+        _folder_names = [str(x).strip() for x in _folder_names if str(x).strip()]
+        _nama_norm = _ku_re.sub(r"[^a-z0-9]+", "", str(paket.get("nama") or "").lower())
+        _pokja_match = _ku_re.search(r"\d+", str(paket.get("pokja") or paket.get("kode_pokja") or ""))
+        _pokja_norm = _pokja_match.group(0).lstrip("0") if _pokja_match else ""
+        try:
+            _disk_dirs = [
+                d for d in _ku_os.listdir(_KU_TENDER_ROOT)
+                if _ku_os.path.isdir(_ku_os.path.join(_KU_TENDER_ROOT, d))
+                and "backup" not in d.lower()
+            ]
+            for _d in _disk_dirs:
+                _dn = _ku_re.sub(r"[^a-z0-9]+", "", _d.lower())
+                if ((_nama_norm and (_nama_norm in _dn or _dn in _nama_norm))
+                        or (_pokja_norm and _ku_re.search(r"pokja\s*0*" + _pokja_norm, _d, _ku_re.I))):
+                    if _d not in _folder_names:
+                        _folder_names.append(_d)
+        except OSError:
+            pass
+
+        _kode_tender_target = str(paket.get("kode") or paket.get("id_lelang") or "").strip()
+        _kode_tender_digits = _ku_re.sub(r"\D", "", _kode_tender_target)
+        for _folder_candidate in _folder_names:
+            _folder_candidate = _ku_re.sub(r'[/\\:*?"<>|]', "-", _folder_candidate).strip()
+            folder = _ku_os.path.join(_KU_TENDER_ROOT, _folder_candidate)
+            try:
+                candidates = sorted(
+                    p for p in _ku_os.listdir(folder)
+                    if p.lower().endswith(".xlsm")
+                    and "backup" not in p.lower()
+                    and ".bak_" not in p.lower()
+                )
+            except OSError:
+                continue
+            for _candidate in candidates:
+                path = _ku_os.path.join(folder, _candidate)
+                stat = _ku_os.stat(path)
+                kode_excel = _read_tender_master_data_cached(path, stat.st_mtime_ns, stat.st_size)
+                if kode_excel:
+                    return kode_excel, kode_db, "excel" if kode_excel == kode_db else "beda"
+
+        # Fallback paling kuat: cari workbook berdasarkan Kode Tender pada
+        # @ Master Data!C4. Ini mengatasi metadata folder/cache yang kosong,
+        # stale, atau berbeda format; C4 adalah identitas paket yang stabil.
+        if _kode_tender_target:
+            try:
+                for _d in _ku_os.listdir(_KU_TENDER_ROOT):
+                    _dir_path = _ku_os.path.join(_KU_TENDER_ROOT, _d)
+                    if (not _ku_os.path.isdir(_dir_path)
+                            or "backup" in _d.lower()):
+                        continue
+                    for _candidate in sorted(_ku_os.listdir(_dir_path)):
+                        if (not _candidate.lower().endswith(".xlsm")
+                                or "backup" in _candidate.lower()
+                                or ".bak_" in _candidate.lower()):
+                            continue
+                        _path = _ku_os.path.join(_dir_path, _candidate)
+                        _stat = _ku_os.stat(_path)
+                        _kode_file, _kode_g2 = _read_tender_identity_cached(
+                            _path, _stat.st_mtime_ns, _stat.st_size
+                        )
+                        _kode_file_digits = _ku_re.sub(r"\D", "", _kode_file)
+                        if ((_kode_file == _kode_tender_target or
+                             (_kode_tender_digits and _kode_file_digits == _kode_tender_digits))
+                                and _kode_g2):
+                            return _kode_g2, kode_db, "excel" if _kode_g2 == kode_db else "beda"
+            except OSError:
+                pass
+        return "", kode_db, "workbook/G2 tidak ditemukan"
     except Exception as exc:
         return "", kode_db, f"gagal baca Excel: {exc}"
 
@@ -240,6 +296,55 @@ def _read_tender_master_data_cached(path: str, mtime_ns: int, size: int) -> str:
         return str(wb["@ Master Data"]["G2"].value or "").strip()
     finally:
         wb.close()
+
+
+@st.cache_data(ttl=300)
+def _read_tender_identity_cached(path: str, mtime_ns: int, size: int) -> tuple[str, str]:
+    """Baca identitas paket C4 dan Kode Unik G2 dari workbook Tender."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
+    try:
+        ws = wb["@ Master Data"]
+        return str(ws["C4"].value or "").strip(), str(ws["G2"].value or "").strip()
+    finally:
+        wb.close()
+
+
+def _find_tender_folder_local(kode_tender: str, kode_pokja: str = "", nama: str = "") -> str:
+    """Cari folder Tender yang sudah ada di disk saat metadata DB belum lengkap."""
+    try:
+        from config import TENDER_ROOT as _root
+        _kode_digits = re.sub(r"\D", "", str(kode_tender or ""))
+        _pokja_digits = re.sub(r"\D", "", str(kode_pokja or "")).lstrip("0")
+        _nama_norm = re.sub(r"[^a-z0-9]+", "", str(nama or "").lower())
+        _dirs = [
+            d for d in os.listdir(_root)
+            if os.path.isdir(os.path.join(_root, d)) and "backup" not in d.lower()
+        ]
+        # Folder kerja dibuat dengan suffix Pokja; ini juga mencakup workbook
+        # yang C4-nya belum pernah diisi (mis. paket 034/035).
+        for _d in _dirs:
+            _dn = re.sub(r"[^a-z0-9]+", "", _d.lower())
+            if _pokja_digits and re.search(r"pokja0*" + _pokja_digits, _dn):
+                return _d
+            if _nama_norm and (_nama_norm in _dn or _dn in _nama_norm):
+                return _d
+        # Identitas workbook menjadi fallback paling akurat untuk paket tanpa
+        # nomor Pokja di metadata SPSE.
+        if _kode_digits:
+            for _d in _dirs:
+                _folder = os.path.join(_root, _d)
+                for _f in os.listdir(_folder):
+                    if not (_f.lower().endswith(".xlsm") and ".bak_" not in _f.lower()):
+                        continue
+                    _path = os.path.join(_folder, _f)
+                    _stat = os.stat(_path)
+                    _kode_file, _ = _read_tender_identity_cached(_path, _stat.st_mtime_ns, _stat.st_size)
+                    if re.sub(r"\D", "", _kode_file) == _kode_digits:
+                        return _d
+    except Exception:
+        pass
+    return ""
 
 
 def _enrich_kode_unik_pl_excel(row: dict) -> str:
@@ -424,6 +529,28 @@ def _load_draft_paket_cached() -> list:
             return [r for r in rows if not _is_tender_excluded(r)]
         except Exception:
             rows = _load_local()
+            # Jika Supabase belum dikonfigurasi/terputus dan cache lokal kosong,
+            # gunakan daftar SPSE yang sudah berhasil diambil pada sesi ini.
+            # Ini menjaga Tab 0 tetap menampilkan paket untuk ditrace.
+            if not rows:
+                _now_fallback = datetime.now().isoformat()
+                _session_paket = (
+                    st.session_state.get("global_paket_draft", {}).get("paket", [])
+                    + st.session_state.get("global_paket_aktif", {}).get("paket", [])
+                )
+                rows = [
+                    {
+                        "kode_tender": str(p.get("kode") or p.get("id_lelang") or ""),
+                        "nama_tender": p.get("nama") or "",
+                        "kode_pokja": p.get("kode_pokja") or p.get("pokja") or "",
+                        "folder_dibuat": p.get("folder_dibuat") or "",
+                        "nomor_urut": p.get("nomor_urut") or "",
+                        "status_tahap": p.get("status") or "",
+                        "diambil_pada": _now_fallback,
+                    }
+                    for p in _session_paket
+                    if p.get("kode") or p.get("id_lelang")
+                ]
             return [r for r in rows if not _is_tender_excluded(r)]
 
 
@@ -7465,6 +7592,12 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state["global_paket_aktif"] = _ga0
                     kirimpesan_engine.save_paket_cache(_gd0, _ga0)
 
+        # Supabase fallback baru bisa memakai daftar SPSE setelah global state
+        # terisi; refresh sumber Tab 0 pada startup yang sebelumnya kosong.
+        if not _draft_rows:
+            _load_draft_paket_cached.clear()
+            _draft_rows = _load_draft_paket_cached()
+
         if st.button("🚀 Serap Data Paket", type="primary", use_container_width=True, key="btn_serap_tender_gabung"):
             _tender_rows_dirty = False
             # Aksi 1: Update Inbox
@@ -7705,6 +7838,18 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 return (datetime.now() - _dp_dt).days <= 14
             except (ValueError, TypeError):
                 return False
+
+        # Sinkronkan status folder dari disk sebagai fallback ketika row
+        # Supabase belum memiliki folder_dibuat atau paket belum ada di DB.
+        for _r_local in _draft_rows:
+            if not _r_local.get("folder_dibuat"):
+                _folder_local = _find_tender_folder_local(
+                    _r_local.get("kode_tender"),
+                    _r_local.get("kode_pokja"),
+                    _r_local.get("nama_tender"),
+                )
+                if _folder_local:
+                    _r_local["folder_dibuat"] = _folder_local
 
         _rows_valid = [
             _r for _r in _draft_rows
@@ -9842,7 +9987,11 @@ if _tender_active_tab == "8️⃣ Upload & Cetak 5 BA":
                 # Paket hasil sinkronisasi sudah membawa folder_dibuat. Hindari
                 # query Supabase per baris; fallback lookup tetap tersedia untuk
                 # row legacy yang belum memiliki metadata folder.
-                _has_folder_meta = "folder_dibuat" in _p_ba
+                # _get_paket_gabungan selalu menyertakan key folder_dibuat,
+                # termasuk saat nilainya kosong dari cache lama. Yang boleh
+                # melewati lookup Supabase hanya metadata folder yang benar-benar
+                # berisi; jika kosong, resolver harus mencari folder dari DB.
+                _has_folder_meta = bool(str(_p_ba.get("folder_dibuat") or "").strip())
                 _kode_xl, _kode_db, _kode_src = _enrich_kode_unik_tender_excel(
                     _p_ba,
                     folder_dibuat=_p_ba.get("folder_dibuat"),
@@ -9913,8 +10062,29 @@ if _tender_active_tab == "8️⃣ Upload & Cetak 5 BA":
                     pass
         st.session_state["_ba_last_sel_ids"] = _ba_sel_ids
 
-    if ba_selected and not ba_selected[0].get("kode_unik"):
-        st.warning("⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel.")
+    # Guard terakhir sebelum warning/cetak. Pada rerun Streamlit, object paket
+    # dapat berasal dari cache lama; baca ulang Excel sekali lagi agar warning
+    # tidak didasarkan pada state DB yang stale.
+    _ba_kode_missing = []
+    for _p_guard in ba_selected:
+        if not str(_p_guard.get("kode_unik") or "").strip():
+            _kode_guard, _, _kode_guard_status = _enrich_kode_unik_tender_excel(
+                _p_guard,
+                folder_dibuat=_p_guard.get("folder_dibuat"),
+                skip_folder_lookup=bool(str(_p_guard.get("folder_dibuat") or "").strip()),
+            )
+            if _kode_guard:
+                _p_guard["kode_unik"] = _kode_guard
+            else:
+                _ba_kode_missing.append((_p_guard, _kode_guard_status))
+    if _ba_kode_missing:
+        _missing_labels = ", ".join(
+            f"{p.get('kode') or '-'} ({status})" for p, status in _ba_kode_missing
+        )
+        st.warning(
+            "⚠️ Paket ini belum punya Kode Unik — generate dulu via Excel. "
+            f"Paket yang belum terbaca: {_missing_labels}"
+        )
 
     # ── Konfirmasi sebelum cetak ──────────────────────────────────────────
     if st.session_state.get("ba_pending_target"):

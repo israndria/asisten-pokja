@@ -39,7 +39,7 @@ def _get_active_spse_page():
     """Ambil tab SPSE yang sudah login dari CDP context."""
     import spse_browser as _sb
     if not _sb._cek_cdp_aktif():
-        return None, "Chrome CDP tidak aktif — buka 'Buka Chrome SPSE.bat' dulu"
+        return None, "Brave CDP tidak aktif — buka Brave dengan remote debugging port 9222 dulu"
     if _sb._get_ctx() is None:
         try:
             _sb.buka_browser(navigate=False)
