@@ -217,7 +217,23 @@ def _prompt_evaluasi_kualifikasi(folder_paket: Path, nama_paket: str) -> str:
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
 
-⛔ ATURAN HEMAT TOKEN — WAJIB DIPATUHI:
+ATURAN AKURASI — WAJIB:
+- Dokpil/LDP paket adalah sumber aturan utama. Baca jenis kontrak dan syarat
+  paket; jangan menganggap kontrak Lumsum dari nama file SOP.
+- Baca PROTOKOL_EVALUASI_AI.md DAN
+  EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md. Nama file lama dipertahankan hanya
+  untuk kompatibilitas.
+- Gunakan checklist SPSE, dokumen pendukung, dan workbook 0. BAPLJKK*.xlsm
+  sheet Hasil Evaluasi/@ Master Data sebagai satu rangkaian bukti.
+- Jangan meminta user memverifikasi ulang bukti yang sudah ada. KSWP VALID,
+  perusahaan baru, dan ketiadaan akta perubahan yang sudah tercatat harus
+  diputus sendiri.
+- Pisahkan verdict saat ini dari pembuktian tahap berikut. Dokumen asli yang
+  baru diwajibkan saat pembuktian adalah flag NONBLOCKING.
+- Status Administrasi dan Kualifikasi wajib LULUS atau GUGUR. Jangan gunakan
+  LULUS*, BELUM FINAL, atau KLARIFIKASI sebagai pengganti verdict.
+
+ATURAN EFISIENSI:
 - Sumber data sudah di-EXTRACT ke teks (.txt) di subfolder "8. Dokumen Kualifikasi/_teks_ekstrak".
 - DILARANG Read PDF mentah > 1MB di "8. Dokumen Kualifikasi". PDF besar = boros token ekstrem. Baca .txt saja.
 - Tiap penyedia punya 1 file .txt. Di dalamnya: bagian "### SUMBER UTAMA (checklist SPSE) ###" = ringkasan resmi SPSE (NPWP, SBU, NIB, akta, manajerial, pengalaman) — ini SUMBER UTAMA evaluasi.
@@ -225,7 +241,9 @@ Folder paket: {folder_paket}
 
 Langkah:
 1. Baca _INDEX.txt di "8. Dokumen Kualifikasi/_teks_ekstrak" → list penyedia + file .txt mereka.
-2. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis" → pahami persyaratan.
+2. Baca PROTOKOL_EVALUASI_AI.md dan
+   EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md di subfolder
+   "5. Evaluator Kualifikasi & Teknis".
 3. Untuk tiap penyedia: Read file .txt-nya. Evaluasi dari bagian SUMBER UTAMA (checklist). Cek silang ke DOKUMEN PENDUKUNG hanya jika ada poin yang perlu konfirmasi.
 4. Tulis output ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
 5. Output WAJIB dalam Bahasa Indonesia.
@@ -243,18 +261,27 @@ Folder paket: {folder_paket}
 
 PENTING:
 - Jangan mengarang atau membuat file yang tidak ada. Jika _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md tidak ditemukan → output "ERROR: Sesi 1 belum selesai." dan berhenti.
-- Pisahkan gate SPSE dari audit dokumen offline: jika Sesi 1 belum LULUS tetapi subfolder
-  "9. Dokumen Teknis Biaya" dan dokumen penawarannya sudah tersedia, tetap lakukan
-  evaluasi teknis berbasis dokumen. Tandai administrasi/kualifikasi sebagai PENDING,
-  jangan merekomendasikan klik LULUS di SPSE, dan jangan mengubah status SPSE.
+- Gunakan Dokpil/LDP sebagai sumber aturan utama dan deteksi jenis kontrak.
+  Jangan hardcode Lumsum.
+- Baca PROTOKOL_EVALUASI_AI.md DAN
+  EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md.
+- Pisahkan gate SPSE dari verdict dokumen. Jika dokumen teknis tersedia, lakukan
+  evaluasi penuh dan tetapkan LULUS/GUGUR walaupun gate SPSE dicatat terpisah.
+- Bukti SKK asli atau overlap personel yang menurut Dokpil baru diperiksa saat
+  klarifikasi adalah flag NONBLOCKING, bukan alasan BELUM FINAL.
+- Unsur wajib penawaran yang tidak ditemukan setelah seluruh file diperiksa
+  adalah TIDAK MEMENUHI; jangan meminta user menambahkan/verifikasi substansi.
 - Jika dokumen teknis memang belum tersedia, tulis laporan teknis dengan status PENDING
   dan alasan spesifik; jangan berhenti tanpa membuat _HASIL_EVALUASI_TEKNIS.md.
-- HEMAT TOKEN: Glob dulu untuk list file, baca selektif — jangan baca semua PDF sekaligus.
-- PDF gabungan besar (>5MB) — baca halaman awal saja untuk identifikasi, lalu baca bagian spesifik yang relevan.
+- Glob dulu untuk list file dan gunakan anchor untuk navigasi, tetapi kualitas
+  keputusan mengalahkan hemat token. Jangan berhenti di halaman awal jika bukti
+  wajib berada di halaman lain.
 - Output WAJIB dalam Bahasa Indonesia.
 
 Langkah:
-1. Baca PROTOKOL_EVALUASI_AI.md di subfolder "5. Evaluator Kualifikasi & Teknis".
+1. Baca PROTOKOL_EVALUASI_AI.md dan
+   EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md di subfolder
+   "5. Evaluator Kualifikasi & Teknis".
 2. Cek _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT. Jika tidak ada → stop.
 3. Glob subfolder "9. Dokumen Teknis Biaya" untuk list file penyedia.
 4. Output: _HASIL_EVALUASI_TEKNIS.md di ROOT folder paket.
@@ -271,14 +298,16 @@ SOP evaluasi biaya: {EVALUASI_BIAYA_PLJKK_SOP}
 
 PENTING:
 - Sesi 3 hanya boleh dilanjutkan setelah membaca `_HASIL_EVALUASI_TEKNIS.md`.
+- Jika teknis GUGUR/TIDAK MEMENUHI, hasil biaya wajib
+  `TIDAK DILANJUTKAN — tidak lulus teknis`; jangan audit biaya substantif.
 - Gunakan Dokpil paket ini sebagai acuan utama, khususnya LDP, klausul 7.5,
   klausul 10.4, dan bentuk Dokumen Penawaran Biaya.
 - Baca dokumen biaya secara selektif dari subfolder `9. Dokumen Teknis Biaya`.
 - Jangan mengarang HPS, nilai penawaran, volume, harga satuan, hasil koreksi
   SPSE, atau standar minimum remunerasi.
-- Jika angka/tabel tidak terbaca atau tolok ukur remunerasi tidak tersedia,
-  gunakan status `DATA TIDAK CUKUP` atau `KLARIFIKASI WAJIB`; jangan memaksakan
-  kesimpulan MEMENUHI/TIDAK MEMENUHI.
+- Jika tolok ukur remunerasi menurut Dokpil baru dipakai saat negosiasi dan
+  tidak tersedia sekarang, catat `AGENDA NEGOSIASI — NONBLOCKING`; jangan
+  menahan putusan biaya yang sudah dapat dihitung.
 - Dokpil yang dipakai saat fitur ini dibuat memiliki konflik internal:
   klausul 10.4 angka 1 butir 3 menyebut hasil koreksi di atas HPS gugur,
   sedangkan angka 2 menyebut tidak dinyatakan gugur sebelum klarifikasi teknis
