@@ -2,6 +2,8 @@
 
 import os
 import re
+import hashlib
+import shutil
 import sys
 import requests
 from contextlib import contextmanager
@@ -84,32 +86,136 @@ def fetch_dokumen_teknis_biaya_pl(id_nontender: str) -> dict:
         return {"ok": False, "dokumen": [], "pesan": str(e)}
 
 
-def _download_file(url: str, dest_path: str) -> dict:
-    """Download file ke dest_path via requests + cookie."""
+def _same_file_contents(path_a: str, path_b: str) -> bool:
     try:
-        r = requests.get(url, headers=_headers(BASE + "/evaluasinontender"), timeout=60, stream=True)
-        if r.status_code != 200:
-            return {"ok": False, "pesan": f"HTTP {r.status_code}", "path": ""}
-        if "text/html" in r.headers.get("Content-Type", ""):
-            return {"ok": False, "pesan": "session expired (server return HTML) — login ulang", "path": ""}
+        if os.path.getsize(path_a) != os.path.getsize(path_b):
+            return False
+        digests = []
+        for path in (path_a, path_b):
+            digest = hashlib.sha256()
+            with open(path, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            digests.append(digest.digest())
+        return digests[0] == digests[1]
+    except OSError:
+        return False
 
-        # Deteksi nama file dari Content-Disposition
-        cd = r.headers.get("Content-Disposition", "")
-        fname_match = re.search(r'filename[^;=\n]*=([\'"]?)([^\'";\n]+)\1', cd)
-        if fname_match:
-            fname_orig = fname_match.group(2).strip().strip('"').strip("'").replace("+", " ").strip()
-            if fname_orig:
-                dest_path = os.path.join(os.path.dirname(dest_path), _slug(fname_orig))
 
-        os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
-        ukuran = 0
-        with open(dest_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-                ukuran += len(chunk)
-        return {"ok": True, "pesan": "OK", "path": dest_path, "ukuran": ukuran}
-    except Exception as e:
-        return {"ok": False, "pesan": str(e), "path": ""}
+def _promote_download(part_path: str, actual_path: str) -> None:
+    try:
+        os.replace(part_path, actual_path)
+        return
+    except OSError as replace_error:
+        if os.path.isfile(actual_path) and _same_file_contents(
+            part_path,
+            actual_path,
+        ):
+            os.remove(part_path)
+            return
+        try:
+            shutil.copyfile(part_path, actual_path)
+            if not _same_file_contents(part_path, actual_path):
+                raise OSError("fallback copy tidak identik")
+            os.remove(part_path)
+            return
+        except OSError:
+            raise replace_error
+
+
+def _download_file(url: str, dest_path: str, max_attempts: int = 3) -> dict:
+    """Download atomik dengan retry; file parsial tidak dianggap sukses."""
+    errors = []
+    for attempt in range(1, max_attempts + 1):
+        response = None
+        part_path = ""
+        try:
+            response = requests.get(
+                url,
+                headers=_headers(BASE + "/evaluasinontender"),
+                timeout=(20, 180),
+                stream=True,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            if "text/html" in response.headers.get("Content-Type", ""):
+                raise RuntimeError(
+                    "session expired (server return HTML) — login ulang"
+                )
+
+            cd = response.headers.get("Content-Disposition", "")
+            fname_match = re.search(
+                r'filename[^;=\n]*=([\'"]?)([^\'";\n]+)\1',
+                cd,
+            )
+            actual_path = dest_path
+            if fname_match:
+                fname_orig = (
+                    fname_match.group(2)
+                    .strip()
+                    .strip('"')
+                    .strip("'")
+                    .replace("+", " ")
+                    .strip()
+                )
+                if fname_orig:
+                    actual_path = os.path.join(
+                        os.path.dirname(dest_path),
+                        _slug(fname_orig),
+                    )
+
+            os.makedirs(
+                os.path.dirname(os.path.abspath(actual_path)),
+                exist_ok=True,
+            )
+            part_path = actual_path + ".part"
+            ukuran = 0
+            with open(part_path, "wb") as output:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    output.write(chunk)
+                    ukuran += len(chunk)
+
+            expected = response.headers.get("Content-Length", "").strip()
+            if ukuran <= 0:
+                raise RuntimeError("file kosong")
+            if expected.isdigit() and ukuran != int(expected):
+                raise RuntimeError(
+                    f"ukuran tidak lengkap ({ukuran}/{expected} byte)"
+                )
+
+            _promote_download(part_path, actual_path)
+            return {
+                "ok": True,
+                "pesan": "OK",
+                "path": actual_path,
+                "ukuran": ukuran,
+                "attempts": attempt,
+            }
+        except Exception as exc:
+            errors.append(str(exc))
+            if part_path and os.path.exists(part_path):
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+    return {
+        "ok": False,
+        "pesan": (
+            f"gagal setelah {max_attempts} percobaan: "
+            f"{errors[-1] if errors else 'unknown error'}"
+        ),
+        "path": "",
+        "attempts": max_attempts,
+    }
 
 
 def _convert_to_pdf(src_path: str, dest_pdf: str) -> bool:
@@ -304,6 +410,7 @@ def download_teknis_biaya_peserta(
     dokumen = res_dok["dokumen"]
     files_pdf = []
     n_dl = 0
+    failed_documents = []
 
     for i, dok in enumerate(dokumen):
         _log(f"  [{i+1}/{len(dokumen)}] {dok['nama']}")
@@ -314,6 +421,13 @@ def download_teknis_biaya_peserta(
         res_dl = _download_file(dok["url"], dest_file)
         if not res_dl["ok"]:
             _log(f"    [GAGAL] {res_dl['pesan']}")
+            failed_documents.append(
+                {
+                    "nama": dok.get("nama", nama_file),
+                    "section": dok.get("section", ""),
+                    "pesan": res_dl["pesan"],
+                }
+            )
             continue
         actual_path = res_dl["path"]
         n_dl += 1
@@ -369,11 +483,51 @@ def download_teknis_biaya_peserta(
         gabungan_path = ""
         _log("  Tidak ada PDF untuk digabung")
 
+    marker_path = os.path.join(
+        dest_folder,
+        "_DOWNLOAD_TIDAK_LENGKAP.txt",
+    )
+    download_complete = (
+        bool(dokumen)
+        and n_dl == len(dokumen)
+        and not failed_documents
+    )
+    if download_complete:
+        if os.path.exists(marker_path):
+            os.remove(marker_path)
+    else:
+        lines = [
+            "DOWNLOAD DOKUMEN TEKNIS/BIAYA TIDAK LENGKAP",
+            f"SPSE ditemukan: {len(dokumen)} dokumen",
+            f"Berhasil: {n_dl} dokumen",
+            "Gagal:",
+        ]
+        lines.extend(
+            f"- {item['nama']}: {item['pesan']}"
+            for item in failed_documents
+        )
+        with open(marker_path, "w", encoding="utf-8") as marker:
+            marker.write("\n".join(lines) + "\n")
+
     return {
-        "ok": n_dl > 0,
+        "ok": download_complete,
+        "files_expected": len(dokumen),
         "files_downloaded": n_dl,
+        "failed_documents": failed_documents,
         "pdf_gabungan_path": gabungan_path,
-        "pesan": f"{n_dl} file didownload" + (f", gabungan: {gabungan_nama}" if gabungan_path else ""),
+        "pesan": (
+            f"{n_dl}/{len(dokumen)} file didownload"
+            + (
+                f", {len(failed_documents)} gagal"
+                if failed_documents
+                else ""
+            )
+            + (
+                f", gabungan: {gabungan_nama}"
+                if gabungan_path
+                else ""
+            )
+        ),
     }
 
 

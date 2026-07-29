@@ -270,7 +270,14 @@ PENTING:
 - Bukti SKK asli atau overlap personel yang menurut Dokpil baru diperiksa saat
   klarifikasi adalah flag NONBLOCKING, bukan alasan BELUM FINAL.
 - Unsur wajib penawaran yang tidak ditemukan setelah seluruh file diperiksa
-  adalah TIDAK MEMENUHI; jangan meminta user menambahkan/verifikasi substansi.
+adalah TIDAK MEMENUHI; jangan meminta user menambahkan/verifikasi substansi.
+- Nilai setiap Tenaga Ahli pada baris terpisah. Tenaga pendukung/non-ahli
+bukan gate pass/fail individual. Klaim durasi ringkas di proposal bukan bukti;
+hitung pengalaman Tenaga Ahli dari DRH/referensi bertanggal dan jangan
+membulatkan kekurangan durasi.
+- Bedakan dokumen wajib penawaran, substansi/rencana proposal, dan produk
+kontrak final. Jangan menggugurkan hanya karena RKK/RK3K, RAB, TKDN,
+spesifikasi, gambar, atau laporan final belum tersedia saat penawaran.
 - Jika dokumen teknis memang belum tersedia, tulis laporan teknis dengan status PENDING
   dan alasan spesifik; jangan berhenti tanpa membuat _HASIL_EVALUASI_TEKNIS.md.
 - Glob dulu untuk list file dan gunakan anchor untuk navigasi, tetapi kualitas
@@ -453,11 +460,30 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
 
+def _download_teknis_tidak_lengkap(folder: Path) -> list[Path]:
+    root = folder / "9. Dokumen Teknis Biaya"
+    if not root.is_dir():
+        return []
+    return sorted(root.rglob("_DOWNLOAD_TIDAK_LENGKAP.txt"))
+
+
 def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:
     """Evaluasi Teknis (Sesi 2) 1 paket."""
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
+    incomplete = _download_teknis_tidak_lengkap(folder)
+    if incomplete:
+        detail = "; ".join(str(path.relative_to(folder)) for path in incomplete)
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": (
+                "Dokumen teknis/biaya belum lengkap. Jalankan ulang download "
+                f"sebelum evaluasi AI. Marker: {detail}"
+            ),
+        }
     hasil_teknis = folder / "_HASIL_EVALUASI_TEKNIS.md"
     sebelum = hasil_teknis.stat().st_mtime_ns if hasil_teknis.exists() else 0
     try:
