@@ -291,7 +291,8 @@ def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
     # Push GCal
     gcal_result = push_jadwal_pl_ke_gcal(kode_paket, nama_paket, jadwal_list)
 
-    # Upsert Supabase — ambil tanggal dari tahap index 2,3,4
+    # Upsert Supabase — ambil tanggal dari tahap index 1..4.
+    # Tanggal pembukaan punya dua nama kolom historis; sinkronkan keduanya.
     sb_update = {}
     for i, tahap in enumerate(jadwal_list):
         col = _SUPABASE_COL.get(i)
@@ -302,7 +303,10 @@ def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
             dt = tahap["selesai"]   # T3 Evaluasi → selesai
         else:
             dt = tahap["mulai"]     # T2/T4/T5 → mulai
-        sb_update[col] = dt.date().isoformat()
+        nilai_tanggal = dt.date().isoformat()
+        sb_update[col] = nilai_tanggal
+        if col == "tgl_pembukaan":
+            sb_update["tgl_buka_penawaran"] = nilai_tanggal
 
     sb_result = {"ok": False, "error": ""}
     if sb_update:

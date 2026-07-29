@@ -409,6 +409,13 @@ def simpan_paket_pl(data: dict) -> dict:
     """
     if not data.get("kode_paket"):
         return {"ok": False, "error": "kode_paket wajib diisi"}
+    data = dict(data)
+    # Dua nama kolom historis dipakai lintas flow. Jaga keduanya selalu sama
+    # agar workbook donor tidak mempertahankan tanggal paket sebelumnya.
+    tgl_buka = data.get("tgl_buka_penawaran") or data.get("tgl_pembukaan")
+    if tgl_buka:
+        data["tgl_buka_penawaran"] = tgl_buka
+        data["tgl_pembukaan"] = tgl_buka
     data.setdefault("diambil_pada", datetime.now(timezone.utc).isoformat())
     try:
         _sb().table("draft_paket_pl").upsert(data).execute()
