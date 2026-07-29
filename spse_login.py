@@ -327,6 +327,18 @@ def _parse_luna_verdict(output: str, candidates: list[str]) -> str:
     return lines[-1] if lines and lines[-1] in normalized else ""
 
 
+def _classify_luna_failure(returncode: int, stderr: str) -> str:
+    """Bedakan NO_MATCH model dari kegagalan proses/config Codex."""
+    if returncode == 0:
+        return "no_match"
+    message = (stderr or "").lower()
+    if "config.toml" in message and (
+        "duplicate key" in message or "error loading" in message
+    ):
+        return "config_error"
+    return f"cli_exit_{max(1, min(abs(int(returncode)), 999))}"
+
+
 def _verify_captcha_luna(
     img_bytes: bytes,
     candidates: list[str],
@@ -386,12 +398,24 @@ def _verify_captcha_luna(
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         verdict = _parse_luna_verdict(result.stdout, candidates) if result.returncode == 0 else ""
+        status = (
+            "matched"
+            if verdict
+            else _classify_luna_failure(result.returncode, result.stderr)
+        )
         if log_fn:
-            log_fn("Luna verifier: kandidat cocok." if verdict else "Luna verifier: tidak cocok; lanjut Gemini.")
+            if verdict:
+                log_fn("Luna verifier: kandidat cocok.")
+            elif status == "no_match":
+                log_fn("Luna verifier: tidak cocok; lanjut Gemini.")
+            elif status == "config_error":
+                log_fn("Luna verifier gagal karena konfigurasi Codex; lanjut Gemini.")
+            else:
+                log_fn(f"Luna verifier gagal dijalankan ({status}); lanjut Gemini.")
         _record_login_event(
             "captcha_verify",
             method="luna",
-            status="matched" if verdict else "no_match",
+            status=status,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
         return verdict
@@ -467,6 +491,7 @@ def _ocr_captcha_gemini(img_bytes: bytes, log_fn=None) -> str:
 
 _LOGIN_URL = "https://spse.inaproc.id/tapinkab/loginpass"
 _MAX_RETRY = 5
+_LOGIN_TIMEOUT_SECONDS = 420
 
 
 async def _probe_authenticated_role(page) -> str | None:
@@ -497,19 +522,157 @@ async def _probe_authenticated_role(page) -> str | None:
     return None
 
 
+async def _wait_for_authenticated_role(
+    page,
+    *,
+    timeout_ms: int = 8000,
+    interval_ms: int = 500,
+) -> str | None:
+    """Poll sesi karena redirect/login SPSE kadang lebih cepat dari propagasi role."""
+    attempts = max(1, (max(0, timeout_ms) + max(1, interval_ms) - 1) // max(1, interval_ms))
+    for index in range(attempts):
+        detected = await _probe_authenticated_role(page)
+        if detected:
+            return detected
+        if index + 1 < attempts:
+            await page.wait_for_timeout(interval_ms)
+    return None
+
+
+async def _open_loginpass(page, username: str, log_fn=None) -> None:
+    """Buka ulang form password+CAPTCHA dari beranda SPSE."""
+    import spse_browser as _sb
+    from config import SPSE_BASE_URL
+
+    def _log(message: str) -> None:
+        if log_fn:
+            log_fn(message)
+
+    _log("Membuka halaman SPSE...")
+    await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+    await page.wait_for_timeout(500)
+
+    already_logged_in = await page.evaluate("""() => {
+        var links = Array.from(document.querySelectorAll('a, button'));
+        return links.some(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
+                                (l.innerText||'').toUpperCase().includes('LOGOUT') ||
+                                (l.href||'').includes('logout'));
+    }""")
+    if already_logged_in:
+        _log("Sesi lama terdeteksi, logout dulu...")
+        await page.evaluate("""() => {
+            var links = Array.from(document.querySelectorAll('a, button'));
+            var btn = links.find(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
+                                       (l.innerText||'').toUpperCase().includes('LOGOUT') ||
+                                       (l.href||'').includes('logout'));
+            if (btn) btn.click();
+        }""")
+        await page.wait_for_load_state("networkidle")
+        await page.wait_for_timeout(500)
+        try:
+            if _sb._get_ctx() is not None:
+                await _sb._get_ctx().clear_cookies(domain="spse.inaproc.id")
+                _log("Cookie sesi lama dibersihkan.")
+        except Exception as exc:
+            _log(f"(clear cookie dilewati: {type(exc).__name__})")
+        await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(500)
+
+    _log("Klik tombol Login...")
+    login_el = await page.query_selector("#login")
+    if not login_el:
+        for retry in range(4):
+            _log(f"#login belum ada — reload home (percobaan {retry + 1}/4)...")
+            await page.wait_for_timeout(1500)
+            await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(500)
+            login_el = await page.query_selector("#login")
+            if login_el:
+                break
+    if not login_el:
+        debug_path = Path(__file__).parent / "scratch" / "debug_nologin.png"
+        debug_path.parent.mkdir(exist_ok=True)
+        await page.screenshot(path=str(debug_path))
+        page_text = await page.evaluate("() => document.body?.innerText?.slice(0,200) || ''")
+        raise RuntimeError(f"Tombol #login tidak ditemukan — halaman: {page.url}\n{page_text}")
+    await page.evaluate("document.querySelector('#login').click()")
+
+    modal_visible = False
+    for _ in range(10):
+        await page.wait_for_timeout(500)
+        modal_visible = await page.evaluate("""() => {
+            var m = document.querySelector('.modal.show');
+            return m !== null && m.offsetParent !== null;
+        }""")
+        if modal_visible:
+            break
+    _log(f"Modal visible: {modal_visible}")
+
+    _log("Pilih Non Penyedia...")
+    await page.wait_for_timeout(800)
+    clicked = await page.evaluate("""() => {
+        var btns = Array.from(document.querySelectorAll('button'));
+        var btn = btns.find(b => (b.innerText || b.textContent || '').trim().toUpperCase().includes('NON PENYEDIA'));
+        if (btn) { btn.click(); return true; }
+        return false;
+    }""")
+    if not clicked:
+        debug_path = Path(__file__).parent / "scratch" / "debug_nonpenyedia.png"
+        await page.screenshot(path=str(debug_path))
+        raise RuntimeError("Tombol NON PENYEDIA tidak ditemukan — lihat scratch/debug_nonpenyedia.png")
+    await page.wait_for_load_state("domcontentloaded")
+    _log("Isi User ID...")
+    await page.wait_for_selector("input[name='txtUserId']", timeout=8000)
+    await page.fill("input[name='txtUserId']", username)
+    await page.click("button[type='submit']")
+    await page.wait_for_load_state("domcontentloaded")
+    await page.wait_for_selector("#txtPassword", timeout=10000)
+    _log("Halaman password + CAPTCHA terbuka.")
+
+
+async def _ensure_loginpass(
+    page,
+    username: str,
+    expected_role: str,
+    log_fn=None,
+) -> str | None:
+    """Pastikan retry berada di form login; pulihkan redirect beranda SPSE."""
+    if "loginpass" in page.url.lower():
+        try:
+            await page.wait_for_selector("#txtPassword", timeout=3000)
+            return None
+        except Exception:
+            pass
+
+    detected = await _probe_authenticated_role(page)
+    if detected:
+        return detected
+    if log_fn:
+        log_fn("SPSE kembali ke beranda tanpa sesi; membuka ulang form login.")
+    await _open_loginpass(page, username, log_fn=log_fn)
+    return None
+
+
 async def _fetch_captcha_bytes(page) -> bytes:
     captcha_el = await page.query_selector("img[src*='showcaptcha']")
     if not captcha_el:
         raise RuntimeError("Elemen CAPTCHA tidak ditemukan di halaman login.")
-    captcha_src = await captcha_el.get_attribute("src")
-    captcha_b64 = await page.evaluate(
-        """async (src) => {
-            const response = await fetch(src, {credentials: 'include'});
-            if (!response.ok) throw new Error(`CAPTCHA HTTP ${response.status}`);
-            const buffer = await response.arrayBuffer();
-            return btoa(String.fromCharCode(...new Uint8Array(buffer)));
-        }""",
-        captcha_src,
+    await page.wait_for_function(
+        "(el) => el.complete && el.naturalWidth > 0 && el.naturalHeight > 0",
+        arg=captcha_el,
+        timeout=5000,
+    )
+    captcha_b64 = await captcha_el.evaluate(
+        """el => {
+            const canvas = document.createElement('canvas');
+            canvas.width = el.naturalWidth;
+            canvas.height = el.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(el, 0, 0);
+            return canvas.toDataURL('image/png').split(',', 2)[1];
+        }"""
     )
     return base64.b64decode(captcha_b64)
 
@@ -590,20 +753,31 @@ async def _solve_captcha(img_bytes: bytes, role: str, attempt: int, log_fn=None)
     return fallback, method
 
 
-async def _run_captcha_attempts(page, password: str, role: str, log_fn=None) -> bool:
+async def _run_captcha_attempts(
+    page,
+    username: str,
+    password: str,
+    role: str,
+    log_fn=None,
+) -> bool:
     """Pipeline CAPTCHA tunggal untuk login awal dan tombol retry."""
     def _log(message: str) -> None:
         if log_fn:
             log_fn(message)
 
     for attempt in range(1, _MAX_RETRY + 1):
-        _log(f"Percobaan login {attempt}/{_MAX_RETRY}...")
-        if "loginpass" not in page.url.lower():
-            detected = await _probe_authenticated_role(page)
-            if detected == role:
-                return True
-            raise RuntimeError("Halaman login berubah tetapi sesi/role belum tervalidasi.")
+        detected = await _ensure_loginpass(
+            page,
+            username,
+            role,
+            log_fn=_log,
+        )
+        if detected == role:
+            return True
+        if detected and detected != role:
+            raise RuntimeError(f"Login masuk sebagai {detected}, bukan {role}.")
 
+        _log(f"Percobaan login {attempt}/{_MAX_RETRY}...")
         await page.wait_for_selector("#txtPassword", timeout=10000)
         await page.fill("#txtPassword", password)
         captcha_bytes = await _fetch_captcha_bytes(page)
@@ -624,7 +798,7 @@ async def _run_captcha_attempts(page, password: str, role: str, log_fn=None) -> 
         await page.click("button[type='submit']")
         await page.wait_for_timeout(2000)
 
-        detected = await _probe_authenticated_role(page)
+        detected = await _wait_for_authenticated_role(page)
         if detected == role:
             _record_login_event(
                 "captcha_submit",
@@ -646,18 +820,21 @@ async def _run_captcha_attempts(page, password: str, role: str, log_fn=None) -> 
             raise RuntimeError(f"Login masuk sebagai {detected}, bukan {role}.")
 
         err_msg = await _read_login_error(page)
+        page_state = "loginpass" if "loginpass" in page.url.lower() else "redirect"
         _record_login_event(
             "captcha_submit",
             role=role,
             method=method,
             attempt=attempt,
-            status="rejected",
+            status="rejected" if err_msg else f"{page_state}_no_session",
         )
         if any(key in err_msg.lower() for key in ("captcha", "kode", "code")):
             _log(f"CAPTCHA ditolak; refresh ({method}).")
             await _refresh_captcha(page)
         elif err_msg:
             raise RuntimeError(f"Login gagal: {err_msg[:120]}")
+        elif page_state == "redirect":
+            _log("SPSE kembali ke beranda tanpa sesi; retry akan membuka ulang form login.")
         else:
             _log("Sesi belum tervalidasi; refresh CAPTCHA.")
             await _refresh_captcha(page)
@@ -704,101 +881,18 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
             _log(f"(pembersihan cookie dilewati: {type(exc).__name__})")
 
     username, password = _get_creds(role)
-
-    # Step 1: Home SPSE — navigate fresh, tunggu sampai networkidle (Bootstrap JS siap)
-    from config import SPSE_BASE_URL
-    _log("Membuka halaman SPSE...")
-    await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
-    await page.wait_for_timeout(500)
-
-    # Step 1b: Logout dulu kalau sudah login
-    already_logged_in = await page.evaluate("""() => {
-        var links = Array.from(document.querySelectorAll('a, button'));
-        return links.some(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
-                                (l.innerText||'').toUpperCase().includes('LOGOUT') ||
-                                (l.href||'').includes('logout'));
-    }""")
-    if already_logged_in:
-        _log("Sesi lama terdeteksi, logout dulu...")
-        await page.evaluate("""() => {
-            var links = Array.from(document.querySelectorAll('a, button'));
-            var btn = links.find(l => (l.innerText||'').toUpperCase().includes('KELUAR') ||
-                                       (l.innerText||'').toUpperCase().includes('LOGOUT') ||
-                                       (l.href||'').includes('logout'));
-            if (btn) btn.click();
-        }""")
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(500)
-        # Ganti akun cepat: session/cookie lama sering masih nempel di server → /home balas
-        # "Akses Ditolak". Paksa clear cookies lalu navigate ulang ke home agar bersih.
-        try:
-            if _sb._get_ctx() is not None:
-                await _sb._get_ctx().clear_cookies(domain="spse.inaproc.id")
-                _log("Cookie sesi lama dibersihkan.")
-        except Exception as _ce:
-            _log(f"(clear cookie dilewati: {_ce})")
-        await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
-        await page.wait_for_timeout(500)
-
-    # Step 2: Klik tombol LOGIN via JS
-    _log("Klik tombol Login...")
-    # Cek dulu #login ada. Saat ganti akun cepat, kadang halaman masih "Akses Ditolak"
-    # (session lama belum benar-benar habis) → retry reload home beberapa kali.
-    login_el = await page.query_selector("#login")
-    if not login_el:
-        for _retry in range(4):
-            _log(f"#login belum ada — reload home (percobaan {_retry+1}/4)...")
-            await page.wait_for_timeout(1500)
-            await page.goto(SPSE_BASE_URL, wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(500)
-            login_el = await page.query_selector("#login")
-            if login_el:
-                break
-    if not login_el:
-        # Screenshot untuk debug
-        from pathlib import Path as _P
-        _ss = _P(__file__).parent / "scratch" / "debug_nologin.png"
-        _ss.parent.mkdir(exist_ok=True)
-        await page.screenshot(path=str(_ss))
-        current_url = page.url
-        page_text = await page.evaluate("() => document.body?.innerText?.slice(0,200) || ''")
-        raise RuntimeError(f"Tombol #login tidak ditemukan — halaman: {current_url}\n{page_text}")
-    await page.evaluate("document.querySelector('#login').click()")
-
-    # Tunggu modal Bootstrap animate-in (max 5 detik)
-    for _i in range(10):
-        await page.wait_for_timeout(500)
-        modal_visible = await page.evaluate("""() => {
-            var m = document.querySelector('.modal.show');
-            return m !== null && m.offsetParent !== null;
-        }""")
-        if modal_visible:
-            break
-    _log(f"Modal visible: {modal_visible}")
-
-    # Step 3: Pilih Non Penyedia via JS (modal Bootstrap, Playwright wait_for_selector tidak reliable)
-    _log("Pilih Non Penyedia...")
-    await page.wait_for_timeout(800)
-    clicked = await page.evaluate("""() => {
-        var btns = Array.from(document.querySelectorAll('button'));
-        var btn = btns.find(b => (b.innerText || b.textContent || '').trim().toUpperCase().includes('NON PENYEDIA'));
-        if (btn) { btn.click(); return true; }
-        return false;
-    }""")
-    if not clicked:
-        await page.screenshot(path=str(Path(__file__).parent / "scratch" / "debug_nonpenyedia.png"))
-        raise RuntimeError("Tombol NON PENYEDIA tidak ditemukan — lihat scratch/debug_nonpenyedia.png")
-    await page.wait_for_load_state("domcontentloaded")
-    _log("Isi User ID...")
-    await page.wait_for_selector("input[name='txtUserId']", timeout=8000)
-    await page.fill("input[name='txtUserId']", username)
-    await page.click("button[type='submit']")
-    await page.wait_for_load_state("domcontentloaded")
-    _log("Halaman password + CAPTCHA terbuka.")
-    return await _run_captcha_attempts(page, password, role, log_fn=log_fn)
+    await _open_loginpass(page, username, log_fn=log_fn)
+    return await _run_captcha_attempts(
+        page,
+        username,
+        password,
+        role,
+        log_fn=log_fn,
+    )
 
 
 async def _retry_captcha_async(
+    username: str,
     password: str,
     role: Literal["PP", "POKJA", "PPK"],
     log_fn=None,
@@ -809,14 +903,23 @@ async def _retry_captcha_async(
     page = _sb._get_page()
     if page is None:
         raise RuntimeError("Browser belum terhubung.")
-    return await _run_captcha_attempts(page, password, role, log_fn=log_fn)
+    return await _run_captcha_attempts(
+        page,
+        username,
+        password,
+        role,
+        log_fn=log_fn,
+    )
 
 
 def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     import spse_browser as _sb
-    _, password = _get_creds(role)
-    return _sb._run(_retry_captcha_async(password, role, log_fn=log_fn), timeout=240)
+    username, password = _get_creds(role)
+    return _sb._run(
+        _retry_captcha_async(username, password, role, log_fn=log_fn),
+        timeout=_LOGIN_TIMEOUT_SECONDS,
+    )
 
 
 async def _submit_manual_captcha_async(
@@ -916,4 +1019,7 @@ def login_spse(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     import spse_browser as _sb
     # Cover Tesseract + Luna verifier + Gemini fallback pada beberapa attempt.
     _sb._ensure_loop()
-    return _sb._run(_login_async(role, log_fn=log_fn), timeout=240)
+    return _sb._run(
+        _login_async(role, log_fn=log_fn),
+        timeout=_LOGIN_TIMEOUT_SECONDS,
+    )

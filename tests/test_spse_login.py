@@ -1,8 +1,10 @@
 import io
 import json
+import base64
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from PIL import Image
@@ -82,6 +84,24 @@ class SpseLoginHelpersTest(unittest.TestCase):
 
 
 class SpseSessionFirstTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_captcha_uses_displayed_dom_image_without_second_get(self):
+        displayed = b"displayed-captcha"
+        element = SimpleNamespace(
+            evaluate=AsyncMock(
+                return_value=base64.b64encode(displayed).decode("ascii")
+            )
+        )
+        page = SimpleNamespace(
+            query_selector=AsyncMock(return_value=element),
+            wait_for_function=AsyncMock(),
+        )
+
+        result = await spse_login._fetch_captcha_bytes(page)
+
+        self.assertEqual(result, displayed)
+        page.wait_for_function.assert_awaited_once()
+        element.evaluate.assert_awaited_once()
+
     async def test_valid_same_role_skips_credentials_and_navigation(self):
         page = object()
         with (
@@ -101,6 +121,110 @@ class SpseSessionFirstTest(unittest.IsolatedAsyncioTestCase):
             result = await spse_login._login_async("PP")
 
         self.assertTrue(result)
+
+    async def test_wait_for_authenticated_role_retries_transient_probe(self):
+        page = SimpleNamespace(wait_for_timeout=AsyncMock())
+        with patch.object(
+            spse_login,
+            "_probe_authenticated_role",
+            AsyncMock(side_effect=[None, None, "PP"]),
+        ) as probe:
+            detected = await spse_login._wait_for_authenticated_role(
+                page,
+                timeout_ms=1500,
+                interval_ms=500,
+            )
+
+        self.assertEqual(detected, "PP")
+        self.assertEqual(probe.await_count, 3)
+
+    async def test_ensure_loginpass_reopens_form_after_root_redirect(self):
+        page = SimpleNamespace(url="https://spse.inaproc.id/tapinkab/")
+        with (
+            patch.object(
+                spse_login,
+                "_probe_authenticated_role",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(
+                spse_login,
+                "_open_loginpass",
+                AsyncMock(),
+            ) as reopen,
+        ):
+            detected = await spse_login._ensure_loginpass(
+                page,
+                username="user",
+                expected_role="PP",
+            )
+
+        self.assertIsNone(detected)
+        reopen.assert_awaited_once_with(page, "user", log_fn=None)
+
+    async def test_captcha_loop_continues_after_root_redirect(self):
+        page = SimpleNamespace(
+            url="https://spse.inaproc.id/tapinkab/loginpass",
+            wait_for_selector=AsyncMock(),
+            fill=AsyncMock(),
+            wait_for_timeout=AsyncMock(),
+        )
+
+        async def redirect_to_root(*_args, **_kwargs):
+            page.url = "https://spse.inaproc.id/tapinkab/"
+
+        page.click = AsyncMock(side_effect=redirect_to_root)
+        with (
+            patch.object(
+                spse_login,
+                "_ensure_loginpass",
+                AsyncMock(side_effect=[None, "PP"]),
+            ) as ensure,
+            patch.object(
+                spse_login,
+                "_fetch_captcha_bytes",
+                AsyncMock(return_value=b"image"),
+            ),
+            patch.object(
+                spse_login,
+                "_solve_captcha",
+                AsyncMock(return_value=("abc123", "test")),
+            ),
+            patch.object(
+                spse_login,
+                "_wait_for_authenticated_role",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(
+                spse_login,
+                "_read_login_error",
+                AsyncMock(return_value=""),
+            ),
+            patch.object(spse_login, "_record_login_event"),
+        ):
+            result = await spse_login._run_captcha_attempts(
+                page,
+                "user",
+                "password",
+                "PP",
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(ensure.await_count, 2)
+        page.click.assert_awaited_once_with("button[type='submit']")
+
+
+class SpseLunaFailureTest(unittest.TestCase):
+    def test_luna_config_error_is_not_reported_as_no_match(self):
+        self.assertEqual(
+            spse_login._classify_luna_failure(
+                1,
+                "Error loading config.toml: duplicate key",
+            ),
+            "config_error",
+        )
+
+    def test_luna_valid_empty_verdict_is_no_match(self):
+        self.assertEqual(spse_login._classify_luna_failure(0, ""), "no_match")
 
 
 if __name__ == "__main__":
