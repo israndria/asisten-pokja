@@ -294,6 +294,7 @@ def _sidebar_login_form():
                 _ekl.clear_session()
                 st.rerun(scope="app")
     else:
+        st.caption("Auto-login: sesi aktif → Tesseract → GPT-5.6 Luna Medium → Gemini 2.5 Flash Lite.")
         if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
             try:
                 import spse_login as _spse_login
@@ -336,12 +337,14 @@ def _sidebar_login_form():
                 logging.exception("SPSE auto-login gagal")
                 st.session_state["login_failed"] = True
                 st.session_state["login_failed_role"] = _login_role
+                if "_login_logs" in locals() and _login_logs:
+                    st.info("\n".join(_login_logs))
                 st.error(_friendly_login_error(e))
 
     # Tombol retry — muncul kalau login gagal & browser masih di loginpass
     if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
         _retry_role = st.session_state.get("login_failed_role", "PP")
-        if st.button("🔄 Coba Lagi (captcha only)", type="primary", use_container_width=True):
+        if st.button("🔄 Coba Lagi (pipeline otomatis)", type="primary", use_container_width=True):
             try:
                 import spse_login as _spse_login
                 _retry_logs: list[str] = []
@@ -349,7 +352,7 @@ def _sidebar_login_form():
                 def _rlog(msg: str):
                     _retry_logs.append(msg)
 
-                with st.spinner("Retry captcha..."):
+                with st.spinner("Retry Tesseract → Luna → Gemini..."):
                     _spse_login.retry_captcha(role=_retry_role, log_fn=_rlog)
 
                 _rlog_box.info("\n".join(_retry_logs))

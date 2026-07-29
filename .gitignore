@@ -46,4 +46,5 @@ secret_spse.txt
 data/pokja.db
 data/pl_sbu_history.json
 data/pl_undangan_dates.json
+data/spse_login_metrics.jsonl
 /.tokensave/

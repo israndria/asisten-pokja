@@ -4,8 +4,9 @@ spse_login.py — Auto-login SPSE via CDP + OCR CAPTCHA (pytesseract).
 Security:
 - Credentials dibaca dari secret_spse.env (gitignored), TIDAK pernah di-log/print.
 - Tidak ada credential yang masuk ke session_state Streamlit.
-- CAPTCHA screenshot disimpan sementara di .browser_session/ lalu dihapus setelah OCR.
-- Retry max 3x — kalau gagal, raise RuntimeError (bukan expose password).
+- CAPTCHA hanya disimpan bila SPSE_LOGIN_DEBUG_CAPTCHA=1.
+- Telemetry tidak menyimpan credential maupun isi CAPTCHA.
+- Retry dibatasi; kalau gagal, raise RuntimeError (bukan expose password).
 """
 
 from __future__ import annotations
@@ -15,8 +16,13 @@ import hashlib
 import json
 import time
 import asyncio
+import io
+import logging
+import shutil
+import subprocess
 import tempfile
 import base64
+import threading
 from pathlib import Path
 from typing import Literal
 from config import find_secret
@@ -27,12 +33,61 @@ from config import find_secret
 
 _ENV_PATH = find_secret("secret_spse.env")
 _ROLE_FILE = Path(__file__).parent / ".browser_session" / "last_role.txt"
+_METRICS_PATH = Path(__file__).parent / "data" / "spse_login_metrics.jsonl"
+_TELEMETRY_LOCK = threading.Lock()
+_CODEX_MODEL = "gpt-5.6-luna"
+_CODEX_REASONING = "medium"
+_CODEX_BIN = os.environ.get(
+    "POKJA_CODEX_EXE",
+    str(Path.home() / "AppData" / "Local" / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe"),
+)
 
 
 def _cookie_fingerprint(cookie: str) -> str:
     """Hash SPSE_SESSION; nilai cookie tidak pernah disimpan."""
     session = next((p.split("=", 1)[1] for p in cookie.split("; ") if p.startswith("SPSE_SESSION=")), "")
     return hashlib.sha256(session.encode("utf-8")).hexdigest() if session else ""
+
+
+def _role_from_text(text: str) -> str | None:
+    """Deteksi role dari HTML/teks halaman authenticated."""
+    value = (text or "").lower()
+    if "pejabat pembuat komitmen" in value:
+        return "PPK"
+    if "pejabat pengadaan" in value:
+        return "PP"
+    if "kelompok kerja" in value or "pokja" in value:
+        return "POKJA"
+    return None
+
+
+def _record_login_event(
+    event: str,
+    *,
+    role: str = "",
+    method: str = "",
+    attempt: int = 0,
+    status: str = "",
+    elapsed_ms: int = 0,
+    path: Path | None = None,
+) -> None:
+    """Append telemetry aman; tidak menerima credential atau isi CAPTCHA."""
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": str(event)[:40],
+        "role": role if role in ("PP", "POKJA", "PPK") else "",
+        "method": str(method)[:32],
+        "attempt": max(0, int(attempt or 0)),
+        "status": str(status)[:40],
+        "elapsed_ms": max(0, int(elapsed_ms or 0)),
+    }
+    target = path or _METRICS_PATH
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with _TELEMETRY_LOCK, target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError:
+        logging.debug("Gagal menulis telemetry login", exc_info=True)
 
 
 def remember_login_role(role: str) -> None:
@@ -84,27 +139,23 @@ def detect_login_role() -> str | None:
     """
     import spse_browser as _sb
 
-    def _detect_role_from_page(url: str, cookie: str) -> str | None:
-        """Validasi role dari halaman SPSE saat fingerprint cookie berubah."""
+    def _detect_role_from_session(cookie: str) -> str | None:
+        """Validasi role dari /home, bukan tab detail yang bisa tanpa label role."""
         import requests
         from bs4 import BeautifulSoup
         try:
+            from config import SPSE_BASE_URL
             response = requests.get(
-                url,
+                SPSE_BASE_URL.rstrip("/") + "/home",
                 headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
                 timeout=10,
                 allow_redirects=True,
             )
             final_url = response.url.lower()
-            if "loginpass" in final_url:
+            if response.status_code != 200 or "loginpass" in final_url:
                 return None
             text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
-            if "Pejabat Pengadaan" in text:
-                return "PP"
-            if "Pejabat Pembuat Komitmen" in text:
-                return "PPK"
-            if "Kelompok Kerja" in text or "Pokja" in text:
-                return "POKJA"
+            return _role_from_text(text)
         except Exception:
             pass
         return None
@@ -120,18 +171,12 @@ def detect_login_role() -> str | None:
             return None
         if _ROLE_FILE.exists():
             record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
-            role = record.get("role")
             cookie = _sb.get_spse_cookies(force=True)
-            if role not in ("PP", "POKJA", "PPK", "E-Katalog"):
+            if record.get("role") not in ("PP", "POKJA", "PPK", "E-Katalog"):
                 return None
-            current_fp = _cookie_fingerprint(cookie)
-            if record.get("cookie_fp") == current_fp:
-                return role
-
-            # Session SPSE dapat rotate tanpa logout. Validasi halaman aktif,
-            # lalu refresh fingerprint agar F5 tidak memaksa login ulang.
-            detected = _detect_role_from_page(url, cookie)
+            detected = _detect_role_from_session(cookie)
             if detected:
+                current_fp = _cookie_fingerprint(cookie)
                 _ROLE_FILE.write_text(
                     json.dumps({"role": detected, "cookie_fp": current_fp}),
                     encoding="utf-8",
@@ -146,11 +191,34 @@ def detect_login_role() -> str | None:
 # OCR CAPTCHA
 # ============================================================
 
-def _ocr_captcha(img_bytes: bytes) -> str:
+def _normalize_captcha_png(img_bytes: bytes) -> bytes:
+    """Composite PNG transparan ke putih agar vision model tidak melihat gambar hitam."""
+    from PIL import Image
+
+    source = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    white = Image.new("RGBA", source.size, (255, 255, 255, 255))
+    white.alpha_composite(source)
+    output = io.BytesIO()
+    white.convert("RGB").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _rank_captcha_candidates(results: list[str]) -> list[str]:
+    """Urutkan kandidat berdasarkan voting; panjang 6 menjadi tie-breaker."""
+    from collections import Counter
+
+    cleaned = [
+        "".join(c for c in str(value).lower() if c.isalnum())
+        for value in results
+    ]
+    freq = Counter(value for value in cleaned if 4 <= len(value) <= 8)
+    return sorted(freq, key=lambda value: (-freq[value], abs(len(value) - 6), value))
+
+
+def _ocr_captcha_candidates(img_bytes: bytes) -> list[str]:
     """
     OCR teks CAPTCHA dari bytes gambar.
-    Multi-strategy: coba beberapa threshold + PSM, ambil hasil terpanjang.
-    Return string hasil OCR (lowercase, alfanumerik only).
+    Multi-strategy: beberapa threshold, grid removal, scale, dan PSM.
     """
     import os
     import cv2
@@ -198,47 +266,159 @@ def _ocr_captcha(img_bytes: bytes) -> str:
         kd = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         return 255 - cv2.dilate(cv2.erode(inv, ke), kd)
 
-    cleaned  = _clean(work)
-    cleaned4 = _clean(work4)
+    cleaned = _clean(work)
 
     whitelist = "abcdefghijklmnopqrstuvwxyz0123456789"
-    results = []
+    results: list[str] = []
+
+    # Grid SPSE berada pada baris/kolom penuh tiap 6 px. Hilangkan garis
+    # proyeksi dominan lalu close kembali stroke huruf yang terpotong.
+    raw_binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)[1]
+    if raw_binary.mean() > 127:
+        raw_binary = 255 - raw_binary
+    gridless = raw_binary.copy()
+    rows = np.where((gridless > 0).sum(axis=1) > gridless.shape[1] * 0.75)[0]
+    cols = np.where((gridless > 0).sum(axis=0) > gridless.shape[0] * 0.75)[0]
+    gridless[rows, :] = 0
+    gridless[:, cols] = 0
+    gridless = cv2.morphologyEx(
+        gridless,
+        cv2.MORPH_CLOSE,
+        np.ones((3, 3), np.uint8),
+    )
+    gridless = 255 - cv2.resize(
+        gridless,
+        None,
+        fx=4,
+        fy=4,
+        interpolation=cv2.INTER_CUBIC,
+    )
+
     variants = [
-        cleaned,   work,                                                    # fx=3
-        cleaned4,  work4,                                                   # fx=4
-        cv2.threshold(work,  0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
-        cv2.threshold(work4, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+        cleaned,
+        work4,
+        gridless,
     ]
 
     for processed in variants:
-        for psm in [7, 8, 6]:
+        for psm in [7, 8]:
             cfg = f"--psm {psm} -c tessedit_char_whitelist={whitelist}"
             try:
                 txt = pytesseract.image_to_string(processed, config=cfg).strip()
                 txt = "".join(c for c in txt.lower() if c.isalnum())
-                # CAPTCHA SPSE = 4-8 karakter — filter hasil noise (terlalu panjang/pendek)
                 if 4 <= len(txt) <= 8:
                     results.append(txt)
             except Exception:
                 pass
+    return _rank_captcha_candidates(results)[:5]
 
-    if not results:
+
+def _ocr_captcha(img_bytes: bytes) -> str:
+    candidates = _ocr_captcha_candidates(img_bytes)
+    return candidates[0] if candidates else ""
+
+
+def _parse_luna_verdict(output: str, candidates: list[str]) -> str:
+    """Terima hanya satu kandidat persis; teks bebas/refusal dianggap gagal."""
+    normalized = [value.lower() for value in candidates]
+    lines = [line.strip().lower() for line in (output or "").splitlines() if line.strip()]
+    if len(normalized) == 1 and lines and lines[-1] == "match":
+        return normalized[0]
+    return lines[-1] if lines and lines[-1] in normalized else ""
+
+
+def _verify_captcha_luna(
+    img_bytes: bytes,
+    candidates: list[str],
+    *,
+    timeout: int = 30,
+    log_fn=None,
+) -> str:
+    """Minta GPT-5.6 Luna memilih kandidat OCR; refusal/error selalu fail-open."""
+    candidates = _rank_captcha_candidates(candidates)[:5]
+    if not candidates:
         return ""
-    # Ambil yang paling sering muncul, fallback ke terpendek
-    from collections import Counter
-    freq = Counter(results)
-    return freq.most_common(1)[0][0]
+
+    codex_bin = _CODEX_BIN if Path(_CODEX_BIN).exists() else shutil.which("codex")
+    if not codex_bin:
+        if log_fn:
+            log_fn("Luna verifier tidak tersedia; lanjut Gemini.")
+        return ""
+
+    temp_path = ""
+    started = time.perf_counter()
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            handle.write(_normalize_captcha_png(img_bytes))
+            temp_path = handle.name
+
+        prompt = (
+            "Verify which OCR candidate exactly matches the CAPTCHA image. "
+            f"Candidates: {', '.join(candidates)}. "
+            "Return only one candidate exactly as listed, or NO_MATCH. "
+            "Do not return any explanation."
+        )
+        cmd = [
+            str(codex_bin),
+            "exec",
+            "--ephemeral",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "-C",
+            tempfile.gettempdir(),
+            "-m",
+            _CODEX_MODEL,
+            "-c",
+            f"model_reasoning_effort={_CODEX_REASONING}",
+            "--image",
+            temp_path,
+            "--",
+            prompt,
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            shell=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        verdict = _parse_luna_verdict(result.stdout, candidates) if result.returncode == 0 else ""
+        if log_fn:
+            log_fn("Luna verifier: kandidat cocok." if verdict else "Luna verifier: tidak cocok; lanjut Gemini.")
+        _record_login_event(
+            "captcha_verify",
+            method="luna",
+            status="matched" if verdict else "no_match",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return verdict
+    except (OSError, subprocess.SubprocessError) as exc:
+        if log_fn:
+            log_fn(f"Luna verifier dilewati ({type(exc).__name__}); lanjut Gemini.")
+        _record_login_event(
+            "captcha_verify",
+            method="luna",
+            status=type(exc).__name__,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return ""
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
-def _ocr_captcha_gemini(img_bytes: bytes) -> str:
+def _ocr_captcha_gemini(img_bytes: bytes, log_fn=None) -> str:
     """
     Fallback OCR via Gemini Vision API.
-    Dipanggil hanya setelah Tesseract gagal MAX_RETRY kali.
+    Dipanggil setelah kandidat Tesseract tidak disahkan Luna.
     Return string hasil OCR (lowercase, alfanumerik only), atau '' kalau gagal.
     """
-    import os, base64
-    from pathlib import Path
-
     # Load API key dari secret_spse.env
     env_path = _ENV_PATH
     api_key = None
@@ -265,7 +445,7 @@ def _ocr_captcha_gemini(img_bytes: bytes) -> str:
         response = client.models.generate_content(
             model="gemini-2.5-flash-lite",
             contents=[
-                types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
+                types.Part.from_bytes(data=_normalize_captcha_png(img_bytes), mime_type="image/png"),
                 prompt,
             ],
         )
@@ -274,9 +454,10 @@ def _ocr_captcha_gemini(img_bytes: bytes) -> str:
         # Sanity check panjang
         if 4 <= len(result) <= 8:
             return result
-        # Kalau terlalu panjang → ambil 6 char pertama
-        return result[:6] if len(result) > 8 else ""
-    except Exception:
+        return ""
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"Gemini OCR gagal ({type(exc).__name__}).")
         return ""
 
 
@@ -286,6 +467,202 @@ def _ocr_captcha_gemini(img_bytes: bytes) -> str:
 
 _LOGIN_URL = "https://spse.inaproc.id/tapinkab/loginpass"
 _MAX_RETRY = 5
+
+
+async def _probe_authenticated_role(page) -> str | None:
+    """Validasi sesi lewat /home dan kembalikan role aktual."""
+    from config import SPSE_BASE_URL
+
+    try:
+        response = await page.context.request.get(
+            SPSE_BASE_URL.rstrip("/") + "/home",
+            timeout=10000,
+            fail_on_status_code=False,
+        )
+        if response.status == 200:
+            text = await response.text()
+            if "akses ditolak" not in text.lower() and "loginpass" not in response.url.lower():
+                detected = _role_from_text(text)
+                if detected:
+                    return detected
+    except Exception:
+        pass
+
+    # Fallback DOM untuk redirect sukses yang belum stabil di endpoint /home.
+    try:
+        if "loginpass" not in page.url.lower():
+            return _role_from_text(await page.locator("body").inner_text(timeout=3000))
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_captcha_bytes(page) -> bytes:
+    captcha_el = await page.query_selector("img[src*='showcaptcha']")
+    if not captcha_el:
+        raise RuntimeError("Elemen CAPTCHA tidak ditemukan di halaman login.")
+    captcha_src = await captcha_el.get_attribute("src")
+    captcha_b64 = await page.evaluate(
+        """async (src) => {
+            const response = await fetch(src, {credentials: 'include'});
+            if (!response.ok) throw new Error(`CAPTCHA HTTP ${response.status}`);
+            const buffer = await response.arrayBuffer();
+            return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        }""",
+        captcha_src,
+    )
+    return base64.b64decode(captcha_b64)
+
+
+async def _refresh_captcha(page) -> None:
+    refresh = await page.query_selector("a:has-text('klik di sini')")
+    if refresh:
+        await refresh.click()
+    else:
+        await page.reload(wait_until="domcontentloaded")
+    await page.wait_for_timeout(800)
+
+
+async def _read_login_error(page) -> str:
+    err_el = await page.query_selector(".alert-danger, .alert-error, .error")
+    return (await err_el.inner_text()).strip() if err_el else ""
+
+
+def _save_debug_captcha(img_bytes: bytes, filename: str) -> None:
+    """Simpan CAPTCHA hanya saat debug eksplisit; default tidak meninggalkan artefak."""
+    if os.environ.get("SPSE_LOGIN_DEBUG_CAPTCHA") != "1":
+        return
+    path = Path(__file__).parent / "scratch" / filename
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(img_bytes)
+
+
+async def _solve_captcha(img_bytes: bytes, role: str, attempt: int, log_fn=None) -> tuple[str, str]:
+    started = time.perf_counter()
+    candidates = await asyncio.to_thread(_ocr_captcha_candidates, img_bytes)
+    if log_fn:
+        log_fn(f"Tesseract menghasilkan {len(candidates)} kandidat.")
+
+    verified = await asyncio.to_thread(
+        _verify_captcha_luna,
+        img_bytes,
+        candidates,
+        timeout=30,
+        log_fn=log_fn,
+    )
+    if verified:
+        method = "tesseract+luna"
+        _record_login_event(
+            "captcha_solve",
+            role=role,
+            method=method,
+            attempt=attempt,
+            status="candidate_verified",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return verified, method
+
+    gemini = await asyncio.to_thread(_ocr_captcha_gemini, img_bytes, log_fn)
+    if gemini:
+        method = "gemini-2.5-flash-lite"
+        _record_login_event(
+            "captcha_solve",
+            role=role,
+            method=method,
+            attempt=attempt,
+            status="candidate_generated",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return gemini, method
+
+    # Semua model gagal: satu kandidat voting lokal masih lebih baik daripada
+    # membuang attempt tanpa submit. Server tetap menjadi validator akhir.
+    fallback = candidates[0] if candidates else ""
+    method = "tesseract-unverified" if fallback else "none"
+    _record_login_event(
+        "captcha_solve",
+        role=role,
+        method=method,
+        attempt=attempt,
+        status="fallback" if fallback else "empty",
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
+    return fallback, method
+
+
+async def _run_captcha_attempts(page, password: str, role: str, log_fn=None) -> bool:
+    """Pipeline CAPTCHA tunggal untuk login awal dan tombol retry."""
+    def _log(message: str) -> None:
+        if log_fn:
+            log_fn(message)
+
+    for attempt in range(1, _MAX_RETRY + 1):
+        _log(f"Percobaan login {attempt}/{_MAX_RETRY}...")
+        if "loginpass" not in page.url.lower():
+            detected = await _probe_authenticated_role(page)
+            if detected == role:
+                return True
+            raise RuntimeError("Halaman login berubah tetapi sesi/role belum tervalidasi.")
+
+        await page.wait_for_selector("#txtPassword", timeout=10000)
+        await page.fill("#txtPassword", password)
+        captcha_bytes = await _fetch_captcha_bytes(page)
+        _save_debug_captcha(captcha_bytes, f"captcha_attempt_{attempt}.png")
+
+        captcha_text, method = await _solve_captcha(
+            captcha_bytes,
+            role,
+            attempt,
+            log_fn=_log,
+        )
+        if not captcha_text:
+            _log("Semua OCR gagal membaca CAPTCHA; refresh.")
+            await _refresh_captcha(page)
+            continue
+
+        await page.fill("#txtCode", captcha_text)
+        await page.click("button[type='submit']")
+        await page.wait_for_timeout(2000)
+
+        detected = await _probe_authenticated_role(page)
+        if detected == role:
+            _record_login_event(
+                "captcha_submit",
+                role=role,
+                method=method,
+                attempt=attempt,
+                status="success",
+            )
+            _log(f"✅ Login dan role {role} tervalidasi ({method}).")
+            return True
+        if detected and detected != role:
+            _record_login_event(
+                "captcha_submit",
+                role=role,
+                method=method,
+                attempt=attempt,
+                status="wrong_role",
+            )
+            raise RuntimeError(f"Login masuk sebagai {detected}, bukan {role}.")
+
+        err_msg = await _read_login_error(page)
+        _record_login_event(
+            "captcha_submit",
+            role=role,
+            method=method,
+            attempt=attempt,
+            status="rejected",
+        )
+        if any(key in err_msg.lower() for key in ("captcha", "kode", "code")):
+            _log(f"CAPTCHA ditolak; refresh ({method}).")
+            await _refresh_captcha(page)
+        elif err_msg:
+            raise RuntimeError(f"Login gagal: {err_msg[:120]}")
+        else:
+            _log("Sesi belum tervalidasi; refresh CAPTCHA.")
+            await _refresh_captcha(page)
+
+    raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} percobaan CAPTCHA.")
 
 
 async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool:
@@ -300,13 +677,33 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
         if log_fn:
             log_fn(msg)
 
-    username, password = _get_creds(role)
     _log(f"Menghubungkan ke Brave CDP (port {_sb.CDP_PORT})...")
 
     # Reuse page dari spse_browser (sudah di-init via buka_browser sebelum login)
     if _sb._get_page() is None:
         raise RuntimeError("spse_browser belum di-init — panggil buka_browser() dulu.")
     page = _sb._get_page()
+
+    # Session-first: hindari logout/CAPTCHA bila sesi dan role sudah benar.
+    existing_role = await _probe_authenticated_role(page)
+    if existing_role is None:
+        await page.wait_for_timeout(500)
+        existing_role = await _probe_authenticated_role(page)
+    if existing_role == role:
+        _log(f"✅ Sesi {role} masih valid; login ulang dilewati.")
+        _record_login_event("session_reuse", role=role, status="success")
+        return True
+    if existing_role:
+        _log(f"Sesi {existing_role} aktif; ganti ke {role}.")
+    else:
+        # Cookie invalid sering membuat /home 403 dan tombol #login hilang.
+        try:
+            await page.context.clear_cookies(name="SPSE_SESSION")
+            _log("Cookie SPSE invalid/kedaluwarsa dibersihkan.")
+        except Exception as exc:
+            _log(f"(pembersihan cookie dilewati: {type(exc).__name__})")
+
+    username, password = _get_creds(role)
 
     # Step 1: Home SPSE — navigate fresh, tunggu sampai networkidle (Bootstrap JS siap)
     from config import SPSE_BASE_URL
@@ -336,7 +733,7 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
         # "Akses Ditolak". Paksa clear cookies lalu navigate ulang ke home agar bersih.
         try:
             if _sb._get_ctx() is not None:
-                await _sb._get_ctx().clear_cookies()
+                await _sb._get_ctx().clear_cookies(domain="spse.inaproc.id")
                 _log("Cookie sesi lama dibersihkan.")
         except Exception as _ce:
             _log(f"(clear cookie dilewati: {_ce})")
@@ -398,208 +795,28 @@ async def _login_async(role: Literal["PP", "POKJA", "PPK"], log_fn=None) -> bool
     await page.click("button[type='submit']")
     await page.wait_for_load_state("domcontentloaded")
     _log("Halaman password + CAPTCHA terbuka.")
-
-    for attempt in range(1, _MAX_RETRY + 1):
-        _log(f"Percobaan login {attempt}/{_MAX_RETRY}...")
-
-        await page.wait_for_selector("#txtPassword", timeout=10000)
-        await page.fill("#txtPassword", password)
-
-        # CAPTCHA: ambil src → fetch bytes via JS (lebih reliable dari element screenshot)
-        captcha_el = await page.query_selector("img[src*='showcaptcha']")
-        if not captcha_el:
-            raise RuntimeError("Elemen CAPTCHA tidak ditemukan di halaman login.")
-
-        captcha_src = await captcha_el.get_attribute("src")
-        # Fetch bytes CAPTCHA via browser (session cookie otomatis ikut)
-        captcha_b64 = await page.evaluate(f"""async () => {{
-            const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
-            const buf = await r.arrayBuffer();
-            return btoa(String.fromCharCode(...new Uint8Array(buf)));
-        }}""")
-        import base64 as _b64
-        captcha_bytes = _b64.b64decode(captcha_b64)
-
-        # Debug: simpan ke scratch
-        _debug_path = Path(__file__).parent / "scratch" / f"captcha_attempt_{attempt}.png"
-        _debug_path.parent.mkdir(exist_ok=True)
-        _debug_path.write_bytes(captcha_bytes)
-
-        captcha_text = _ocr_captcha(captcha_bytes)
-        _log(f"OCR CAPTCHA: '{captcha_text}' (attempt {attempt})")
-
-        if not captcha_text:
-            _log("OCR gagal membaca CAPTCHA, refresh...")
-            refresh = await page.query_selector("a:has-text('klik di sini')")
-            if refresh:
-                await refresh.click()
-                await page.wait_for_timeout(800)
-            continue
-
-        await page.fill("#txtCode", captcha_text)
-        await page.click("button[type='submit']")
-        await page.wait_for_timeout(2000)
-        current_url = page.url
-
-        if "loginpass" not in current_url and "login" not in current_url.split("/")[-1]:
-            _log(f"✅ Login berhasil sebagai {role}!")
-            return True
-
-        err_el = await page.query_selector(".alert-danger, .alert-error, .error")
-        err_msg = (await err_el.inner_text()).strip() if err_el else ""
-
-        if any(k in err_msg.lower() for k in ["captcha", "kode", "code"]):
-            _log(f"CAPTCHA salah, retry... ({err_msg[:60]})")
-            refresh = await page.query_selector("a:has-text('klik di sini')")
-            if refresh:
-                await refresh.click()
-                await page.wait_for_timeout(800)
-        elif err_msg:
-            raise RuntimeError(f"Login gagal: {err_msg[:120]}")
-        else:
-            _log("Login belum berhasil, retry...")
-
-    # Semua Tesseract retry habis — fallback ke Gemini Vision
-    return await _gemini_captcha_attempt(page, password, log_fn=log_fn)
+    return await _run_captcha_attempts(page, password, role, log_fn=log_fn)
 
 
-_MAX_GEMINI_RETRY = 3
-
-async def _gemini_captcha_attempt(page, password: str, log_fn=None) -> bool:
-    """3x retry login pakai Gemini Vision — refresh captcha tiap attempt."""
-    def _log(msg):
-        if log_fn: log_fn(msg)
-
-    _log("🤖 Fallback ke Gemini Vision untuk baca CAPTCHA...")
-
-    for _gi in range(1, _MAX_GEMINI_RETRY + 1):
-        await page.wait_for_selector("#txtPassword", timeout=8000)
-        await page.fill("#txtPassword", password)
-
-        captcha_el = await page.query_selector("img[src*='showcaptcha']")
-        if not captcha_el:
-            raise RuntimeError("Elemen CAPTCHA tidak ditemukan (Gemini attempt).")
-
-        captcha_src = await captcha_el.get_attribute("src")
-        captcha_b64 = await page.evaluate(f"""async () => {{
-            const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
-            const buf = await r.arrayBuffer();
-            return btoa(String.fromCharCode(...new Uint8Array(buf)));
-        }}""")
-        import base64 as _b64
-        captcha_bytes = _b64.b64decode(captcha_b64)
-
-        # Simpan debug
-        from pathlib import Path as _P
-        (_P(__file__).parent / "scratch" / f"captcha_gemini_{_gi}.png").write_bytes(captcha_bytes)
-
-        captcha_text = _ocr_captcha_gemini(captcha_bytes)
-        _log(f"Gemini OCR [{_gi}/{_MAX_GEMINI_RETRY}]: '{captcha_text}'")
-
-        if not captcha_text:
-            _log(f"Gemini gagal baca CAPTCHA attempt {_gi}, refresh...")
-            refresh = await page.query_selector("a:has-text('klik di sini')")
-            if refresh:
-                await refresh.click()
-                await page.wait_for_timeout(800)
-            continue
-
-        await page.fill("#txtCode", captcha_text)
-        await page.click("button[type='submit']")
-        await page.wait_for_timeout(2000)
-
-        if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
-            _log(f"✅ Login berhasil via Gemini (attempt {_gi})!")
-            return True
-
-        err_el = await page.query_selector(".alert-danger, .alert-error, .error")
-        err_msg = (await err_el.inner_text()).strip() if err_el else ""
-        if any(k in err_msg.lower() for k in ["captcha", "kode", "code"]):
-            _log(f"Gemini CAPTCHA salah attempt {_gi}, refresh...")
-            refresh = await page.query_selector("a:has-text('klik di sini')")
-            if refresh:
-                await refresh.click()
-                await page.wait_for_timeout(800)
-        elif err_msg:
-            raise RuntimeError(f"Login gagal (Gemini): {err_msg[:120]}")
-
-    raise RuntimeError(f"Login gagal setelah {_MAX_GEMINI_RETRY}x Gemini — CAPTCHA tidak terbaca.")
-
-
-async def _retry_captcha_async(password: str, log_fn=None) -> bool:
-    """Hanya isi ulang password + captcha di halaman /loginpass yang sudah terbuka."""
+async def _retry_captcha_async(
+    password: str,
+    role: Literal["PP", "POKJA", "PPK"],
+    log_fn=None,
+) -> bool:
+    """Ulangi pipeline Tesseract → Luna → Gemini pada halaman loginpass."""
     import spse_browser as _sb
-
-    def _log(msg):
-        if log_fn:
-            log_fn(msg)
 
     page = _sb._get_page()
     if page is None:
         raise RuntimeError("Browser belum terhubung.")
-
-    for attempt in range(1, _MAX_RETRY + 1):
-        _log(f"Retry captcha {attempt}/{_MAX_RETRY}...")
-
-        # Pastikan masih di halaman loginpass
-        if "loginpass" not in page.url:
-            raise RuntimeError("Halaman sudah berpindah — tidak bisa retry captcha saja.")
-
-        await page.wait_for_selector("#txtPassword", timeout=8000)
-        await page.fill("#txtPassword", password)
-
-        captcha_el = await page.query_selector("img[src*='showcaptcha']")
-        if not captcha_el:
-            raise RuntimeError("Elemen CAPTCHA tidak ditemukan.")
-
-        captcha_src = await captcha_el.get_attribute("src")
-        captcha_b64 = await page.evaluate(f"""async () => {{
-            const r = await fetch({repr(captcha_src)}, {{credentials: 'include'}});
-            const buf = await r.arrayBuffer();
-            return btoa(String.fromCharCode(...new Uint8Array(buf)));
-        }}""")
-        import base64 as _b64
-        captcha_bytes = _b64.b64decode(captcha_b64)
-
-        from pathlib import Path as _Path
-        (_Path(__file__).parent / "scratch").mkdir(exist_ok=True)
-        (_Path(__file__).parent / "scratch" / f"captcha_attempt_{attempt}.png").write_bytes(captcha_bytes)
-
-        captcha_text = _ocr_captcha(captcha_bytes)
-        _log(f"OCR CAPTCHA: '{captcha_text}'")
-
-        if not captcha_text:
-            refresh = await page.query_selector("a:has-text('klik di sini')")
-            if refresh:
-                await refresh.click()
-                await page.wait_for_timeout(800)
-            continue
-
-        await page.fill("#txtCode", captcha_text)
-        await page.click("button[type='submit']")
-        await page.wait_for_timeout(2000)
-
-        if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
-            _log("✅ Login berhasil!")
-            return True
-
-        err_el = await page.query_selector(".alert-danger, .alert-error, .error")
-        err_msg = (await err_el.inner_text()).strip() if err_el else ""
-        _log(f"Salah, retry... ({err_msg[:60]})")
-
-        refresh = await page.query_selector("a:has-text('klik di sini')")
-        if refresh:
-            await refresh.click()
-            await page.wait_for_timeout(800)
-
-    raise RuntimeError(f"Login gagal setelah {_MAX_RETRY} retry captcha.")
+    return await _run_captcha_attempts(page, password, role, log_fn=log_fn)
 
 
 def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     import spse_browser as _sb
     _, password = _get_creds(role)
-    return _sb._run(_retry_captcha_async(password, log_fn=log_fn), timeout=180)
+    return _sb._run(_retry_captcha_async(password, role, log_fn=log_fn), timeout=240)
 
 
 async def _submit_manual_captcha_async(
@@ -626,10 +843,14 @@ async def _submit_manual_captcha_async(
     await page.click("button[type='submit']")
     await page.wait_for_timeout(2000)
 
-    if "loginpass" not in page.url and "login" not in page.url.split("/")[-1]:
+    detected = await _probe_authenticated_role(page)
+    if detected == role:
         if log_fn:
-            log_fn("✅ Login berhasil dengan CAPTCHA manual.")
+            log_fn(f"✅ Login manual dan role {role} tervalidasi.")
+        _record_login_event("captcha_manual", role=role, method="manual", status="success")
         return True
+    if detected and detected != role:
+        raise RuntimeError(f"Login manual masuk sebagai {detected}, bukan {role}.")
 
     err_el = await page.query_selector(".alert-danger, .alert-error, .error")
     err_msg = (await err_el.inner_text()).strip() if err_el else "CAPTCHA ditolak atau login belum berhasil."
@@ -693,6 +914,6 @@ def login_spse(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     log_fn: callable(str) untuk progress logging (opsional)
     """
     import spse_browser as _sb
-    # Timeout 180s — cover 5x Tesseract retry + Gemini fallback
+    # Cover Tesseract + Luna verifier + Gemini fallback pada beberapa attempt.
     _sb._ensure_loop()
-    return _sb._run(_login_async(role, log_fn=log_fn), timeout=180)
+    return _sb._run(_login_async(role, log_fn=log_fn), timeout=240)
