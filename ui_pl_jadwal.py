@@ -8,6 +8,34 @@ import pl_engine
 from pl_ui_helpers import _pl_label
 
 
+def _validasi_perubahan_jadwal(current: list[dict], proposed: list[dict]) -> list[str]:
+    """Validasi perubahan tanpa memblokir overlap lama yang tidak diperparah.
+
+    Beberapa jadwal PL yang sudah tersimpan di SPSE memang memiliki tahap
+    evaluasi dan klarifikasi yang berjalan tumpang tindih. Ubah jadwal existing
+    harus tetap bisa mengubah satu field (misalnya selesai T4) tanpa dipaksa
+    membetulkan seluruh histori jadwal sekaligus. Overlap baru atau overlap yang
+    makin besar tetap ditolak sebelum POST.
+    """
+    errors = []
+    for i, row in enumerate(proposed):
+        if row["mulai"] >= row["selesai"]:
+            errors.append(f"T{i + 1}: waktu mulai harus sebelum selesai")
+
+    for i in range(min(len(current), len(proposed)) - 1):
+        current_overlap = current[i]["selesai"] - current[i + 1]["mulai"]
+        proposed_overlap = proposed[i]["selesai"] - proposed[i + 1]["mulai"]
+        if proposed_overlap <= timedelta(0):
+            continue
+        # Jadwal lama valid tetapi usulan membuat overlap baru.
+        if current_overlap <= timedelta(0):
+            errors.append(f"T{i + 1}–T{i + 2}: overlap baru")
+        # Jadwal lama sudah overlap; hanya izinkan jika tidak makin besar.
+        elif proposed_overlap > current_overlap:
+            errors.append(f"T{i + 1}–T{i + 2}: overlap makin besar")
+    return errors
+
+
 def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
     """Bulk edit jadwal existing; POST hanya setelah konfirmasi."""
     st.markdown("### ✏️ Ubah Jadwal Existing (Bulk)")
@@ -92,6 +120,16 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
 
     import pandas as _pd_edit
     st.dataframe(_pd_edit.DataFrame(preview), use_container_width=True, hide_index=True)
+    for code in codes:
+        existing_schedule = loaded[code]["jadwal"]
+        if any(
+            existing_schedule[i]["selesai"] > existing_schedule[i + 1]["mulai"]
+            for i in range(len(existing_schedule) - 1)
+        ):
+            st.warning(
+                f"{code}: terdapat overlap jadwal lama di SPSE. "
+                "Overlap ini dipertahankan selama perubahan tidak memperbesarnya."
+            )
     alasan = st.text_area("Alasan Perubahan (minimal 30 karakter)", key=f"{prefix}_alasan")
     konfirmasi = st.checkbox("Saya sudah memeriksa preview dan menyetujui perubahan semua paket.", key=f"{prefix}_confirm")
 
@@ -105,11 +143,15 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
         hasil = []
         for code in codes:
             usulan = semua_usulan[code]
-            valid = all(x["mulai"] < x["selesai"] for x in usulan) and all(
-                usulan[i]["selesai"] <= usulan[i + 1]["mulai"] for i in range(4)
+            validasi = _validasi_perubahan_jadwal(
+                loaded[code]["jadwal"], usulan
             )
-            if not valid:
-                hasil.append((code, False, "Urutan waktu antar tahap tidak valid."))
+            if validasi:
+                hasil.append((
+                    code,
+                    False,
+                    "Urutan waktu antar tahap tidak valid: " + "; ".join(validasi),
+                ))
                 continue
             try:
                 result = engine.submit_perubahan_jadwal_pl(code, usulan, alasan)
