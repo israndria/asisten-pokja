@@ -37,6 +37,11 @@ def _decode_cf_email(cf_hex: str) -> str:
 def _clean_person_name(value: str) -> str:
     """Buang prefix sistem/NIK agar nilai aman dipakai sebagai nama orang."""
     text = re.sub(r"\s+", " ", str(value or "")).strip()
+    # Beberapa PDF/preview menempelkan label field ke nama:
+    # "Nama Lengkap TRI ASTUTI LESTARI Jabatan".
+    # Label bukan bagian identitas dan tidak boleh masuk mail-merge.
+    text = re.sub(r"^Nama\s+Lengkap\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+Jabatan\s*$", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\bBADAN\s+USAHA\b", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\b\d{16}\b", "", text)
     text = re.sub(r"\s{2,}", " ", text).strip(" -:;,.")

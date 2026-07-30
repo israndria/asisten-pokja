@@ -22,6 +22,13 @@ def _slug(nama: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "", nama).strip()[:80]
 
 
+def _normalize_notary(value: str) -> str:
+    """Normalisasi typo OCR/HTML pada gelar notaris tanpa mengubah nama."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"M\.K[Nn]{1,2}\b", "M.Kn.", text, flags=re.IGNORECASE)
+    return text
+
+
 def _excel_running() -> bool:
     """Return True jika EXCEL.EXE sedang berjalan (cek via WMIC atau lock file ~$)."""
     try:
@@ -151,17 +158,23 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
        f"{sbu_nomor} | {sbu_label} | {sbu_kual} | s/d {sbu_berlaku}" if sbu_nomor else "")
 
     akta_p = peserta_data.get("akta_pendirian", {})
+    _notaris_p = _normalize_notary(akta_p.get("notaris", ""))
     _r("Akta Pendirian", "Administrasi", "preview t2",
-       catatan=f"No. {akta_p.get('nomor','')} tgl {akta_p.get('tanggal','')} — {akta_p.get('notaris','')}" if akta_p else "")
+       catatan=f"No. {akta_p.get('nomor','')} tgl {akta_p.get('tanggal','')} — {_notaris_p}" if akta_p else "")
 
     akta_u = peserta_data.get("akta_perubahan", {})
+    _notaris_u = _normalize_notary(akta_u.get("notaris", ""))
     _r("Akta Perubahan Terakhir", "Administrasi", "preview t2",
-       catatan=f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {akta_u.get('notaris','')}" if akta_u else "")
+       catatan=f"No. {akta_u.get('nomor','')} tgl {akta_u.get('tanggal','')} — {_notaris_u}" if akta_u else "")
 
     # Direktur: prioritas dari PDF (direktur_pdf), fallback pemilik[0] (sudah ter-filter nama PT)
     _direktur_pdf = peserta_data.get("direktur_pdf", "")
     pemilik = peserta_data.get("pemilik", [])
     direktur_utama = _direktur_pdf if _direktur_pdf else (pemilik[0] if pemilik else "")
+    direktur_utama = re.sub(
+        r"^Nama\s+Lengkap\s*[:\-]?\s*|\s+Jabatan\s*$", "",
+        str(direktur_utama or ""), flags=re.IGNORECASE
+    ).strip()
     # Satu nama saja — TIDAK tampilkan "(+ N lain)" supaya bersih untuk mail-merge
     _r("Direktur Utama/Pimpinan", "Administrasi", "PDF/preview t3",
        "ADA" if direktur_utama else "PERIKSA",
@@ -224,9 +237,12 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
 
             sbu_match_status = "MEMENUHI" if cocok else "TIDAK MEMENUHI"
             _pdf_kode_str = ", ".join(sbu_dari_pdf) if sbu_dari_pdf else "-"
+            _spse_label = sbu_peserta_kode_spse
+            if _spse_label.startswith("M7"):
+                _spse_label += " (KBLI/aktivitas)"
             sbu_match_catatan = (
-                f"SBU SPSE: {sbu_peserta_kode_spse} | "
-                f"Bidang dok PQ: {_pdf_kode_str} | "
+                f"Label/kode SPSE: {_spse_label} | "
+                f"Kode bidang dok PQ: {_pdf_kode_str} | "
                 f"Syarat: {', '.join(sbu_syarat_kodes)}"
             )
     except Exception:
