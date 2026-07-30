@@ -40,6 +40,14 @@ def _slug(nama: str) -> str:
     return nama.strip()[:80]
 
 
+def _checklist_output_path(dest_folder: str, slug_nama: str) -> str:
+    """Jaga output Playwright di bawah batas path klasik Windows."""
+    named_path = os.path.join(dest_folder, f"checklist_kualifikasi_{slug_nama}.pdf")
+    if len(os.path.abspath(named_path)) < 248:
+        return named_path
+    return os.path.join(dest_folder, "checklist_kualifikasi.pdf")
+
+
 def fetch_peserta_pl(kode_paket: str) -> dict:
     """
     Scrape daftar peserta dari /pesertanontender/{kode}/penawaran via CDP.
@@ -426,7 +434,7 @@ def download_kualifikasi_peserta_pl(
 
     # 3. Generate checklist PDF
     _log("  Membuat checklist PDF...")
-    checklist_path = os.path.join(dest_folder, f"checklist_kualifikasi_{slug_nama}.pdf")
+    checklist_path = _checklist_output_path(dest_folder, slug_nama)
     res_pdf = generate_checklist_pdf_pl(kualifikasi_id, checklist_path)
     if res_pdf["ok"]:
         file_didownload.append(checklist_path)

@@ -95,7 +95,7 @@ def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
         pass
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk
+from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -1605,6 +1605,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     with st.expander(_pr_label):
                         st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        if _pr_jenis == "JKK":
+                            st.caption(f"Workflow target SPSE: **{_pl_workflow(_pr)}**")
                         # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
                         _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
@@ -1741,6 +1743,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     st.error(_pr_hr.get("pesan", "-"))
                             else:
                                 st.error("Folder/xlsm tidak ditemukan.")
+                        # Aksi lanjutan: dua tombol berdampingan, sinkronisasi full-width
+                        # agar label panjang tetap terbaca pada layar sempit.
                         _pr_r1, _pr_r2 = st.columns([1, 1])
                         if _pr_folder and _pr_r2.button("🤖 Pra-Reviu + Isi DOCM", key=f"pl_pra_reviu_{_pr_kode}", use_container_width=True):
                             import ai_evaluator as _heval_one
@@ -1764,6 +1768,23 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             except Exception as _reset_one_e:
                                 st.error(f"Reset gagal: {_reset_one_e}")
                             st.rerun()
+                        if _pr_folder and st.button("🔄 Sinkronkan Workflow", key=f"pl_migrate_wf_{_pr_kode}", use_container_width=True):
+                            import kualifikasi_engine_pl as _keng_pr_wf
+                            _wf_fr = _keng_pr_wf.resolve_folder_paket_pl(_pr_kode)
+                            _wf_root = _wf_fr.get("pesan", "") if _wf_fr.get("ok") else ""
+                            if not _wf_root:
+                                st.error("Folder tidak ditemukan.")
+                            else:
+                                with st.spinner("Memeriksa dan memigrasikan workflow..."):
+                                    _wf_res = migrate_pl_workflow(_wf_root, _pr, expected_family="JKK")
+                                if _wf_res.get("ok"):
+                                    st.success(_wf_res.get("message", "Workflow sudah sesuai."))
+                                    if _wf_res.get("status") == "MIGRATED":
+                                        st.info(f"Backup template lama: {_wf_res.get('backup')}")
+                                    _load_draft_pl_cached.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(f"Workflow belum dimigrasikan: {_wf_res.get('message', '-')}")
 
         # ══════════════════════════════════════════════════════
         # KOLOM KANAN — Buat Folder + Download Dokumen
@@ -1857,7 +1878,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     "nama_folder": _bnm_folder0,
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
-                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _TEMPLATE_DIR_PL_PK,
+                    "workflow": _pl_workflow(_br0),
+                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL_PK),
                 })
 
             
@@ -2022,6 +2044,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
                             _pl_paket_log.append("⏱ Excel: skipped")
+                        try:
+                            _meta_wf = mark_workflow_applied(
+                                _pl_target_b, _pl_res.get("workflow") or _pl_workflow({"jenis_pl": _pl_res["jenis_pl"], "nama_paket": _pl_nf}), _pl_res["jenis_pl"]
+                            )
+                            _pl_paket_log.append(f"🧩 Workflow: {_meta_wf.get('workflow_applied')}")
+                        except Exception as _meta_wf_e:
+                            _pl_paket_log.append(f"⚠ Metadata workflow: {_meta_wf_e}")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                     _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
@@ -2046,6 +2075,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             )
             _cb_dl_dok_bulk = st.checkbox("📦 Re-download Dokumen SPSE (KAK, Personil, Kontrak)", value=False, key="pl_cb_dl_dok_bulk")
             _cb_template_refresh = st.checkbox("🔄 Refresh Template ke folder PL existing", value=False, key="pl_cb_template_refresh_existing")
+            _cb_workflow_migrate = st.checkbox("🔄 Sinkronkan workflow PLJKK yang berubah", value=False, key="pl_cb_workflow_migrate_existing")
             _cb_hps_update = st.checkbox("💰 Update HPS semua paket berfolder → Excel + MD", value=False, key="pl_cb_hps_update")
             _cb_excel_existing = st.checkbox(
                 "📊 Isi ulang Excel @ Master Data semua paket berfolder",
@@ -2064,6 +2094,32 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             )
 
             if st.button("▶ Jalankan Operasi Terpilih", use_container_width=True, key="btn_update_data_folder"):
+                if _cb_workflow_migrate:
+                    import kualifikasi_engine_pl as _keng_wf_bulk
+                    _wf_rows_bulk = [
+                        r for r in _pl_rows
+                        if r.get("kode_paket") and r.get("folder_dibuat") and (r.get("jenis_pl") or "JKK").upper() == "JKK"
+                    ]
+                    _wf_bulk_status = st.status(f"🔄 Sinkronkan workflow {len(_wf_rows_bulk)} paket JKK...", expanded=True)
+                    _wf_bulk_line = _wf_bulk_status.empty()
+                    _wf_ok = _wf_fail = 0
+                    for _wf_i, _wf_row in enumerate(_wf_rows_bulk, 1):
+                        try:
+                            _wf_fr = _keng_wf_bulk.resolve_folder_paket_pl(_wf_row.get("kode_paket", ""))
+                            _wf_root = _wf_fr.get("pesan", "") if _wf_fr.get("ok") else ""
+                            _wf_res = migrate_pl_workflow(_wf_root, _wf_row, expected_family="JKK") if _wf_root else {"ok": False, "message": "folder tidak ditemukan"}
+                            if _wf_res.get("ok"):
+                                _wf_ok += 1
+                                _wf_bulk_line.write(f"✅ [{_wf_i}] {_pl_label(_wf_row)} — {_wf_res.get('message', '-')}")
+                            else:
+                                _wf_fail += 1
+                                _wf_bulk_line.write(f"❌ [{_wf_i}] {_pl_label(_wf_row)} — {_wf_res.get('message', '-')}")
+                        except Exception as _wf_e:
+                            _wf_fail += 1
+                            _wf_bulk_line.write(f"❌ [{_wf_i}] {_pl_label(_wf_row)} — {_wf_e}")
+                    _wf_bulk_status.update(label=f"🔄 Workflow selesai: ✅ {_wf_ok}, ❌ {_wf_fail}", state="complete", expanded=_wf_fail > 0)
+                    _load_draft_pl_cached.clear()
+
                 # Aksi: Refresh template bulk semua paket berfolder
                 if _cb_template_refresh:
                     import kualifikasi_engine_pl as _keng_pl_rt
@@ -2093,7 +2149,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 if not _rt_root or not _pl_os.path.isdir(_rt_root):
                                     raise ValueError("folder tidak ditemukan")
                                 _rt_jenis = (_rt_row.get("jenis_pl") or "JKK").upper()
-                                _rt_src = _template_dir_pl_jkk(_rt_row, _TEMPLATE_DIR_PL) if _rt_jenis == "JKK" else _TEMPLATE_DIR_PL_PK
+                                _rt_src = _template_dir_pl_jkk(_rt_row, _TEMPLATE_DIR_PL) if _rt_jenis == "JKK" else _template_dir_pl_jkk(_rt_row, _TEMPLATE_DIR_PL_PK)
                                 _rt_mode = "pl_jkk" if _rt_jenis == "JKK" else "pl_pk"
                                 _rt_existing([_rt_Path(_rt_root)], _rt_Path(_rt_src), _rt_mode, auto_relink=True, dry_run=False)
                                 _rt_ok += 1
@@ -4472,12 +4528,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
                     _do_ai_kualifikasi = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8_do_ai_kual")
                     _do_ai_teknis = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8_do_ai_teknis")
+                    _do_ai_biaya = st.checkbox("💰 Evaluasi Biaya (Sesi 3) via AI", value=True, key="pl8_do_ai_biaya")
                     _btn_ai_eval = st.button(
                         f"🤖 Jalankan Evaluasi AI — {_n_paket8} paket",
                         key="pl8_btn_ai_eval", use_container_width=True,
-                        disabled=not (_do_ai_kualifikasi or _do_ai_teknis),
+                        disabled=not (_do_ai_kualifikasi or _do_ai_teknis or _do_ai_biaya),
                     )
-                    if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis):
+                    if _btn_ai_eval and (_do_ai_kualifikasi or _do_ai_teknis or _do_ai_biaya):
                         import ai_evaluator as _heval8
                         if _do_extract_teks8:
                             import extract_teks_kualifikasi as _etk8
@@ -4516,6 +4573,46 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         st.markdown(_rt["output"][:3000])
                                 else:
                                     st.error(f"❌ {_rt_name[:50]} — {_rt['error'][:200]}")
+                        if _do_ai_biaya:
+                            _ai_jobs_biaya = _ai_jobs
+                            if _do_ai_teknis:
+                                _teknis_ok = {
+                                    _r.get("nama")
+                                    for _r in _res_teknis
+                                    if _r.get("status") == "ok"
+                                }
+                                _ai_jobs_biaya = [
+                                    _j for _j in _ai_jobs
+                                    if _j.get("nama_paket") in _teknis_ok
+                                ]
+                                _n_skip_biaya = len(_ai_jobs) - len(_ai_jobs_biaya)
+                                if _n_skip_biaya:
+                                    st.warning(
+                                        f"⏭️ {_n_skip_biaya} paket tidak masuk evaluasi biaya "
+                                        "karena Sesi 2 gagal pada proses ini."
+                                    )
+                            if _ai_jobs_biaya:
+                                st.info("💰 Menjalankan evaluasi Biaya...")
+                                _res_biaya = _heval8.evaluasi_bulk(
+                                    _ai_jobs_biaya, jenis="biaya",
+                                    model=_ai_eval_model, max_workers=3,
+                                    engine=_ai_eval_engine,
+                                )
+                                for _rb in _res_biaya:
+                                    _rb_name = _ai_label_map.get(
+                                        _rb.get("nama"), _rb.get("nama", "-")
+                                    )
+                                    if _rb["status"] == "ok":
+                                        st.success(f"✅ {_rb_name[:50]}")
+                                        with st.expander(
+                                            f"Output biaya: {_rb_name[:35]}"
+                                        ):
+                                            st.markdown(_rb["output"][:3000])
+                                    else:
+                                        st.error(
+                                            f"❌ {_rb_name[:50]} — "
+                                            f"{_rb['error'][:200]}"
+                                        )
 
 
                     if _btn8:
@@ -5033,7 +5130,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     "nama_folder": _bnm_folder0,
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
-                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _TEMPLATE_DIR_PL_PK,
+                    "workflow": _pl_workflow(_br0),
+                    "template_dir": _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL) if _bj0 == "JKK" else _template_dir_pl_jkk(_br0, _TEMPLATE_DIR_PL_PK),
                 })
 
             
@@ -5198,6 +5296,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
                             _pl_paket_log.append("⏱ Excel: skipped")
+                        try:
+                            _meta_wf = mark_workflow_applied(
+                                _pl_target_b, _pl_res.get("workflow") or _pl_workflow({"jenis_pl": _pl_res["jenis_pl"], "nama_paket": _pl_nf}), _pl_res["jenis_pl"]
+                            )
+                            _pl_paket_log.append(f"🧩 Workflow: {_meta_wf.get('workflow_applied')}")
+                        except Exception as _meta_wf_e:
+                            _pl_paket_log.append(f"⚠ Metadata workflow: {_meta_wf_e}")
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                     _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")

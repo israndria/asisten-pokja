@@ -3,9 +3,28 @@
 import os
 import pathlib
 import re
+import json
+import shutil
+import subprocess
+from datetime import datetime
 from functools import lru_cache
 
 import pl_engine
+
+
+@lru_cache(maxsize=1)
+def _core_workflow_config():
+    """Muat registry dari procurement_core tanpa menabrak config UI lokal."""
+    import importlib.util
+    from config import V19_ROOT
+
+    path = pathlib.Path(V19_ROOT) / "config.py"
+    spec = importlib.util.spec_from_file_location("pokja_procurement_config", path)
+    if not spec or not spec.loader:
+        raise ImportError(f"config procurement_core tidak dapat dimuat: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _fmt_elapsed(seconds):
@@ -41,7 +60,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     jenis_pl = item["jenis_pl"]
     target = _o.path.join(out_base, nama_folder)
     res = {"kode": kode, "nama_folder": nama_folder, "out_base": out_base,
-           "jenis_pl": jenis_pl, "target": target, "template_dir": item.get("template_dir", ""),
+           "jenis_pl": jenis_pl, "workflow": item.get("workflow", ""), "target": target, "template_dir": item.get("template_dir", ""),
            "ok": False, "log": [], "files_ok": []}
     log = res["log"].append
 
@@ -58,6 +77,8 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         # 1. Buat folder fisik via subprocess setup_paket_baru.py
         _t_step = _tm.perf_counter()
         _cmd_setup = [cfg["py"], cfg["script"], "--mode", "pl", "--output-dir", out_base]
+        if item.get("workflow"):
+            _cmd_setup += ["--workflow", item["workflow"]]
         if item.get("template_dir"):
             _cmd_setup += ["--template-dir", item["template_dir"]]
         _cmd_setup.append(nama_folder)
@@ -360,7 +381,169 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     return logs
 
 def _template_dir_pl_jkk(row, default_dir):
+    # V2: pilih donor berdasarkan subjenis paket, bukan hanya JKK/PK.
+    # Profil header instansi ditentukan saat output Word/PDF dibuat.
+    try:
+        _cfg_core = _core_workflow_config()
+        workflow = _cfg_core.detect_pl_workflow(row, row.get("jenis_pl"))
+        resolved = _cfg_core.pl_workflow_template_dir(workflow)
+        if os.path.isdir(resolved):
+            return resolved
+    except Exception:
+        pass
+    # Kompatibilitas donor lama, termasuk folder Disdag.
     satker = " ".join(str(row.get(k) or "") for k in ("satker", "nama_satker", "nama_dinas"))
     if re.search(r"perdagangan|disdag", satker, re.IGNORECASE):
         return str(pathlib.Path(default_dir).with_name("Development - PL - JKK - Disdag"))
     return default_dir
+
+
+def _pl_workflow(row):
+    """Public resolver workflow V2 untuk UI dan setup subprocess."""
+    return _core_workflow_config().detect_pl_workflow(row, row.get("jenis_pl"))
+
+
+def _read_template_meta(package_dir):
+    path = pathlib.Path(package_dir) / ".template-meta.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _write_template_meta(package_dir, data):
+    path = pathlib.Path(package_dir) / ".template-meta.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def mark_workflow_applied(package_dir, workflow, family):
+    """Simpan workflow aktif setelah setup/isi Excel selesai."""
+    meta = _read_template_meta(package_dir)
+    meta.update({
+        "workflow": workflow,
+        "workflow_applied": workflow,
+        "workflow_target": workflow,
+        "mode_family": str(family or "").upper(),
+        "setup_completed_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    _write_template_meta(package_dir, meta)
+    return meta
+
+
+def _template_output_name(name, package_dir):
+    """Nama file hasil setup: hilangkan label domain agar tidak dobel."""
+    folder = pathlib.Path(package_dir).name
+    match = re.search(r"PL(?:JKK|PK)\s+-\s+(.+)$", folder, re.IGNORECASE)
+    suffix = match.group(1).strip() if match else ""
+    if not suffix or "Template" not in name:
+        return name
+    return re.sub(
+        r"Template(?:\s+(?:Perencanaan|Pengawasan|Konstruksi))?",
+        suffix,
+        name,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def migrate_pl_workflow(package_dir, row, expected_family="JKK"):
+    """Migrasikan template Word PLJKK setelah jenis kontrak berubah.
+
+    Workbook existing sengaja dipertahankan agar data Excel tidak tertimpa.
+    Hanya template Word domain yang diganti, dibackup, lalu direlink ke
+    workbook yang sama. PLPK/JKK mismatch diblokir keras.
+    """
+    package_dir = pathlib.Path(package_dir)
+    expected_family = str(expected_family or "JKK").upper()
+    row_kind = str(row.get("jenis_pl") or expected_family).upper()
+    if row_kind != expected_family:
+        return {"ok": False, "status": "FAMILY_MISMATCH", "message": f"Data paket {row_kind} tidak cocok mode {expected_family}."}
+
+    core = _core_workflow_config()
+    target = core.detect_pl_workflow(row, row_kind)
+    target_cfg = core.pl_workflow_config(target)
+    if target_cfg["jenis_pl"] != expected_family:
+        return {"ok": False, "status": "FAMILY_MISMATCH", "message": f"Target {target} bukan workflow {expected_family}."}
+
+    meta = _read_template_meta(package_dir)
+    applied = str(meta.get("workflow_applied") or meta.get("workflow") or "").upper()
+    if not applied:
+        return {"ok": False, "status": "UNKNOWN", "target": target, "message": "Workflow aktif tidak tercatat di metadata; migrasi otomatis diblokir."}
+    if applied == target:
+        return {"ok": True, "status": "UNCHANGED", "target": target, "message": f"Template sudah sesuai: {target}."}
+    applied_cfg = core.pl_workflow_config(applied)
+    if applied_cfg["jenis_pl"] != expected_family:
+        return {"ok": False, "status": "FAMILY_MISMATCH", "message": f"Folder pernah dibuat sebagai {applied}; tidak disentuh otomatis."}
+
+    workbook = _cari_xlsm_pl(str(package_dir))
+    if not workbook or "BAPLJKK" not in pathlib.Path(workbook).name.upper():
+        return {"ok": False, "status": "FAMILY_MISMATCH", "message": "Workbook folder bukan BAPLJKK; migrasi JKK diblokir."}
+
+    source_dir = pathlib.Path(core.pl_workflow_template_dir(target))
+    backup_dir = package_dir / ".workflow-backups" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    moved = []
+    copied = []
+    try:
+        # Hanya file Word domain yang diganti. Workbook package tetap aman.
+        for source_name, _sheet in target_cfg["word_map"]:
+            source = source_dir / source_name
+            if not source.is_file():
+                raise FileNotFoundError(f"Donor tidak ditemukan: {source}")
+            destination_name = _template_output_name(source_name, package_dir)
+            destination = package_dir / destination_name
+            prefix = re.match(r"^(\d+)\.\s+", destination_name)
+            candidates = []
+            if prefix:
+                candidates = [
+                    p for p in package_dir.iterdir()
+                    if p.is_file()
+                    and p.suffix.lower() == source.suffix.lower()
+                    and re.match(rf"^{prefix.group(1)}\.\s+", p.name)
+                    and "(merged)" not in p.name.lower()
+                    and ".bak" not in p.name.lower()
+                ]
+            for old in candidates:
+                target_backup = backup_dir / old.name
+                shutil.move(str(old), str(target_backup))
+                moved.append(old.name)
+            shutil.copy2(source, destination)
+            copied.append(destination.name)
+
+        relink = pathlib.Path(core.BASE_DIR) / "relink_pl.py"
+        result = subprocess.run(
+            [str(core.PYTHON_EXE), str(relink), str(workbook)],
+            capture_output=True, text=True, timeout=90, creationflags=0x08000000,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Relink gagal: {(result.stderr or result.stdout).strip()[:500]}")
+
+        meta.update({
+            "workflow": target,
+            "workflow_applied": target,
+            "workflow_target": target,
+            "workflow_previous": applied,
+            "workflow_migrated_at": datetime.now().isoformat(timespec="seconds"),
+            "workflow_backup": str(backup_dir),
+            "workbook_preserved": True,
+        })
+        _write_template_meta(package_dir, meta)
+        return {"ok": True, "status": "MIGRATED", "target": target, "backup": str(backup_dir), "copied": copied, "moved": moved, "message": f"Migrasi {applied} → {target} selesai."}
+    except Exception as exc:
+        # Rollback jika copy/relink gagal di tengah jalan.
+        for name in copied:
+            try:
+                (package_dir / name).unlink(missing_ok=True)
+            except Exception:
+                pass
+        for name in moved:
+            try:
+                backup_file = backup_dir / name
+                if backup_file.exists() and not (package_dir / name).exists():
+                    shutil.move(str(backup_file), str(package_dir / name))
+            except Exception:
+                pass
+        return {"ok": False, "status": "ERROR", "target": target, "backup": str(backup_dir), "message": str(exc), "moved": moved, "copied": copied}

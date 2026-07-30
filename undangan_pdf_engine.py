@@ -154,6 +154,20 @@ def _export_pdf_via_word(docx_path: str, pdf_path: str, replacements: dict | Non
         pythoncom.CoUninitialize()
 
 
+def _apply_agency_header(docx_path: str, pokja_root: str, data: dict) -> None:
+    """Apply agency header to a temporary invitation copy only."""
+    import sys as _sys
+    v19_root = os.environ.get("POKJA_V19_ROOT", "")
+    if v19_root and v19_root not in _sys.path:
+        _sys.path.insert(0, v19_root)
+    from document_profiles import detect_agency, header_profile_path, inject_header_profile
+
+    profile = header_profile_path(pokja_root, detect_agency(data))
+    temp = docx_path + ".header.tmp"
+    inject_header_profile(docx_path, profile, temp)
+    os.replace(temp, docx_path)
+
+
 def generate_undangan_pdf(
     kode_tender: str,
     tanggal_kirim: date,
@@ -267,6 +281,8 @@ def generate_undangan_pdf(
             for ph, val in replacements.items():
                 _replace_all(doc, ph, str(val))
             doc.save(tmp_docx)
+
+            _apply_agency_header(tmp_docx, POKJA_ROOT, data)
 
             _export_pdf_via_word(
                 os.path.abspath(tmp_docx),
@@ -442,6 +458,7 @@ def generate_undangan_pdf_pl(
 
     try:
         shutil.copy2(template_path, tmp_docx)
+        _apply_agency_header(tmp_docx, POKJA_ROOT, data)
 
         # Replace placeholder + inject TTD langsung di XML zip (hindari lxml reconstruct)
         import zipfile as _zf, re as _re3
