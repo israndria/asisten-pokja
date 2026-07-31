@@ -4,11 +4,12 @@ ppk_upload_engine.py — Engine upload dokumen persiapan pengadaan untuk role PP
 
 import json
 import re
+import os
 import urllib.request
 import requests
 from bs4 import BeautifulSoup
 import spse_browser
-from config import SPSE_BASE_URL
+from config import SPSE_BASE_URL, POKJA_ROOT
 
 BASE_URL = SPSE_BASE_URL.rstrip("/")
 _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
@@ -162,6 +163,42 @@ def fetch_detail_paket(kode_paket: str) -> dict:
     try:
         r1 = requests.get(f"{BASE_URL}/paketnontender/{kode_paket}/edit?step=1", headers=headers, timeout=15)
         soup1 = BeautifulSoup(r1.text, "html.parser")
+
+        # Metadata family paket. Nilai ini sengaja diambil dari label/select
+        # SPSE, bukan ditebak dari nama paket.
+        for el in soup1.find_all(["input", "select", "textarea"]):
+            name = (el.get("name") or el.get("id") or "").lower()
+            value = el.get("value", "")
+            if el.name == "select":
+                opt = el.find("option", selected=True)
+                value = opt.get_text(" ", strip=True) if opt else value
+            if not value:
+                value = el.get_text(" ", strip=True)
+            if not value:
+                continue
+            if any(k in name for k in ("jenis_pengadaan", "jenispekerjaan", "jenis_pekerjaan", "kategori_pengadaan", "tipe_pengadaan", "package_type")):
+                result.setdefault("jenis_pengadaan", value)
+            if any(k in name for k in ("jenis_pl", "jenispl")):
+                result["jenis_pl"] = value
+        for label in soup1.find_all(["label", "th", "td"]):
+            label_text = label.get_text(" ", strip=True).lower()
+            if not any(k in label_text for k in ("jenis pengadaan", "jenis pekerjaan", "kategori pengadaan")):
+                continue
+            sibling = label.find_next_sibling()
+            if sibling:
+                value = sibling.get_text(" ", strip=True)
+                if value:
+                    result.setdefault("jenis_pengadaan", value)
+        # Beberapa versi SPSE merender detail sebagai tabel key/value tanpa
+        # input name. Tangkap pasangan sel secara eksplisit.
+        for tr in soup1.find_all("tr"):
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+            if len(cells) < 2:
+                continue
+            key = cells[0].lower().rstrip(":")
+            value = cells[1]
+            if key in {"jenis pengadaan", "jenis pekerjaan", "kategori pengadaan"} and value:
+                result.setdefault("jenis_pengadaan", value)
 
         # Tabel RUP (kolom: kode_rup, nama_paket_rup, sumber_dana)
         for tbl in soup1.find_all("table"):
@@ -783,7 +820,60 @@ def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
     return val
 
 
-PPK_PL_BASE = r"D:\Dokumen\@ POKJA 2026\@ Pejabat Pengadaan 2026\@ Dinas Perdagangan\1 PERENCANAAN PENGADAAN\Dokumen Upload PPK PL"
+PPK_PL_LEGACY_BASE = os.environ.get(
+    "POKJA_PPK_PL_LEGACY_BASE",
+    os.path.join(
+        POKJA_ROOT,
+        "@ Pejabat Pengadaan 2026",
+        "@ Dinas Perdagangan",
+        "1 PERENCANAAN PENGADAAN",
+        "Dokumen Upload PPK PL",
+    ),
+)
+PPK_WORKFLOW_REGISTRY = {
+    "JKK": {
+        "label": "PL Konsultansi (JKK)",
+        "root": os.environ.get("POKJA_PPK_JKK_BASE", PPK_PL_LEGACY_BASE),
+        "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "4.": "kontrak", "5.": "kontrak", "6.": "kontrak", "8.": "nd", "11.": "lainnya"},
+    },
+    "PK": {
+        "label": "PL Pekerjaan Konstruksi (PK)",
+        "root": os.environ.get("POKJA_PPK_PK_BASE", os.path.join(os.path.dirname(PPK_PL_LEGACY_BASE), "Dokumen Upload PPK PK")),
+        # PK tidak mewarisi mapping SPPBJ/SPMK/SPK/SUK consultancy 4-6.
+        "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "8.": "nd", "11.": "lainnya"},
+    },
+}
+
+
+def ppk_workflow_config(workflow: str | None) -> dict:
+    key = str(workflow or "").upper().strip()
+    if key not in PPK_WORKFLOW_REGISTRY:
+        raise KeyError(f"Workflow PPK tidak dikenal: {workflow}")
+    cfg = dict(PPK_WORKFLOW_REGISTRY[key])
+    root = os.path.normpath(cfg["root"])
+    cfg["transitional"] = False
+    if not os.path.isdir(root) and os.path.isdir(PPK_PL_LEGACY_BASE):
+        cfg["root"] = PPK_PL_LEGACY_BASE
+        cfg["transitional"] = True
+    return cfg
+
+
+def resolve_ppk_workflow(metadata: dict | None) -> dict:
+    """Resolve family dari metadata SPSE; nama paket bukan sumber utama."""
+    row = metadata or {}
+    explicit = " ".join(str(row.get(k) or "") for k in (
+        "jenis_pl", "jenis_pengadaan", "jenis_pekerjaan", "kategori_pengadaan",
+        "tipe_pengadaan", "package_type", "procurement_type",
+    )).lower()
+    if any(x in explicit for x in ("jasa konsultansi", "konsultansi", "jkk", "consult")):
+        return {"status": "resolved", "workflow": "JKK", "source": "metadata"}
+    if any(x in explicit for x in ("pekerjaan konstruksi", "konstruksi", "plpk", "pk")):
+        return {"status": "resolved", "workflow": "PK", "source": "metadata"}
+    return {"status": "ambiguous", "workflow": None, "source": "metadata_missing"}
+
+
+# Backward-compatible alias untuk modul lama yang masih mengimpor konstanta ini.
+PPK_PL_BASE = PPK_PL_LEGACY_BASE
 
 
 def folder_number(folder_name: str) -> int | None:
@@ -810,14 +900,15 @@ FILE_PREFIX_MAP = {
     # 7. HPS, 10. Survey — tidak diupload
 }
 
-def scan_folder(folder_path: str, pdf_only: bool = False) -> list[dict]:
+def scan_folder(folder_path: str, pdf_only: bool = False, workflow: str = "JKK") -> list[dict]:
     """
     Scan folder → return list file yang akan diupload.
     [{"path": str, "nama": str, "jenis": str, "mime": str}]
-    Skip file yang prefixnya tidak ada di FILE_PREFIX_MAP.
+    Skip file yang prefixnya tidak ada di mapping family aktif.
     """
     import os, mimetypes
     hasil = []
+    mapping = ppk_workflow_config(workflow)["mapping"]
     if not os.path.isdir(folder_path):
         return []
     for fname in sorted(os.listdir(folder_path)):
@@ -827,7 +918,7 @@ def scan_folder(folder_path: str, pdf_only: bool = False) -> list[dict]:
         if pdf_only and os.path.splitext(fname)[1].lower() != ".pdf":
             continue
         jenis = None
-        for prefix, j in FILE_PREFIX_MAP.items():
+        for prefix, j in mapping.items():
             if fname.startswith(prefix + " ") or fname == prefix.rstrip(".") + ".pdf":
                 jenis = j
                 break
@@ -838,17 +929,18 @@ def scan_folder(folder_path: str, pdf_only: bool = False) -> list[dict]:
     return hasil
 
 
-def list_subfolder_ppk() -> list[str]:
+def list_subfolder_ppk(workflow: str = "JKK") -> list[str]:
     """
-    List subfolder di PPK_PL_BASE yang bukan _* atau .*
+    List subfolder di root family PPK yang bukan _* atau .*
     Return sorted list nama folder.
     """
     import os
-    if not os.path.isdir(PPK_PL_BASE):
+    root = ppk_workflow_config(workflow)["root"]
+    if not os.path.isdir(root):
         return []
     return sorted([
-        d for d in os.listdir(PPK_PL_BASE)
-        if os.path.isdir(os.path.join(PPK_PL_BASE, d))
+        d for d in os.listdir(root)
+        if os.path.isdir(os.path.join(root, d))
         and not d.startswith('_') and not d.startswith('.')
     ])
 
@@ -906,6 +998,7 @@ def upload_dari_folder(
     folder_path: str,
     log_fn=None,
     pdf_only: bool = False,
+    workflow: str = "JKK",
 ) -> dict:
     """
     Upload semua file yang cocok dari folder ke SPSE.
@@ -914,7 +1007,7 @@ def upload_dari_folder(
     def _log(msg):
         if log_fn: log_fn(msg)
 
-    files = scan_folder(folder_path, pdf_only=pdf_only)
+    files = scan_folder(folder_path, pdf_only=pdf_only, workflow=workflow)
     if not files:
         return {"results": [], "total_ok": 0, "total_err": 0, "error": "Tidak ada file yang cocok di folder ini."}
 
@@ -1006,10 +1099,11 @@ def upload_dokumen_dari_folder(
     folder_path: str,
     log_fn=None,
     pdf_only: bool = False,
+    workflow: str = "JKK",
 ) -> dict:
     """Pilih PP lalu upload dokumen PPK 1-9/11; Nota Dinas dikecualikan."""
     files = [
-        f for f in scan_folder(folder_path, pdf_only=pdf_only)
+        f for f in scan_folder(folder_path, pdf_only=pdf_only, workflow=workflow)
         if re.match(r"^(?:[1-9]|11)\.\s", f["nama"]) and f["jenis"] != "nd"
     ]
     if not files:

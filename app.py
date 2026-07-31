@@ -1054,6 +1054,13 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 return nama[len(pfx):]
         return nama
 
+    def _resolve_ppk_package(_pk: dict) -> tuple[dict, dict]:
+        """Gabungkan row SPSE + detail dan resolve family JKK/PK."""
+        _kode0 = _pk.get("kode_paket", "")
+        _meta0 = dict(_pk)
+        _meta0.update(st.session_state.get(f"ppk_detail_{_kode0}") or {})
+        return _meta0, _ppk_up.resolve_ppk_workflow(_meta0)
+
     @st.cache_data(ttl=120)
     def _load_paket_ppk(_role_key=None):
         return _ppk_up.fetch_paket_ppk()
@@ -1232,13 +1239,38 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
             _nama = _pk["nama_paket"]
             _status = _pk.get("status", "-")
             _singkat = _nama_singkat(_nama)
+            _ppk_meta, _ppk_resolved = _resolve_ppk_package(_pk)
+            _ppk_workflow = _ppk_resolved.get("workflow")
+            if not _ppk_workflow:
+                # Metadata detail belum termuat di sesi ini; jangan menebak
+                # dari nama. User hanya boleh melanjutkan lewat konfirmasi.
+                _ppk_detail_lazy = _ppk_up.fetch_detail_paket(_kode)
+                if _ppk_detail_lazy:
+                    st.session_state[f"ppk_detail_{_kode}"] = _ppk_detail_lazy
+                    _ppk_meta, _ppk_resolved = _resolve_ppk_package(_pk)
+                    _ppk_workflow = _ppk_resolved.get("workflow")
+            _ppk_cfg = _ppk_up.ppk_workflow_config(_ppk_workflow) if _ppk_workflow else None
             _folder_no_upload = _ppk_up.folder_number(
-                _ppk_up.auto_match_folder(_nama, _ppk_folders_info)
+                _ppk_up.auto_match_folder(_nama, _ppk_folders_info, workflow=_ppk_workflow)
             ) or _pi
             _exp_label = f"{_folder_no_upload}. {_singkat}"
 
             with st.expander(_exp_label, expanded=False):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
+                if _ppk_workflow:
+                    _transition = " (root legacy/transisi)" if _ppk_cfg.get("transitional") else ""
+                    st.success(f"Workflow terdeteksi: **{_ppk_cfg['label']}**{_transition}")
+                else:
+                    st.warning("⚠️ Family paket belum terdeteksi dari metadata SPSE. Konfirmasi JKK/PK sebelum upload.")
+                    _manual_wf = st.selectbox(
+                        "Konfirmasi family paket:",
+                        ["(pilih)", "JKK", "PK"],
+                        key=f"ppk_workflow_confirm_{_kode}",
+                    )
+                    if _manual_wf != "(pilih)":
+                        _ppk_workflow = _manual_wf
+                        _ppk_cfg = _ppk_up.ppk_workflow_config(_ppk_workflow)
+                        st.info(f"Dipilih manual: {_ppk_cfg['label']}")
 
                 # ── Bulk load dokumen existing (1 subprocess, 4 endpoint) ───
                 _bulk_key = f"ppk_bulk_{_kode}"
@@ -1282,8 +1314,8 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 st.divider()
 
                 # ── Upload dari Folder ──────────────────────────────────────
-                _subfolder_list = _ppk_up.list_subfolder_ppk()
-                _auto_match     = _ppk_up.auto_match_folder(_nama, _subfolder_list)
+                _subfolder_list = _ppk_up.list_subfolder_ppk(_ppk_workflow) if _ppk_workflow else []
+                _auto_match     = _ppk_up.auto_match_folder(_nama, _subfolder_list, workflow=_ppk_workflow) if _ppk_workflow else None
 
                 if st.checkbox("📁 Upload dari Folder", key=f"chk_folder_{_kode}"):
                     with st.container(border=True):
@@ -1308,11 +1340,11 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                 key=f"foldersel_{_kode}",
                             )
                             if _sel != "(pilih folder...)":
-                                _selected_folder = os.path.join(_ppk_up.PPK_PL_BASE, _sel)
+                                _selected_folder = os.path.join(_ppk_cfg["root"], _sel)
                         else:
                             _path_input = st.text_input(
                                 "Paste path folder:",
-                                value=(_auto_match and os.path.join(_ppk_up.PPK_PL_BASE, _auto_match)) or "",
+                                value=(_auto_match and os.path.join(_ppk_cfg["root"], _auto_match)) or "",
                                 key=f"folderpath_{_kode}",
                                 placeholder=r"D:\path\ke\folder paket",
                             )
@@ -1326,7 +1358,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                 st.warning("⚠️ Path tidak valid atau bukan folder.")
 
                         if _selected_folder:
-                            _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True)
+                            _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True, workflow=_ppk_workflow)
                             if _preview:
                                 _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}
                                 _doc_files = [
@@ -1362,6 +1394,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                         folder_path=_selected_folder,
                                         log_fn=_flog,
                                         pdf_only=True,
+                                        workflow=_ppk_workflow,
                                     )
                                     # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):
@@ -1482,8 +1515,10 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                             key=f"up_{_kode}_{_sec['key']}",
                             label_visibility="collapsed",
                         )
+                        if not _ppk_workflow:
+                            st.caption("🔒 Upload dikunci sampai family JKK/PK terkonfirmasi.")
                         if _up:
-                            if st.button(f"⬆️ Upload **{_up.name}** ke SPSE", key=f"btn_{_kode}_{_sec['key']}", type="primary"):
+                            if st.button(f"⬆️ Upload **{_up.name}** ke SPSE", key=f"btn_{_kode}_{_sec['key']}", type="primary", disabled=not _ppk_workflow):
                                 with st.status(f"Mengupload {_up.name}...", expanded=True) as _sts:
                                     def _mklog(sts):
                                         def _log(msg): sts.write(msg)
@@ -1517,6 +1552,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     key=f"btn_final_ppk_{_kode}",
                     type="primary",
                     use_container_width=True,
+                    disabled=not _ppk_workflow,
                 ):
                     _final_box = st.container(border=True)
                     _final_box.info("Menyimpan dan membuat paket...")
