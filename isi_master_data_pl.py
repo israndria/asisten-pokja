@@ -32,6 +32,7 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
 
     xl = None
     wb = None
+    sync_v2 = False
     try:
         xl = win32com.client.DispatchEx("Excel.Application")
         xl.Visible = False
@@ -66,6 +67,7 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
 
         wb.Save()
         _log("@ Master Data + @ Evaluasi terisi.")
+        sync_v2 = True
         return {"ok": True, "pesan": "@ Master Data + @ Evaluasi terisi otomatis"}
     except pywintypes.com_error as ce:
         return {"ok": False, "pesan": f"COM error: {ce}"}
@@ -82,6 +84,16 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
                 xl.Quit()
             except Exception:
                 pass
+        if sync_v2:
+            try:
+                import sys
+                code_root = os.environ.get("POKJA_CODE_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                sys.path.insert(0, os.path.join(code_root, "procurement_core"))
+                from master_data_v2 import sync_daftar_paket_snapshot
+                sync_daftar_paket_snapshot(excel_path)
+                _log("Snapshot Daftar Paket V2 tersinkron.")
+            except Exception as exc:
+                _log(f"[WARN] Snapshot V2 tidak tersinkron: {exc}")
         try:
             pythoncom.CoUninitialize()
         except Exception:
@@ -230,11 +242,22 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
             "hps": {"ok": False, "pesan": "timeout", "count": 0},
             "md":  {"ok": False, "pesan": f"COM timeout {timeout}s — Excel tidak responsif"},
         }
-    return result_box[0] or {
+    result = result_box[0] or {
         "ok": False,
         "hps": {"ok": False, "pesan": "tidak ada hasil", "count": 0},
         "md":  {"ok": False, "pesan": "thread selesai tanpa hasil"},
     }
+    if result.get("md", {}).get("ok"):
+        try:
+            import sys
+            code_root = os.environ.get("POKJA_CODE_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            sys.path.insert(0, os.path.join(code_root, "procurement_core"))
+            from master_data_v2 import sync_daftar_paket_snapshot
+            sync_daftar_paket_snapshot(excel_path)
+            _log("Snapshot Daftar Paket V2 tersinkron.")
+        except Exception as exc:
+            _log(f"[WARN] Snapshot V2 tidak tersinkron: {exc}")
+    return result
 
 if __name__ == "__main__":
     import sys
