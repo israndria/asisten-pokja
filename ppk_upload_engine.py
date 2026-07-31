@@ -481,6 +481,64 @@ def kirim_email_pp(kode_paket: str, path: str, file_id: str, log_fn=None) -> boo
     st = val.get("status")
     return st in (0, 200, 302)
 
+
+def simpan_dan_membuat_paket(kode_paket: str, log_fn=None) -> dict:
+    """Submit final step 3 SPSE setelah PP, Nota Dinas, dan email siap.
+
+    Token diambil ulang dari halaman step 3 agar tidak memakai token lama
+    setelah rangkaian upload/email sebelumnya.
+    """
+    import json as _json
+
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    kode_js = _json.dumps(str(kode_paket))
+    js = f"""
+    (async () => {{
+        const lpse = {_json.dumps(_LPSE)};
+        const kode = {kode_js};
+        const editUrl = '/' + lpse + '/paketnontender/' + kode + '/edit?step=3';
+        const submitPath = '/' + lpse + '/paketnontender/' + kode + '/simpanpartthree';
+        const pageResp = await fetch(editUrl, {{credentials: 'include', cache: 'no-store'}});
+        if (!pageResp.ok) return {{ok: false, error: 'Gagal membaca step 3 HTTP ' + pageResp.status}};
+
+        const html = await pageResp.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const form = doc.querySelector('#formTambahPaket');
+        if (!form) return {{ok: false, error: 'Form #formTambahPaket tidak ditemukan pada step 3'}};
+
+        const fd = new FormData(form);
+        fd.set('step', fd.get('step') || '3');
+        fd.set('flow', fd.get('flow') || '1');
+        fd.set('simpan', 'simpan');
+        const response = await fetch(submitPath, {{
+            method: 'POST', credentials: 'include', body: fd, redirect: 'follow'
+        }});
+        const responseText = await response.text();
+        const finalUrl = response.url || '';
+        const followed = !finalUrl.includes('/simpanpartthree');
+        const success = response.ok && followed;
+        return {{
+            ok: success,
+            status: response.status,
+            finalUrl,
+            error: success ? '' : ('Submit final tidak terkonfirmasi (HTTP ' + response.status + ', URL ' + finalUrl + ')'),
+            preview: responseText.slice(0, 300)
+        }};
+    }})()
+    """
+    ok, val, err = _cdp_eval(js, timeout=30)
+    if not ok or not val:
+        _log(f"❌ Simpan dan Membuat Paket gagal: {err or 'respons kosong'}")
+        return {"ok": False, "error": err or "Respons kosong dari submit final"}
+    if val.get("ok"):
+        _log("✅ Simpan dan Membuat Paket berhasil")
+    else:
+        _log(f"❌ Simpan dan Membuat Paket gagal: {val.get('error', 'respons tidak terkonfirmasi')}")
+    return val
+
 _LIST_ENDPOINTS = {
     "kak":     "spekppk",
     "kontrak": "uploadsskk",
@@ -941,3 +999,135 @@ def upload_dari_folder(
     total_ok = sum(1 for r in results if r["ok"])
     total_err = len(results) - total_ok
     return {"results": results, "total_ok": total_ok, "total_err": total_err}
+
+
+def upload_dokumen_dari_folder(
+    kode_paket: str,
+    folder_path: str,
+    log_fn=None,
+    pdf_only: bool = False,
+) -> dict:
+    """Pilih PP lalu upload dokumen PPK 1-9/11; Nota Dinas dikecualikan."""
+    files = [
+        f for f in scan_folder(folder_path, pdf_only=pdf_only)
+        if re.match(r"^(?:[1-9]|11)\.\s", f["nama"]) and f["jenis"] != "nd"
+    ]
+    if not files:
+        return {
+            "results": [],
+            "total_ok": 0,
+            "total_err": 0,
+            "error": "Tidak ada dokumen bernomor 1-9/11 (selain Nota Dinas) yang cocok di folder ini.",
+        }
+
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    _log("🔗 Memilih Pejabat Pengadaan...")
+    pp_ok = pilih_pp(kode_paket, log_fn=log_fn)
+    if not pp_ok:
+        _log("❌ Pemilihan Pejabat Pengadaan gagal; dokumen belum diupload.")
+        return {
+            "results": [],
+            "total_ok": 0,
+            "total_err": len(files),
+            "pp_ok": False,
+            "error": "Pemilihan Pejabat Pengadaan gagal; dokumen belum diupload.",
+        }
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _upload_one(file_info):
+        try:
+            with open(file_info["path"], "rb") as fh:
+                file_bytes = fh.read()
+            result = upload_dokumen(
+                kode_paket=kode_paket,
+                jenis=file_info["jenis"],
+                file_bytes=file_bytes,
+                file_name=file_info["nama"],
+                mime_type=file_info["mime"],
+            )
+            return {
+                "jenis": file_info["jenis"],
+                "nama": file_info["nama"],
+                "ok": result.get("ok", False),
+                "error": result.get("error", ""),
+                "versi": result.get("versi"),
+            }
+        except Exception as exc:
+            return {
+                "jenis": file_info["jenis"],
+                "nama": file_info["nama"],
+                "ok": False,
+                "error": str(exc),
+                "versi": None,
+            }
+
+    results = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(_upload_one, f): f for f in files}
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            status = "✅" if result["ok"] else "❌"
+            suffix = "" if result["ok"] else f": {result['error']}"
+            _log(f"{status} {result['nama']}{suffix}")
+
+    total_ok = sum(1 for result in results if result["ok"])
+    return {
+        "results": results,
+        "total_ok": total_ok,
+        "total_err": len(results) - total_ok,
+        "pp_ok": True,
+    }
+
+
+def upload_nota_dinas_dan_email(
+    kode_paket: str,
+    file_bytes: bytes,
+    file_name: str,
+    mime_type: str,
+    log_fn=None,
+) -> dict:
+    """Upload Nota Dinas lalu kirim email; pembuatan paket dilakukan tombol terpisah."""
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    _log(f"📨 Upload Nota Dinas: {file_name}...")
+    upload_result = upload_nota_dinas(
+        kode_paket=kode_paket,
+        file_bytes=file_bytes,
+        file_name=file_name,
+        mime_type=mime_type,
+        log_fn=log_fn,
+    )
+    if not upload_result.get("ok"):
+        return {
+            "ok": False,
+            "upload_ok": False,
+            "email_ok": False,
+            "upload": upload_result,
+            "error": upload_result.get("error", "Upload Nota Dinas gagal."),
+        }
+
+    _log("📧 Mengirim email pemberitahuan ke Pejabat Pengadaan...")
+    email_ok = kirim_email_pp(
+        kode_paket,
+        upload_result.get("path", ""),
+        upload_result.get("fileId", ""),
+        log_fn=log_fn,
+    )
+    if email_ok:
+        _log("✅ Nota Dinas terupload dan email berhasil dikirim")
+    else:
+        _log("⚠️ Nota Dinas terupload, tetapi email gagal dikirim")
+    return {
+        "ok": bool(email_ok),
+        "upload_ok": True,
+        "email_ok": bool(email_ok),
+        "upload": upload_result,
+        "error": "" if email_ok else "Email gagal dikirim; paket belum dibuat.",
+    }

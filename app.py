@@ -1329,17 +1329,35 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                             _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True)
                             if _preview:
                                 _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}
-                                st.markdown("**Preview file yang akan diupload:**")
+                                _doc_files = [
+                                    p for p in _preview
+                                    if re.match(r"^(?:[1-9]|11)\.\s", p["nama"]) and p["jenis"] != "nd"
+                                ]
+                                _nd_files = [p for p in _preview if p["jenis"] == "nd"]
+                                _other_files = [
+                                    p for p in _preview
+                                    if p not in _doc_files and p not in _nd_files
+                                ]
+                                st.markdown("**Preview file terdeteksi:**")
                                 for _pf in _preview:
                                     st.markdown(f"- `{_pf['nama']}` → **{_JENIS_LABEL.get(_pf['jenis'], _pf['jenis'])}**")
-                                st.caption(f"{len(_preview)} file akan diupload")
-                                if st.button(f"⬆️ Upload {len(_preview)} file ke SPSE", key=f"btn_folder_{_kode}", type="primary"):
+
+                                if _doc_files:
+                                    st.caption(f"{len(_doc_files)} dokumen nomor 1-9/11 (tanpa Nota Dinas) siap diupload")
+                                if _other_files:
+                                    st.caption(f"⏭ {len(_other_files)} file lain (mis. nomor 10) tidak ikut upload bulk")
+                                if st.button(
+                                    f"⬆️ Upload Dokumen PPK + Pilih PP ({len(_doc_files)} file)",
+                                    key=f"btn_folder_docs_{_kode}",
+                                    type="primary",
+                                    disabled=not _doc_files,
+                                ):
                                     _flog_box = st.container(border=True)
                                     _flog_lines = []
                                     def _flog(msg):
                                         _flog_lines.append(msg)
                                         _flog_box.write(msg)
-                                    _fres = _ppk_up.upload_dari_folder(
+                                    _fres = _ppk_up.upload_dokumen_dari_folder(
                                         kode_paket=_kode,
                                         folder_path=_selected_folder,
                                         log_fn=_flog,
@@ -1353,12 +1371,43 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                             _fvl.append({"nama_file": _fr["nama"], "versi": _fr["versi"]})
                                             st.session_state[_fvk] = _fvl
                                     if _fres.get("total_err", 0) == 0:
-                                        st.success(f"✅ {_fres['total_ok']} file berhasil diupload!")
-                                        st.toast(f"✅ {_fres['total_ok']} file diupload", icon="✅")
+                                        st.success(f"✅ {_fres['total_ok']} dokumen PPK berhasil diupload!")
+                                        st.toast(f"✅ {_fres['total_ok']} dokumen diupload", icon="✅")
                                     else:
                                         st.warning(f"⚠️ {_fres['total_ok']} berhasil, {_fres['total_err']} gagal")
+                                    if _fres.get("pp_ok") is False:
+                                        st.error("❌ PP gagal dipilih; tidak ada dokumen yang diupload.")
+
+                                if _nd_files:
+                                    if len(_nd_files) > 1:
+                                        st.warning("⚠️ Ditemukan lebih dari satu Nota Dinas. Pilih satu file melalui uploader Nota Dinas di tab khusus.")
+                                    else:
+                                        st.caption(f"1 Nota Dinas siap diupload dan dikirim melalui email")
+                                        if st.button(
+                                            "📨 Upload Nota Dinas + Kirim Email",
+                                            key=f"btn_folder_nd_{_kode}",
+                                        ):
+                                            _nd_file = _nd_files[0]
+                                            _nd_log_box = st.container(border=True)
+                                            def _nd_log(msg):
+                                                _nd_log_box.write(msg)
+                                            with open(_nd_file["path"], "rb") as _nd_fh:
+                                                _nd_bytes = _nd_fh.read()
+                                            _nd_res = _ppk_up.upload_nota_dinas_dan_email(
+                                                kode_paket=_kode,
+                                                file_bytes=_nd_bytes,
+                                                file_name=_nd_file["nama"],
+                                                mime_type=_nd_file["mime"],
+                                                log_fn=_nd_log,
+                                            )
+                                            if _nd_res.get("upload_ok") and _nd_res.get("email_ok"):
+                                                st.success("✅ Nota Dinas terupload dan email berhasil dikirim.")
+                                            elif _nd_res.get("upload_ok"):
+                                                st.warning("⚠️ Nota Dinas terupload, tetapi email gagal dikirim.")
+                                            else:
+                                                st.error(_nd_res.get("error", "Flow Nota Dinas gagal."))
                             else:
-                                st.info("Tidak ada file yang cocok di folder ini (KAK/Uraian/Kontrak/Diskresi).")
+                                st.info("Tidak ada file PDF yang cocok di folder ini.")
 
                 # 4 tab per paket
                 _tab_labels = [f"{s['icon']} {s['label']}{' *' if s['required'] else ''}" for s in _UPLOAD_SECTIONS]
@@ -1368,6 +1417,35 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     with _tab:
                         if _sec["key"] == "nd":
                             st.info("ℹ️ Dokumen Nota Dinas PPK yang terupload tidak ditampilkan di list ini karena perbedaan endpoint. Cek langsung di SPSE jika ingin melihat daftarnya.")
+                            _nd_up = st.file_uploader(
+                                "Pilih file Nota Dinas PPK:",
+                                type=_sec["accept"],
+                                key=f"up_{_kode}_nd_dedicated",
+                            )
+                            if _nd_up and st.button(
+                                "📨 Upload Nota Dinas + Kirim Email",
+                                key=f"btn_{_kode}_nd_dedicated",
+                                type="primary",
+                            ):
+                                with st.status(f"Memproses Nota Dinas {_nd_up.name}...", expanded=True) as _nd_sts:
+                                    def _nd_mklog(sts):
+                                        def _log(msg): sts.write(msg)
+                                        return _log
+                                    _nd_res = _ppk_up.upload_nota_dinas_dan_email(
+                                        kode_paket=_kode,
+                                        file_bytes=_nd_up.read(),
+                                        file_name=_nd_up.name,
+                                        mime_type=_nd_up.type or "application/pdf",
+                                        log_fn=_nd_mklog(_nd_sts),
+                                    )
+                                    if _nd_res.get("upload_ok") and _nd_res.get("email_ok"):
+                                        _nd_sts.update(label="✅ Nota Dinas + email berhasil", state="complete")
+                                    elif _nd_res.get("upload_ok"):
+                                        _nd_sts.update(label="⚠️ Nota Dinas terupload, email gagal", state="error")
+                                    else:
+                                        _nd_sts.update(label="❌ Flow Nota Dinas gagal", state="error")
+                                        st.error(_nd_res.get("error", "Flow Nota Dinas gagal."))
+                            continue
                         # Dokumen existing
                         try:
                             if _sec["key"] != "nd":
@@ -1430,6 +1508,25 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                     else:
                                         _sts.update(label="❌ Gagal", state="error")
                                         st.error(_res.get("error", "Unknown error"))
+
+                st.divider()
+                st.markdown("### Finalisasi Paket")
+                st.caption("Setelah dokumen PPK, PP, Nota Dinas, dan email selesai, klik tombol ini untuk membuat paket di SPSE.")
+                if st.button(
+                    "💾 Simpan dan Membuat Paket",
+                    key=f"btn_final_ppk_{_kode}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    _final_box = st.container(border=True)
+                    _final_box.info("Menyimpan dan membuat paket...")
+                    def _final_log(msg):
+                        _final_box.write(msg)
+                    _final_res = _ppk_up.simpan_dan_membuat_paket(_kode, log_fn=_final_log)
+                    if _final_res.get("ok"):
+                        _final_box.success("✅ Paket berhasil disimpan dan dibuat di SPSE.")
+                    else:
+                        _final_box.error(_final_res.get("error", "Simpan dan Membuat Paket gagal."))
 
     st.stop()
 
