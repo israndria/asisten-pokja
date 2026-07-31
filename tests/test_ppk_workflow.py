@@ -27,3 +27,8 @@ def test_pk_mapping_does_not_inherit_consultancy_files():
     assert "5." not in mapping
     assert "6." not in mapping
 
+
+def test_auto_match_folder_accepts_workflow_argument():
+    assert engine.auto_match_folder(
+        "Pagar Pasar Binuang", ["28. Pagar Pasar Binuang"], workflow="PK"
+    ) == "28. Pagar Pasar Binuang"

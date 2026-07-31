@@ -945,13 +945,24 @@ def list_subfolder_ppk(workflow: str = "JKK") -> list[str]:
     ])
 
 
-def auto_match_folder(nama_paket_spse: str, subfolder_list: list[str]) -> str | None:
+def auto_match_folder(
+    nama_paket_spse: str,
+    subfolder_list: list[str] | None = None,
+    workflow: str | None = None,
+) -> str | None:
     """
     Fuzzy match nama paket SPSE ke subfolder PPK PL.
-    Return nama subfolder yang paling cocok, atau None.
+    Jika workflow diberikan, gunakan root folder family tersebut. Ini menjaga
+    paket JKK dan PK tidak saling tertukar; argumen list tetap dipertahankan
+    untuk kompatibilitas caller lama.
     """
     import re
     from difflib import SequenceMatcher
+
+    if subfolder_list is None:
+        # Caller tanpa daftar eksplisit tetap dapat meminta root family.
+        subfolder_list = list_subfolder_ppk(workflow) if workflow else []
+    subfolder_list = subfolder_list or []
 
     STRIP_PREFIXES = [
         'Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur Lainnya ',

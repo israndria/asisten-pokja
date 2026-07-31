@@ -1036,6 +1036,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         st.stop()
 
     _PPK_STRIP = [
+        # Prefix rekening/modal yang sama pada paket konstruksi. Hapus hanya
+        # label kategorinya agar objek pekerjaan tetap terlihat di UI.
+        "Modal Bangunan Gedung Pertokoan/Koperasi/Pasar ",
         "Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur Lainnya ",
         "Belanja Jasa Konsultansi Perencanaan Rekayasa-Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan ",
         "Belanja Jasa Konsultansi Perencanaan Rekayasa-",
@@ -1073,8 +1076,8 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
     with _ppk_tab1:
         _info_list = _load_paket_ppk(_role_key=st.session_state.get("spse_role"))
-        _ppk_folders_info = _ppk_up.list_subfolder_ppk()
-        _ppk_next_info = _ppk_up.next_folder_number(_ppk_folders_info)
+        _ppk_info_folder_cache = {}
+        _ppk_info_next_cache = {}
         _ppk_assigned_info = set()
 
         def _rp(v):
@@ -1121,17 +1124,35 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 _det_key = f"ppk_detail_{_ik}"
                 _det = st.session_state.get(_det_key)
 
+                # PPK tidak melakukan "serap paket". Metadata detail hanya
+                # dipakai untuk memilih family folder JKK/PK yang tepat.
+                _ip_meta, _ip_resolved = _resolve_ppk_package(_ip)
+                _ip_workflow = _ip_resolved.get("workflow")
+                _ip_family_key = _ip_workflow or "UNKNOWN"
+                if _ip_family_key not in _ppk_info_folder_cache:
+                    _ppk_info_folder_cache[_ip_family_key] = (
+                        _ppk_up.list_subfolder_ppk(_ip_workflow)
+                        if _ip_workflow else []
+                    )
+                    _ppk_info_next_cache[_ip_family_key] = _ppk_up.next_folder_number(
+                        _ppk_info_folder_cache[_ip_family_key]
+                    )
+                _ip_folders_info = _ppk_info_folder_cache[_ip_family_key]
+
                 # Label expander: nomor + nama singkat + preview nilai pagu jika sudah dimuat
                 _pagu_preview = f" — {_rp(_det.get('nilai_pagu'))}" if _det and _det.get("nilai_pagu") else ""
-                _matched_info_folder = _ppk_up.auto_match_folder(_in, _ppk_folders_info)
+                _matched_info_folder = _ppk_up.auto_match_folder(
+                    _in, _ip_folders_info, workflow=_ip_workflow
+                )
                 _folder_no_info = _ppk_up.folder_number(_matched_info_folder)
                 if _folder_no_info is None:
-                    while _ppk_next_info in _ppk_assigned_info:
+                    _ppk_next_info = _ppk_info_next_cache[_ip_family_key]
+                    while (_ip_family_key, _ppk_next_info) in _ppk_assigned_info:
                         _ppk_next_info += 1
                     _folder_no_info = _ppk_next_info
-                    _ppk_next_info += 1
-                _ppk_assigned_info.add(_folder_no_info)
-                _exp_label = f"{_folder_no_info}. {_nama_singkat(_in)[:75]}{_pagu_preview}"
+                    _ppk_info_next_cache[_ip_family_key] = _ppk_next_info + 1
+                _ppk_assigned_info.add((_ip_family_key, _folder_no_info))
+                _exp_label = f"{_folder_no_info}. {_nama_singkat(_in)}{_pagu_preview}"
 
                 with st.expander(_exp_label, expanded=False):
                     st.caption(f"Status: {_is}")
@@ -1225,6 +1246,9 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
         st.caption(f"{len(_paket_list)} paket ditemukan")
 
+        # Cache lokal satu render: root folder tiap family cukup discan sekali.
+        _ppk_folder_cache = {}
+
         _UPLOAD_SECTIONS = [
             {"key": "kak",     "label": "KAK / Spesifikasi",   "icon": "📄", "accept": ["doc","docx","xls","xlsx","pdf","jpg","jpeg","png","zip","rar"], "required": True},
             {"key": "kontrak", "label": "Rancangan Kontrak",    "icon": "📋", "accept": ["pdf"], "required": True},
@@ -1250,6 +1274,13 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                     _ppk_meta, _ppk_resolved = _resolve_ppk_package(_pk)
                     _ppk_workflow = _ppk_resolved.get("workflow")
             _ppk_cfg = _ppk_up.ppk_workflow_config(_ppk_workflow) if _ppk_workflow else None
+            _ppk_family_key = _ppk_workflow or "UNKNOWN"
+            if _ppk_family_key not in _ppk_folder_cache:
+                _ppk_folder_cache[_ppk_family_key] = (
+                    _ppk_up.list_subfolder_ppk(_ppk_workflow)
+                    if _ppk_workflow else []
+                )
+            _ppk_folders_info = _ppk_folder_cache[_ppk_family_key]
             _folder_no_upload = _ppk_up.folder_number(
                 _ppk_up.auto_match_folder(_nama, _ppk_folders_info, workflow=_ppk_workflow)
             ) or _pi
@@ -1314,7 +1345,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                 st.divider()
 
                 # ── Upload dari Folder ──────────────────────────────────────
-                _subfolder_list = _ppk_up.list_subfolder_ppk(_ppk_workflow) if _ppk_workflow else []
+                _subfolder_list = _ppk_folders_info
                 _auto_match     = _ppk_up.auto_match_folder(_nama, _subfolder_list, workflow=_ppk_workflow) if _ppk_workflow else None
 
                 if st.checkbox("📁 Upload dari Folder", key=f"chk_folder_{_kode}"):
