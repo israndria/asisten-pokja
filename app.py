@@ -1358,6 +1358,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                         )
 
                         _selected_folder = None
+                        _selected_package_folder = None
                         if _input_mode == "📂 Pilih dari daftar":
                             _folder_options = ["(pilih folder...)"] + _subfolder_list
                             _default_idx = 0
@@ -1371,7 +1372,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                 key=f"foldersel_{_kode}",
                             )
                             if _sel != "(pilih folder...)":
-                                _selected_folder = os.path.join(_ppk_cfg["root"], _sel)
+                                _selected_package_folder = os.path.join(_ppk_cfg["root"], _sel)
                         else:
                             _path_input = st.text_input(
                                 "Paste path folder:",
@@ -1384,11 +1385,25 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
                                 _path_input.strip().strip('"').strip("'").strip()
                             ) if _path_input else ""
                             if _path_clean and os.path.isdir(_path_clean):
-                                _selected_folder = os.path.normpath(_path_clean)
+                                _selected_package_folder = os.path.normpath(_path_clean)
                             elif _path_clean:
                                 st.warning("⚠️ Path tidak valid atau bukan folder.")
 
-                        if _selected_folder:
+                        if _selected_package_folder:
+                            _resolved_upload = _ppk_up.resolve_ppk_upload_folder(_selected_package_folder)
+                            _selected_folder = _resolved_upload["folder"]
+                            _stage_label = _resolved_upload["stage"]
+                            if _resolved_upload["source"] == "stage":
+                                st.caption(
+                                    f"Tahap **{_stage_label}** · sumber: "
+                                    f"`{os.path.relpath(_selected_folder, _resolved_upload['package_folder'])}`"
+                                )
+                            else:
+                                st.caption(
+                                    f"Tahap **{_stage_label}** · subfolder tahap belum ada, "
+                                    "memakai folder legacy paket."
+                                )
+
                             _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True, workflow=_ppk_workflow)
                             if _preview:
                                 _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}

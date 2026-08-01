@@ -876,6 +876,151 @@ def resolve_ppk_workflow(metadata: dict | None) -> dict:
 PPK_PL_BASE = PPK_PL_LEGACY_BASE
 
 
+# Struktur output generator PPK PL V2. Resolver di bawah hanya dipakai oleh
+# alur upload Streamlit; folder legacy tetap didukung jika subfolder tahap
+# belum dibuat.
+PPK_DOCUMENT_DRAFT_ROOT = "0. Draft Dokumen PPK"
+PPK_DOCUMENT_STAGE_MARKER = "._ppk_stage.txt"
+PPK_DOCUMENT_STAGE_DIRS = {
+    "UPLOAD AWAL": "01. Upload Awal",
+    "BERKONTRAK": "02. Berkontrak",
+}
+PPK_DOCUMENT_STAGE_ALIASES = {
+    "UPLOAD AWAL": "UPLOAD AWAL",
+    "BERKONTRAK": "BERKONTRAK",
+    # Nilai lama dari workbook sebelum dua tahap disederhanakan.
+    "SPPBJ FINAL": "BERKONTRAK",
+    "SPK FINAL": "BERKONTRAK",
+    "SPMK FINAL": "BERKONTRAK",
+}
+
+
+def normalize_ppk_document_stage(value: object) -> str:
+    """Normalisasi tahap workbook ke dua nilai routing yang didukung."""
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().upper())
+    return PPK_DOCUMENT_STAGE_ALIASES.get(normalized, "UPLOAD AWAL")
+
+
+def _ppk_package_root(candidate: str) -> str:
+    """Naik ke root paket jika user menempel path subfolder draft/tahap."""
+    path = os.path.normpath(os.path.expandvars(os.path.expanduser(str(candidate or ""))))
+    leaf = os.path.basename(path).casefold()
+    draft_leaf = PPK_DOCUMENT_DRAFT_ROOT.casefold()
+    stage_leaves = {name.casefold() for name in PPK_DOCUMENT_STAGE_DIRS.values()}
+
+    if leaf in stage_leaves:
+        parent = os.path.dirname(path)
+        if os.path.basename(parent).casefold() == draft_leaf:
+            return os.path.dirname(parent)
+    if leaf == draft_leaf:
+        return os.path.dirname(path)
+    return path
+
+
+def _find_ppk_master_workbook(package_folder: str) -> str | None:
+    """Cari workbook canonical; suffix ``(1)`` dipertahankan untuk legacy."""
+    candidates = (
+        "0. Master_Data_PL_PPK.xlsm",
+        "0. Master_Data_PL_PPK (1).xlsm",
+    )
+    for name in candidates:
+        path = os.path.join(package_folder, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _read_ppk_stage_marker(package_folder: str) -> str | None:
+    """Baca tahap hasil generator jika workbook tidak ikut disalin ke paket."""
+    marker = os.path.join(package_folder, PPK_DOCUMENT_STAGE_MARKER)
+    try:
+        with open(marker, "r", encoding="utf-8") as handle:
+            raw = re.sub(r"\s+", " ", handle.readline().strip().upper())
+        return normalize_ppk_document_stage(raw) if raw in PPK_DOCUMENT_STAGE_ALIASES else None
+    except (OSError, UnicodeError):
+        return None
+
+
+def read_ppk_document_stage(package_folder: str) -> tuple[str, str | None, str]:
+    """Baca ``Tahap Dokumen`` tanpa mengubah workbook.
+
+    Return ``(stage, workbook_path, source)``. Setiap kegagalan baca sengaja
+    menjadi ``UPLOAD AWAL`` agar upload awal tidak salah masuk folder kontrak.
+    """
+    package_root = _ppk_package_root(package_folder)
+    workbook_path = _find_ppk_master_workbook(package_root)
+    marker_stage = _read_ppk_stage_marker(package_root)
+    if not workbook_path:
+        return marker_stage or "UPLOAD AWAL", None, (
+            "marker" if marker_stage else "default_missing_workbook"
+        )
+
+    workbook = None
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+        sheets = []
+        if "Master Data" in workbook.sheetnames:
+            sheets.append(workbook["Master Data"])
+        sheets.extend(ws for ws in workbook.worksheets if ws not in sheets)
+        for worksheet in sheets:
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    label = str(cell.value or "").strip().casefold()
+                    if label != "tahap dokumen":
+                        continue
+                    value = worksheet.cell(row=cell.row, column=cell.column + 1).value
+                    return normalize_ppk_document_stage(value), workbook_path, "workbook"
+        if marker_stage:
+            return marker_stage, workbook_path, "marker_missing_field"
+        return "UPLOAD AWAL", workbook_path, "default_missing_field"
+    except Exception:
+        if marker_stage:
+            return marker_stage, workbook_path, "marker_unreadable_workbook"
+        return "UPLOAD AWAL", workbook_path, "default_unreadable_workbook"
+    finally:
+        if workbook is not None:
+            try:
+                workbook.close()
+            except Exception:
+                pass
+
+
+def resolve_ppk_upload_folder(package_folder: str, stage: object = None) -> dict:
+    """Resolve folder upload PPK dari root paket dan tahap workbook.
+
+    Jika folder tahap tersedia, hanya folder itu yang dipakai. Jika belum ada,
+    fallback ke root paket legacy; folder ``0. Draft Dokumen PPK`` sendiri
+    tidak pernah dipakai sebagai fallback karena dapat berisi arsip/root.
+    """
+    package_root = _ppk_package_root(package_folder)
+    workbook_stage, workbook_path, stage_source = read_ppk_document_stage(package_root)
+    resolved_stage = normalize_ppk_document_stage(stage) if stage is not None else workbook_stage
+    stage_folder = os.path.join(
+        package_root,
+        PPK_DOCUMENT_DRAFT_ROOT,
+        PPK_DOCUMENT_STAGE_DIRS[resolved_stage],
+    )
+    if os.path.isdir(stage_folder):
+        return {
+            "folder": os.path.normpath(stage_folder),
+            "package_folder": os.path.normpath(package_root),
+            "stage": resolved_stage,
+            "source": "stage",
+            "workbook": workbook_path,
+            "stage_source": "explicit" if stage is not None else stage_source,
+        }
+    return {
+        "folder": os.path.normpath(package_root),
+        "package_folder": os.path.normpath(package_root),
+        "stage": resolved_stage,
+        "source": "legacy",
+        "workbook": workbook_path,
+        "stage_source": "explicit" if stage is not None else stage_source,
+    }
+
+
 def folder_number(folder_name: str) -> int | None:
     """Ambil nomor urut dari prefix folder PPK, mis. ``9. Nama`` → 9."""
     m = re.match(r"^\s*(\d+)\s*\.\s*", str(folder_name or ""))
