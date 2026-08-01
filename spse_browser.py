@@ -170,6 +170,21 @@ def _boleh_auto_refresh(url: str) -> bool:
     )
 
 
+_SPSE_ACCESS_ERROR_MARKERS = (
+    "akses ditolak",
+    "belum login",
+    "session telah habis",
+    "sesi telah habis",
+    "terjadi kesalahan",
+)
+
+
+def _is_spse_access_error_text(text: str) -> bool:
+    """Deteksi halaman SPSE stale/error dari title atau body yang terlihat."""
+    normalized = " ".join((text or "").casefold().split())
+    return any(marker in normalized for marker in _SPSE_ACCESS_ERROR_MARKERS)
+
+
 def _url_spse_score(url: str, title: str = "") -> int:
     """Beri skor tab SPSE agar tab loginpass/root tidak mengalahkan sesi aktif.
 
@@ -183,6 +198,8 @@ def _url_spse_score(url: str, title: str = "") -> int:
     current = urlsplit(url or "")
     if current.scheme not in {"http", "https"} or current.netloc != base.netloc:
         return -1
+    if _is_spse_access_error_text(title):
+        return -100
     base_path = base.path.rstrip("/")
     path = current.path.rstrip("/")
     if path == base_path or any(path.endswith(suffix) for suffix in ("/login", "/loginpass", "/logout")):
@@ -211,6 +228,151 @@ def _pilih_tab_spse(tabs: list[dict]) -> dict | None:
         enumerate(candidates),
         key=lambda pair: (_url_spse_score(pair[1].get("url", ""), pair[1].get("title", "")), -pair[0]),
     )[1]
+
+
+async def _deskripsikan_page_spse(page, *, inspect_body: bool = False) -> dict:
+    """Ambil metadata page tanpa navigasi untuk pemilihan tab yang aman."""
+    url = page.url
+    title = ""
+    try:
+        title = (await page.title()).strip()
+    except Exception:
+        pass
+
+    is_error = _is_spse_access_error_text(title)
+    score = _url_spse_score(url, title)
+    if inspect_body and score >= 0:
+        try:
+            body = await page.locator("body").inner_text(timeout=1500)
+            if _is_spse_access_error_text(body):
+                is_error = True
+                score = -100
+        except Exception:
+            # Body tidak terbaca bukan bukti logout; pertahankan skor URL/title.
+            pass
+    return {
+        "page": page,
+        "url": url,
+        "title": title,
+        "score": score,
+        "error": is_error,
+    }
+
+
+async def _find_page_for_tab_async(tab: dict):
+    """Cocokkan tab CDP ke Playwright memakai URL + title, bukan URL saja."""
+    context = _get_ctx()
+    if context is None:
+        return None
+    target_url = tab.get("url", "")
+    pages = [page for page in context.pages if not page.is_closed()]
+    same_url = [page for page in pages if page.url == target_url]
+    if not same_url:
+        return None
+
+    target_title = (tab.get("title", "") or "").strip()
+    if target_title:
+        for page in same_url:
+            try:
+                if (await page.title()).strip() == target_title:
+                    return page
+            except Exception:
+                continue
+
+    descriptions = []
+    for page in same_url:
+        try:
+            descriptions.append(await _deskripsikan_page_spse(page, inspect_body=True))
+        except Exception:
+            continue
+    if not descriptions:
+        return same_url[0]
+    return max(descriptions, key=lambda item: item["score"])["page"]
+
+
+async def _fokuskan_tab_spse_async():
+    """Bawa tab SPSE terbaik ke foreground untuk flow auto-login saja."""
+    context = _get_ctx()
+    if context is None:
+        return None
+
+    from urllib.parse import urlsplit as _urlsplit
+    base_netloc = _urlsplit(SPSE_BASE_URL).netloc
+    candidates = []
+    for page in context.pages:
+        if page.is_closed():
+            continue
+        try:
+            info = await _deskripsikan_page_spse(page, inspect_body=True)
+        except Exception:
+            continue
+        if _urlsplit(info["url"]).netloc == base_netloc:
+            candidates.append(info)
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda item: item["score"])
+    page = best["page"]
+    _set_page(page)
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+    return page
+
+
+def fokuskan_tab_spse():
+    """Bawa tab SPSE authenticated terbaik ke foreground tanpa navigasi."""
+    if _get_ctx() is None:
+        return None
+    return _run(_fokuskan_tab_spse_async(), timeout=15)
+
+
+async def _rapikan_tab_spse_async():
+    """Tutup hanya tab SPSE stale/error hasil restore, lalu fokuskan tab terbaik."""
+    context = _get_ctx()
+    if context is None:
+        return None
+
+    from urllib.parse import urlsplit as _urlsplit
+    base_netloc = _urlsplit(SPSE_BASE_URL).netloc
+    candidates = []
+    for page in context.pages:
+        if page.is_closed():
+            continue
+        try:
+            info = await _deskripsikan_page_spse(page, inspect_body=True)
+        except Exception:
+            continue
+        if _urlsplit(info["url"]).netloc == base_netloc:
+            candidates.append(info)
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda item: item["score"])
+    for item in candidates:
+        if item is best or not item["error"]:
+            continue
+        try:
+            await item["page"].close()
+        except Exception:
+            pass
+
+    page = best["page"]
+    _set_page(page)
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+    return page
+
+
+def rapikan_tab_spse():
+    """Hapus tab error restore dan fokuskan tab SPSE terbaik tanpa navigasi."""
+    if _get_ctx() is None:
+        return None
+    return _run(_rapikan_tab_spse_async(), timeout=20)
+
 
 # File/folder yang di-clone dari profil asli (tanpa cache)
 _CLONE_FILES = [
@@ -334,16 +496,26 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     # Pakai tab SPSE paling relevan. Urutan ``context.pages`` bukan urutan tab
     # foreground dan bisa menempatkan loginpass/root di posisi pertama.
     if _get_ctx().pages:
-        _page_candidates = [
-            {"page": page, "url": page.url, "title": ""}
-            for page in _get_ctx().pages
-            if not page.is_closed()
+        _page_candidates = []
+        for page in _get_ctx().pages:
+            if page.is_closed():
+                continue
+            try:
+                _page_candidates.append(
+                    await _deskripsikan_page_spse(page, inspect_body=True)
+                )
+            except Exception:
+                continue
+        # Jika ada page SPSE, jangan biarkan tab eksternal mengalahkannya.
+        from urllib.parse import urlsplit as _urlsplit
+        _base_netloc = _urlsplit(SPSE_BASE_URL).netloc
+        _spse_candidates = [
+            item for item in _page_candidates
+            if _urlsplit(item["url"]).netloc == _base_netloc
         ]
-        _page_candidates.sort(
-            key=lambda item: _url_spse_score(item["url"], item["title"]),
-            reverse=True,
-        )
-        _set_page(_page_candidates[0]["page"] if _page_candidates else _get_ctx().pages[0])
+        _choice_pool = _spse_candidates or _page_candidates
+        _best = max(_choice_pool, key=lambda item: item["score"]) if _choice_pool else None
+        _set_page(_best["page"] if _best else _get_ctx().pages[0])
     else:
         _set_page(await _get_ctx().new_page())
     if navigate and url:
@@ -469,31 +641,19 @@ def refresh_browser():
         if not target_tabs:
             return False
         # Reload background — jangan activate (foreground takeover).
-        tab = target_tabs[0]
-        current_url = tab.get("url", "")
-        # Cari page berdasarkan URL, bukan halaman pertama/aktif yang bisa salah tab.
-        page = next(
-            (
-                p for p in ((_get_ctx().pages) if _get_ctx() else [])
-                if not p.is_closed() and p.url == current_url
-            ),
-            None,
-        )
-        if page is None:
-            try:
+        tab = _pilih_tab_spse(target_tabs)
+        if tab is None:
+            return False
+        try:
+            if _get_ctx() is None:
                 _run(_connect_cdp_async(navigate=False), timeout=15)
-                page = next(
-                    (
-                        p for p in ((_get_ctx().pages) if _get_ctx() else [])
-                        if not p.is_closed() and p.url == current_url
-                    ),
-                    None,
-                )
-            except Exception:
-                page = None
+            page = _run(_find_page_for_tab_async(tab), timeout=8)
+        except Exception:
+            page = None
         if page and not page.is_closed():
             try:
                 _run(page.reload(timeout=15000), timeout=20)
+                _set_page(page)
                 _cdp_tabs_cache = []
                 _cdp_tabs_cache_ts = 0.0
                 return True

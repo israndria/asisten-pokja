@@ -312,6 +312,9 @@ def _sidebar_login_form():
                                 break
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
+                    # Brave dapat me-restore banyak tab error lama.
+                    # Tutup hanya tab error, pertahankan tab normal, lalu fokuskan terbaik.
+                    spse_browser.rapikan_tab_spse()
 
                 _log_box = st.empty()
                 # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread

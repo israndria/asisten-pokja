@@ -155,32 +155,30 @@ def detect_login_role() -> str | None:
             if response.status_code != 200 or "loginpass" in final_url:
                 return None
             text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+            if _sb._is_spse_access_error_text(text):
+                return None
             return _role_from_text(text)
         except Exception:
             pass
         return None
 
     try:
-        url = _sb.get_url()
-        if not url:
-            return None
-        # URL root /tapinkab atau /loginpass = belum/pasca logout → belum login
-        from config import SPSE_BASE_URL
-        _base = SPSE_BASE_URL.rstrip("/")
-        if url.rstrip("/") == _base or "loginpass" in url:
-            return None
         if _ROLE_FILE.exists():
             record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
             cookie = _sb.get_spse_cookies(force=True)
             if record.get("role") not in ("PP", "POKJA", "PPK", "E-Katalog"):
                 return None
+            current_fp = _cookie_fingerprint(cookie)
+            if not current_fp:
+                return None
+            cache_matches_session = record.get("cookie_fp") == current_fp
             detected = _detect_role_from_session(cookie)
             if detected:
-                current_fp = _cookie_fingerprint(cookie)
-                _ROLE_FILE.write_text(
-                    json.dumps({"role": detected, "cookie_fp": current_fp}),
-                    encoding="utf-8",
-                )
+                if not cache_matches_session or detected != record.get("role"):
+                    _ROLE_FILE.write_text(
+                        json.dumps({"role": detected, "cookie_fp": current_fp}),
+                        encoding="utf-8",
+                    )
                 return detected
     except Exception:
         pass
@@ -496,6 +494,7 @@ _LOGIN_TIMEOUT_SECONDS = 420
 
 async def _probe_authenticated_role(page) -> str | None:
     """Validasi sesi lewat /home dan kembalikan role aktual."""
+    import spse_browser as _sb
     from config import SPSE_BASE_URL
 
     try:
@@ -506,7 +505,7 @@ async def _probe_authenticated_role(page) -> str | None:
         )
         if response.status == 200:
             text = await response.text()
-            if "akses ditolak" not in text.lower() and "loginpass" not in response.url.lower():
+            if not _sb._is_spse_access_error_text(text) and "loginpass" not in response.url.lower():
                 detected = _role_from_text(text)
                 if detected:
                     return detected
@@ -516,7 +515,9 @@ async def _probe_authenticated_role(page) -> str | None:
     # Fallback DOM untuk redirect sukses yang belum stabil di endpoint /home.
     try:
         if "loginpass" not in page.url.lower():
-            return _role_from_text(await page.locator("body").inner_text(timeout=3000))
+            body = await page.locator("body").inner_text(timeout=3000)
+            if not _sb._is_spse_access_error_text(body):
+                return _role_from_text(body)
     except Exception:
         pass
     return None

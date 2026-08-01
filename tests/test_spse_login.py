@@ -82,6 +82,31 @@ class SpseLoginHelpersTest(unittest.TestCase):
         self.assertNotIn("password", payload)
         self.assertNotIn("username", payload)
 
+    def test_detect_role_recovers_when_only_stale_error_tab_is_selected(self):
+        response = SimpleNamespace(
+            status_code=200,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Beranda Pejabat Pembuat Komitmen",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({"role": "PPK", "cookie_fp": "old-session"}),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_url", return_value=""),
+                patch(
+                    "spse_browser.get_spse_cookies",
+                    return_value="SPSE_SESSION=current-session",
+                ),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertEqual(detected, "PPK")
+
 
 class SpseSessionFirstTest(unittest.IsolatedAsyncioTestCase):
     async def test_fetch_captcha_uses_displayed_dom_image_without_second_get(self):

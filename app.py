@@ -809,18 +809,32 @@ _login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 
-# Auto-detect role dari CDP kalau session baru tapi Brave masih aktif (misal F5 refresh).
-# Retry periodik agar kegagalan sesaat saat Brave/SPSE masih loading tidak mematikan watchdog.
+# Auto-detect + validasi role dari CDP. Tidak bergantung URL tab aktif karena
+# tab stale/error bisa membuat get_url() kosong walau cookie masih terbaca.
+# Dua probe kosong berturut-turut baru dianggap session putus.
 _cdp_role_last_check = st.session_state.get("_cdp_role_last_check", 0.0)
-if not _spse_role and (time.time() - _cdp_role_last_check >= 30):
+if time.time() - _cdp_role_last_check >= 30:
     st.session_state["_cdp_role_last_check"] = time.time()
     try:
         import spse_browser as _sb_detect
         import spse_login as _sl_detect
-        _cdp_url = _sb_detect.get_url()  # kosong "" kalau CDP tidak aktif
-        if _cdp_url:
+        if _sb_detect._cek_cdp_aktif():
             _detected = _sl_detect.detect_login_role()
-            if _detected:
+            if _spse_role in ("PP", "POKJA", "PPK"):
+                if _detected == _spse_role:
+                    st.session_state["_cdp_role_miss_count"] = 0
+                elif _detected:
+                    st.session_state.pop("spse_role", None)
+                    st.session_state["_cdp_role_miss_count"] = 0
+                    _spse_role = None
+                else:
+                    _miss_count = st.session_state.get("_cdp_role_miss_count", 0) + 1
+                    st.session_state["_cdp_role_miss_count"] = _miss_count
+                    if _miss_count >= 2:
+                        st.session_state.pop("spse_role", None)
+                        _spse_role = None
+                        st.session_state["_cdp_role_miss_count"] = 0
+            elif _detected:
                 st.session_state["spse_role"] = _detected
                 _spse_role = _detected
     except Exception:
