@@ -1326,13 +1326,20 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
     _ppk_total_count = len(_ppk_preflight_rows)
     _ppk_unresolved_count = 0
 
-    _ppk_tab1, _ppk_tab2, _ppk_tab3 = st.tabs([
+    _PPK_MAIN_SECTIONS = [
         "1️⃣ Info Paket",
         "2️⃣ Upload Dokumen",
         "3️⃣ Import DPA",
-    ])
+    ]
+    _ppk_active_section = st.radio(
+        "Bagian PPK",
+        _PPK_MAIN_SECTIONS,
+        horizontal=True,
+        key="ppk_active_section",
+        label_visibility="collapsed",
+    )
 
-    with _ppk_tab1:
+    if _ppk_active_section == "1️⃣ Info Paket":
         _info_list = _ppk_mode_packages
         _ppk_info_folder_cache = {}
         _ppk_info_next_cache = {}
@@ -1467,10 +1474,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                             else:
                                 st.caption("Belum ada data DPA")
 
-    with _ppk_tab3:
+    elif _ppk_active_section == "3️⃣ Import DPA":
         _render_tab_dpa()
 
-    with _ppk_tab2:
+    elif _ppk_active_section == "2️⃣ Upload Dokumen":
         _ppk_col1, _ppk_col2 = st.columns([3, 1])
         _ppk_col1.markdown("## 📤 Upload Dokumen Persiapan Pengadaan")
         if _ppk_col2.button("🔄 Refresh", key="btn_refresh_paket_ppk", use_container_width=True):
