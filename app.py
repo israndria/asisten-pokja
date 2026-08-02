@@ -951,13 +951,14 @@ with _login_popover:
         _sidebar_login_form()
 
 _spse_role = st.session_state.get("spse_role", None)  # re-sync setelah sidebar logic
-_ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", "PPK - Upload Dokumen"]
+_PPK_MODE_OPTIONS = ["PPK - Konsultan", "PPK - Pekerjaan Konstruksi"]
+_ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", *_PPK_MODE_OPTIONS]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
 elif _spse_role == "POKJA":
     _MODE_OPTIONS = ["Tender"]
 elif _spse_role == "PPK":
-    _MODE_OPTIONS = ["PPK - Upload Dokumen"]
+    _MODE_OPTIONS = _PPK_MODE_OPTIONS
 elif _spse_role == "E-Katalog":
     _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
 else:
@@ -1038,9 +1039,9 @@ def _fmt_rp(angka_str: str) -> str:
     except:
         return angka_str or "-"
 
-if st.session_state["app_mode"] == "PPK - Upload Dokumen":
+if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
     # ============================================================
-    # MODE: PPK — Upload Dokumen Persiapan Pengadaan
+    # MODE: PPK — Konsultan / Pekerjaan Konstruksi
     # ============================================================
     import ppk_upload_engine as _ppk_up
 
@@ -1082,6 +1083,63 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
     def _load_paket_ppk(_role_key=None):
         return _ppk_up.fetch_paket_ppk()
 
+    _ppk_mode_cfg = _ppk_up.ppk_mode_config(st.session_state["app_mode"])
+    _ppk_selected_workflow = _ppk_mode_cfg["workflow"]
+    st.caption(
+        f"Mode aktif: **{_ppk_mode_cfg['label']}** · "
+        f"paket hanya family **{_ppk_selected_workflow}**"
+    )
+
+    def _load_ppk_mode_packages() -> tuple[list[dict], int, int]:
+        """Muat metadata family sekali, lalu filter paket sesuai submode aktif."""
+        _all_rows = _load_paket_ppk(_role_key=st.session_state.get("spse_role"))
+        _missing = [
+            p for p in _all_rows
+            if f"ppk_detail_{p.get('kode_paket', '')}" not in st.session_state
+        ]
+        if _missing:
+            with st.status(
+                f"Memuat family {len(_missing)} paket dari SPSE...",
+                expanded=False,
+            ) as _st_family:
+                _family_done = 0
+                with ThreadPoolExecutor(max_workers=4) as _ex_family:
+                    _futs_family = {
+                        _ex_family.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p
+                        for p in _missing
+                    }
+                    for _fut_family in as_completed(_futs_family):
+                        _family_done += 1
+                        _p_family = _futs_family[_fut_family]
+                        try:
+                            st.session_state[f"ppk_detail_{_p_family['kode_paket']}"] = _fut_family.result()
+                        except Exception:
+                            st.session_state[f"ppk_detail_{_p_family['kode_paket']}"] = {}
+                        _st_family.update(label=f"Memuat family {_family_done}/{len(_missing)}...")
+                _st_family.update(
+                    label=f"✅ Metadata {len(_all_rows)} paket selesai",
+                    state="complete",
+                )
+
+        _details = {
+            str(p.get("kode_paket") or ""): st.session_state.get(
+                f"ppk_detail_{p.get('kode_paket', '')}", {}
+            )
+            for p in _all_rows
+        }
+        _filtered = _ppk_up.filter_paket_ppk_by_workflow(
+            _all_rows, _ppk_selected_workflow, _details
+        )
+        _unresolved = sum(
+            1 for p in _all_rows
+            if not _ppk_up.resolve_ppk_workflow(
+                {**p, **(_details.get(str(p.get("kode_paket") or "")) or {})}
+            ).get("workflow")
+        )
+        return _filtered, _unresolved, len(_all_rows)
+
+    _ppk_mode_packages, _ppk_unresolved_count, _ppk_total_count = _load_ppk_mode_packages()
+
     _ppk_tab1, _ppk_tab2, _ppk_tab3 = st.tabs([
         "1️⃣ Info Paket",
         "2️⃣ Upload Dokumen",
@@ -1089,7 +1147,7 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
     ])
 
     with _ppk_tab1:
-        _info_list = _load_paket_ppk(_role_key=st.session_state.get("spse_role"))
+        _info_list = _ppk_mode_packages
         _ppk_info_folder_cache = {}
         _ppk_info_next_cache = {}
         _ppk_assigned_info = set()
@@ -1100,8 +1158,15 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
 
         if not _info_list:
             st.markdown("## ℹ️ Info Paket PPK")
-            st.warning("Tidak ada paket ditemukan. Pastikan login PPK aktif di browser.")
+            st.warning(
+                f"Tidak ada paket family {_ppk_selected_workflow} pada mode ini. "
+                f"Total paket SPSE: {_ppk_total_count}; "
+                f"metadata belum terdefinisi: {_ppk_unresolved_count}."
+            )
             if st.button("🔄 Refresh Paket", key="ppk_refresh_empty"):
+                for _k in list(st.session_state.keys()):
+                    if _k.startswith(("ppk_detail_", "ppk_dpa_")):
+                        del st.session_state[_k]
                 _load_paket_ppk.clear()
                 st.rerun()
         else:
@@ -1246,16 +1311,20 @@ if st.session_state["app_mode"] == "PPK - Upload Dokumen":
         if _ppk_col2.button("🔄 Refresh", key="btn_refresh_paket_ppk", use_container_width=True):
             # Hapus semua cache bulk + cache paket PPK
             for _k in list(st.session_state.keys()):
-                if _k.startswith("ppk_versi_") or _k.startswith("ppk_bulk"):
+                if _k.startswith(("ppk_versi_", "ppk_bulk", "ppk_detail_", "ppk_dpa_")):
                     del st.session_state[_k]
             _load_paket_ppk.clear()
             st.rerun()
 
-        with st.spinner("Memuat daftar paket dari SPSE..."):
-            _paket_list = _load_paket_ppk()
+        with st.spinner("Memuat daftar paket mode PPK..."):
+            _paket_list = _ppk_mode_packages
 
         if not _paket_list:
-            st.warning("Tidak ada paket ditemukan. Pastikan login PPK aktif di browser.")
+            st.warning(
+                f"Tidak ada paket family {_ppk_selected_workflow} pada mode ini. "
+                f"Total paket SPSE: {_ppk_total_count}; "
+                f"metadata belum terdefinisi: {_ppk_unresolved_count}."
+            )
             st.stop()
 
         st.caption(f"{len(_paket_list)} paket ditemukan")

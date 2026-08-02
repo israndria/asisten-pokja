@@ -820,6 +820,11 @@ def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
     return val
 
 
+PPK_PL_V2_BASE = os.path.join(
+    POKJA_ROOT,
+    "Paket Experiment - Pengadaan Langsung",
+    "V2 - Template PPK PL",
+)
 PPK_PL_LEGACY_BASE = os.environ.get(
     "POKJA_PPK_PL_LEGACY_BASE",
     os.path.join(
@@ -833,12 +838,15 @@ PPK_PL_LEGACY_BASE = os.environ.get(
 PPK_WORKFLOW_REGISTRY = {
     "JKK": {
         "label": "PL Konsultansi (JKK)",
-        "root": os.environ.get("POKJA_PPK_JKK_BASE", PPK_PL_LEGACY_BASE),
+        # JKK dan PK berbagi root paket V2; family dipisahkan oleh metadata.
+        "root": os.environ.get("POKJA_PPK_JKK_BASE", PPK_PL_V2_BASE),
         "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "4.": "kontrak", "5.": "kontrak", "6.": "kontrak", "8.": "nd", "11.": "lainnya"},
     },
     "PK": {
         "label": "PL Pekerjaan Konstruksi (PK)",
-        "root": os.environ.get("POKJA_PPK_PK_BASE", os.path.join(os.path.dirname(PPK_PL_LEGACY_BASE), "Dokumen Upload PPK PK")),
+        # Canonical PPK V2 berada satu root dengan folder paket bernomor.
+        # Tetap beri override agar PC lain/struktur lama tidak terkunci.
+        "root": os.environ.get("POKJA_PPK_PK_BASE", PPK_PL_V2_BASE),
         # PK tidak mewarisi mapping SPPBJ/SPMK/SPK/SUK consultancy 4-6.
         "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "8.": "nd", "11.": "lainnya"},
     },
@@ -859,7 +867,13 @@ def ppk_workflow_config(workflow: str | None) -> dict:
 
 
 def resolve_ppk_workflow(metadata: dict | None) -> dict:
-    """Resolve family dari metadata SPSE; nama paket bukan sumber utama."""
+    """Resolve family dari metadata SPSE, lalu fallback ke nama paket.
+
+    Endpoint PPK SPSE yang tersedia tidak selalu mengembalikan field jenis
+    pekerjaan. Metadata eksplisit tetap menjadi sumber utama; nama paket hanya
+    dipakai bila metadata tersebut kosong, dengan pola yang sama seperti
+    klasifikasi PL yang sudah berjalan di ``pl_engine``.
+    """
     row = metadata or {}
     explicit = " ".join(str(row.get(k) or "") for k in (
         "jenis_pl", "jenis_pengadaan", "jenis_pekerjaan", "kategori_pengadaan",
@@ -869,7 +883,73 @@ def resolve_ppk_workflow(metadata: dict | None) -> dict:
         return {"status": "resolved", "workflow": "JKK", "source": "metadata"}
     if any(x in explicit for x in ("pekerjaan konstruksi", "konstruksi", "plpk", "pk")):
         return {"status": "resolved", "workflow": "PK", "source": "metadata"}
+
+    # /dt/paketppknontender dan /paketnontender/{kode}/edit hanya memberi
+    # identitas, anggaran, dan status; family sering tidak tersedia. Gunakan
+    # pola nama sebagai fallback terkontrol. Urutan JKK lebih dulu agar nama
+    # "konsultansi ... konstruksi" tidak salah masuk ke PK.
+    package_name = str(row.get("nama_paket") or "").strip().lower()
+    jkk_markers = (
+        "jasa konsultansi", "konsultansi", "konsultan", "perencanaan",
+        "pengawasan", "supervisi", "manajemen konstruksi",
+    )
+    if any(marker in package_name for marker in jkk_markers):
+        return {"status": "resolved", "workflow": "JKK", "source": "name_fallback"}
+
+    pk_markers = (
+        "pekerjaan konstruksi", "belanja modal", "pembangunan", "konstruksi",
+        "rehabilitasi", "rehab ", "renovasi", "pemasangan", "pengurugan",
+    )
+    if any(marker in package_name for marker in pk_markers):
+        return {"status": "resolved", "workflow": "PK", "source": "name_fallback"}
+
     return {"status": "ambiguous", "workflow": None, "source": "metadata_missing"}
+
+
+PPK_MODE_REGISTRY = {
+    "PPK - Konsultan": {
+        "workflow": "JKK",
+        "label": "PPK - Konsultan",
+    },
+    "PPK - Pekerjaan Konstruksi": {
+        "workflow": "PK",
+        "label": "PPK - Pekerjaan Konstruksi",
+    },
+}
+
+
+def ppk_mode_config(mode: str) -> dict:
+    """Ambil konfigurasi family dari submode PPK yang dipilih UI."""
+    key = str(mode or "").strip()
+    if key not in PPK_MODE_REGISTRY:
+        raise KeyError(f"Mode PPK tidak dikenal: {mode}")
+    return dict(PPK_MODE_REGISTRY[key])
+
+
+def filter_paket_ppk_by_workflow(
+    rows: list[dict], workflow: str, details_by_code: dict | None = None
+) -> list[dict]:
+    """Filter paket PPK berdasarkan metadata/fallback family.
+
+    Metadata eksplisit selalu menang; fallback nama dipakai untuk versi SPSE
+    yang tidak mengirim field jenis pekerjaan. Paket yang tidak punya sinyal
+    family tetap dikeluarkan agar mode Konsultan/PK tidak tercampur.
+    """
+    expected = str(workflow or "").strip().upper()
+    if expected not in PPK_WORKFLOW_REGISTRY:
+        return []
+    details = details_by_code or {}
+    result = []
+    for row in rows or []:
+        code = str(row.get("kode_paket") or "")
+        metadata = dict(row)
+        extra = details.get(code) or details.get(row.get("kode_paket")) or {}
+        if isinstance(extra, dict):
+            metadata.update(extra)
+        resolved = resolve_ppk_workflow(metadata)
+        if resolved.get("workflow") == expected:
+            result.append(row)
+    return result
 
 
 # Backward-compatible alias untuk modul lama yang masih mengimpor konstanta ini.
@@ -1083,11 +1163,23 @@ def list_subfolder_ppk(workflow: str = "JKK") -> list[str]:
     root = ppk_workflow_config(workflow)["root"]
     if not os.path.isdir(root):
         return []
-    return sorted([
-        d for d in os.listdir(root)
-        if os.path.isdir(os.path.join(root, d))
-        and not d.startswith('_') and not d.startswith('.')
-    ])
+    package_folders = []
+    for name in os.listdir(root):
+        if not os.path.isdir(os.path.join(root, name)):
+            continue
+        if name.startswith('_') or name.startswith('.'):
+            continue
+        # Root V2 juga berisi donor template (Konstruksi/Perencanaan/
+        # Pengawasan). Tab 2 hanya boleh menampilkan folder paket bernomor.
+        if not re.match(r"^\s*\d+\s*\.\s*", name):
+            continue
+        package_folders.append(name)
+
+    def _package_sort_key(name: str):
+        match = re.match(r"^\s*(\d+)\s*\.\s*", name)
+        return (int(match.group(1)) if match else 10**9, name.casefold())
+
+    return sorted(package_folders, key=_package_sort_key)
 
 
 def auto_match_folder(

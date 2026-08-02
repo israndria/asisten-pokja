@@ -17,6 +17,8 @@ _MODE_SLUG = {
     "PL - Konsultansi": "pl_jkk",
     "PL - Konstruksi": "pl_pk",
     "PPK - Upload Dokumen": "ppk",
+    "PPK - Konsultan": "ppk_jkk",
+    "PPK - Pekerjaan Konstruksi": "ppk_pk",
     "E-Katalog - Survei Pasar": "ekatalog",
 }
 
@@ -38,6 +40,10 @@ def mode_slug(mode: str | None) -> str:
 
 
 def _is_transient(key: str) -> bool:
+    # Detail metadata SPSE dapat dipakai ulang saat berpindah submode PPK;
+    # logout/refresh eksplisit tetap membersihkannya dari app.py.
+    if key.startswith("ppk_detail_"):
+        return False
     return key in _TRANSIENT_EXACT or key.startswith(_TRANSIENT_PREFIXES)
 
 
