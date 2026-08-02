@@ -1779,12 +1779,12 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     type="primary",
                                     disabled=not _doc_files,
                                 ):
-                                    with st.status(
-                                        f"Mengupload {len(_doc_files)} dokumen + memilih PP...",
-                                        expanded=True,
-                                    ) as _flog_status:
+                                    with st.container(border=True):
+                                        st.caption(
+                                            f"⏳ Mengupload {len(_doc_files)} dokumen + memilih PP..."
+                                        )
                                         def _flog(msg):
-                                            _flog_status.write(msg)
+                                            st.write(msg)
                                         _fres = _ppk_up.upload_dokumen_dari_folder(
                                             kode_paket=_kode,
                                             folder_path=_selected_folder,
@@ -1792,15 +1792,15 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                             pdf_only=True,
                                             workflow=_ppk_workflow,
                                         )
-                                        _flog_status.update(
-                                            label=(
-                                                f"✅ Upload selesai: {_fres.get('total_ok', 0)} berhasil"
-                                                if _fres.get("total_err", 0) == 0
-                                                else f"⚠️ Upload selesai: {_fres.get('total_ok', 0)} berhasil, {_fres.get('total_err', 0)} gagal"
-                                            ),
-                                            state=("complete" if _fres.get("total_err", 0) == 0 else "error"),
-                                            expanded=False,
-                                        )
+                                        if _fres.get("total_err", 0) == 0:
+                                            st.success(
+                                                f"Upload selesai: {_fres.get('total_ok', 0)} berhasil"
+                                            )
+                                        else:
+                                            st.warning(
+                                                f"Upload selesai: {_fres.get('total_ok', 0)} berhasil, "
+                                                f"{_fres.get('total_err', 0)} gagal"
+                                            )
                                     # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):
                                         if _fr.get("ok") and _fr.get("jenis") != "nd":
@@ -1872,23 +1872,23 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                 key=f"btn_{_kode}_nd_dedicated",
                                 type="primary",
                             ):
-                                with st.status(f"Memproses Nota Dinas {_nd_up.name}...", expanded=True) as _nd_sts:
-                                    def _nd_mklog(sts):
-                                        def _log(msg): sts.write(msg)
+                                with st.container(border=True):
+                                    st.caption(f"⏳ Memproses Nota Dinas {_nd_up.name}...")
+                                    def _nd_mklog(container):
+                                        def _log(msg): container.write(msg)
                                         return _log
                                     _nd_res = _ppk_up.upload_nota_dinas_dan_email(
                                         kode_paket=_kode,
                                         file_bytes=_nd_up.read(),
                                         file_name=_nd_up.name,
                                         mime_type=_nd_up.type or "application/pdf",
-                                        log_fn=_nd_mklog(_nd_sts),
+                                        log_fn=_nd_mklog(st),
                                     )
                                     if _nd_res.get("upload_ok") and _nd_res.get("email_ok"):
-                                        _nd_sts.update(label="✅ Nota Dinas + email berhasil", state="complete")
+                                        st.success("Nota Dinas + email berhasil")
                                     elif _nd_res.get("upload_ok"):
-                                        _nd_sts.update(label="⚠️ Nota Dinas terupload, email gagal", state="error")
+                                        st.warning("Nota Dinas terupload, email gagal")
                                     else:
-                                        _nd_sts.update(label="❌ Flow Nota Dinas gagal", state="error")
                                         st.error(_nd_res.get("error", "Flow Nota Dinas gagal."))
                             continue
                         # Dokumen existing
@@ -1931,9 +1931,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                             st.caption("🔒 Upload dikunci sampai family JKK/PK terkonfirmasi.")
                         if _up:
                             if st.button(f"⬆️ Upload **{_up.name}** ke SPSE", key=f"btn_{_kode}_{_sec['key']}", type="primary", disabled=not _ppk_workflow):
-                                with st.status(f"Mengupload {_up.name}...", expanded=True) as _sts:
-                                    def _mklog(sts):
-                                        def _log(msg): sts.write(msg)
+                                with st.container(border=True):
+                                    st.caption(f"⏳ Mengupload {_up.name}...")
+                                    def _mklog(container):
+                                        def _log(msg): container.write(msg)
                                         return _log
                                     _res = _ppk_up.upload_dokumen_dengan_replace(
                                         kode_paket=_kode,
@@ -1942,10 +1943,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         file_name=_up.name,
                                         mime_type=_up.type or "application/octet-stream",
                                         existing_docs=_existing,
-                                        log_fn=_mklog(_sts),
+                                        log_fn=_mklog(st),
                                     )
                                     if _res.get("ok"):
-                                        _sts.update(label="✅ Berhasil!", state="complete")
+                                        st.success("Berhasil!")
                                         st.toast(f"✅ {_up.name} diupload", icon="✅")
                                         # Simpan versi untuk hapus nanti
                                         _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
@@ -1960,7 +1961,6 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                             st.warning(f"⚠️ Replace: {_warning}")
                                         st.rerun()
                                     else:
-                                        _sts.update(label="❌ Gagal", state="error")
                                         st.error(_res.get("error", "Unknown error"))
 
                 st.divider()
