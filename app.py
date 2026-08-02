@@ -1335,7 +1335,7 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
         "Bagian PPK",
         _PPK_MAIN_SECTIONS,
         horizontal=True,
-        key="ppk_active_section",
+        key="active_ppk_section",
         label_visibility="collapsed",
     )
 
@@ -1405,7 +1405,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                 _ppk_assigned_info.add((_ip_family_key, _folder_no_info))
                 _exp_label = f"{_folder_no_info}. {_nama_singkat(_in)}{_pagu_preview}"
 
-                with st.expander(_exp_label, expanded=False):
+                _info_package_container = st.container(key=f"ppk_info_package_{_ik}")
+                with _info_package_container.expander(_exp_label, expanded=False):
                     st.caption(f"Status: {_is}")
                     st.markdown("**Nama Paket (Lengkap):**")
                     st.code(_in, language=None)
@@ -1597,7 +1598,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             ) or _pi
             _exp_label = f"{_folder_no_upload}. {_singkat}"
 
-            with st.expander(_exp_label, expanded=False):
+            _upload_package_container = st.container(key=f"ppk_upload_package_{_kode}")
+            with _upload_package_container.expander(_exp_label, expanded=False):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
                 if _ppk_workflow:
                     _transition = " (root legacy/transisi)" if _ppk_cfg.get("transitional") else ""
