@@ -805,6 +805,103 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
     return bool(ok and val)
 
 
+_PPK_REPLACE_JENIS = frozenset({"kak", "kontrak", "uraian", "lainnya"})
+
+
+def _normalized_upload_name(name: str) -> str:
+    """Normalisasi nama untuk fallback exact-name replacement."""
+    return re.sub(r"\s+", " ", os.path.basename(str(name or "")).strip()).casefold()
+
+
+def _upload_slot(name: str) -> int | None:
+    """Ambil slot numerik dari nama file, mis. ``11. Diskresi.pdf`` -> 11."""
+    match = re.match(r"^\s*(\d+)\s*\.\s+", os.path.basename(str(name or "")))
+    return int(match.group(1)) if match else None
+
+
+def _replacement_candidates(existing_docs: list[dict] | None, new_name: str) -> list[dict]:
+    """Cari dokumen lama pada slot yang sama, atau exact name bila tanpa nomor."""
+    docs = [doc for doc in (existing_docs or []) if isinstance(doc, dict)]
+    new_slot = _upload_slot(new_name)
+    if new_slot is not None:
+        return [
+            doc for doc in docs
+            if _upload_slot(doc.get("nama_file")) == new_slot
+            and doc.get("versi") is not None
+        ]
+    normalized = _normalized_upload_name(new_name)
+    return [
+        doc for doc in docs
+        if _normalized_upload_name(doc.get("nama_file")) == normalized
+        and doc.get("versi") is not None
+    ]
+
+
+def upload_dokumen_dengan_replace(
+    kode_paket: str,
+    jenis: str,
+    file_bytes: bytes,
+    file_name: str,
+    mime_type: str,
+    existing_docs: list[dict] | None = None,
+    cookies: dict = None,
+    log_fn=None,
+    upload_fn=None,
+    delete_fn=None,
+) -> dict:
+    """Upload dokumen lalu hapus versi lama pada slot/nama yang sama.
+
+    Hanya empat kategori PPK yang boleh auto-replace. Nota Dinas sengaja
+    diproteksi di helper ini agar tidak ikut terhapus bila caller keliru.
+    Kegagalan upload tidak pernah memicu penghapusan; kegagalan delete hanya
+    menjadi warning karena file baru sudah berhasil tersimpan.
+    """
+    uploader = upload_fn or upload_dokumen
+    deleter = delete_fn or hapus_dokumen
+    result = uploader(
+        kode_paket=kode_paket,
+        jenis=jenis,
+        file_bytes=file_bytes,
+        file_name=file_name,
+        mime_type=mime_type,
+        cookies=cookies,
+        log_fn=log_fn,
+    ) or {"ok": False, "error": "Upload mengembalikan hasil kosong."}
+    result = dict(result)
+    result.setdefault("replaced_versions", [])
+    result.setdefault("replacement_errors", [])
+    if not result.get("ok") or jenis not in _PPK_REPLACE_JENIS:
+        return result
+
+    if existing_docs is None:
+        try:
+            existing_docs = list_dokumen(kode_paket, jenis)
+        except Exception as exc:
+            result["replacement_errors"].append(
+                f"daftar dokumen lama tidak terbaca: {exc}"
+            )
+            existing_docs = []
+
+    for old_doc in _replacement_candidates(existing_docs, file_name):
+        versi = old_doc.get("versi")
+        error_added = False
+        try:
+            deleted = deleter(kode_paket, jenis, versi, cookies=cookies)
+        except Exception as exc:
+            deleted = False
+            error_added = True
+            result["replacement_errors"].append(
+                f"{old_doc.get('nama_file', versi)}: {exc}"
+            )
+        if deleted:
+            result["replaced_versions"].append(versi)
+        elif not error_added:
+            result["replacement_errors"].append(
+                f"{old_doc.get('nama_file', versi)}: gagal dihapus"
+            )
+    return result
+
+
 def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
     """
     Hapus semua dokumen (kak/kontrak/uraian/lainnya).
@@ -1555,16 +1652,23 @@ def upload_dokumen_dari_folder(
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Snapshot existing per kategori sebelum upload paralel. Snapshot ini
+    # sengaja tidak mencakup Nota Dinas karena ND memakai flow email terpisah.
+    existing_by_jenis = {}
+    for jenis in sorted({item["jenis"] for item in files} & _PPK_REPLACE_JENIS):
+        existing_by_jenis[jenis] = list_dokumen(kode_paket, jenis)
+
     def _upload_one(file_info):
         try:
             with open(file_info["path"], "rb") as fh:
                 file_bytes = fh.read()
-            result = upload_dokumen(
+            result = upload_dokumen_dengan_replace(
                 kode_paket=kode_paket,
                 jenis=file_info["jenis"],
                 file_bytes=file_bytes,
                 file_name=file_info["nama"],
                 mime_type=file_info["mime"],
+                existing_docs=existing_by_jenis.get(file_info["jenis"], []),
             )
             return {
                 "jenis": file_info["jenis"],
@@ -1572,6 +1676,8 @@ def upload_dokumen_dari_folder(
                 "ok": result.get("ok", False),
                 "error": result.get("error", ""),
                 "versi": result.get("versi"),
+                "replaced_versions": result.get("replaced_versions", []),
+                "replacement_errors": result.get("replacement_errors", []),
             }
         except Exception as exc:
             return {
@@ -1580,6 +1686,8 @@ def upload_dokumen_dari_folder(
                 "ok": False,
                 "error": str(exc),
                 "versi": None,
+                "replaced_versions": [],
+                "replacement_errors": [],
             }
 
     results = []
@@ -1594,6 +1702,8 @@ def upload_dokumen_dari_folder(
                 f"{status} {result['nama']} → "
                 f"{upload_target_label(result['jenis'])}{suffix}"
             )
+            for warning in result.get("replacement_errors", []):
+                _log(f"  ⚠️ Replace: {warning}")
 
     total_ok = sum(1 for result in results if result["ok"])
     return {

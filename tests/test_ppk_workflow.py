@@ -186,6 +186,102 @@ def test_upload_target_labels_are_consistent_for_logs():
     assert engine.upload_target_label("lainnya") == "Informasi Lainnya"
 
 
+def test_replacement_matches_same_numeric_slot_and_deletes_after_upload():
+    events = []
+
+    def fake_upload(**kwargs):
+        events.append("upload")
+        return {"ok": True, "versi": 8}
+
+    def fake_delete(kode, jenis, versi, **kwargs):
+        events.append(("delete", versi))
+        return True
+
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "lainnya", b"new", "11. Diskresi PA.pdf", "application/pdf",
+        existing_docs=[
+            {"nama_file": "11. Diskresi.pdf", "versi": 0},
+            {"nama_file": "10. Survey.pdf", "versi": 4},
+        ],
+        upload_fn=fake_upload,
+        delete_fn=fake_delete,
+    )
+    assert events == ["upload", ("delete", 0)]
+    assert result["replaced_versions"] == [0]
+    assert result["replacement_errors"] == []
+
+
+def test_replacement_uses_exact_normalized_name_without_numeric_prefix():
+    deleted = []
+
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kak", b"new", "Lampiran Final.pdf", "application/pdf",
+        existing_docs=[
+            {"nama_file": "  lampiran   final.PDF ", "versi": 3},
+            {"nama_file": "Lampiran Lain.pdf", "versi": 5},
+        ],
+        upload_fn=lambda **kwargs: {"ok": True, "versi": 7},
+        delete_fn=lambda kode, jenis, versi, **kwargs: deleted.append(versi) or True,
+    )
+    assert deleted == [3]
+    assert result["replaced_versions"] == [3]
+
+
+def test_replacement_loads_existing_docs_when_caller_does_not_supply_them(monkeypatch):
+    deleted = []
+    monkeypatch.setattr(
+        engine,
+        "list_dokumen",
+        lambda kode, jenis: [{"nama_file": "1. KAK Lama.pdf", "versi": 2}],
+    )
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kak", b"new", "1. KAK Baru.pdf", "application/pdf",
+        upload_fn=lambda **kwargs: {"ok": True, "versi": 3},
+        delete_fn=lambda kode, jenis, versi, **kwargs: deleted.append(versi) or True,
+    )
+    assert deleted == [2]
+    assert result["replaced_versions"] == [2]
+
+
+def test_replacement_preserves_new_upload_when_delete_fails():
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "uraian", b"new", "2. Uraian Baru.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "2. Uraian Lama.pdf", "versi": 1}],
+        upload_fn=lambda **kwargs: {"ok": True, "versi": 9},
+        delete_fn=lambda *args, **kwargs: False,
+    )
+    assert result["ok"] is True
+    assert result["versi"] == 9
+    assert result["replaced_versions"] == []
+    assert result["replacement_errors"]
+
+
+def test_failed_upload_never_deletes_existing_version():
+    deleted = []
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kontrak", b"bad", "5. R_SPK Baru.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "5. R_SPK Lama.pdf", "versi": 2}],
+        upload_fn=lambda **kwargs: {"ok": False, "error": "server gagal"},
+        delete_fn=lambda *args, **kwargs: deleted.append(args) or True,
+    )
+    assert result["ok"] is False
+    assert deleted == []
+    assert result["replaced_versions"] == []
+
+
+def test_replacement_does_not_delete_nota_dinas():
+    deleted = []
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "nd", b"new", "8. ND Baru.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "8. ND Lama.pdf", "versi": 2}],
+        upload_fn=lambda **kwargs: {"ok": True, "versi": 3},
+        delete_fn=lambda *args, **kwargs: deleted.append(args) or True,
+    )
+    assert result["ok"] is True
+    assert deleted == []
+    assert result["replaced_versions"] == []
+
+
 def test_auto_match_folder_accepts_workflow_argument():
     assert engine.auto_match_folder(
         "Pagar Pasar Binuang", ["28. Pagar Pasar Binuang"], workflow="PK"

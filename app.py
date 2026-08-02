@@ -1794,11 +1794,18 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         )
                                     # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):
-                                        if _fr.get("ok") and _fr.get("versi") and _fr.get("jenis") != "nd":
+                                        if _fr.get("ok") and _fr.get("jenis") != "nd":
                                             _fvk = f"ppk_versi_{_kode}_{_fr['jenis']}"
-                                            _fvl = st.session_state.get(_fvk, [])
-                                            _fvl.append({"nama_file": _fr["nama"], "versi": _fr["versi"]})
+                                            _replaced = set(_fr.get("replaced_versions", []))
+                                            _fvl = [
+                                                _doc for _doc in st.session_state.get(_fvk, [])
+                                                if _doc.get("versi") not in _replaced
+                                            ]
+                                            if _fr.get("versi") is not None:
+                                                _fvl.append({"nama_file": _fr["nama"], "versi": _fr["versi"]})
                                             st.session_state[_fvk] = _fvl
+                                            for _warning in _fr.get("replacement_errors", []):
+                                                st.warning(f"⚠️ Replace {_fr['nama']}: {_warning}")
                                     if _fres.get("total_err", 0) == 0:
                                         st.success(f"✅ {_fres['total_ok']} dokumen PPK berhasil diupload!")
                                         st.toast(f"✅ {_fres['total_ok']} dokumen diupload", icon="✅")
@@ -1919,12 +1926,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     def _mklog(sts):
                                         def _log(msg): sts.write(msg)
                                         return _log
-                                    _res = _ppk_up.upload_dokumen(
+                                    _res = _ppk_up.upload_dokumen_dengan_replace(
                                         kode_paket=_kode,
                                         jenis=_sec["key"],
                                         file_bytes=_up.read(),
                                         file_name=_up.name,
                                         mime_type=_up.type or "application/octet-stream",
+                                        existing_docs=_existing,
                                         log_fn=_mklog(_sts),
                                     )
                                     if _res.get("ok"):
@@ -1932,9 +1940,15 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         st.toast(f"✅ {_up.name} diupload", icon="✅")
                                         # Simpan versi untuk hapus nanti
                                         _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
-                                        _vlist = st.session_state.get(_vkey, [])
-                                        _vlist.append({"nama_file": _up.name, "versi": _res.get("versi")})
+                                        _vlist = [
+                                            _doc for _doc in st.session_state.get(_vkey, [])
+                                            if _doc.get("versi") not in set(_res.get("replaced_versions", []))
+                                        ]
+                                        if _res.get("versi") is not None:
+                                            _vlist.append({"nama_file": _up.name, "versi": _res.get("versi")})
                                         st.session_state[_vkey] = _vlist
+                                        for _warning in _res.get("replacement_errors", []):
+                                            st.warning(f"⚠️ Replace: {_warning}")
                                         st.rerun()
                                     else:
                                         _sts.update(label="❌ Gagal", state="error")
