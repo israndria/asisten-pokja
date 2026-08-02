@@ -659,9 +659,12 @@ def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict
   const kode_list = {_json.dumps(kode_list)};
   const endpoints = {_json.dumps(endpoints)};
   const out = {{}};
-  await Promise.all(kode_list.map(async kode => {{
-    out[kode] = {{}};
-    await Promise.all(Object.entries(endpoints).map(async ([jenis, ep]) => {{
+  const maxPackagesPerBatch = 8;
+  for (let start = 0; start < kode_list.length; start += maxPackagesPerBatch) {{
+    const batch = kode_list.slice(start, start + maxPackagesPerBatch);
+    await Promise.all(batch.map(async kode => {{
+      out[kode] = {{}};
+      await Promise.all(Object.entries(endpoints).map(async ([jenis, ep]) => {{
       try {{
         const r = await fetch('/' + lpse + '/dokumennontender/' + kode + '/' + ep, {{credentials: 'include'}});
         const html = await r.text();
@@ -679,8 +682,9 @@ def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict
         }});
         out[kode][jenis] = docs;
       }} catch(e) {{ out[kode][jenis] = []; }}
+      }}));
     }}));
-  }}));
+  }}
   return out;
 }})()
 """
@@ -861,15 +865,15 @@ PPK_WORKFLOW_REGISTRY = {
         "label": "PL Konsultansi (JKK)",
         # JKK dan PK berbagi root paket V2; family dipisahkan oleh metadata.
         "root": os.environ.get("POKJA_PPK_JKK_BASE", PPK_PL_V2_BASE),
-        "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "4.": "kontrak", "5.": "kontrak", "6.": "kontrak", "8.": "nd", "11.": "lainnya"},
+        "mapping": {"1.": "kak", "9.": "kak", "12.": "kak", "13.": "kak", "14.": "kak", "15.": "kak", "2.": "uraian", "3.": "kontrak", "4.": "kontrak", "5.": "kontrak", "6.": "kontrak", "8.": "nd", "11.": "lainnya"},
     },
     "PK": {
         "label": "PL Pekerjaan Konstruksi (PK)",
         # Canonical PPK V2 berada satu root dengan folder paket bernomor.
         # Tetap beri override agar PC lain/struktur lama tidak terkunci.
         "root": os.environ.get("POKJA_PPK_PK_BASE", PPK_PL_V2_BASE),
-        # PK tidak mewarisi mapping SPPBJ/SPMK/SPK/SUK consultancy 4-6.
-        "mapping": {"1.": "kak", "9.": "kak", "2.": "uraian", "3.": "kontrak", "8.": "nd", "11.": "lainnya"},
+        # PK memakai seluruh dokumen rancangan kontrak SPPBJ/SPMK/R_SPK/SUK 3-6.
+        "mapping": {"1.": "kak", "9.": "kak", "12.": "kak", "13.": "kak", "14.": "kak", "15.": "kak", "2.": "uraian", "3.": "kontrak", "4.": "kontrak", "5.": "kontrak", "6.": "kontrak", "8.": "nd", "11.": "lainnya"},
     },
 }
 
@@ -1205,6 +1209,10 @@ def next_folder_number(subfolders: list[str] | None = None) -> int:
 FILE_PREFIX_MAP = {
     "1.":  "kak",      # KAK / Spesifikasi Teknis
     "9.":  "kak",      # List Personil (masuk KAK)
+    "12.": "kak",      # Spesifikasi Teknis manual (masuk KAK)
+    "13.": "kak",      # Gambar (masuk KAK)
+    "14.": "kak",      # RK3 (masuk KAK)
+    "15.": "kak",      # TKDN (masuk KAK)
     "2.":  "uraian",   # Uraian Singkat
     "3.":  "kontrak",  # SPPBJ (masuk Rancangan Kontrak)
     "4.":  "kontrak",  # SPMK (masuk Rancangan Kontrak)
@@ -1215,6 +1223,20 @@ FILE_PREFIX_MAP = {
     # 7. HPS, 10. Survey — tidak diupload
 }
 
+
+def _windows_filesystem_path(path: str) -> str:
+    """Tambahkan prefix extended-length untuk path file Windows yang panjang."""
+    path = os.fspath(path)
+    if os.name != "nt" or path.startswith(("\\\\?\\", "\\\\.\\")):
+        return path
+    absolute = os.path.abspath(path)
+    if len(absolute) < 240:
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+
 def scan_folder(folder_path: str, pdf_only: bool = False, workflow: str = "JKK") -> list[dict]:
     """
     Scan folder → return list file yang akan diupload.
@@ -1224,14 +1246,20 @@ def scan_folder(folder_path: str, pdf_only: bool = False, workflow: str = "JKK")
     import os, mimetypes
     hasil = []
     mapping = ppk_workflow_config(workflow)["mapping"]
-    if not os.path.isdir(folder_path):
+    scan_path = _windows_filesystem_path(folder_path)
+    if not os.path.isdir(scan_path):
         return []
-    for fname in sorted(os.listdir(folder_path)):
-        fpath = os.path.join(folder_path, fname)
+    for fname in sorted(os.listdir(scan_path)):
+        fpath = _windows_filesystem_path(os.path.join(scan_path, fname))
         if not os.path.isfile(fpath):
             continue
-        if pdf_only and os.path.splitext(fname)[1].lower() != ".pdf":
-            continue
+        extension = os.path.splitext(fname)[1].lower()
+        # Bulk upload umumnya PDF, tetapi List Personil/Alat canonical
+        # memang boleh tetap DOCX bila PDF-nya belum dibuat. Preferensi PDF
+        # ditangani oleh select_bulk_upload_files() agar tidak dobel upload.
+        if pdf_only and extension != ".pdf":
+            if not (fname.startswith("9. ") and extension in {".doc", ".docx"}):
+                continue
         jenis = None
         for prefix, j in mapping.items():
             if fname.startswith(prefix + " ") or fname == prefix.rstrip(".") + ".pdf":
@@ -1242,6 +1270,47 @@ def scan_folder(folder_path: str, pdf_only: bool = False, workflow: str = "JKK")
         mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
         hasil.append({"path": fpath, "nama": fname, "jenis": jenis, "mime": mime})
     return hasil
+
+
+def select_bulk_upload_files(files: list[dict], pdf_only: bool = True) -> list[dict]:
+    """Pilih dokumen bulk bernomor yang siap dikirim ke kategori SPSE.
+
+    Saat ``pdf_only=False``, perilaku legacy dipertahankan: semua file
+    bernomor yang terdaftar dikembalikan. Saat mode PDF aktif, PDF terbaru
+    diprioritaskan; DOCX hanya fallback untuk List Personil/Alat nomor 9.
+    """
+    if not pdf_only:
+        return [
+            item for item in (files or [])
+            if item.get("jenis") != "nd"
+            and re.match(r"^(?:[1-9]|11|12|13|14|15)\.\s", str(item.get("nama") or ""))
+        ]
+
+    candidates = []
+    for item in files or []:
+        name = str(item.get("nama") or "")
+        if item.get("jenis") == "nd":
+            continue
+        match = re.match(r"^(\d+)\.\s", name)
+        if not match or int(match.group(1)) not in set(range(1, 10)) | {11, 12, 13, 14, 15}:
+            continue
+        extension = os.path.splitext(name)[1].lower()
+        if extension == ".pdf":
+            priority = 0
+        elif match.group(1) == "9" and extension in {".doc", ".docx"}:
+            priority = 1
+        else:
+            continue
+        try:
+            modified_ns = os.stat(item.get("path", "")).st_mtime_ns
+        except (OSError, TypeError, ValueError):
+            modified_ns = 0
+        candidates.append((int(match.group(1)), priority, -modified_ns, name.casefold(), item))
+
+    selected = {}
+    for number, priority, newest_key, name_key, item in sorted(candidates, key=lambda row: row[:4]):
+        selected.setdefault(number, (priority, newest_key, name_key, item))
+    return [selected[number][3] for number in sorted(selected)]
 
 
 def list_subfolder_ppk(workflow: str = "JKK") -> list[str]:
@@ -1439,17 +1508,17 @@ def upload_dokumen_dari_folder(
     pdf_only: bool = False,
     workflow: str = "JKK",
 ) -> dict:
-    """Pilih PP lalu upload dokumen PPK 1-9/11; Nota Dinas dikecualikan."""
-    files = [
-        f for f in scan_folder(folder_path, pdf_only=pdf_only, workflow=workflow)
-        if re.match(r"^(?:[1-9]|11)\.\s", f["nama"]) and f["jenis"] != "nd"
-    ]
+    """Pilih PP lalu upload dokumen PPK 1-9/11-15; Nota Dinas dikecualikan."""
+    files = select_bulk_upload_files(
+        scan_folder(folder_path, pdf_only=pdf_only, workflow=workflow),
+        pdf_only=pdf_only,
+    )
     if not files:
         return {
             "results": [],
             "total_ok": 0,
             "total_err": 0,
-            "error": "Tidak ada dokumen bernomor 1-9/11 (selain Nota Dinas) yang cocok di folder ini.",
+            "error": "Tidak ada dokumen bernomor 1-9/11-15 (selain Nota Dinas) yang cocok di folder ini.",
         }
 
     def _log(msg):

@@ -1,3 +1,5 @@
+import os
+
 import ppk_upload_engine as engine
 from unittest.mock import patch
 
@@ -95,12 +97,86 @@ def test_empty_registry_environment_override_uses_shared_default(monkeypatch):
     assert engine._ppk_workflow_registry_path() == engine.PPK_WORKFLOW_REGISTRY_PATH
 
 
-def test_pk_mapping_does_not_inherit_consultancy_files():
+def test_pk_mapping_includes_contract_and_kak_documents():
     mapping = engine.ppk_workflow_config("PK")["mapping"]
     assert "3." in mapping
-    assert "4." not in mapping
-    assert "5." not in mapping
-    assert "6." not in mapping
+    assert mapping["4."] == "kontrak"
+    assert mapping["5."] == "kontrak"
+    assert mapping["6."] == "kontrak"
+    assert mapping["9."] == "kak"
+    assert mapping["12."] == "kak"
+    assert mapping["13."] == "kak"
+    assert mapping["14."] == "kak"
+    assert mapping["15."] == "kak"
+
+
+def test_jkk_mapping_includes_personil_and_manual_specification_in_kak():
+    mapping = engine.ppk_workflow_config("JKK")["mapping"]
+    assert mapping["9."] == "kak"
+    assert mapping["12."] == "kak"
+    assert mapping["13."] == "kak"
+    assert mapping["14."] == "kak"
+    assert mapping["15."] == "kak"
+
+
+def test_scan_folder_pdf_mode_keeps_personil_docx_and_spec_pdf(tmp_path):
+    (tmp_path / "9. List_Personil_Alat.docx").write_bytes(b"docx")
+    (tmp_path / "12. Spesifikasi Teknis.pdf").write_bytes(b"pdf")
+    (tmp_path / "13. Gambar.pdf").write_bytes(b"pdf")
+    (tmp_path / "14. RK3.pdf").write_bytes(b"pdf")
+    (tmp_path / "15. TKDN.pdf").write_bytes(b"pdf")
+    (tmp_path / "10. Survey Pasar.pdf").write_bytes(b"pdf")
+
+    files = engine.scan_folder(str(tmp_path), pdf_only=True, workflow="PK")
+    names = {item["nama"] for item in files}
+    assert "9. List_Personil_Alat.docx" in names
+    assert "12. Spesifikasi Teknis.pdf" in names
+    assert "13. Gambar.pdf" in names
+    assert "14. RK3.pdf" in names
+    assert "15. TKDN.pdf" in names
+    assert "10. Survey Pasar.pdf" not in names
+
+
+def test_windows_long_path_helper_adds_extended_prefix():
+    if os.name != "nt":
+        return
+    path = "C:\\" + ("nested\\" * 40) + "9. List_Personil_Alat.pdf"
+    resolved = engine._windows_filesystem_path(path)
+    assert resolved.startswith("\\\\?\\")
+    assert resolved.endswith("9. List_Personil_Alat.pdf")
+
+
+def test_bulk_upload_selection_prefers_pdf_but_falls_back_to_personil_docx():
+    files = [
+        {"nama": "9. List_Personil_Alat.docx", "jenis": "kak", "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        {"nama": "9. List_Personil_Alat.pdf", "jenis": "kak", "mime": "application/pdf"},
+        {"nama": "12. Spesifikasi Teknis.pdf", "jenis": "kak", "mime": "application/pdf"},
+        {"nama": "13. Gambar.pdf", "jenis": "kak", "mime": "application/pdf"},
+        {"nama": "14. RK3.pdf", "jenis": "kak", "mime": "application/pdf"},
+        {"nama": "15. TKDN.pdf", "jenis": "kak", "mime": "application/pdf"},
+    ]
+    selected = engine.select_bulk_upload_files(files)
+    assert [item["nama"] for item in selected] == [
+        "9. List_Personil_Alat.pdf",
+        "12. Spesifikasi Teknis.pdf",
+        "13. Gambar.pdf",
+        "14. RK3.pdf",
+        "15. TKDN.pdf",
+    ]
+
+    selected = engine.select_bulk_upload_files(files[:1])
+    assert [item["nama"] for item in selected] == ["9. List_Personil_Alat.docx"]
+
+
+def test_bulk_upload_selection_preserves_legacy_non_pdf_mode():
+    files = [
+        {"nama": "1. KAK.docx", "jenis": "kak", "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        {"nama": "2. Uraian Singkat.xlsx", "jenis": "uraian", "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ]
+    assert [item["nama"] for item in engine.select_bulk_upload_files(files, pdf_only=False)] == [
+        "1. KAK.docx",
+        "2. Uraian Singkat.xlsx",
+    ]
 
 
 def test_auto_match_folder_accepts_workflow_argument():

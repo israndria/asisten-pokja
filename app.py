@@ -1476,7 +1476,7 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
         if _ppk_col2.button("🔄 Refresh", key="btn_refresh_paket_ppk", use_container_width=True):
             # Hapus semua cache bulk + cache paket PPK
             for _k in list(st.session_state.keys()):
-                if _k.startswith(("ppk_versi_", "ppk_bulk", "ppk_detail_", "ppk_dpa_")):
+                if _k.startswith(("ppk_versi_", "ppk_bulk", "ppk_detail_", "ppk_dpa_", "ppk_folder_preview_cache")):
                     del st.session_state[_k]
             _load_paket_ppk.clear()
             st.rerun()
@@ -1497,6 +1497,20 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
         # Cache lokal satu render: root folder tiap family cukup discan sekali.
         _ppk_folder_cache = {}
 
+        def _ppk_folder_fingerprint(_folder):
+            """Fingerprint file folder agar edit isi terdeteksi tanpa baca ulang bytes."""
+            try:
+                _entries = []
+                with os.scandir(_folder) as _scan:
+                    for _entry in _scan:
+                        if not _entry.is_file():
+                            continue
+                        _stat = _entry.stat()
+                        _entries.append((_entry.name, _stat.st_size, _stat.st_mtime_ns))
+                return tuple(sorted(_entries))
+            except OSError:
+                return None
+
         _UPLOAD_SECTIONS = [
             {"key": "kak",     "label": "KAK / Spesifikasi",   "icon": "📄", "accept": ["doc","docx","xls","xlsx","pdf","jpg","jpeg","png","zip","rar"], "required": True},
             {"key": "kontrak", "label": "Rancangan Kontrak",    "icon": "📋", "accept": ["pdf"], "required": True},
@@ -1505,7 +1519,49 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
 
-        # ── Semua paket tampil sekaligus (dokumen dimuat lazy per paket) ───────────
+        # Satu CDP call untuk seluruh paket, bukan empat fetch serial per
+        # paket. Isi tetap disimpan per paket agar rerun saat memilih file
+        # tidak mengulang network request.
+        import hashlib as _hashlib
+        _bulk_codes = [str(_row.get("kode_paket") or "") for _row in _paket_list]
+        _bulk_codes = [code for code in _bulk_codes if code]
+        _bulk_signature = _hashlib.sha1(
+            "|".join(_bulk_codes).encode("utf-8")
+        ).hexdigest()[:12]
+        _bulk_batch_key = f"ppk_bulk_batch_{_ppk_selected_workflow}_{_bulk_signature}"
+        if _bulk_batch_key not in st.session_state:
+            with st.spinner("Memuat status dokumen PPK..."):
+                _bulk_all_docs = _ppk_up.list_bulk_semua_paket(_bulk_codes)
+            _bulk_all_valid = (
+                isinstance(_bulk_all_docs, dict)
+                and bool(_bulk_all_docs)
+                and all(
+                    isinstance(_bulk_all_docs.get(_code), dict)
+                    for _code in _bulk_codes
+                )
+            )
+            if not _bulk_all_valid:
+                st.warning(
+                    "Status dokumen existing belum terbaca. Upload tetap bisa "
+                    "dijalankan; status akan dicoba per paket."
+                )
+            for _bulk_code in _bulk_codes:
+                _bulk_docs = (
+                    _bulk_all_docs.get(_bulk_code)
+                    if isinstance(_bulk_all_docs, dict)
+                    else None
+                )
+                if not isinstance(_bulk_docs, dict):
+                    _bulk_docs = _ppk_up.list_semua_dokumen(_bulk_code)
+                if not isinstance(_bulk_docs, dict):
+                    _bulk_docs = {}
+                for _bulk_jenis in ("kak", "kontrak", "uraian", "lainnya"):
+                    st.session_state[f"ppk_versi_{_bulk_code}_{_bulk_jenis}"] = list(
+                        _bulk_docs.get(_bulk_jenis, []) or []
+                    )
+            st.session_state[_bulk_batch_key] = True
+
+        # ── Semua paket tampil sekaligus; status existing sudah dibatch di atas ──
         for _pi, _pk in enumerate(_paket_list, start=1):
             _kode = _pk["kode_paket"]
             _nama = _pk["nama_paket"]
@@ -1551,14 +1607,6 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                         _ppk_cfg = _ppk_up.ppk_workflow_config(_ppk_workflow)
                         st.info(f"Dipilih manual: {_ppk_cfg['label']}")
 
-                # ── Bulk load dokumen existing (1 subprocess, 4 endpoint) ───
-                _bulk_key = f"ppk_bulk_{_kode}"
-                if _bulk_key not in st.session_state:
-                    _bulk = _ppk_up.list_semua_dokumen(_kode)
-                    for _jenis_b, _docs_b in _bulk.items():
-                        st.session_state[f"ppk_versi_{_kode}_{_jenis_b}"] = _docs_b
-                    st.session_state[_bulk_key] = True
-
                 # ── Hapus Semua ─────────────────────────────────────────────
                 _hcol1, _hcol2 = st.columns([5, 1])
                 if _hcol2.button("🗑️ Hapus Semua", key=f"hapus_semua_{_kode}",
@@ -1584,7 +1632,6 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                         for _sec2 in _UPLOAD_SECTIONS:
                             _vk2 = f"ppk_versi_{_kode}_{_sec2['key']}"
                             if _vk2 in st.session_state: del st.session_state[_vk2]
-                        if _bulk_key in st.session_state: del st.session_state[_bulk_key]
                         st.toast(f"✅ {_total_hapus} dokumen dihapus", icon="🗑️")
                     else:
                         st.warning(f"⚠️ {_total_hapus} dihapus, {_total_err} gagal")
@@ -1596,7 +1643,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                 _subfolder_list = _ppk_folders_info
                 _auto_match     = _ppk_up.auto_match_folder(_nama, _subfolder_list, workflow=_ppk_workflow) if _ppk_workflow else None
 
-                if st.checkbox("📁 Upload dari Folder", key=f"chk_folder_{_kode}"):
+                # Mode folder selalu tersedia; user langsung memilih salah satu
+                # dari dua cara input tanpa checklist tambahan.
+                _folder_upload_enabled = True
+                if _folder_upload_enabled:
                     with st.container(border=True):
                         _input_mode = st.radio(
                             "Cara pilih folder:",
@@ -1652,24 +1702,64 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     "memakai folder legacy paket."
                                 )
 
-                            _preview = _ppk_up.scan_folder(_selected_folder, pdf_only=True, workflow=_ppk_workflow)
+                            _preview_cache = st.session_state.setdefault(
+                                "ppk_folder_preview_cache", {}
+                            )
+                            _folder_fingerprint = _ppk_folder_fingerprint(_selected_folder)
+                            _cached_preview = _preview_cache.get(_selected_folder)
+                            if (
+                                _cached_preview
+                                and _cached_preview.get("fingerprint") == _folder_fingerprint
+                            ):
+                                _preview = _cached_preview.get("files", [])
+                            else:
+                                _preview = _ppk_up.scan_folder(
+                                    _selected_folder,
+                                    pdf_only=True,
+                                    workflow=_ppk_workflow,
+                                )
+                                _preview_cache[_selected_folder] = {
+                                    "fingerprint": _folder_fingerprint,
+                                    "files": _preview,
+                                }
                             if _preview:
                                 _JENIS_LABEL = {"kak": "KAK / Spesifikasi", "uraian": "Uraian Singkat", "kontrak": "Rancangan Kontrak", "lainnya": "Informasi Lainnya", "nd": "Nota Dinas PPK"}
-                                _doc_files = [
-                                    p for p in _preview
-                                    if re.match(r"^(?:[1-9]|11)\.\s", p["nama"]) and p["jenis"] != "nd"
-                                ]
+                                _doc_files = _ppk_up.select_bulk_upload_files(_preview)
                                 _nd_files = [p for p in _preview if p["jenis"] == "nd"]
                                 _other_files = [
                                     p for p in _preview
                                     if p not in _doc_files and p not in _nd_files
                                 ]
                                 st.markdown("**Preview file terdeteksi:**")
-                                for _pf in _preview:
-                                    st.markdown(f"- `{_pf['nama']}` → **{_JENIS_LABEL.get(_pf['jenis'], _pf['jenis'])}**")
+                                _preview_groups = {}
+                                _preview_sorted = sorted(
+                                    _preview,
+                                    key=lambda _item: (
+                                        int(_match.group(1))
+                                        if (_match := re.match(r"^(\d+)\.\s", str(_item.get("nama") or "")))
+                                        else 999,
+                                        str(_item.get("nama") or "").casefold(),
+                                    ),
+                                )
+                                for _pf in _preview_sorted:
+                                    _preview_groups.setdefault(_pf["jenis"], []).append(_pf["nama"])
+                                _preview_order = ("kak", "kontrak", "uraian", "lainnya", "nd")
+                                for _jenis_preview in _preview_order:
+                                    _names_preview = _preview_groups.get(_jenis_preview, [])
+                                    if not _names_preview:
+                                        continue
+                                    _joined_preview = ", ".join(f"`{_name}`" for _name in _names_preview)
+                                    st.markdown(
+                                        f"- {_joined_preview} → **{_JENIS_LABEL.get(_jenis_preview, _jenis_preview)}**"
+                                    )
+                                for _jenis_preview, _names_preview in _preview_groups.items():
+                                    if _jenis_preview in _preview_order:
+                                        continue
+                                    _joined_preview = ", ".join(f"`{_name}`" for _name in _names_preview)
+                                    st.markdown(f"- {_joined_preview} → **{_JENIS_LABEL.get(_jenis_preview, _jenis_preview)}**")
 
                                 if _doc_files:
-                                    st.caption(f"{len(_doc_files)} dokumen nomor 1-9/11 (tanpa Nota Dinas) siap diupload")
+                                    st.caption(f"{len(_doc_files)} dokumen nomor 1-9/11-15 (tanpa Nota Dinas) siap diupload")
                                 if _other_files:
                                     st.caption(f"⏭ {len(_other_files)} file lain (mis. nomor 10) tidak ikut upload bulk")
                                 if st.button(
@@ -1734,7 +1824,7 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                             else:
                                                 st.error(_nd_res.get("error", "Flow Nota Dinas gagal."))
                             else:
-                                st.info("Tidak ada file PDF yang cocok di folder ini.")
+                                st.info("Tidak ada file yang cocok di folder ini.")
 
                 # 4 tab per paket
                 _tab_labels = [f"{s['icon']} {s['label']}{' *' if s['required'] else ''}" for s in _UPLOAD_SECTIONS]
