@@ -35,6 +35,8 @@ if not hasattr(_builtins_sb, "_spse_cdp_state"):
     _builtins_sb._spse_cdp_state = {"pw": None, "context": None, "page": None}
 if not hasattr(_builtins_sb, "_spse_loop_state"):
     _builtins_sb._spse_loop_state = {"loop": None, "thread": None}
+if not hasattr(_builtins_sb, "_spse_restore_state"):
+    _builtins_sb._spse_restore_state = {"signature": None}
 
 def _get_pw():      return _builtins_sb._spse_cdp_state["pw"]
 def _set_pw(v):     _builtins_sb._spse_cdp_state["pw"] = v
@@ -372,6 +374,51 @@ def rapikan_tab_spse():
     if _get_ctx() is None:
         return None
     return _run(_rapikan_tab_spse_async(), timeout=20)
+
+
+def _spse_tabs_signature(tabs: list[dict]) -> tuple[tuple[str, str], ...]:
+    """Fingerprint ringan URL+title tab untuk mencegah cleanup berulang."""
+    return tuple(sorted(
+        (str(tab.get("url") or ""), str(tab.get("title") or ""))
+        for tab in tabs or []
+    ))
+
+
+def ensure_spse_restore_cleaned() -> dict:
+    """Bersihkan tab error hasil restore Brave satu kali per snapshot.
+
+    Brave dapat memulihkan tab lama sebelum user menekan tombol login. Fungsi
+    ini sengaja tidak menutup tab jika hanya tab error yang tersedia; pipeline
+    login tetap membutuhkan tab tersebut sebagai konteks awal. Jika snapshot
+    tab berubah, cleanup dicoba ulang (termasuk setelah Brave direstart).
+    """
+    if not _cek_cdp_aktif():
+        return {"ok": False, "skipped": True, "reason": "cdp_inactive"}
+
+    tabs_before = _cdp_tabs(force=True)
+    if not tabs_before:
+        return {"ok": False, "skipped": True, "reason": "no_tabs"}
+
+    state = _builtins_sb._spse_restore_state
+    signature_before = _spse_tabs_signature(tabs_before)
+    if state.get("signature") == signature_before:
+        return {"ok": True, "skipped": True, "reason": "same_snapshot"}
+
+    try:
+        # Reconnect tanpa navigasi agar cleanup juga bekerja setelah Brave
+        # direstart sementara proses Streamlit masih hidup.
+        buka_browser(navigate=False)
+        selected = rapikan_tab_spse()
+        tabs_after = _cdp_tabs(force=True)
+        state["signature"] = _spse_tabs_signature(tabs_after)
+        return {
+            "ok": True,
+            "skipped": False,
+            "url": getattr(selected, "url", "") if selected else "",
+        }
+    except Exception as exc:
+        # Jangan menyimpan signature saat gagal; rerun berikutnya harus retry.
+        return {"ok": False, "skipped": False, "reason": str(exc)[:240]}
 
 
 # File/folder yang di-clone dari profil asli (tanpa cache)

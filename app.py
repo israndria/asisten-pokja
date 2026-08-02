@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
-from ui_state import activate_mode
+from ui_state import activate_mode, invalidate_ppk_session_state
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
@@ -809,6 +809,17 @@ _login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 
+# Brave dapat me-restore tab error lama saat laptop baru dinyalakan. Bersihkan
+# otomatis sebelum deteksi role agar tab yang terlihat user bukan stale error.
+# Fingerprint di spse_browser membuat operasi ini idempoten antar-rerun dan
+# tetap retry jika browser baru saja restart.
+try:
+    import spse_browser as _sb_restore
+    if _sb_restore._cek_cdp_aktif():
+        _sb_restore.ensure_spse_restore_cleaned()
+except Exception:
+    pass
+
 # Auto-detect + validasi role dari CDP. Tidak bergantung URL tab aktif karena
 # tab stale/error bisa membuat get_url() kosong walau cookie masih terbaca.
 # Dua probe kosong berturut-turut baru dianggap session putus.
@@ -890,11 +901,17 @@ with _login_popover:
             # Sudah login berhasil
             st.success("Browser terhubung")
             _spse_home = SPSE_BASE_URL.rstrip("/") + "/home"
-            st.markdown(f"[🔗 {_spse_home}]({_spse_home})", unsafe_allow_html=False)
-            if st.button("↗️ Buka SPSE di Brave", use_container_width=True, key="btn_buka_spse_brave"):
+            if _role_label == "PPK":
+                st.caption("PPK memakai tab paket authenticated yang sudah terbuka; route dashboard baru SPSE dapat mengembalikan HTTP 403.")
+            else:
+                st.markdown(f"[🔗 {_spse_home}]({_spse_home})", unsafe_allow_html=False)
+            if st.button("↗️ Fokuskan SPSE di Brave", use_container_width=True, key="btn_buka_spse_brave"):
                 try:
-                    spse_browser.buka_tab_baru(_spse_home)
-                    st.toast("Tab SPSE dibuka di Brave ✅", icon="✅")
+                    spse_browser.buka_browser(navigate=False)
+                    selected = spse_browser.fokuskan_tab_spse()
+                    if selected is None:
+                        raise RuntimeError("Tidak ada tab SPSE authenticated yang dapat difokuskan.")
+                    st.toast("Tab SPSE authenticated difokuskan ✅", icon="✅")
                 except Exception as _e:
                     st.error(str(_e))
             col1, col2 = st.columns(2)
@@ -911,10 +928,10 @@ with _login_popover:
                     spse_browser.tutup_browser()
                     st.session_state.pop("spse_role", None)
                     st.session_state.pop("login_failed", None)
-                    # Bersihkan cache per-role (detail paket + pool DPA) agar tidak nempel saat ganti akun
+                    # Bersihkan state PPK agar tidak nempel saat ganti akun.
+                    invalidate_ppk_session_state()
                     for _k in [k for k in list(st.session_state.keys())
-                               if k.startswith(("ppk_detail_", "ppk_dpa_", "pl_dpa_"))
-                               or k in ("ppk_dpa_pool", "pl_dpa_pool")]:
+                               if k.startswith("pl_dpa_") or k in ("pl_dpa_pool",)]:
                         st.session_state.pop(_k, None)
                     _load_draft_paket_cached.clear()
                     _load_draft_pl_cached.clear()
@@ -951,6 +968,32 @@ with _login_popover:
         _sidebar_login_form()
 
 _spse_role = st.session_state.get("spse_role", None)  # re-sync setelah sidebar logic
+
+
+# Detail PPK harus terikat pada fingerprint sesi, bukan hanya role. Ini
+# menangani ganti akun dengan role sama dan recovery setelah hot-reload.
+_current_spse_identity = None
+if _spse_role in ("PP", "POKJA", "PPK"):
+    try:
+        import spse_login as _sl_session
+        _session_fp = _sl_session.get_spse_session_fingerprint()
+    except Exception:
+        _session_fp = ""
+    if _session_fp:
+        _current_spse_identity = f"{_spse_role}:{_session_fp}"
+
+_previous_spse_identity = st.session_state.get("_spse_session_identity")
+if _current_spse_identity:
+    if _previous_spse_identity != _current_spse_identity:
+        invalidate_ppk_session_state()
+    elif "_spse_session_epoch" not in st.session_state:
+        st.session_state["_spse_session_epoch"] = time.time_ns()
+    st.session_state["_spse_session_identity"] = _current_spse_identity
+elif _previous_spse_identity:
+    invalidate_ppk_session_state()
+    st.session_state.pop("_spse_session_identity", None)
+    st.session_state["_spse_session_epoch"] = time.time_ns()
+
 _PPK_MODE_OPTIONS = ["PPK - Konsultan", "PPK - Pekerjaan Konstruksi"]
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", *_PPK_MODE_OPTIONS]
 if _spse_role == "PP":
@@ -963,6 +1006,224 @@ elif _spse_role == "E-Katalog":
     _MODE_OPTIONS = ["E-Katalog - Survei Pasar"]
 else:
     _MODE_OPTIONS = _ALL_MODES
+
+# ── Preflight PPK: muat paket dan petakan family sebelum mode selector ────────
+# Streamlit berjalan lebih dahulu daripada Excel. Karena itu klasifikasi PPK
+# harus selesai sebelum user memilih submode Konsultan/PK. Hasil preflight
+# dipakai ulang di blok PPK di bawah; tidak ada fetch SPSE kedua.
+if _spse_role == "PPK":
+    import ppk_upload_engine as _ppk_up
+    import dpa_engine as _dpa_match  # cari_dpa_di_pool / load_pool_dpa
+
+    _PPK_STRIP = [
+        # Prefix rekening/modal yang sama pada paket konstruksi. Hapus hanya
+        # label kategorinya agar objek pekerjaan tetap terlihat di UI.
+        "Modal Bangunan Gedung Pertokoan/Koperasi/Pasar ",
+        "Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur Lainnya ",
+        "Belanja Jasa Konsultansi Perencanaan Rekayasa-Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan ",
+        "Belanja Jasa Konsultansi Perencanaan Rekayasa-",
+        "Belanja Jasa Konsultansi Perencanaan Arsitektur-",
+        "Belanja Jasa Konsultansi Perencanaan ",
+        "Belanja Jasa Konsultansi ",
+        "Belanja Jasa ",
+        "Belanja ",
+    ]
+
+    # Registry berbasis kode paket menjadi sumber utama agar nomenklatur
+    # rekening/judul tidak menipu.
+    _ppk_workflow_registry = _ppk_up.load_ppk_workflow_registry()
+
+    def _nama_singkat(nama: str) -> str:
+        for pfx in _PPK_STRIP:
+            if nama.startswith(pfx):
+                return nama[len(pfx):]
+        return nama
+
+    def _resolve_ppk_package(_pk: dict) -> tuple[dict, dict]:
+        """Gabungkan row SPSE + detail dan resolve family JKK/PK."""
+        _kode0 = _pk.get("kode_paket", "")
+        _meta0 = dict(_pk)
+        _meta0.update(
+            _ppk_preflight_details.get(str(_kode0) or "") or {}
+        )
+        _meta0.update(st.session_state.get(f"ppk_detail_{_kode0}") or {})
+        return _meta0, _ppk_up.resolve_ppk_workflow(
+            _meta0, registry=_ppk_workflow_registry
+        )
+
+    if "_spse_session_epoch" not in st.session_state:
+        # Cache PPK harus berubah saat Streamlit session/browser session baru.
+        # Nilai ini tidak berisi credential dan hanya hidup di session_state.
+        st.session_state["_spse_session_epoch"] = time.time_ns()
+
+    class _PpkAuthError(RuntimeError):
+        """Fetch PPK menerima 401/403; jangan tampilkan sebagai 0 paket."""
+
+    class _PpkFetchError(RuntimeError):
+        """Endpoint daftar paket gagal selain karena session invalid."""
+
+        def __init__(self, state: dict):
+            self.state = dict(state or {})
+            status = self.state.get("status") or self.state.get("reason") or "unknown"
+            super().__init__(f"Gagal membaca daftar paket SPSE ({status}).")
+
+    @st.cache_data(ttl=120)
+    def _load_paket_ppk(role_key=None, session_epoch=0):
+        _rows = _ppk_up.fetch_paket_ppk()
+        _state = _ppk_up.get_ppk_fetch_state()
+        if _state.get("reason") == "auth_error":
+            # Exception tidak disimpan st.cache_data. Jadi 403 tidak menjadi
+            # cache kosong yang terus dipakai setelah user login ulang.
+            raise _PpkAuthError(
+                f"Sesi SPSE tidak valid (HTTP {_state.get('status')})."
+            )
+        if _state.get("reason") != "ok":
+            # 500 berupa halaman error server SPSE, bukan daftar kosong.
+            raise _PpkFetchError(_state)
+        return _rows, _state
+
+    def _load_ppk_preflight() -> tuple[list[dict], dict, list[dict]]:
+        """Load daftar/detail sekali dan kembalikan paket yang belum dipetakan."""
+        try:
+            _all_rows, _fetch_state = _load_paket_ppk(
+                role_key=st.session_state.get("spse_role"),
+                session_epoch=st.session_state.get("_spse_session_epoch", 0),
+            )
+        except _PpkAuthError:
+            # Jangan tampilkan 0 paket ketika session SPSE invalid. Tutup
+            # browser stale agar rerun menampilkan form login yang bersih.
+            invalidate_ppk_session_state()
+            st.session_state.pop("spse_role", None)
+            st.session_state.pop("_cdp_role_miss_count", None)
+            st.session_state["header_login_role"] = "PPK"
+            st.session_state["selected_login_role"] = "PPK"
+            st.session_state.pop("login_failed", None)
+            st.session_state.pop("login_failed_role", None)
+            st.session_state["_spse_relogin_reason"] = (
+                "Sesi SPSE PPK sudah kedaluwarsa/ditolak (HTTP 401/403). "
+                "Silakan login ulang."
+            )
+            try:
+                import spse_browser as _sb_invalid
+                _sb_invalid.tutup_browser()
+            except Exception:
+                pass
+            _load_paket_ppk.clear()
+            st.rerun(scope="app")
+        except _PpkFetchError as _fetch_exc:
+            _status = _fetch_exc.state.get("status") or _fetch_exc.state.get("reason")
+            st.error(
+                f"Daftar paket PPK belum dapat dibaca dari SPSE (status: {_status}). "
+                "Ini bukan berarti paket berjumlah 0."
+            )
+            if st.button("🔄 Coba baca ulang daftar paket", key="ppk_retry_fetch_error"):
+                _load_paket_ppk.clear()
+                st.rerun(scope="app")
+            st.stop()
+
+        _missing = [
+            p for p in _all_rows
+            if f"ppk_detail_{p.get('kode_paket', '')}" not in st.session_state
+        ]
+        if _missing:
+            with st.status(
+                f"Memuat family {len(_missing)} paket dari SPSE...",
+                expanded=False,
+            ) as _st_family:
+                _family_done = 0
+                with ThreadPoolExecutor(max_workers=4) as _ex_family:
+                    _futs_family = {
+                        _ex_family.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p
+                        for p in _missing
+                    }
+                    for _fut_family in as_completed(_futs_family):
+                        _family_done += 1
+                        _p_family = _futs_family[_fut_family]
+                        try:
+                            st.session_state[
+                                f"ppk_detail_{_p_family['kode_paket']}"
+                            ] = _fut_family.result()
+                        except Exception:
+                            st.session_state[
+                                f"ppk_detail_{_p_family['kode_paket']}"
+                            ] = {}
+                        _st_family.update(
+                            label=f"Memuat family {_family_done}/{len(_missing)}..."
+                        )
+                _st_family.update(
+                    label=f"✅ Metadata {len(_all_rows)} paket selesai",
+                    state="complete",
+                )
+
+        _details = {
+            str(p.get("kode_paket") or ""): st.session_state.get(
+                f"ppk_detail_{p.get('kode_paket', '')}", {}
+            )
+            for p in _all_rows
+        }
+        _unresolved_packages = []
+        for _p in _all_rows:
+            _p_meta = {**_p, **(_details.get(str(_p.get("kode_paket") or "")) or {})}
+            if not _ppk_up.resolve_ppk_workflow(
+                _p_meta, registry=_ppk_workflow_registry
+            ).get("workflow"):
+                _unresolved_packages.append(_p)
+        return _all_rows, _details, _unresolved_packages
+
+    (
+        _ppk_preflight_rows,
+        _ppk_preflight_details,
+        _ppk_preflight_unresolved,
+    ) = _load_ppk_preflight()
+
+    if _ppk_preflight_unresolved:
+        _ppk_unresolved_count = len(_ppk_preflight_unresolved)
+        with st.expander(
+            f"⚠️ Pemetaan jenis paket diperlukan ({_ppk_unresolved_count})",
+            expanded=True,
+        ):
+            st.info(
+                "Paket belum dipetakan otomatis dari metadata SPSE. "
+                "Pilih jenis berdasarkan substansi paket; pilihan disimpan "
+                "berdasarkan kode paket dan tidak perlu diulang."
+            )
+            with st.form("ppk_workflow_mapping_form"):
+                _ppk_mapping_choices = {}
+                for _map_i, _map_row in enumerate(_ppk_preflight_unresolved):
+                    _map_code = str(_map_row.get("kode_paket") or "")
+                    _map_name = str(_map_row.get("nama_paket") or "")
+                    _map_col1, _map_col2 = st.columns([5, 2])
+                    _map_col1.caption(f"{_map_code} — {_map_name}")
+                    _ppk_mapping_choices[_map_code] = _map_col2.selectbox(
+                        "Jenis",
+                        ["PILIH", "PK", "JKK"],
+                        key=f"ppk_workflow_choice_{_map_code}_{_map_i}",
+                    )
+                _map_submit = st.form_submit_button(
+                    "💾 Simpan Pemetaan", type="primary", use_container_width=True
+                )
+            if _map_submit:
+                _map_saved = 0
+                _map_registry = dict(_ppk_workflow_registry)
+                for _map_code, _map_workflow in _ppk_mapping_choices.items():
+                    if _map_workflow in ("PK", "JKK"):
+                        _map_registry[_map_code] = _map_workflow
+                        _map_saved += 1
+                if _map_saved:
+                    try:
+                        _ppk_up.save_ppk_workflow_registry(_map_registry)
+                    except OSError as _map_exc:
+                        st.error(
+                            "Registry tidak dapat disimpan. Pastikan folder V2 "
+                            f"tersedia dan tidak read-only: {_map_exc}"
+                        )
+                    else:
+                        st.success(f"{_map_saved} pemetaan tersimpan.")
+                        st.rerun(scope="app")
+                else:
+                    st.warning("Pilih minimal satu jenis paket sebelum menyimpan.")
+        # Selector mode tidak boleh tampil sebelum seluruh paket baru dipetakan.
+        st.stop()
 
 if _spse_role:
     if "app_mode" not in st.session_state:
@@ -1043,45 +1304,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
     # ============================================================
     # MODE: PPK — Konsultan / Pekerjaan Konstruksi
     # ============================================================
-    import ppk_upload_engine as _ppk_up
-
     # ── Cek login PPK ────────────────────────────────────────────────────────
     if st.session_state.get("spse_role") != "PPK":
         st.warning("⚠️ Browser belum login sebagai PPK. Login via sidebar terlebih dahulu.")
         st.stop()
-
-    _PPK_STRIP = [
-        # Prefix rekening/modal yang sama pada paket konstruksi. Hapus hanya
-        # label kategorinya agar objek pekerjaan tetap terlihat di UI.
-        "Modal Bangunan Gedung Pertokoan/Koperasi/Pasar ",
-        "Belanja Jasa Konsultansi Perencanaan Arsitektur-Jasa Arsitektur Lainnya ",
-        "Belanja Jasa Konsultansi Perencanaan Rekayasa-Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan ",
-        "Belanja Jasa Konsultansi Perencanaan Rekayasa-",
-        "Belanja Jasa Konsultansi Perencanaan Arsitektur-",
-        "Belanja Jasa Konsultansi Perencanaan ",
-        "Belanja Jasa Konsultansi ",
-        "Belanja Jasa ",
-        "Belanja ",
-    ]
-
-    import dpa_engine as _dpa_match  # cari_dpa_di_pool / load_pool_dpa
-
-    def _nama_singkat(nama: str) -> str:
-        for pfx in _PPK_STRIP:
-            if nama.startswith(pfx):
-                return nama[len(pfx):]
-        return nama
-
-    def _resolve_ppk_package(_pk: dict) -> tuple[dict, dict]:
-        """Gabungkan row SPSE + detail dan resolve family JKK/PK."""
-        _kode0 = _pk.get("kode_paket", "")
-        _meta0 = dict(_pk)
-        _meta0.update(st.session_state.get(f"ppk_detail_{_kode0}") or {})
-        return _meta0, _ppk_up.resolve_ppk_workflow(_meta0)
-
-    @st.cache_data(ttl=120)
-    def _load_paket_ppk(_role_key=None):
-        return _ppk_up.fetch_paket_ppk()
 
     _ppk_mode_cfg = _ppk_up.ppk_mode_config(st.session_state["app_mode"])
     _ppk_selected_workflow = _ppk_mode_cfg["workflow"]
@@ -1090,55 +1316,15 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
         f"paket hanya family **{_ppk_selected_workflow}**"
     )
 
-    def _load_ppk_mode_packages() -> tuple[list[dict], int, int]:
-        """Muat metadata family sekali, lalu filter paket sesuai submode aktif."""
-        _all_rows = _load_paket_ppk(_role_key=st.session_state.get("spse_role"))
-        _missing = [
-            p for p in _all_rows
-            if f"ppk_detail_{p.get('kode_paket', '')}" not in st.session_state
-        ]
-        if _missing:
-            with st.status(
-                f"Memuat family {len(_missing)} paket dari SPSE...",
-                expanded=False,
-            ) as _st_family:
-                _family_done = 0
-                with ThreadPoolExecutor(max_workers=4) as _ex_family:
-                    _futs_family = {
-                        _ex_family.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p
-                        for p in _missing
-                    }
-                    for _fut_family in as_completed(_futs_family):
-                        _family_done += 1
-                        _p_family = _futs_family[_fut_family]
-                        try:
-                            st.session_state[f"ppk_detail_{_p_family['kode_paket']}"] = _fut_family.result()
-                        except Exception:
-                            st.session_state[f"ppk_detail_{_p_family['kode_paket']}"] = {}
-                        _st_family.update(label=f"Memuat family {_family_done}/{len(_missing)}...")
-                _st_family.update(
-                    label=f"✅ Metadata {len(_all_rows)} paket selesai",
-                    state="complete",
-                )
-
-        _details = {
-            str(p.get("kode_paket") or ""): st.session_state.get(
-                f"ppk_detail_{p.get('kode_paket', '')}", {}
-            )
-            for p in _all_rows
-        }
-        _filtered = _ppk_up.filter_paket_ppk_by_workflow(
-            _all_rows, _ppk_selected_workflow, _details
-        )
-        _unresolved = sum(
-            1 for p in _all_rows
-            if not _ppk_up.resolve_ppk_workflow(
-                {**p, **(_details.get(str(p.get("kode_paket") or "")) or {})}
-            ).get("workflow")
-        )
-        return _filtered, _unresolved, len(_all_rows)
-
-    _ppk_mode_packages, _ppk_unresolved_count, _ppk_total_count = _load_ppk_mode_packages()
+    _ppk_mode_packages = _ppk_up.filter_paket_ppk_by_workflow(
+        _ppk_preflight_rows,
+        _ppk_selected_workflow,
+        _ppk_preflight_details,
+        registry=_ppk_workflow_registry,
+    )
+    _ppk_unresolved_packages = []
+    _ppk_total_count = len(_ppk_preflight_rows)
+    _ppk_unresolved_count = 0
 
     _ppk_tab1, _ppk_tab2, _ppk_tab3 = st.tabs([
         "1️⃣ Info Paket",
@@ -1164,34 +1350,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                 f"metadata belum terdefinisi: {_ppk_unresolved_count}."
             )
             if st.button("🔄 Refresh Paket", key="ppk_refresh_empty"):
-                for _k in list(st.session_state.keys()):
-                    if _k.startswith(("ppk_detail_", "ppk_dpa_")):
-                        del st.session_state[_k]
+                invalidate_ppk_session_state()
                 _load_paket_ppk.clear()
                 st.rerun()
         else:
-            # Auto-load detail yang belum ada di session_state
-            _missing = [p for p in _info_list if f"ppk_detail_{p['kode_paket']}" not in st.session_state]
-            if _missing:
-                _hcol1, _hcol2 = st.columns([3, 2])
-                _hcol1.markdown("## ℹ️ Info Paket PPK")
-                with _hcol2:
-                    with st.status(f"Memuat {len(_missing)} paket...", expanded=False) as _st:
-                        from concurrent.futures import ThreadPoolExecutor, as_completed
-                        with ThreadPoolExecutor(max_workers=4) as _ex:
-                            _futs = {_ex.submit(_ppk_up.fetch_detail_paket, p["kode_paket"]): p for p in _missing}
-                            _done = 0
-                            for _fut in as_completed(_futs, timeout=120):
-                                _done += 1
-                                _p = _futs[_fut]
-                                _st.update(label=f"[{_done}/{len(_missing)}] selesai...")
-                                try:
-                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = _fut.result()
-                                except Exception:
-                                    st.session_state[f"ppk_detail_{_p['kode_paket']}"] = {}
-                        _st.update(label=f"✅ {len(_missing)} paket dimuat", state="complete")
-            else:
-                st.markdown("## ℹ️ Info Paket PPK")
+            # Detail sudah dimuat oleh preflight. Retry hanya lewat tombol
+            # manual di dalam expander bila satu detail gagal.
+            st.markdown("## ℹ️ Info Paket PPK")
 
             _n_loaded = sum(1 for p in _info_list if ("ppk_detail_" + p["kode_paket"]) in st.session_state)
             st.caption(f"{len(_info_list)} paket · {_n_loaded} detail tersedia")
@@ -1349,13 +1514,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             _ppk_meta, _ppk_resolved = _resolve_ppk_package(_pk)
             _ppk_workflow = _ppk_resolved.get("workflow")
             if not _ppk_workflow:
-                # Metadata detail belum termuat di sesi ini; jangan menebak
-                # dari nama. User hanya boleh melanjutkan lewat konfirmasi.
-                _ppk_detail_lazy = _ppk_up.fetch_detail_paket(_kode)
-                if _ppk_detail_lazy:
-                    st.session_state[f"ppk_detail_{_kode}"] = _ppk_detail_lazy
-                    _ppk_meta, _ppk_resolved = _resolve_ppk_package(_pk)
-                    _ppk_workflow = _ppk_resolved.get("workflow")
+                # Preflight adalah satu-satunya fetch otomatis. Jika mapping
+                # belum ada, jangan diam-diam fetch ulang dari Upload.
+                st.warning(
+                    "Family paket belum dipetakan. Kembali ke preflight dan "
+                    "simpan pilihan PK/JKK terlebih dahulu."
+                )
+                continue
             _ppk_cfg = _ppk_up.ppk_workflow_config(_ppk_workflow) if _ppk_workflow else None
             _ppk_family_key = _ppk_workflow or "UNKNOWN"
             if _ppk_family_key not in _ppk_folder_cache:

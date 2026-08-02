@@ -5,6 +5,7 @@ ppk_upload_engine.py — Engine upload dokumen persiapan pengadaan untuk role PP
 import json
 import re
 import os
+import tempfile
 import urllib.request
 import requests
 from bs4 import BeautifulSoup
@@ -17,6 +18,12 @@ _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
 
 _cdp_eval_lock = __import__("threading").Lock()
 _CDP_PORT = 9222
+_PPK_FETCH_STATE = {"ok": False, "status": None, "reason": "not_fetched"}
+
+
+def get_ppk_fetch_state() -> dict:
+    """Status fetch terakhir agar UI membedakan kosong vs session invalid."""
+    return dict(_PPK_FETCH_STATE)
 
 
 def _cdp_eval(js: str, timeout: int = 30) -> tuple[bool, object, str]:
@@ -127,19 +134,33 @@ def fetch_paket_ppk() -> list[dict]:
     (async () => {{
         const r = await fetch('/{_LPSE}/dt/paketppknontender?draw=1&start=0&length=200&_={ts}',
                               {{credentials:'include'}});
-        if (!r.ok) return [];
+        if (!r.ok) return {{ok:false, status:r.status, rows:[]}};
         const j = await r.json();
-        return (j.data || []).map(row => ({{
+        return {{ok:true, status:r.status, rows:(j.data || []).map(row => ({{
             kode_paket: String(row[0]),
             nama_paket: String(row[1]),
             status:     String(row[2]),
-        }}));
+        }}))}};
     }})()
     """
+    global _PPK_FETCH_STATE
     ok, val, err = _cdp_eval(js, timeout=20)
     if not ok:
+        _PPK_FETCH_STATE = {"ok": False, "status": None, "reason": "cdp_error", "error": err}
         return []
-    rows = val or []
+    if not isinstance(val, dict):
+        _PPK_FETCH_STATE = {"ok": False, "status": None, "reason": "invalid_response"}
+        return []
+    status = val.get("status")
+    if not val.get("ok"):
+        _PPK_FETCH_STATE = {
+            "ok": False,
+            "status": status,
+            "reason": "auth_error" if status in (401, 403) else "http_error",
+        }
+        return []
+    _PPK_FETCH_STATE = {"ok": True, "status": status, "reason": "ok"}
+    rows = val.get("rows") or []
     # Tab PPK hanya menampilkan paket aktif berstatus Draft.
     return [p for p in rows if str(p.get("status", "")).strip().lower() == "draft"]
 
@@ -852,6 +873,71 @@ PPK_WORKFLOW_REGISTRY = {
     },
 }
 
+PPK_WORKFLOW_CODES = frozenset({"PK", "JKK"})
+PPK_WORKFLOW_REGISTRY_PATH = os.path.join(
+    PPK_PL_V2_BASE,
+    ".ppk_workflow_registry.json",
+)
+
+
+def _ppk_workflow_registry_path(path=None) -> str:
+    """Ambil path registry, dengan override lokal per komputer bila ada."""
+    if path is not None:
+        return os.fspath(path)
+    override = str(os.environ.get("POKJA_PPK_WORKFLOW_REGISTRY") or "").strip()
+    return override or PPK_WORKFLOW_REGISTRY_PATH
+
+
+def _normalize_ppk_workflow_registry(registry) -> dict[str, str]:
+    """Normalisasi registry; hanya kode paket dan workflow PK/JKK yang valid."""
+    if not isinstance(registry, dict):
+        return {}
+    normalized = {}
+    for code, workflow in registry.items():
+        package_code = str(code or "").strip()
+        workflow_code = str(workflow or "").strip().upper()
+        if package_code and workflow_code in PPK_WORKFLOW_CODES:
+            normalized[package_code] = workflow_code
+    return normalized
+
+
+def load_ppk_workflow_registry(path=None) -> dict[str, str]:
+    """Baca registry workflow PPK; file hilang/rusak dianggap registry kosong."""
+    registry_path = _ppk_workflow_registry_path(path)
+    try:
+        with open(registry_path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return {}
+    return _normalize_ppk_workflow_registry(raw)
+
+
+def save_ppk_workflow_registry(registry, path=None) -> dict[str, str]:
+    """Simpan registry valid secara atomic dan kembalikan isi yang disimpan."""
+    normalized = _normalize_ppk_workflow_registry(registry)
+    registry_path = os.path.abspath(_ppk_workflow_registry_path(path))
+    parent = os.path.dirname(registry_path) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    temporary_path = None
+    try:
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(registry_path)}.",
+            suffix=".tmp",
+            dir=parent,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(normalized, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary_path, registry_path)
+        temporary_path = None
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+    return normalized
+
 
 def ppk_workflow_config(workflow: str | None) -> dict:
     key = str(workflow or "").upper().strip()
@@ -866,42 +952,42 @@ def ppk_workflow_config(workflow: str | None) -> dict:
     return cfg
 
 
-def resolve_ppk_workflow(metadata: dict | None) -> dict:
-    """Resolve family dari metadata SPSE, lalu fallback ke nama paket.
+def _workflow_from_explicit_metadata(value) -> str | None:
+    """Map nilai field jenis pekerjaan eksplisit ke workflow PPK."""
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized in {"JKK", "PLJKK"} or "KONSULTAN" in normalized:
+        return "JKK"
+    if normalized in {"PK", "PLPK", "KONSTRUKSI"} or "PEKERJAAN KONSTRUKSI" in normalized:
+        return "PK"
+    return None
 
-    Endpoint PPK SPSE yang tersedia tidak selalu mengembalikan field jenis
-    pekerjaan. Metadata eksplisit tetap menjadi sumber utama; nama paket hanya
-    dipakai bila metadata tersebut kosong, dengan pola yang sama seperti
-    klasifikasi PL yang sudah berjalan di ``pl_engine``.
+
+def resolve_ppk_workflow(metadata: dict | None, registry=None) -> dict:
+    """Resolve workflow dari registry paket, lalu metadata eksplisit.
+
+    Nama paket sengaja tidak digunakan: nomenklatur rekening/uraian SPSE
+    dapat menyerupai konstruksi tetapi bukan penentu family PPK.
     """
-    row = metadata or {}
-    explicit = " ".join(str(row.get(k) or "") for k in (
-        "jenis_pl", "jenis_pengadaan", "jenis_pekerjaan", "kategori_pengadaan",
-        "tipe_pengadaan", "package_type", "procurement_type",
-    )).lower()
-    if any(x in explicit for x in ("jasa konsultansi", "konsultansi", "jkk", "consult")):
-        return {"status": "resolved", "workflow": "JKK", "source": "metadata"}
-    if any(x in explicit for x in ("pekerjaan konstruksi", "konstruksi", "plpk", "pk")):
-        return {"status": "resolved", "workflow": "PK", "source": "metadata"}
-
-    # /dt/paketppknontender dan /paketnontender/{kode}/edit hanya memberi
-    # identitas, anggaran, dan status; family sering tidak tersedia. Gunakan
-    # pola nama sebagai fallback terkontrol. Urutan JKK lebih dulu agar nama
-    # "konsultansi ... konstruksi" tidak salah masuk ke PK.
-    package_name = str(row.get("nama_paket") or "").strip().lower()
-    jkk_markers = (
-        "jasa konsultansi", "konsultansi", "konsultan", "perencanaan",
-        "pengawasan", "supervisi", "manajemen konstruksi",
+    row = metadata if isinstance(metadata, dict) else {}
+    registry_data = (
+        load_ppk_workflow_registry() if registry is None
+        else _normalize_ppk_workflow_registry(registry)
     )
-    if any(marker in package_name for marker in jkk_markers):
-        return {"status": "resolved", "workflow": "JKK", "source": "name_fallback"}
+    package_code = str(row.get("kode_paket") or "").strip()
+    mapped_workflow = registry_data.get(package_code)
+    if mapped_workflow:
+        return {"status": "resolved", "workflow": mapped_workflow, "source": "registry"}
 
-    pk_markers = (
-        "pekerjaan konstruksi", "belanja modal", "pembangunan", "konstruksi",
-        "rehabilitasi", "rehab ", "renovasi", "pemasangan", "pengurugan",
-    )
-    if any(marker in package_name for marker in pk_markers):
-        return {"status": "resolved", "workflow": "PK", "source": "name_fallback"}
+    for key in (
+        "workflow", "ppk_workflow", "jenis_pl", "jenis_pengadaan",
+        "jenis_pekerjaan", "kategori_pengadaan", "tipe_pengadaan",
+        "package_type", "procurement_type",
+    ):
+        workflow = _workflow_from_explicit_metadata(row.get(key))
+        if workflow:
+            return {"status": "resolved", "workflow": workflow, "source": "metadata"}
 
     return {"status": "ambiguous", "workflow": None, "source": "metadata_missing"}
 
@@ -927,18 +1013,22 @@ def ppk_mode_config(mode: str) -> dict:
 
 
 def filter_paket_ppk_by_workflow(
-    rows: list[dict], workflow: str, details_by_code: dict | None = None
+    rows: list[dict], workflow: str, details_by_code: dict | None = None,
+    registry: dict | None = None,
 ) -> list[dict]:
-    """Filter paket PPK berdasarkan metadata/fallback family.
+    """Filter paket PPK berdasarkan registry atau metadata eksplisit.
 
-    Metadata eksplisit selalu menang; fallback nama dipakai untuk versi SPSE
-    yang tidak mengirim field jenis pekerjaan. Paket yang tidak punya sinyal
-    family tetap dikeluarkan agar mode Konsultan/PK tidak tercampur.
+    Paket yang belum memiliki mapping registry/metadata tetap dikeluarkan agar
+    mode Konsultan/PK tidak tercampur.
     """
     expected = str(workflow or "").strip().upper()
     if expected not in PPK_WORKFLOW_REGISTRY:
         return []
     details = details_by_code or {}
+    registry_data = (
+        load_ppk_workflow_registry() if registry is None
+        else _normalize_ppk_workflow_registry(registry)
+    )
     result = []
     for row in rows or []:
         code = str(row.get("kode_paket") or "")
@@ -946,7 +1036,7 @@ def filter_paket_ppk_by_workflow(
         extra = details.get(code) or details.get(row.get("kode_paket")) or {}
         if isinstance(extra, dict):
             metadata.update(extra)
-        resolved = resolve_ppk_workflow(metadata)
+        resolved = resolve_ppk_workflow(metadata, registry=registry_data)
         if resolved.get("workflow") == expected:
             result.append(row)
     return result

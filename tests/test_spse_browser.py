@@ -40,6 +40,25 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(selected["title"], "Beranda PPK")
 
+    def test_restore_cleanup_runs_once_per_tab_snapshot(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+        before = [
+            {"url": base + "/home", "title": "Terjadi Kesalahan"},
+            {"url": base + "/paketnontender", "title": "Daftar Paket"},
+        ]
+        after = [before[1]]
+        spse_browser._builtins_sb._spse_restore_state["signature"] = None
+        with patch.object(spse_browser, "_cek_cdp_aktif", return_value=True), \
+                patch.object(spse_browser, "_cdp_tabs", side_effect=[before, after]) as tabs, \
+                patch.object(spse_browser, "buka_browser") as connect, \
+                patch.object(spse_browser, "rapikan_tab_spse", return_value=SimpleNamespace(url=after[0]["url"])):
+            result = spse_browser.ensure_spse_restore_cleaned()
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["skipped"])
+        connect.assert_called_once_with(navigate=False)
+        self.assertEqual(tabs.call_count, 2)
+
 
 class SpseBrowserPageMappingTest(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_url_mapping_uses_title(self):

@@ -7,6 +7,7 @@ dibersihkan saat user berpindah mode. Data hasil baca/cache tidak disentuh.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 import streamlit as st
@@ -61,6 +62,14 @@ def activate_mode(mode: str) -> bool:
     st.session_state["_workflow_active_mode"] = mode
     st.session_state["_workflow_mode_slug"] = mode_slug(mode)
     return changed
+
+
+def invalidate_ppk_session_state() -> None:
+    """Bersihkan seluruh state UI/cache yang terikat sesi PPK."""
+    st.session_state["_spse_session_epoch"] = time.time_ns()
+    for key in list(st.session_state.keys()):
+        if str(key).startswith("ppk_"):
+            st.session_state.pop(key, None)
 
 
 def package_key(mode: str, kode: Any, name: str) -> str:

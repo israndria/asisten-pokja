@@ -99,6 +99,14 @@ def remember_login_role(role: str) -> None:
     _ROLE_FILE.parent.mkdir(exist_ok=True)
     _ROLE_FILE.write_text(json.dumps({"role": role, "cookie_fp": _cookie_fingerprint(cookie)}), encoding="utf-8")
 
+
+def get_spse_session_fingerprint(force: bool = False) -> str:
+    """Kembalikan hash sesi SPSE aktif tanpa mengekspos nilai cookie."""
+    import spse_browser as _sb
+
+    return _cookie_fingerprint(_sb.get_spse_cookies(force=force))
+
+
 def _load_env() -> dict[str, str]:
     """Baca secret_spse.env → dict. Raise jika file tidak ada."""
     if not _ENV_PATH.exists():
@@ -152,12 +160,24 @@ def detect_login_role() -> str | None:
                 allow_redirects=True,
             )
             final_url = response.url.lower()
-            if response.status_code != 200 or "loginpass" in final_url:
-                return None
-            text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
-            if _sb._is_spse_access_error_text(text):
-                return None
-            return _role_from_text(text)
+            if response.status_code == 200 and "loginpass" not in final_url:
+                text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+                if not _sb._is_spse_access_error_text(text):
+                    detected = _role_from_text(text)
+                    if detected:
+                        return detected
+
+            # Pada akun PPK, route /home kadang 403 meski session valid dan
+            # halaman edit paket tetap authenticated. Fallback ke tab yang
+            # sudah dipilih oleh spse_browser tanpa navigasi baru.
+            page = _sb._get_page()
+            if page is not None and not page.is_closed():
+                body = _sb._run(
+                    page.locator("body").inner_text(timeout=3000),
+                    timeout=5,
+                )
+                if not _sb._is_spse_access_error_text(body):
+                    return _role_from_text(body)
         except Exception:
             pass
         return None

@@ -2,6 +2,7 @@
 
 import os
 import logging
+import time
 
 import streamlit as st
 
@@ -180,6 +181,9 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 @st.fragment
 def _sidebar_login_form():
     st.info("Brave SPSE belum terhubung")
+    _relogin_reason = st.session_state.pop("_spse_relogin_reason", None)
+    if _relogin_reason:
+        st.warning(_relogin_reason)
 
     if st.button("🌐 Hubungkan ke Brave SPSE", type="primary", use_container_width=True):
         try:
@@ -328,11 +332,13 @@ def _sidebar_login_form():
                 _log_box.info("\n".join(_login_logs))
                 _spse_login.remember_login_role(_login_role)
 
-                # Connect CDP setelah login berhasil
+                # Connect CDP setelah login berhasil. Jangan buka /home di tab
+                # baru: route dashboard ini mengembalikan 403 pada sesi PPK.
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                # Tampilkan tab SPSE otomatis; user tidak perlu klik Buka SPSE lagi.
-                spse_browser.buka_tab_baru(SPSE_BASE_URL.rstrip("/") + "/home")
+                spse_browser.rapikan_tab_spse()
+                spse_browser.fokuskan_tab_spse()
                 st.session_state["spse_role"] = _login_role
+                st.session_state["_spse_session_epoch"] = time.time_ns()
                 spse_browser.mulai_auto_refresh()
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun(scope="app")
@@ -362,6 +368,7 @@ def _sidebar_login_form():
                 _spse_login.remember_login_role(_retry_role)
                 spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                 st.session_state["spse_role"] = _retry_role
+                st.session_state["_spse_session_epoch"] = time.time_ns()
                 spse_browser.mulai_auto_refresh()
                 st.session_state.pop("login_failed", None)
                 st.session_state.pop("login_failed_role", None)
@@ -394,6 +401,7 @@ def _sidebar_login_form():
                     st.info("\n".join(_manual_logs))
                     spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
                     st.session_state["spse_role"] = _retry_role
+                    st.session_state["_spse_session_epoch"] = time.time_ns()
                     spse_browser.mulai_auto_refresh()
                     st.session_state.pop("login_failed", None)
                     st.session_state.pop("login_failed_role", None)

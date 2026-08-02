@@ -13,6 +13,16 @@ import spse_login
 
 
 class SpseLoginHelpersTest(unittest.TestCase):
+    def test_session_fingerprint_hashes_cookie_without_exposing_value(self):
+        with patch(
+            "spse_browser.get_spse_cookies",
+            return_value="SPSE_SESSION=current-session",
+        ):
+            fingerprint = spse_login.get_spse_session_fingerprint()
+
+        self.assertEqual(len(fingerprint), 64)
+        self.assertNotIn("current-session", fingerprint)
+
     def test_normalize_rgba_captcha_uses_alpha_on_white(self):
         source = Image.new("RGBA", (2, 1), (0, 0, 0, 0))
         source.putpixel((1, 0), (0, 0, 0, 255))
@@ -101,6 +111,39 @@ class SpseLoginHelpersTest(unittest.TestCase):
                     "spse_browser.get_spse_cookies",
                     return_value="SPSE_SESSION=current-session",
                 ),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertEqual(detected, "PPK")
+
+    def test_detect_role_falls_back_to_authenticated_package_tab_when_home_is_403(self):
+        response = SimpleNamespace(
+            status_code=403,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Akses Ditolak",
+        )
+
+        class FakePage:
+            def is_closed(self):
+                return False
+
+            def locator(self, _selector):
+                return SimpleNamespace(
+                    inner_text=lambda **_kwargs: "Pejabat Pembuat Komitmen"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({"role": "PPK", "cookie_fp": "old-session"}),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_spse_cookies", return_value="SPSE_SESSION=current-session"),
+                patch("spse_browser._get_page", return_value=FakePage()),
+                patch("spse_browser._run", return_value="Pejabat Pembuat Komitmen"),
                 patch("requests.get", return_value=response),
             ):
                 detected = spse_login.detect_login_role()
