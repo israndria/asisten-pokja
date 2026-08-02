@@ -179,6 +179,13 @@ def test_bulk_upload_selection_preserves_legacy_non_pdf_mode():
     ]
 
 
+def test_upload_target_labels_are_consistent_for_logs():
+    assert engine.upload_target_label("kak") == "KAK / Spesifikasi"
+    assert engine.upload_target_label("kontrak") == "Rancangan Kontrak"
+    assert engine.upload_target_label("uraian") == "Uraian Singkat"
+    assert engine.upload_target_label("lainnya") == "Informasi Lainnya"
+
+
 def test_auto_match_folder_accepts_workflow_argument():
     assert engine.auto_match_folder(
         "Pagar Pasar Binuang", ["28. Pagar Pasar Binuang"], workflow="PK"

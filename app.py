@@ -1608,9 +1608,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                         st.info(f"Dipilih manual: {_ppk_cfg['label']}")
 
                 # ── Hapus Semua ─────────────────────────────────────────────
-                _hcol1, _hcol2 = st.columns([5, 1])
-                if _hcol2.button("🗑️ Hapus Semua", key=f"hapus_semua_{_kode}",
-                                 help="Hapus semua dokumen yang sudah terupload di paket ini"):
+                _package_actions = st.popover("⚙️ Aksi Paket", help="Aksi untuk paket ini")
+                if _package_actions.button(
+                    "🗑️ Hapus Semua",
+                    key=f"hapus_semua_{_kode}",
+                    help="Hapus semua dokumen yang sudah terupload di paket ini",
+                    use_container_width=True,
+                ):
                     # Kumpulkan versi dari session_state per jenis
                     _to_del = {}
                     for _sec2 in _UPLOAD_SECTIONS:
@@ -1636,8 +1640,6 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                     else:
                         st.warning(f"⚠️ {_total_hapus} dihapus, {_total_err} gagal")
                     st.rerun()
-
-                st.divider()
 
                 # ── Upload dari Folder ──────────────────────────────────────
                 _subfolder_list = _ppk_folders_info
@@ -1768,18 +1770,28 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     type="primary",
                                     disabled=not _doc_files,
                                 ):
-                                    _flog_box = st.container(border=True)
-                                    _flog_lines = []
-                                    def _flog(msg):
-                                        _flog_lines.append(msg)
-                                        _flog_box.write(msg)
-                                    _fres = _ppk_up.upload_dokumen_dari_folder(
-                                        kode_paket=_kode,
-                                        folder_path=_selected_folder,
-                                        log_fn=_flog,
-                                        pdf_only=True,
-                                        workflow=_ppk_workflow,
-                                    )
+                                    with st.status(
+                                        f"Mengupload {len(_doc_files)} dokumen + memilih PP...",
+                                        expanded=True,
+                                    ) as _flog_status:
+                                        def _flog(msg):
+                                            _flog_status.write(msg)
+                                        _fres = _ppk_up.upload_dokumen_dari_folder(
+                                            kode_paket=_kode,
+                                            folder_path=_selected_folder,
+                                            log_fn=_flog,
+                                            pdf_only=True,
+                                            workflow=_ppk_workflow,
+                                        )
+                                        _flog_status.update(
+                                            label=(
+                                                f"✅ Upload selesai: {_fres.get('total_ok', 0)} berhasil"
+                                                if _fres.get("total_err", 0) == 0
+                                                else f"⚠️ Upload selesai: {_fres.get('total_ok', 0)} berhasil, {_fres.get('total_err', 0)} gagal"
+                                            ),
+                                            state=("complete" if _fres.get("total_err", 0) == 0 else "error"),
+                                            expanded=False,
+                                        )
                                     # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):
                                         if _fr.get("ok") and _fr.get("versi") and _fr.get("jenis") != "nd":

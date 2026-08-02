@@ -102,6 +102,19 @@ _SUBMIT_ENDPOINTS = {
     "lainnya": "lainnyaPpkSubmit",
 }
 
+UPLOAD_TARGET_LABELS = {
+    "kak": "KAK / Spesifikasi",
+    "kontrak": "Rancangan Kontrak",
+    "uraian": "Uraian Singkat",
+    "lainnya": "Informasi Lainnya",
+    "nd": "Nota Dinas PPK",
+}
+
+
+def upload_target_label(jenis: str) -> str:
+    """Nama kategori tujuan SPSE untuk log upload yang konsisten."""
+    return UPLOAD_TARGET_LABELS.get(str(jenis or "").strip().lower(), str(jenis or "-"))
+
 _DELETE_ENDPOINTS = {
     "kak":     "hapusspekppk",
     "kontrak": "hapussskkattachment",
@@ -399,9 +412,12 @@ def upload_dokumen(
     if not ok:
         return {"ok": False, "error": err}
     if result and result.get("ok"):
-        _log(f"✅ {file_name} berhasil diupload")
+        _log(f"✅ {file_name} → {upload_target_label(jenis)} berhasil diupload")
     else:
-        _log(f"❌ {file_name} gagal: {result.get('error') if result else err}")
+        _log(
+            f"❌ {file_name} → {upload_target_label(jenis)} gagal: "
+            f"{result.get('error') if result else err}"
+        )
     return result or {"ok": False, "error": err}
 
 def upload_nota_dinas(kode_paket: str, file_bytes: bytes, file_name: str, mime_type: str, log_fn=None) -> dict:
@@ -1574,7 +1590,10 @@ def upload_dokumen_dari_folder(
             results.append(result)
             status = "✅" if result["ok"] else "❌"
             suffix = "" if result["ok"] else f": {result['error']}"
-            _log(f"{status} {result['nama']}{suffix}")
+            _log(
+                f"{status} {result['nama']} → "
+                f"{upload_target_label(result['jenis'])}{suffix}"
+            )
 
     total_ok = sum(1 for result in results if result["ok"])
     return {
