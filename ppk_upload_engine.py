@@ -16,6 +16,111 @@ BASE_URL = SPSE_BASE_URL.rstrip("/")
 _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
 
 
+_UPLOAD_NAME_KEYS = ("fileName", "file_name", "nama_file", "name", "filename")
+_UPLOAD_ID_KEYS = ("fileId", "file_id", "id")
+_UPLOAD_VERSION_KEYS = ("versi", "version", "fileVersion", "file_version")
+
+
+def _normalized_upload_name(name: str) -> str:
+    """Normalisasi nama file untuk membandingkan variasi output SPSE."""
+    import unicodedata
+
+    value = unicodedata.normalize("NFKC", os.path.basename(str(name or "")))
+    return re.sub(r"\s+", " ", value).strip().casefold()
+
+
+def _compact_upload_name(name: str) -> str:
+    """Bentuk tolerant: abaikan spasi, titik, strip, dan underscore."""
+    return "".join(char for char in _normalized_upload_name(name) if char.isalnum())
+
+
+def _upload_names_match(left: str, right: str) -> bool:
+    return (
+        _normalized_upload_name(left) == _normalized_upload_name(right)
+        or _compact_upload_name(left) == _compact_upload_name(right)
+    )
+
+
+def _first_upload_value(item: dict, keys: tuple[str, ...]):
+    if not isinstance(item, dict):
+        return None
+    for key in keys:
+        value = item.get(key)
+        if value is not None and str(value).strip() not in {"", "null", "None"}:
+            return value
+    return None
+
+
+def _upload_response_entries(result: dict) -> list[dict]:
+    """Ambil kandidat entry dari variasi envelope JSON SPSE."""
+    response = result.get("response") if isinstance(result, dict) else None
+    candidates = []
+    for value in (
+        result.get("files") if isinstance(result, dict) else None,
+        response.get("files") if isinstance(response, dict) else None,
+        response.get("result", {}).get("files")
+        if isinstance(response, dict) and isinstance(response.get("result"), dict)
+        else None,
+        response.get("data", {}).get("files")
+        if isinstance(response, dict) and isinstance(response.get("data"), dict)
+        else None,
+        response.get("result", {}).get("data", {}).get("files")
+        if isinstance(response, dict)
+        and isinstance(response.get("result"), dict)
+        and isinstance(response.get("result", {}).get("data"), dict)
+        else None,
+    ):
+        if isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+
+    # Be tolerant of endpoint responses with a single file entry at root.
+    if not candidates:
+        for item in (response, response.get("result") if isinstance(response, dict) else None,
+                     response.get("data") if isinstance(response, dict) else None):
+            if isinstance(item, dict) and (
+                _first_upload_value(item, _UPLOAD_NAME_KEYS) is not None
+                or _first_upload_value(item, _UPLOAD_VERSION_KEYS) is not None
+            ):
+                candidates.append(item)
+    return candidates
+
+
+def _match_upload_response(
+    result: dict,
+    file_name: str,
+    file_id=None,
+    path: str | None = None,
+) -> tuple[dict | None, object | None, str | None]:
+    """Cocokkan response submit yang variasinya berbeda-beda di SPSE."""
+    entries = _upload_response_entries(result)
+    matched = None
+    for item in entries:
+        names = [_first_upload_value(item, (_key,)) for _key in _UPLOAD_NAME_KEYS]
+        names = [value for value in names if value is not None]
+        ids = [_first_upload_value(item, (_key,)) for _key in _UPLOAD_ID_KEYS]
+        ids = [value for value in ids if value is not None]
+        item_path = _first_upload_value(item, ("path", "filePath", "file_path"))
+        if (
+            any(_upload_names_match(value, file_name) for value in names)
+            or any(file_id is not None and str(value) == str(file_id) for value in ids)
+            or (path and item_path and str(item_path) == str(path))
+        ):
+            matched = item
+            break
+
+    # Jika server hanya mengembalikan satu file dan success=true, entry tunggal
+    # adalah hasil upload walau nama di-normalisasi atau field namanya berbeda.
+    if matched is None and result.get("ok") is True and len(entries) == 1:
+        matched = entries[0]
+    version = _first_upload_value(matched, _UPLOAD_VERSION_KEYS)
+    if version is None:
+        return None, None, (
+            "Submit tidak menemukan file/versi yang cocok: "
+            + json.dumps(result.get("response"), ensure_ascii=False, default=str)[:800]
+        )
+    return matched, version, None
+
+
 _cdp_eval_lock = __import__("threading").Lock()
 _CDP_PORT = 9222
 _PPK_FETCH_STATE = {"ok": False, "status": None, "reason": "not_fetched"}
@@ -408,16 +513,49 @@ def upload_dokumen(
         }});
         if (!r5.ok) return {{ok: false, error: 'submit HTTP ' + r5.status}};
         let res5 = null;
-        try {{ res5 = await r5.clone().json(); }} catch(e) {{}}
-        const versi = res5?.files?.[0]?.versi ?? null;
-        return {{ok: true, path, fileId, versi}};
+        try {{ res5 = await r5.json(); }} catch(e) {{
+            return {{ok: false, status: r5.status, error: 'Submit response bukan JSON'}};
+        }}
+        const fileLists = [
+            res5?.files,
+            res5?.result?.files,
+            res5?.data?.files,
+            res5?.result?.data?.files
+        ].filter(Array.isArray);
+        const files = fileLists.flat();
+        // Matching nama/ID/version dilakukan di Python agar fallback dan
+        // regresinya bisa diuji tanpa browser. SPSE kadang mengembalikan
+        // nama yang sudah dinormalisasi atau hanya satu entry.
+        return {{
+            ok: res5?.success === true,
+            status: r5.status,
+            path,
+            fileId,
+            files,
+            response: res5
+        }};
     }})()
     """
     ok, result, err = _cdp_eval(js, timeout=120)
     if not ok:
         return {"ok": False, "error": err}
     if result and result.get("ok"):
-        _log(f"✅ {file_name} → {upload_target_label(jenis)} berhasil diupload")
+        _entry, _versi, _match_error = _match_upload_response(
+            result, file_name, result.get("fileId"), result.get("path")
+        )
+        if _entry is None or _versi is None:
+            result["ok"] = False
+            result["error"] = _match_error or "Submit tidak menemukan file/versi yang cocok"
+        else:
+            result["entry"] = _entry
+            result["versi"] = _versi
+        if result.get("ok"):
+            _log(f"✅ {file_name} → {upload_target_label(jenis)} berhasil diupload")
+        else:
+            _log(
+                f"❌ {file_name} → {upload_target_label(jenis)} gagal: "
+                f"{result.get('error') or 'respons tidak cocok'}"
+            )
     else:
         _log(
             f"❌ {file_name} → {upload_target_label(jenis)} gagal: "
@@ -666,6 +804,44 @@ def list_semua_dokumen(kode_paket: str) -> dict[str, list[dict]]:
     return val if ok and isinstance(val, dict) else {}
 
 
+def list_dokumen_cdp(kode_paket: str, jenis: str) -> dict:
+    """Ambil satu kategori via CDP dan bedakan error halaman dari daftar kosong."""
+    import json as _json
+
+    endpoint = _LIST_ENDPOINTS.get(jenis)
+    if not endpoint:
+        return {"ok": False, "status": 0, "documents": [], "error": f"Jenis '{jenis}' tidak dikenal."}
+    js = f"""
+(async () => {{
+  const url = '/{_LPSE}/dokumennontender/' + {_json.dumps(kode_paket)} + '/{endpoint}';
+  const r = await fetch(url, {{credentials: 'include'}});
+  const html = await r.text();
+  if (!r.ok) return {{ok: false, status: r.status, documents: [], error: 'List HTTP ' + r.status}};
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const table = doc.querySelector('#files');
+  if (!table) return {{ok: false, status: r.status, documents: [], error: 'Tabel #files tidak ditemukan'}};
+  const documents = [];
+  table.querySelectorAll('tbody tr').forEach(tr => {{
+    const a = tr.querySelector('td a');
+    const rem = tr.querySelector('.removeDok');
+    if (a && a.textContent.trim()) documents.push({{
+      nama_file: a.textContent.trim(),
+      url_dl: a.href || '',
+      versi: rem ? parseInt(rem.getAttribute('versi') || '', 10) : null
+    }});
+  }});
+  return {{ok: true, status: r.status, documents}};
+}})()
+"""
+    ok, value, err = _cdp_eval(js, timeout=20)
+    if not ok or not isinstance(value, dict):
+        return {"ok": False, "status": 0, "documents": [], "error": err or "Respons list kosong"}
+    value.setdefault("documents", [])
+    value.setdefault("status", 0)
+    value.setdefault("ok", False)
+    return value
+
+
 def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict]]]:
     """
     Ambil dokumen semua jenis untuk N paket via cdp_eval + fetch() paralel.
@@ -789,6 +965,46 @@ with sync_playwright() as pw:
         os.unlink(path)
 
 
+def download_existing_document(doc: dict) -> dict:
+    """Backup bytes dokumen lama via tab SPSE sebelum replacement berisiko."""
+    import base64 as _base64
+    import json as _json
+    import mimetypes as _mimetypes
+
+    url = (doc or {}).get("url_dl") or (doc or {}).get("url")
+    if not url:
+        return {"ok": False, "error": "URL download dokumen lama tidak tersedia"}
+    js = f"""
+(async () => {{
+  try {{
+    const r = await fetch({_json.dumps(url)}, {{credentials: 'include'}});
+    if (!r.ok) return {{ok: false, error: 'Download HTTP ' + r.status}};
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {{
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }}
+    return {{ok: true, b64: btoa(binary), mime: r.headers.get('content-type') || ''}};
+  }} catch (e) {{ return {{ok: false, error: String(e)}}; }}
+}})()
+"""
+    ok, value, err = _cdp_eval(js, timeout=120)
+    if not ok or not isinstance(value, dict) or not value.get("ok"):
+        return {"ok": False, "error": (value or {}).get("error") if isinstance(value, dict) else err}
+    try:
+        data = _base64.b64decode(value.get("b64") or "", validate=True)
+    except Exception as exc:
+        return {"ok": False, "error": f"Backup base64 tidak valid: {exc}"}
+    name = str((doc or {}).get("nama_file") or "dokumen.pdf")
+    return {
+        "ok": True,
+        "file_bytes": data,
+        "mime_type": value.get("mime") or _mimetypes.guess_type(name)[0] or "application/octet-stream",
+        "file_name": name,
+    }
+
+
 def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None) -> bool:
     """
     Hapus dokumen via CDP (cookie HttpOnly).
@@ -813,11 +1029,6 @@ def hapus_dokumen(kode_paket: str, jenis: str, versi: int, cookies: dict = None)
 _PPK_REPLACE_JENIS = frozenset({"kak", "kontrak", "uraian", "lainnya"})
 
 
-def _normalized_upload_name(name: str) -> str:
-    """Normalisasi nama untuk fallback exact-name replacement."""
-    return re.sub(r"\s+", " ", os.path.basename(str(name or "")).strip()).casefold()
-
-
 def _upload_slot(name: str) -> int | None:
     """Ambil slot numerik dari nama file, mis. ``11. Diskresi.pdf`` -> 11."""
     match = re.match(r"^\s*(\d+)\s*\.\s+", os.path.basename(str(name or "")))
@@ -834,12 +1045,75 @@ def _replacement_candidates(existing_docs: list[dict] | None, new_name: str) -> 
             if _upload_slot(doc.get("nama_file")) == new_slot
             and doc.get("versi") is not None
         ]
-    normalized = _normalized_upload_name(new_name)
     return [
         doc for doc in docs
-        if _normalized_upload_name(doc.get("nama_file")) == normalized
+        if _upload_names_match(doc.get("nama_file"), new_name)
         and doc.get("versi") is not None
     ]
+
+
+def verifikasi_dokumen_terunggah(
+    kode_paket: str,
+    jenis: str,
+    file_name: str,
+    versi: int | None = None,
+    retries: int = 3,
+    delay: float = 0.35,
+) -> dict:
+    """Pastikan file terlihat pada endpoint list SPSE sebelum replacement."""
+    import time
+
+    if versi is None:
+        return {
+            "verified": False,
+            "versi": None,
+            "documents": [],
+            "error": "Versi hasil upload kosong; verifikasi dibatalkan",
+        }
+    last_docs: list[dict] = []
+    last_error = ""
+    for attempt in range(max(1, retries)):
+        try:
+            listed = list_dokumen_cdp(kode_paket, jenis)
+            last_docs = list(listed.get("documents", []) or [])
+            if not listed.get("ok"):
+                last_error = listed.get("error", "Endpoint list SPSE gagal")
+                last_docs = []
+                continue
+        except Exception as exc:
+            last_docs = []
+            last_error = str(exc)
+        for doc in last_docs:
+            if _upload_names_match(doc.get("nama_file"), file_name):
+                verified_version = doc.get("versi")
+                if verified_version is not None and str(verified_version) == str(versi):
+                    return {
+                        "verified": True,
+                        "versi": verified_version,
+                        "document": doc,
+                    }
+        if attempt + 1 < max(1, retries):
+            time.sleep(delay)
+    return {
+        "verified": False,
+        "versi": None,
+        "documents": last_docs,
+        "error": last_error or f"Dokumen {file_name} belum muncul pada daftar SPSE",
+    }
+
+
+def _is_duplicate_upload_error(result: dict) -> bool:
+    """True hanya untuk penolakan nama file duplikat dari endpoint SPSE."""
+    if not isinstance(result, dict):
+        return False
+    text = json.dumps(result, ensure_ascii=False, default=str).casefold()
+    markers = (
+        "file dengan nama yang sama",
+        "nama yang sama telah ada",
+        "duplicate",
+        "already exists",
+    )
+    return any(marker in text for marker in markers)
 
 
 def upload_dokumen_dengan_replace(
@@ -853,13 +1127,16 @@ def upload_dokumen_dengan_replace(
     log_fn=None,
     upload_fn=None,
     delete_fn=None,
+    verify_fn=None,
+    backup_fn=None,
 ) -> dict:
     """Upload dokumen lalu hapus versi lama pada slot/nama yang sama.
 
     Hanya empat kategori PPK yang boleh auto-replace. Nota Dinas sengaja
     diproteksi di helper ini agar tidak ikut terhapus bila caller keliru.
-    Kegagalan upload tidak pernah memicu penghapusan; kegagalan delete hanya
-    menjadi warning karena file baru sudah berhasil tersimpan.
+    Kegagalan upload tidak pernah memicu penghapusan. Jalur nama duplikat
+    membuat backup via CDP sebelum delete dan mencoba rollback jika retry/
+    verifikasi gagal.
     """
     uploader = upload_fn or upload_dokumen
     deleter = delete_fn or hapus_dokumen
@@ -875,8 +1152,191 @@ def upload_dokumen_dengan_replace(
     result = dict(result)
     result.setdefault("replaced_versions", [])
     result.setdefault("replacement_errors", [])
+    pre_replaced_versions = []
+    verifier = verify_fn or verifikasi_dokumen_terunggah
+    backupper = backup_fn or download_existing_document
+
+    def _restore_backups(_backups, _delete_new_version=None):
+        """Pulihkan dokumen lama; dipakai hanya saat jalur duplicate gagal."""
+        if _delete_new_version is not None:
+            try:
+                deleter(kode_paket, jenis, _delete_new_version, cookies=cookies)
+            except Exception as exc:
+                result["replacement_errors"].append(
+                    f"versi retry {_delete_new_version} gagal dihapus saat rollback: {exc}"
+                )
+        for _backup in _backups:
+            _restored = uploader(
+                kode_paket=kode_paket,
+                jenis=jenis,
+                file_bytes=_backup["file_bytes"],
+                file_name=_backup["file_name"],
+                mime_type=_backup["mime_type"],
+                cookies=cookies,
+                log_fn=log_fn,
+            ) or {"ok": False, "error": "Respons restore kosong"}
+            if not _restored.get("ok"):
+                result["replacement_errors"].append(
+                    f"restore {_backup['file_name']} gagal: {_restored.get('error', 'unknown')}"
+                )
+
+    # Endpoint SPSE menolak nama duplikat sebelum versi lama bisa diganti.
+    # Hanya pada error eksplisit ini versi lama boleh dihapus lalu upload
+    # dicoba ulang. Error upload lain tetap tidak boleh menghapus data lama.
+    if (
+        not result.get("ok")
+        and jenis in _PPK_REPLACE_JENIS
+        and _is_duplicate_upload_error(result)
+    ):
+        _old_docs = list(existing_docs or [])
+        _candidates = _replacement_candidates(_old_docs, file_name)
+        # Cache session setelah upload hanya menyimpan nama/versi. Ambil
+        # metadata URL terbaru sebelum backup bila URL belum tersedia.
+        if _candidates and any(not (doc.get("url_dl") or doc.get("url")) for doc in _candidates):
+            try:
+                _old_docs = list_dokumen(kode_paket, jenis)
+                _candidates = _replacement_candidates(_old_docs, file_name)
+            except Exception as exc:
+                result["replacement_errors"].append(
+                    f"daftar dokumen lama tidak terbaca: {exc}"
+                )
+        if not _candidates:
+            try:
+                _old_docs = list_dokumen(kode_paket, jenis)
+                _candidates = _replacement_candidates(_old_docs, file_name)
+            except Exception as exc:
+                result["replacement_errors"].append(
+                    f"daftar dokumen lama tidak terbaca: {exc}"
+                )
+        if not _candidates:
+            result["replacement_errors"].append(
+                "SPSE menolak nama duplikat, tetapi versi lama tidak ditemukan"
+            )
+            return result
+
+        _backups = []
+        for _old_doc in _candidates:
+            try:
+                _backup = backupper(_old_doc) or {"ok": False}
+            except Exception as exc:
+                _backup = {"ok": False, "error": str(exc)}
+            if not _backup.get("ok"):
+                result["replacement_errors"].append(
+                    f"backup {_old_doc.get('nama_file', _old_doc.get('versi'))} gagal: "
+                    f"{_backup.get('error', 'respons backup tidak valid')}"
+                )
+                result["error"] = (
+                    result.get("error", "Upload ditolak SPSE")
+                    + "; dokumen lama dipertahankan karena backup gagal"
+                )
+                return result
+            _backups.append({
+                "file_name": _backup.get("file_name") or _old_doc.get("nama_file"),
+                "file_bytes": _backup.get("file_bytes"),
+                "mime_type": _backup.get("mime_type") or "application/octet-stream",
+                "versi": _old_doc.get("versi"),
+            })
+
+        for _old_doc in _candidates:
+            _old_versi = _old_doc.get("versi")
+            try:
+                _deleted = deleter(
+                    kode_paket, jenis, _old_versi, cookies=cookies
+                )
+            except Exception as exc:
+                _deleted = False
+                result["replacement_errors"].append(
+                    f"{_old_doc.get('nama_file', _old_versi)}: {exc}"
+                )
+            if _deleted:
+                pre_replaced_versions.append(_old_versi)
+            elif _old_versi not in pre_replaced_versions:
+                result["replacement_errors"].append(
+                    f"{_old_doc.get('nama_file', _old_versi)}: gagal dihapus"
+                )
+
+        if len(pre_replaced_versions) != len(_candidates):
+            _restore_backups(
+                [backup for backup in _backups if backup["versi"] in pre_replaced_versions]
+            )
+            result["error"] = (
+                result.get("error", "Upload ditolak SPSE")
+                + "; versi lama belum seluruhnya terhapus"
+            )
+            return result
+
+        _retry = uploader(
+            kode_paket=kode_paket,
+            jenis=jenis,
+            file_bytes=file_bytes,
+            file_name=file_name,
+            mime_type=mime_type,
+            cookies=cookies,
+            log_fn=log_fn,
+        ) or {"ok": False, "error": "Retry upload mengembalikan hasil kosong."}
+        _retry = dict(_retry)
+        _retry.setdefault("replaced_versions", [])
+        _retry.setdefault("replacement_errors", [])
+        _retry["replaced_versions"] = list(pre_replaced_versions) + list(
+            _retry.get("replaced_versions", [])
+        )
+        _retry["replacement_errors"] = list(result["replacement_errors"]) + list(
+            _retry.get("replacement_errors", [])
+        )
+        if not _retry.get("ok"):
+            result = _retry
+            _restore_backups(
+                [backup for backup in _backups if backup["versi"] in pre_replaced_versions]
+            )
+            return result
+        result = _retry
+        try:
+            _verification = verifier(
+                kode_paket, jenis, file_name, result.get("versi")
+            ) or {"verified": False}
+        except Exception as exc:
+            _verification = {"verified": False, "error": str(exc)}
+        if not _verification.get("verified"):
+            _restore_backups(
+                [backup for backup in _backups if backup["versi"] in pre_replaced_versions],
+                _delete_new_version=result.get("versi"),
+            )
+            result["ok"] = False
+            result["verified"] = False
+            result["versi"] = None
+            result["error"] = (
+                _verification.get("error")
+                or "Retry upload belum terverifikasi; dokumen lama dipulihkan"
+            )
+            return result
+        result["verified"] = True
+        result["versi"] = _verification.get("versi", result.get("versi"))
+        existing_docs = [
+            doc for doc in _old_docs
+            if doc.get("versi") not in set(pre_replaced_versions)
+        ]
+
     if not result.get("ok") or jenis not in _PPK_REPLACE_JENIS:
         return result
+
+    if not result.get("verified"):
+        try:
+            verification = verifier(
+                kode_paket, jenis, file_name, result.get("versi")
+            ) or {"verified": False}
+        except Exception as exc:
+            verification = {"verified": False, "error": str(exc)}
+        if not verification.get("verified"):
+            result["ok"] = False
+            result["verified"] = False
+            result["versi"] = None
+            result["error"] = (
+                verification.get("error")
+                or "Upload belum terverifikasi pada daftar dokumen SPSE"
+            )
+            return result
+        result["verified"] = True
+        result["versi"] = verification.get("versi", result.get("versi"))
 
     if existing_docs is None:
         try:
@@ -1679,6 +2139,7 @@ def upload_dokumen_dari_folder(
                 "jenis": file_info["jenis"],
                 "nama": file_info["nama"],
                 "ok": result.get("ok", False),
+                "verified": result.get("verified", False),
                 "error": result.get("error", ""),
                 "versi": result.get("versi"),
                 "replaced_versions": result.get("replaced_versions", []),
@@ -1689,6 +2150,7 @@ def upload_dokumen_dari_folder(
                 "jenis": file_info["jenis"],
                 "nama": file_info["nama"],
                 "ok": False,
+                "verified": False,
                 "error": str(exc),
                 "versi": None,
                 "replaced_versions": [],
@@ -1710,7 +2172,7 @@ def upload_dokumen_dari_folder(
             for warning in result.get("replacement_errors", []):
                 _log(f"  ⚠️ Replace: {warning}")
 
-    total_ok = sum(1 for result in results if result["ok"])
+    total_ok = sum(1 for result in results if result["ok"] and result.get("verified", False))
     return {
         "results": results,
         "total_ok": total_ok,

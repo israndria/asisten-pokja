@@ -205,6 +205,7 @@ def test_replacement_matches_same_numeric_slot_and_deletes_after_upload():
         ],
         upload_fn=fake_upload,
         delete_fn=fake_delete,
+        verify_fn=lambda *args: {"verified": True, "versi": 8},
     )
     assert events == ["upload", ("delete", 0)]
     assert result["replaced_versions"] == [0]
@@ -222,6 +223,7 @@ def test_replacement_uses_exact_normalized_name_without_numeric_prefix():
         ],
         upload_fn=lambda **kwargs: {"ok": True, "versi": 7},
         delete_fn=lambda kode, jenis, versi, **kwargs: deleted.append(versi) or True,
+        verify_fn=lambda *args: {"verified": True, "versi": 7},
     )
     assert deleted == [3]
     assert result["replaced_versions"] == [3]
@@ -238,6 +240,7 @@ def test_replacement_loads_existing_docs_when_caller_does_not_supply_them(monkey
         "PK-1", "kak", b"new", "1. KAK Baru.pdf", "application/pdf",
         upload_fn=lambda **kwargs: {"ok": True, "versi": 3},
         delete_fn=lambda kode, jenis, versi, **kwargs: deleted.append(versi) or True,
+        verify_fn=lambda *args: {"verified": True, "versi": 3},
     )
     assert deleted == [2]
     assert result["replaced_versions"] == [2]
@@ -249,6 +252,7 @@ def test_replacement_preserves_new_upload_when_delete_fails():
         existing_docs=[{"nama_file": "2. Uraian Lama.pdf", "versi": 1}],
         upload_fn=lambda **kwargs: {"ok": True, "versi": 9},
         delete_fn=lambda *args, **kwargs: False,
+        verify_fn=lambda *args: {"verified": True, "versi": 9},
     )
     assert result["ok"] is True
     assert result["versi"] == 9
@@ -276,10 +280,273 @@ def test_replacement_does_not_delete_nota_dinas():
         existing_docs=[{"nama_file": "8. ND Lama.pdf", "versi": 2}],
         upload_fn=lambda **kwargs: {"ok": True, "versi": 3},
         delete_fn=lambda *args, **kwargs: deleted.append(args) or True,
+        verify_fn=lambda *args: {"verified": True, "versi": 3},
     )
     assert result["ok"] is True
     assert deleted == []
     assert result["replaced_versions"] == []
+
+
+def test_submit_false_response_is_not_success():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": False,
+            "status": 200,
+            "error": "Submit tidak dikonfirmasi SPSE",
+        }, ""),
+    ):
+        result = engine.upload_dokumen(
+            "PK-1", "lainnya", b"x", "11. Diskresi PA.pdf", "application/pdf"
+        )
+    assert result["ok"] is False
+
+
+def test_submit_invalid_response_is_not_success():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": False,
+            "status": 200,
+            "error": "Submit response bukan JSON",
+        }, ""),
+    ):
+        result = engine.upload_dokumen(
+            "PK-1", "lainnya", b"x", "11. Diskresi PA.pdf", "application/pdf"
+        )
+    assert result["ok"] is False
+
+
+def test_submit_accepts_single_normalized_file_entry_and_zero_version():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": True,
+            "status": 200,
+            "fileId": "file-2",
+            "path": "/tmp/file-2",
+            "files": [{
+                "name": "2. U Singkat.pdf",
+                "version": "0",
+                "file_id": "file-2",
+            }],
+            "response": {"success": True},
+        }, ""),
+    ):
+        result = engine.upload_dokumen(
+            "PK-1", "uraian", b"x", "2. U_Singkat.pdf", "application/pdf"
+        )
+    assert result["ok"] is True
+    assert result["versi"] == "0"
+
+
+def test_submit_accepts_normalized_name_without_hyphen_and_preserves_version():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": True,
+            "status": 200,
+            "fileId": "file-5",
+            "path": "/tmp/file-5",
+            "files": [{
+                "name": "5. RSPK.pdf",
+                "versi": 13,
+                "file_id": "file-5",
+            }],
+            "response": {"success": True},
+        }, ""),
+    ):
+        result = engine.upload_dokumen(
+            "PK-1", "kontrak", b"x", "5. R_SPK.pdf", "application/pdf"
+        )
+    assert result["ok"] is True
+    assert result["versi"] == 13
+
+
+def test_submit_success_without_version_is_rejected():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": True,
+            "status": 200,
+            "files": [{"name": "2. U_Singkat.pdf"}],
+            "response": {"success": True},
+        }, ""),
+    ):
+        result = engine.upload_dokumen(
+            "PK-1", "uraian", b"x", "2. U_Singkat.pdf", "application/pdf"
+        )
+    assert result["ok"] is False
+    assert "versi" in result["error"]
+
+
+def test_duplicate_name_deletes_old_then_retries_upload():
+    events = []
+
+    def fake_upload(**kwargs):
+        events.append("upload")
+        if len(events) == 1:
+            return {
+                "ok": False,
+                "error": "Submit gagal",
+                "response": {
+                    "success": False,
+                    "message": "File dengan nama yang sama telah ada di server!",
+                },
+            }
+        return {"ok": True, "versi": 14}
+
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kontrak", b"new", "5. R_SPK.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "5. RSPK.pdf", "versi": 13, "url_dl": "/old.pdf"}],
+        upload_fn=fake_upload,
+        delete_fn=lambda kode, jenis, versi, **kwargs: events.append(("delete", versi)) or True,
+        verify_fn=lambda *args: {"verified": True, "versi": 14},
+        backup_fn=lambda doc: {
+            "ok": True,
+            "file_name": doc["nama_file"],
+            "file_bytes": b"old",
+            "mime_type": "application/pdf",
+        },
+    )
+    assert events == ["upload", ("delete", 13), "upload"]
+    assert result["ok"] is True
+    assert result["versi"] == 14
+    assert result["replaced_versions"] == [13]
+
+
+def test_duplicate_name_aborts_before_delete_when_backup_fails():
+    events = []
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kontrak", b"new", "5. R_SPK.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "5. RSPK.pdf", "versi": 13, "url_dl": "/old.pdf"}],
+        upload_fn=lambda **kwargs: {
+            "ok": False,
+            "error": "File dengan nama yang sama telah ada di server",
+            "response": {"message": "nama yang sama telah ada"},
+        },
+        delete_fn=lambda *args, **kwargs: events.append("delete") or True,
+        backup_fn=lambda doc: {"ok": False, "error": "download gagal"},
+    )
+    assert result["ok"] is False
+    assert events == []
+    assert "backup" in result["error"] or result["replacement_errors"]
+
+
+def test_duplicate_name_retry_failure_restores_deleted_document():
+    events = []
+
+    def fake_upload(**kwargs):
+        events.append(("upload", kwargs["file_name"], kwargs["file_bytes"]))
+        if len(events) == 1:
+            return {
+                "ok": False,
+                "response": {"message": "File dengan nama yang sama telah ada"},
+            }
+        return {"ok": False, "error": "retry server gagal"}
+
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "kontrak", b"new", "5. R_SPK.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "5. RSPK.pdf", "versi": 13, "url_dl": "/old.pdf"}],
+        upload_fn=fake_upload,
+        delete_fn=lambda kode, jenis, versi, **kwargs: events.append(("delete", versi)) or True,
+        backup_fn=lambda doc: {
+            "ok": True,
+            "file_name": doc["nama_file"],
+            "file_bytes": b"old",
+            "mime_type": "application/pdf",
+        },
+    )
+    assert result["ok"] is False
+    assert events == [
+        ("upload", "5. R_SPK.pdf", b"new"),
+        ("delete", 13),
+        ("upload", "5. R_SPK.pdf", b"new"),
+        ("upload", "5. RSPK.pdf", b"old"),
+    ]
+
+
+def test_verification_failure_never_deletes_old_version():
+    deleted = []
+    result = engine.upload_dokumen_dengan_replace(
+        "PK-1", "lainnya", b"new", "11. Diskresi Baru.pdf", "application/pdf",
+        existing_docs=[{"nama_file": "11. Diskresi Lama.pdf", "versi": 2}],
+        upload_fn=lambda **kwargs: {"ok": True, "versi": 9},
+        delete_fn=lambda *args, **kwargs: deleted.append(args) or True,
+        verify_fn=lambda *args: {
+            "verified": False,
+            "error": "Dokumen belum muncul pada daftar SPSE",
+        },
+    )
+    assert result["ok"] is False
+    assert result["verified"] is False
+    assert result["versi"] is None
+    assert deleted == []
+
+
+def test_verification_rejects_upload_version_none(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "list_dokumen_cdp",
+        lambda *args: {"ok": True, "status": 200, "documents": [
+            {"nama_file": "11. Diskresi PA.pdf", "versi": 4}
+        ]},
+    )
+    result = engine.verifikasi_dokumen_terunggah(
+        "PK-1", "lainnya", "11. Diskresi PA.pdf", None, retries=1
+    )
+    assert result["verified"] is False
+
+
+def test_verification_rejects_mismatched_version(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "list_dokumen_cdp",
+        lambda *args: {"ok": True, "status": 200, "documents": [
+            {"nama_file": "11. Diskresi PA.pdf", "versi": 4}
+        ]},
+    )
+    result = engine.verifikasi_dokumen_terunggah(
+        "PK-1", "lainnya", "11. Diskresi PA.pdf", 5, retries=1
+    )
+    assert result["verified"] is False
+
+
+def test_list_dokumen_cdp_rejects_http_error():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": False,
+            "status": 500,
+            "documents": [],
+            "error": "List HTTP 500",
+        }, ""),
+    ):
+        result = engine.list_dokumen_cdp("PK-1", "lainnya")
+    assert result["ok"] is False
+    assert result["status"] == 500
+
+
+def test_list_dokumen_cdp_rejects_missing_files_table():
+    with patch.object(
+        engine,
+        "_cdp_eval",
+        return_value=(True, {
+            "ok": False,
+            "status": 200,
+            "documents": [],
+            "error": "Tabel #files tidak ditemukan",
+        }, ""),
+    ):
+        result = engine.list_dokumen_cdp("PK-1", "lainnya")
+    assert result["ok"] is False
+    assert "#files" in result["error"]
 
 
 def test_auto_match_folder_accepts_workflow_argument():

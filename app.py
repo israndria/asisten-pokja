@@ -1561,6 +1561,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             {"key": "lainnya", "label": "Informasi Lainnya",    "icon": "ℹ️", "accept": ["txt","doc","docx","xls","xlsx","pdf","gif","jpeg","jpg","png","zip","rar","rtf"], "required": False},
             {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
+        st.session_state.setdefault("ppk_upload_active_package", None)
+        st.session_state.setdefault("ppk_bulk_results", {})
+        st.session_state.setdefault("ppk_bulk_logs", {})
+
+        def _activate_ppk_package(_package_code):
+            """Pertahankan expander paket aktif saat widget memicu rerun."""
+            st.session_state["ppk_upload_active_package"] = _package_code
 
         # Satu CDP call untuk seluruh paket, bukan empat fetch serial per
         # paket. Isi tetap disimpan per paket agar rerun saat memilih file
@@ -1634,7 +1641,10 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             _exp_label = f"{_folder_no_upload}. {_singkat}"
 
             _upload_package_container = st.container(key=f"ppk_upload_package_{_kode}")
-            with _upload_package_container.expander(_exp_label, expanded=False):
+            with _upload_package_container.expander(
+                _exp_label,
+                expanded=st.session_state.get("ppk_upload_active_package") == _kode,
+            ):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
                 if _ppk_workflow:
                     _transition = " (root legacy/transisi)" if _ppk_cfg.get("transitional") else ""
@@ -1645,6 +1655,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                         "Konfirmasi family paket:",
                         ["(pilih)", "JKK", "PK"],
                         key=f"ppk_workflow_confirm_{_kode}",
+                        on_change=_activate_ppk_package,
+                        args=(_kode,),
                     )
                     if _manual_wf != "(pilih)":
                         _ppk_workflow = _manual_wf
@@ -1658,6 +1670,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                     key=f"hapus_semua_{_kode}",
                     help="Hapus semua dokumen yang sudah terupload di paket ini",
                     use_container_width=True,
+                    on_click=_activate_ppk_package,
+                    args=(_kode,),
                 ):
                     # Kumpulkan versi dari session_state per jenis
                     _to_del = {}
@@ -1699,6 +1713,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                             ["📂 Pilih dari daftar", "⌨️ Paste path manual"],
                             horizontal=True,
                             key=f"foldermode_{_kode}",
+                            on_change=_activate_ppk_package,
+                            args=(_kode,),
                         )
 
                         _selected_folder = None
@@ -1714,6 +1730,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                 _folder_options,
                                 index=_default_idx,
                                 key=f"foldersel_{_kode}",
+                                on_change=_activate_ppk_package,
+                                args=(_kode,),
                             )
                             if _sel != "(pilih folder...)":
                                 _selected_package_folder = os.path.join(_ppk_cfg["root"], _sel)
@@ -1723,6 +1741,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                 value=(_auto_match and os.path.join(_ppk_cfg["root"], _auto_match)) or "",
                                 key=f"folderpath_{_kode}",
                                 placeholder=r"D:\path\ke\folder paket",
+                                on_change=_activate_ppk_package,
+                                args=(_kode,),
                             )
                             # Path dari Explorer sering ikut membawa tanda kutip.
                             _path_clean = os.path.expandvars(
@@ -1813,12 +1833,17 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     key=f"btn_folder_docs_{_kode}",
                                     type="primary",
                                     disabled=not _doc_files,
+                                    on_click=_activate_ppk_package,
+                                    args=(_kode,),
                                 ):
+                                    st.session_state["ppk_upload_active_package"] = _kode
+                                    st.session_state[f"ppk_bulk_logs_{_kode}"] = []
                                     with st.container(border=True):
                                         st.caption(
                                             f"⏳ Mengupload {len(_doc_files)} dokumen + memilih PP..."
                                         )
                                         def _flog(msg):
+                                            st.session_state[f"ppk_bulk_logs_{_kode}"].append(str(msg))
                                             st.write(msg)
                                         _fres = _ppk_up.upload_dokumen_dari_folder(
                                             kode_paket=_kode,
@@ -1827,6 +1852,26 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                             pdf_only=True,
                                             workflow=_ppk_workflow,
                                         )
+                                        st.session_state["ppk_bulk_results"][_kode] = _fres
+                                        for _fresh_jenis in ("kak", "kontrak", "uraian", "lainnya"):
+                                            _fresh_status = _ppk_up.list_dokumen_cdp(
+                                                _kode, _fresh_jenis
+                                            )
+                                            if _fresh_status.get("ok"):
+                                                st.session_state[
+                                                    f"ppk_versi_{_kode}_{_fresh_jenis}"
+                                                ] = list(
+                                                    _fresh_status.get("documents", []) or []
+                                                )
+                                            else:
+                                                _refresh_warning = (
+                                                    f"Refresh {_fresh_jenis} gagal: "
+                                                    f"{_fresh_status.get('error', 'respons tidak valid')}"
+                                                )
+                                                st.session_state[
+                                                    f"ppk_bulk_logs_{_kode}"
+                                                ].append(f"⚠️ {_refresh_warning}")
+                                                st.warning(f"⚠️ {_refresh_warning}")
                                         if _fres.get("total_err", 0) == 0:
                                             st.success(
                                                 f"Upload selesai: {_fres.get('total_ok', 0)} berhasil"
@@ -1858,6 +1903,15 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     if _fres.get("pp_ok") is False:
                                         st.error("❌ PP gagal dipilih; tidak ada dokumen yang diupload.")
 
+                                _saved_bulk_logs = st.session_state.get(f"ppk_bulk_logs_{_kode}", [])
+                                _saved_bulk_result = st.session_state.get("ppk_bulk_results", {}).get(_kode)
+                                if _saved_bulk_result and _saved_bulk_logs:
+                                    st.caption(
+                                        f"Hasil terakhir: {_saved_bulk_result.get('total_ok', 0)} terverifikasi, "
+                                        f"{_saved_bulk_result.get('total_err', 0)} gagal"
+                                    )
+                                    st.code("\n".join(_saved_bulk_logs[-30:]), language=None)
+
                                 if _nd_files:
                                     if len(_nd_files) > 1:
                                         st.warning("⚠️ Ditemukan lebih dari satu Nota Dinas. Pilih satu file melalui uploader Nota Dinas di tab khusus.")
@@ -1866,6 +1920,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         if st.button(
                                             "📨 Upload Nota Dinas + Kirim Email",
                                             key=f"btn_folder_nd_{_kode}",
+                                            on_click=_activate_ppk_package,
+                                            args=(_kode,),
                                         ):
                                             _nd_file = _nd_files[0]
                                             _nd_log_box = st.container(border=True)
@@ -1889,23 +1945,40 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                             else:
                                 st.info("Tidak ada file yang cocok di folder ini.")
 
-                # 4 tab per paket
-                _tab_labels = [f"{s['icon']} {s['label']}{' *' if s['required'] else ''}" for s in _UPLOAD_SECTIONS]
-                _tabs = st.tabs(_tab_labels)
-
-                for _tab, _sec in zip(_tabs, _UPLOAD_SECTIONS):
-                    with _tab:
+                # Stateful compact category selector; st.tabs reset after rerun.
+                _category_labels = {
+                    s["key"]: f"{s['icon']} {s['label']}{' *' if s['required'] else ''}"
+                    for s in _UPLOAD_SECTIONS
+                }
+                _active_category = st.radio(
+                    "Kategori dokumen",
+                    list(_category_labels),
+                    format_func=lambda _key: _category_labels[_key],
+                    horizontal=True,
+                    key=f"ppk_upload_category_{_kode}",
+                    label_visibility="collapsed",
+                    on_change=_activate_ppk_package,
+                    args=(_kode,),
+                )
+                for _sec in _UPLOAD_SECTIONS:
+                    if _sec["key"] != _active_category:
+                        continue
+                    with st.container():
                         if _sec["key"] == "nd":
                             st.info("ℹ️ Dokumen Nota Dinas PPK yang terupload tidak ditampilkan di list ini karena perbedaan endpoint. Cek langsung di SPSE jika ingin melihat daftarnya.")
                             _nd_up = st.file_uploader(
                                 "Pilih file Nota Dinas PPK:",
                                 type=_sec["accept"],
                                 key=f"up_{_kode}_nd_dedicated",
+                                on_change=_activate_ppk_package,
+                                args=(_kode,),
                             )
                             if _nd_up and st.button(
                                 "📨 Upload Nota Dinas + Kirim Email",
                                 key=f"btn_{_kode}_nd_dedicated",
                                 type="primary",
+                                on_click=_activate_ppk_package,
+                                args=(_kode,),
                             ):
                                 with st.container(border=True):
                                     st.caption(f"⏳ Memproses Nota Dinas {_nd_up.name}...")
@@ -1941,7 +2014,13 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                 for _doc in _existing:
                                     _dc1, _dc2 = st.columns([5, 1])
                                     _dc1.markdown(f"📎 `{_doc['nama_file']}`")
-                                    if _dc2.button("🗑️", key=f"del_{_kode}_{_sec['key']}_{_doc['versi']}", help="Hapus"):
+                                    if _dc2.button(
+                                        "🗑️",
+                                        key=f"del_{_kode}_{_sec['key']}_{_doc['versi']}",
+                                        help="Hapus",
+                                        on_click=_activate_ppk_package,
+                                        args=(_kode,),
+                                    ):
                                         if _ppk_up.hapus_dokumen(_kode, _sec["key"], _doc["versi"]):
                                             # Hapus dari session_state
                                             _vk3 = f"ppk_versi_{_kode}_{_sec['key']}"
@@ -1961,11 +2040,21 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                             type=_sec["accept"],
                             key=f"up_{_kode}_{_sec['key']}",
                             label_visibility="collapsed",
+                            on_change=_activate_ppk_package,
+                            args=(_kode,),
                         )
                         if not _ppk_workflow:
                             st.caption("🔒 Upload dikunci sampai family JKK/PK terkonfirmasi.")
                         if _up:
-                            if st.button(f"⬆️ Upload **{_up.name}** ke SPSE", key=f"btn_{_kode}_{_sec['key']}", type="primary", disabled=not _ppk_workflow):
+                            if st.button(
+                                f"⬆️ Upload **{_up.name}** ke SPSE",
+                                key=f"btn_{_kode}_{_sec['key']}",
+                                type="primary",
+                                disabled=not _ppk_workflow,
+                                on_click=_activate_ppk_package,
+                                args=(_kode,),
+                            ):
+                                st.session_state["ppk_upload_active_package"] = _kode
                                 with st.container(border=True):
                                     st.caption(f"⏳ Mengupload {_up.name}...")
                                     def _mklog(container):
@@ -1994,6 +2083,19 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         st.session_state[_vkey] = _vlist
                                         for _warning in _res.get("replacement_errors", []):
                                             st.warning(f"⚠️ Replace: {_warning}")
+                                        # Refresh dari endpoint SPSE, bukan hanya cache lokal.
+                                        _refresh_status = _ppk_up.list_dokumen_cdp(
+                                            _kode, _sec["key"]
+                                        )
+                                        if _refresh_status.get("ok"):
+                                            st.session_state[_vkey] = list(
+                                                _refresh_status.get("documents", []) or []
+                                            )
+                                        else:
+                                            st.warning(
+                                                "⚠️ Refresh daftar SPSE gagal; cache lama dipertahankan: "
+                                                f"{_refresh_status.get('error', 'respons tidak valid')}"
+                                            )
                                         st.rerun()
                                     else:
                                         st.error(_res.get("error", "Unknown error"))
@@ -2007,6 +2109,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                     type="primary",
                     use_container_width=True,
                     disabled=not _ppk_workflow,
+                    on_click=_activate_ppk_package,
+                    args=(_kode,),
                 ):
                     _final_box = st.container(border=True)
                     _final_box.info("Menyimpan dan membuat paket...")
