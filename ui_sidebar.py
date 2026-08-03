@@ -24,6 +24,13 @@ def _friendly_login_error(exc: Exception) -> str:
     return "Login gagal. Periksa Brave, SPSE, dan kredensial role, lalu coba lagi."
 
 
+def _clear_login_failure_state() -> None:
+    """Hapus pesan/error pipeline lama saat user mengganti role login."""
+    st.session_state.pop("login_failed", None)
+    st.session_state.pop("login_failed_role", None)
+    st.session_state.pop("manual_spse_captcha", None)
+
+
 @st.cache_data(show_spinner=False)
 def _get_dark_css() -> str:
     return """
@@ -189,6 +196,8 @@ def _sidebar_login_form():
         try:
             with st.spinner("Menghubungkan..."):
                 spse_browser.buka_browser(SPSE_BASE_URL)
+                if spse_browser.fokuskan_tab_spse() is None:
+                    raise RuntimeError("Tidak ada tab SPSE yang dapat difokuskan di Brave.")
             st.success("Terhubung!")
             st.rerun(scope="app")
         except RuntimeError as e:
@@ -224,6 +233,7 @@ def _sidebar_login_form():
         "Login sebagai",
         ["PP", "POKJA", "PPK", "E-Katalog"],
         key="header_login_role",
+        on_change=_clear_login_failure_state,
     )
     st.session_state["selected_login_role"] = _login_role
 
@@ -299,7 +309,12 @@ def _sidebar_login_form():
                 st.rerun(scope="app")
     else:
         st.caption("Auto-login: sesi aktif → Tesseract → GPT-5.6 Luna Medium → Gemini 2.5 Flash Lite.")
-        if st.button("🚀 Launch & Auto-Login", type="secondary", use_container_width=True):
+        if st.button(
+            f"🚀 Buka Brave + Auto-Login ({_login_role})",
+            type="secondary",
+            use_container_width=True,
+        ):
+            _clear_login_failure_state()
             try:
                 import spse_login as _spse_login
                 _login_logs: list[str] = []
@@ -316,9 +331,15 @@ def _sidebar_login_form():
                                 break
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
+                    # Jika Brave hidup tanpa tab (misalnya semua tab ditutup
+                    # sebelum Brave ditutup), buat ulang satu tab SPSE.
+                    if spse_browser.pastikan_tab_spse() is None:
+                        raise RuntimeError("Brave hidup, tetapi tab SPSE tidak dapat dibuka.")
                     # Brave dapat me-restore banyak tab error lama.
                     # Tutup hanya tab error, pertahankan tab normal, lalu fokuskan terbaik.
                     spse_browser.rapikan_tab_spse()
+                    if spse_browser.fokuskan_tab_spse() is None:
+                        raise RuntimeError("Brave hidup, tetapi tidak ada tab SPSE yang dapat difokuskan.")
 
                 _log_box = st.empty()
                 # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
@@ -326,7 +347,9 @@ def _sidebar_login_form():
                     _login_logs.append(msg)
 
                 with st.spinner("Auto-login SPSE..."):
-                    _spse_login.login_spse(role=_login_role, log_fn=_log)
+                    _login_ok = _spse_login.login_spse(role=_login_role, log_fn=_log)
+                if not _login_ok:
+                    raise RuntimeError("Pipeline auto-login tidak memvalidasi sesi SPSE.")
 
                 # Tampilkan log setelah selesai (di main thread)
                 _log_box.info("\n".join(_login_logs))

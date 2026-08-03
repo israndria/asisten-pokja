@@ -323,11 +323,193 @@ async def _fokuskan_tab_spse_async():
     return page
 
 
+def _cdp_listener_pids() -> set[int]:
+    """Ambil PID Brave yang sedang listen pada port CDP aktif."""
+    import subprocess as _sp
+
+    try:
+        result = _sp.run(
+            ["netstat", "-ano"],
+            capture_output=True,
+            text=True,
+            shell=True,
+            timeout=5,
+        )
+    except Exception:
+        return set()
+
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 5 and parts[1].endswith(f":{CDP_PORT}") and parts[3] == "LISTENING":
+            if parts[-1].isdigit():
+                pids.add(int(parts[-1]))
+    return pids
+
+
+def _brave_cdp_window_handles() -> list[int]:
+    """Cari HWND window Brave milik PID CDP, termasuk window tersembunyi."""
+    if os.name != "nt":
+        return []
+
+    import ctypes
+    from ctypes import wintypes
+
+    pids = _cdp_listener_pids()
+    if not pids:
+        return []
+
+    user32 = ctypes.windll.user32
+    handles: list[int] = []
+    enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @enum_proc_type
+    def _enum_window(hwnd, _lparam):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if int(pid.value) not in pids:
+            return True
+
+        class_name = ctypes.create_unicode_buffer(128)
+        user32.GetClassNameW(hwnd, class_name, len(class_name))
+        if class_name.value.startswith("Chrome_WidgetWin_"):
+            handles.append(int(hwnd))
+        return True
+
+    user32.EnumWindows(_enum_window, 0)
+    return handles
+
+
+def _fokuskan_jendela_brave() -> bool:
+    """Restore + foreground-kan window Brave yang memiliki port CDP."""
+    if os.name != "nt":
+        return False
+
+    handles = _brave_cdp_window_handles()
+    if not handles:
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    hwnd = wintypes.HWND(handles[0])
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    else:
+        user32.ShowWindow(hwnd, 5)  # SW_SHOW
+    user32.BringWindowToTop(hwnd)
+    user32.AllowSetForegroundWindow(0xFFFFFFFF)  # ASFW_ANY
+    focused = bool(user32.SetForegroundWindow(hwnd))
+
+    # Windows bisa menolak SetForegroundWindow lintas thread. Attach sementara
+    # ke foreground thread hanya sebagai fallback setelah user menekan tombol.
+    if not focused:
+        foreground = user32.GetForegroundWindow()
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
+        if target_thread and foreground_thread and target_thread != foreground_thread:
+            current_thread = user32.GetCurrentThreadId()
+            user32.AttachThreadInput(current_thread, foreground_thread, True)
+            try:
+                user32.BringWindowToTop(hwnd)
+                focused = bool(user32.SetForegroundWindow(hwnd))
+            finally:
+                user32.AttachThreadInput(current_thread, foreground_thread, False)
+    return focused or int(user32.GetForegroundWindow() or 0) == int(hwnd.value or 0)
+
+
+def _visible_brave_command(*, with_cdp: bool = False) -> list[str]:
+    """Susun command profile sesi tanpa startup flag yang menyembunyikan GUI."""
+    command = [
+        CHROME_EXE,
+        f"--user-data-dir={BROWSER_SESSION_DIR}",
+        "--profile-directory=Default",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--new-window",
+        SPSE_BASE_URL,
+    ]
+    if with_cdp:
+        command.insert(1, f"--remote-debugging-port={CDP_PORT}")
+    return command
+
+
+def _buka_jendela_brave_visible() -> bool:
+    """Minta profile CDP yang sudah hidup membuat window GUI terlihat."""
+    try:
+        # Wajib Popen asli. Popen module-level sudah dipatch SW_HIDE untuk
+        # proses Playwright sehingga tidak boleh dipakai untuk Brave GUI.
+        _OrigPopen(
+            _visible_brave_command(),
+            stdin=_subprocess.DEVNULL,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except Exception:
+        return False
+
+    import time as _time
+    for _ in range(20):
+        if _fokuskan_jendela_brave():
+            return True
+        _time.sleep(0.25)
+    return False
+
+
+def pastikan_jendela_brave() -> bool:
+    """Pastikan browser CDP punya window GUI yang terlihat dan terfokus."""
+    if _fokuskan_jendela_brave():
+        return True
+    if not _cek_cdp_aktif():
+        return False
+    return _buka_jendela_brave_visible()
+
+
+async def _pastikan_tab_spse_async():
+    """Fokuskan tab SPSE; jika semua tab tertutup, gunakan/buka satu tab."""
+    page = await _fokuskan_tab_spse_async()
+    if page is not None:
+        return page
+
+    context = _get_ctx()
+    if context is None:
+        return None
+    pages = [p for p in context.pages if not p.is_closed()]
+    # Jangan menimpa tab eksternal user. Reuse hanya blank/new-tab; selain itu
+    # buka satu tab baru agar tab YouTube/Inaproc tetap aman.
+    page = next(
+        (p for p in pages if p.url in ("", "about:blank", "chrome://newtab/")),
+        None,
+    ) or await context.new_page()
+    await page.goto(SPSE_BASE_URL, wait_until="domcontentloaded", timeout=30000)
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+    return page
+
+
+def pastikan_tab_spse():
+    """Pastikan window Brave terlihat dan minimal satu tab SPSE tersedia."""
+    if _get_ctx() is None:
+        return None
+    pastikan_jendela_brave()
+    page = _run(_pastikan_tab_spse_async(), timeout=40)
+    # Window bisa baru muncul setelah page dibuat; ulangi focus sekali.
+    pastikan_jendela_brave()
+    return page
+
+
 def fokuskan_tab_spse():
     """Bawa tab SPSE authenticated terbaik ke foreground tanpa navigasi."""
     if _get_ctx() is None:
         return None
-    return _run(_fokuskan_tab_spse_async(), timeout=15)
+    page = _run(_fokuskan_tab_spse_async(), timeout=15)
+    if page is not None:
+        pastikan_jendela_brave()
+    return page
 
 
 async def _rapikan_tab_spse_async():
@@ -571,14 +753,39 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
 
 
 def _cek_cdp_aktif() -> bool:
-    """Cek apakah Brave sudah listen di CDP port."""
+    """Cek apakah endpoint DevTools Brave benar-benar sehat.
+
+    Cek TCP saja bisa false-positive: port masih LISTENING walau endpoint
+    CDP sudah stale/tidak merespons. Validasi `/json/version` agar UI tidak
+    menganggap sesi browser masih aktif hanya karena ada proses di port 9222.
+    """
     import socket
     try:
         s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=1)
         s.close()
-        return True
     except OSError:
         return False
+
+    try:
+        import json as _json
+        import urllib.request as _urlreq
+
+        request = _urlreq.Request(f"http://127.0.0.1:{CDP_PORT}/json/version")
+        with _urlreq.urlopen(request, timeout=1.5) as response:
+            if getattr(response, "status", 200) != 200:
+                raise RuntimeError(f"HTTP {getattr(response, 'status', '?')}")
+            payload = _json.loads(response.read().decode("utf-8", errors="replace"))
+        healthy = bool(payload.get("Browser") or payload.get("webSocketDebuggerUrl"))
+        if healthy:
+            return True
+    except Exception:
+        pass
+
+    # Jangan biarkan cache tab/cookie lama membuat Streamlit terlihat login.
+    global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    _cdp_tabs_cache = []
+    _cdp_tabs_cache_ts = 0.0
+    return False
 
 
 def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
@@ -628,15 +835,15 @@ def launch_chrome_dengan_cdp():
     os.makedirs(session_dir, exist_ok=True)
     # Clone profil jika belum pernah (idempoten)
     clone_profil_ke_session(force=False)
-    subprocess.Popen([
-        CHROME_EXE,
-        f"--remote-debugging-port={CDP_PORT}",
-        f"--user-data-dir={session_dir}",
-        "--profile-directory=Default",
-        "--no-first-run",
-        "--no-default-browser-check",
-        SPSE_BASE_URL,
-    ])
+    # Jangan pakai subprocess.Popen module-level: di atas sudah di-patch
+    # SW_HIDE untuk proses Playwright dan itu membuat window Brave invisible.
+    _OrigPopen(
+        _visible_brave_command(with_cdp=True),
+        stdin=_subprocess.DEVNULL,
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
+        close_fds=True,
+    )
 
 
 async def _tutup_async():
@@ -667,6 +874,7 @@ def tutup_browser():
     _kill_browser()
     _cdp_tabs_cache = []
     _cdp_tabs_cache_ts = 0.0
+    _clear_cookie_cache()
     # Hapus last_role saat browser ditutup
     try:
         from pathlib import Path as _Path
@@ -1559,6 +1767,13 @@ _COOKIE_CACHE_TTL = 300.0  # cookie valid 5 menit (cukup utk bulk paralel)
 _cookie_lock = threading.Lock()
 
 
+def _clear_cookie_cache() -> None:
+    """Hapus cookie cache lokal agar sesi browser mati tidak dipakai ulang."""
+    global _cookie_cache, _cookie_cache_ts
+    _cookie_cache = ""
+    _cookie_cache_ts = 0.0
+
+
 def get_spse_cookies(force: bool = False) -> str:
     """
     Ambil cookies SPSE via Playwright context yang sudah ada.
@@ -1567,6 +1782,11 @@ def get_spse_cookies(force: bool = False) -> str:
     """
     import time as _time
     global _cookie_cache, _cookie_cache_ts
+
+    # Jangan mengembalikan cookie lama bila CDP sudah mati/stale.
+    if not _cek_cdp_aktif():
+        _clear_cookie_cache()
+        return ""
 
     if force:
         _cookie_cache = ""
@@ -1637,5 +1857,8 @@ def get_spse_cookies(force: bool = False) -> str:
         except Exception:
             pass
 
-        return _cookie_cache  # kembalikan cache lama jika semua gagal
+        # Semua jalur gagal: sesi harus dianggap tidak tersedia, bukan
+        # mengembalikan cookie stale yang dapat membuat auto-login palsu.
+        _clear_cookie_cache()
+        return ""
 

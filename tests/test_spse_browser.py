@@ -6,6 +6,50 @@ import spse_browser
 
 
 class SpseBrowserTabSelectionTest(unittest.TestCase):
+    def test_cdp_health_requires_devtools_http_endpoint(self):
+        class _Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"Browser":"Brave/1","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/browser/1"}'
+
+        with patch("socket.create_connection") as socket_connect, \
+                patch("urllib.request.urlopen", return_value=_Response()):
+            socket_connect.return_value.__enter__.return_value = socket_connect.return_value
+            self.assertTrue(spse_browser._cek_cdp_aktif())
+
+        class _InvalidResponse(_Response):
+            def read(self):
+                return b"{}"
+
+        with patch("socket.create_connection"), \
+                patch("urllib.request.urlopen", return_value=_InvalidResponse()):
+            self.assertFalse(spse_browser._cek_cdp_aktif())
+
+    def test_brave_gui_command_does_not_inherit_hidden_startup(self):
+        command = spse_browser._visible_brave_command(with_cdp=True)
+
+        self.assertEqual(command[0], spse_browser.CHROME_EXE)
+        self.assertIn(f"--remote-debugging-port={spse_browser.CDP_PORT}", command)
+        self.assertIn("--new-window", command)
+        self.assertNotIn("--headless", command)
+
+    def test_launch_brave_uses_original_popen(self):
+        with patch.object(spse_browser, "clone_profil_ke_session", return_value=(True, "")), \
+                patch.object(spse_browser, "_OrigPopen") as original_popen:
+            spse_browser.launch_chrome_dengan_cdp()
+
+        original_popen.assert_called_once()
+        command = original_popen.call_args.args[0]
+        self.assertIn(f"--remote-debugging-port={spse_browser.CDP_PORT}", command)
+        self.assertNotIn("startupinfo", original_popen.call_args.kwargs)
+
     def test_access_denied_title_is_not_valid_spse_tab(self):
         base = spse_browser.SPSE_BASE_URL.rstrip("/")
 

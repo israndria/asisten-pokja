@@ -166,10 +166,15 @@ def fetch_paket_ppk() -> list[dict]:
         return []
     status = val.get("status")
     if not val.get("ok"):
+        server_statuses = (500, 502, 503, 504)
         _PPK_FETCH_STATE = {
             "ok": False,
             "status": status,
-            "reason": "auth_error" if status in (401, 403) else "http_error",
+            "reason": (
+                "auth_error" if status in (401, 403)
+                else "server_error" if status in server_statuses
+                else "http_error"
+            ),
         }
         return []
     _PPK_FETCH_STATE = {"ok": True, "status": status, "reason": "ok"}

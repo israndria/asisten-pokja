@@ -26,7 +26,7 @@ def test_fetch_ppk_server_error_is_not_mistaken_for_empty_data():
         assert engine.fetch_paket_ppk() == []
 
     state = engine.get_ppk_fetch_state()
-    assert state["reason"] == "http_error"
+    assert state["reason"] == "server_error"
     assert state["status"] == 500
 
 

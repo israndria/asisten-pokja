@@ -1113,11 +1113,44 @@ if _spse_role == "PPK":
             st.rerun(scope="app")
         except _PpkFetchError as _fetch_exc:
             _status = _fetch_exc.state.get("status") or _fetch_exc.state.get("reason")
-            st.error(
-                f"Daftar paket PPK belum dapat dibaca dari SPSE (status: {_status}). "
-                "Ini bukan berarti paket berjumlah 0."
-            )
-            if st.button("🔄 Coba baca ulang daftar paket", key="ppk_retry_fetch_error"):
+            _reason = _fetch_exc.state.get("reason")
+            if _reason == "cdp_error":
+                invalidate_ppk_session_state()
+                st.session_state.pop("spse_role", None)
+                st.session_state["header_login_role"] = "PPK"
+                st.session_state["selected_login_role"] = "PPK"
+                st.session_state["_spse_relogin_reason"] = (
+                    "Koneksi Brave/CDP terputus saat membaca paket PPK. "
+                    "Silakan jalankan Launch & Auto-Login lagi."
+                )
+                _load_paket_ppk.clear()
+                st.rerun(scope="app")
+
+            if _reason == "server_error":
+                st.warning(
+                    f"SPSE/Cloudflare sedang mengembalikan HTTP {_status}. "
+                    "Ini bukan berarti login PPK gagal atau paket berjumlah 0. "
+                    "Sesi tetap dipertahankan; coba ulang beberapa saat lagi."
+                )
+            else:
+                st.error(
+                    f"Daftar paket PPK belum dapat dibaca dari SPSE (status: {_status}). "
+                    "Ini bukan berarti paket berjumlah 0."
+                )
+            _retry_col, _focus_col = st.columns(2)
+            with _retry_col:
+                _retry_fetch = st.button("🔄 Coba baca ulang", key="ppk_retry_fetch_error")
+            with _focus_col:
+                _focus_fetch = st.button("↗️ Fokuskan Brave", key="ppk_focus_fetch_error")
+            if _focus_fetch:
+                try:
+                    spse_browser.buka_browser(navigate=False)
+                    if spse_browser.fokuskan_tab_spse() is None:
+                        raise RuntimeError("Tidak ada tab SPSE yang dapat difokuskan.")
+                    st.success("Tab SPSE difokuskan. Coba baca ulang.")
+                except Exception as _focus_exc:
+                    st.error(f"Brave/CDP belum dapat difokuskan: {_focus_exc}")
+            if _retry_fetch:
                 _load_paket_ppk.clear()
                 st.rerun(scope="app")
             st.stop()
