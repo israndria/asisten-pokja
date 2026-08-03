@@ -995,6 +995,7 @@ elif _previous_spse_identity:
     st.session_state["_spse_session_epoch"] = time.time_ns()
 
 _PPK_MODE_OPTIONS = ["PPK - Konsultan", "PPK - Pekerjaan Konstruksi"]
+_PPK_DEFAULT_MODE = "PPK - Pekerjaan Konstruksi"
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", *_PPK_MODE_OPTIONS]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
@@ -1226,13 +1227,14 @@ if _spse_role == "PPK":
         st.stop()
 
 if _spse_role:
+    _default_mode = _PPK_DEFAULT_MODE if _spse_role == "PPK" else _MODE_OPTIONS[0]
     if "app_mode" not in st.session_state:
-        st.session_state["app_mode"] = _MODE_OPTIONS[0]
+        st.session_state["app_mode"] = _default_mode
 
     _mode_col, _ = st.columns([2, 5])
     with _mode_col:
         if st.session_state.get("app_mode") not in _MODE_OPTIONS:
-            st.session_state["app_mode"] = _MODE_OPTIONS[0]
+            st.session_state["app_mode"] = _default_mode
             st.rerun()
         _selected_mode = st.radio(
             "Mode:",

@@ -90,6 +90,15 @@ LOG_DIR = os.path.join(RUNTIME_ROOT, "logs")
 SECRET_ROOT = os.path.normpath(
     os.environ.get("POKJA_SECRET_ROOT", os.path.join(CODE_ROOT, "Secrets"))
 )
+# Kredensial SPSE tetap terisolasi di profile user per-PC. Ini menjaga
+# kompatibilitas workflow PC kantor/laptop tanpa mencampur credential SPSE
+# dengan secret aplikasi canonical (mis. Supabase).
+SPSE_SECRET_ROOT = os.path.normpath(
+    os.environ.get(
+        "POKJA_SPSE_SECRET_ROOT",
+        os.path.join(LOCALAPPDATA, "POKJA2026", "Secrets"),
+    )
+)
 
 for _runtime_dir in (RUNTIME_ROOT, DOWNLOAD_DIR, BROWSER_SESSION_DIR, STATE_DIR, LOG_DIR):
     os.makedirs(_runtime_dir, exist_ok=True)
@@ -97,12 +106,17 @@ for _runtime_dir in (RUNTIME_ROOT, DOWNLOAD_DIR, BROWSER_SESSION_DIR, STATE_DIR,
 
 def find_secret(filename: str) -> pathlib.Path:
     """Return lokasi secret lokal; jangan membaca secret dari Google Drive."""
-    candidates = [
-        pathlib.Path(CODE_ROOT) / "Secrets" / filename,
-        pathlib.Path(SECRET_ROOT) / filename,
-        pathlib.Path(BASE_DIR) / filename,
-        pathlib.Path(V19_ROOT) / filename,
-    ]
+    candidates = []
+    if filename == "secret_spse.env":
+        candidates.append(pathlib.Path(SPSE_SECRET_ROOT) / filename)
+    candidates.extend(
+        [
+            pathlib.Path(CODE_ROOT) / "Secrets" / filename,
+            pathlib.Path(SECRET_ROOT) / filename,
+            pathlib.Path(BASE_DIR) / filename,
+            pathlib.Path(V19_ROOT) / filename,
+        ]
+    )
     for candidate in candidates:
         if candidate.exists():
             return candidate
