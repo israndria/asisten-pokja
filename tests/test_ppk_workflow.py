@@ -1,7 +1,8 @@
 import os
+from types import SimpleNamespace
 
 import ppk_upload_engine as engine
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 def test_fetch_ppk_auth_error_is_not_mistaken_for_empty_data():
@@ -246,6 +247,21 @@ def test_replacement_loads_existing_docs_when_caller_does_not_supply_them(monkey
     assert result["replaced_versions"] == [2]
 
 
+def test_list_dokumen_uses_cdp_api_fallback_without_browser_tab(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "list_dokumen_cdp",
+        lambda kode, jenis: {
+            "ok": True,
+            "documents": [{"nama_file": "1. KAK.pdf", "versi": 0}],
+        },
+    )
+
+    assert engine.list_dokumen("PK-1", "kak") == [
+        {"nama_file": "1. KAK.pdf", "versi": 0}
+    ]
+
+
 def test_replacement_preserves_new_upload_when_delete_fails():
     result = engine.upload_dokumen_dengan_replace(
         "PK-1", "uraian", b"new", "2. Uraian Baru.pdf", "application/pdf",
@@ -317,6 +333,47 @@ def test_submit_invalid_response_is_not_success():
             "PK-1", "lainnya", b"x", "11. Diskresi PA.pdf", "application/pdf"
         )
     assert result["ok"] is False
+
+
+def test_download_existing_document_uses_direct_http_and_drops_cookie_on_signed_url():
+    spse_response = SimpleNamespace(
+        ok=True,
+        status_code=302,
+        is_redirect=True,
+        is_permanent_redirect=False,
+        headers={"Location": "https://storage.googleapis.com/signed/token"},
+        content=b"",
+    )
+    signed_response = SimpleNamespace(
+        ok=True,
+        status_code=200,
+        is_redirect=False,
+        is_permanent_redirect=False,
+        headers={"content-type": "application/pdf"},
+        content=b"%PDF-old",
+    )
+
+    with patch("spse_browser.get_spse_cookies", return_value="SPSE_SESSION=secret"):
+        with patch("requests.get", side_effect=[spse_response, signed_response]) as http_get:
+            result = engine.download_existing_document({
+                "nama_file": "1. KAK.pdf",
+                "url_dl": "https://spse.inaproc.id/tapinkab/dl/token",
+            })
+
+    assert result == {
+        "ok": True,
+        "file_bytes": b"%PDF-old",
+        "mime_type": "application/pdf",
+        "file_name": "1. KAK.pdf",
+    }
+    assert http_get.call_args_list[0].kwargs["headers"]["Cookie"] == "SPSE_SESSION=secret"
+    assert "Cookie" not in http_get.call_args_list[1].kwargs["headers"]
+    assert http_get.call_args_list[0].args == (
+        "https://spse.inaproc.id/tapinkab/dl/token",
+    )
+    assert http_get.call_args_list[1].args == (
+        "https://storage.googleapis.com/signed/token",
+    )
 
 
 def test_submit_accepts_single_normalized_file_entry_and_zero_version():
@@ -515,6 +572,46 @@ def test_verification_rejects_mismatched_version(monkeypatch):
         "PK-1", "lainnya", "11. Diskresi PA.pdf", 5, retries=1
     )
     assert result["verified"] is False
+
+
+def test_reconcile_upload_results_rejects_file_missing_from_final_spse_list():
+    result = engine.reconcile_upload_results(
+        [{
+            "jenis": "uraian",
+            "nama": "2. U_Singkat.pdf",
+            "ok": True,
+            "verified": True,
+            "versi": 7,
+        }],
+        {"uraian": {"ok": True, "status": 200, "documents": []}},
+    )[0]
+
+    assert result["ok"] is False
+    assert result["verified"] is False
+    assert result["authoritative"] is False
+    assert result["versi"] is None
+    assert "tidak ditemukan" in result["error"]
+
+
+def test_reconcile_upload_results_accepts_only_matching_name_and_version():
+    result = engine.reconcile_upload_results(
+        [{
+            "jenis": "kak",
+            "nama": "1. KAK.pdf",
+            "ok": True,
+            "verified": True,
+            "versi": "11",
+        }],
+        {"kak": {
+            "ok": True,
+            "status": 200,
+            "documents": [{"nama_file": "1. KAK.pdf", "versi": 11}],
+        }},
+    )[0]
+
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["authoritative"] is True
 
 
 def test_list_dokumen_cdp_rejects_http_error():

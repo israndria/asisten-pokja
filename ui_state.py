@@ -64,12 +64,14 @@ def activate_mode(mode: str) -> bool:
     return changed
 
 
-def invalidate_ppk_session_state() -> None:
-    """Bersihkan seluruh state UI/cache yang terikat sesi PPK."""
+def invalidate_ppk_session_state(clear_navigation: bool = True) -> None:
+    """Bersihkan state PPK; navigasi boleh dipertahankan saat cookie berotasi."""
     st.session_state["_spse_session_epoch"] = time.time_ns()
     for key in list(st.session_state.keys()):
         if str(key).startswith("ppk_"):
             st.session_state.pop(key, None)
+    if clear_navigation:
+        st.session_state.pop("active_ppk_upload_package", None)
 
 
 def package_key(mode: str, kode: Any, name: str) -> str:
@@ -77,3 +79,8 @@ def package_key(mode: str, kode: Any, name: str) -> str:
     safe_mode = mode_slug(mode)
     safe_kode = re.sub(r"[^A-Za-z0-9_.:-]+", "_", str(kode or "unknown"))
     return f"{safe_mode}:{safe_kode}:{name}"
+
+
+def ppk_upload_expander_label(label: str, active: bool) -> str:
+    """Beri identitas render berbeda agar expander aktif terbuka setelah rerun."""
+    return f"{'🔽' if active else '▶️'} {label}"

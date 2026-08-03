@@ -18,3 +18,12 @@ def test_invalidate_ppk_session_state_preserves_non_ppk_state():
         "_spse_session_epoch": 123,
         "pl_rows": [{"kode": "tetap"}],
     }
+
+
+def test_ppk_upload_expander_label_changes_identity_when_active():
+    idle = ui_state.ppk_upload_expander_label("10. Paket", active=False)
+    active = ui_state.ppk_upload_expander_label("10. Paket", active=True)
+
+    assert idle != active
+    assert idle.endswith("10. Paket")
+    assert active.endswith("10. Paket")

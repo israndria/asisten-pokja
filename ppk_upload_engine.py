@@ -890,117 +890,77 @@ def list_bulk_semua_paket(kode_list: list[str]) -> dict[str, dict[str, list[dict
 
 
 def list_dokumen(kode_paket: str, jenis: str, cookies: dict = None) -> list[dict]:
+    """Ambil daftar dokumen lewat endpoint API dari tab SPSE aktif.
+
+    ``list_dokumen_cdp`` memakai WebSocket CDP + ``fetch`` dengan sesi tab
+    yang sudah login. Ini menghindari membuka tab Playwright baru dan
+    mencegah state/session browser terganggu saat upload atau hapus dokumen.
+    ``cookies`` dipertahankan pada signature agar caller lama tetap kompatibel.
     """
-    Ambil daftar dokumen terunggah via Playwright goto (tabel diisi JS, bukan SSR).
-    Navigate ke endpoint, tunggu #files tbody terisi, parse .removeDok.
-    """
-    endpoint = _LIST_ENDPOINTS.get(jenis)
-    if not endpoint:
+    result = list_dokumen_cdp(kode_paket, jenis)
+    if not result.get("ok"):
         return []
-
-    url = f"https://spse.inaproc.id/{_LPSE}/dokumennontender/{kode_paket}/{endpoint}"
-    import subprocess, sys, json as _json, tempfile, os
-
-    script = f"""
-import sys, json
-from playwright.sync_api import sync_playwright
-
-url = {_json.dumps(url)}
-with sync_playwright() as pw:
-    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
-    ctx = browser.contexts[0]
-    # Buka halaman baru agar tidak ganggu tab user
-    page = ctx.new_page()
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        # Tunggu jQuery populate #files tbody (via uploadFlow successData)
-        # Max 8 detik; kalau tidak ada row, kembalikan []
-        try:
-            page.wait_for_function(
-                "() => document.querySelectorAll('#files tbody tr td').length > 0",
-                timeout=8000
-            )
-        except Exception:
-            pass  # timeout = tidak ada file
-        result = page.evaluate('''() => {{
-            const rows = document.querySelectorAll("#files tbody tr");
-            const out = [];
-            rows.forEach(tr => {{
-                const a = tr.querySelector("td a");
-                const rem = tr.querySelector(".removeDok");
-                const versi = rem ? parseInt(rem.getAttribute("versi") || "0") : 0;
-                if (a && a.textContent.trim()) {{
-                    out.push({{
-                        nama_file: a.textContent.trim(),
-                        url_dl: a.href || "",
-                        versi: versi,
-                    }});
-                }}
-            }});
-            return out;
-        }}''')
-        print(json.dumps({{"ok": True, "value": result}}))
-    except Exception as e:
-        print(json.dumps({{"ok": False, "error": str(e)}}))
-    finally:
-        page.close()
-"""
-    fd, path = tempfile.mkstemp(suffix="_list_dok.py", prefix="pokja_")
-    os.write(fd, script.encode())
-    os.close(fd)
-    try:
-        proc = subprocess.run(
-            [sys.executable, path],
-            capture_output=True, timeout=30
-        )
-        stdout = proc.stdout.decode(errors="replace").strip()
-        if stdout:
-            resp = json.loads(stdout)
-            if resp.get("ok"):
-                return resp.get("value") or []
-        return []
-    except Exception:
-        return []
-    finally:
-        os.unlink(path)
+    return list(result.get("documents") or [])
 
 
 def download_existing_document(doc: dict) -> dict:
-    """Backup bytes dokumen lama via tab SPSE sebelum replacement berisiko."""
-    import base64 as _base64
-    import json as _json
+    """Backup bytes dokumen lama via HTTP langsung.
+
+    Endpoint ``/dl/<token>`` mengarahkan ke signed Google Storage URL.
+    Fetch API di tab SPSE gagal membaca redirect/download tersebut dengan
+    ``TypeError: Failed to fetch``. Requests mengikuti redirect secara
+    terpisah: cookie hanya dikirim ke SPSE, bukan ke signed storage URL.
+    """
+    import requests as _requests
     import mimetypes as _mimetypes
+    import spse_browser as _spse_browser
 
     url = (doc or {}).get("url_dl") or (doc or {}).get("url")
     if not url:
         return {"ok": False, "error": "URL download dokumen lama tidak tersedia"}
-    js = f"""
-(async () => {{
-  try {{
-    const r = await fetch({_json.dumps(url)}, {{credentials: 'include'}});
-    if (!r.ok) return {{ok: false, error: 'Download HTTP ' + r.status}};
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {{
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }}
-    return {{ok: true, b64: btoa(binary), mime: r.headers.get('content-type') || ''}};
-  }} catch (e) {{ return {{ok: false, error: String(e)}}; }}
-}})()
-"""
-    ok, value, err = _cdp_eval(js, timeout=120)
-    if not ok or not isinstance(value, dict) or not value.get("ok"):
-        return {"ok": False, "error": (value or {}).get("error") if isinstance(value, dict) else err}
+
     try:
-        data = _base64.b64decode(value.get("b64") or "", validate=True)
+        _cookie = _spse_browser.get_spse_cookies()
+        if not _cookie:
+            return {"ok": False, "error": "Cookie SPSE tidak tersedia"}
+        _headers = {"Cookie": _cookie, "User-Agent": "Mozilla/5.0"}
+        _response = _requests.get(
+            url,
+            headers=_headers,
+            allow_redirects=False,
+            timeout=120,
+        )
+        if _response.status_code in {401, 403}:
+            _cookie = _spse_browser.get_spse_cookies(force=True)
+            _headers["Cookie"] = _cookie
+            _response = _requests.get(
+                url,
+                headers=_headers,
+                allow_redirects=False,
+                timeout=120,
+            )
+        if _response.is_redirect or _response.is_permanent_redirect:
+            _signed_url = _response.headers.get("Location")
+            if not _signed_url:
+                return {"ok": False, "error": "Redirect download tidak memiliki Location"}
+            # Jangan kirim Cookie SPSE ke Google Storage.
+            _response = _requests.get(
+                _signed_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                allow_redirects=True,
+                timeout=120,
+            )
+        if not _response.ok:
+            return {"ok": False, "error": f"Download HTTP {_response.status_code}"}
+        data = _response.content
+        _content_type = _response.headers.get("content-type") or ""
     except Exception as exc:
-        return {"ok": False, "error": f"Backup base64 tidak valid: {exc}"}
+        return {"ok": False, "error": str(exc)}
     name = str((doc or {}).get("nama_file") or "dokumen.pdf")
     return {
         "ok": True,
         "file_bytes": data,
-        "mime_type": value.get("mime") or _mimetypes.guess_type(name)[0] or "application/octet-stream",
+        "mime_type": _content_type or _mimetypes.guess_type(name)[0] or "application/octet-stream",
         "file_name": name,
     }
 
@@ -1100,6 +1060,64 @@ def verifikasi_dokumen_terunggah(
         "documents": last_docs,
         "error": last_error or f"Dokumen {file_name} belum muncul pada daftar SPSE",
     }
+
+
+def reconcile_upload_results(
+    results: list[dict],
+    status_by_jenis: dict[str, dict],
+) -> list[dict]:
+    """Cocokkan hasil upload dengan daftar SPSE terakhir yang authoritative.
+
+    Response submit/getSignedUrl tidak cukup untuk menyatakan file terlihat
+    di SPSE. Caller wajib mengisi ``status_by_jenis`` dari endpoint list
+    terakhir; hasil yang tidak muncul di sana diturunkan menjadi gagal agar
+    UI tidak menampilkan false-success atau file hantu dari session-state.
+    """
+    reconciled = []
+    for raw in results or []:
+        item = dict(raw or {})
+        if not item.get("ok"):
+            reconciled.append(item)
+            continue
+
+        jenis = str(item.get("jenis") or "")
+        file_name = item.get("nama") or item.get("file_name") or ""
+        status = status_by_jenis.get(jenis)
+        documents = status.get("documents") if isinstance(status, dict) else None
+        matched = (
+            isinstance(status, dict)
+            and status.get("ok") is True
+            and isinstance(documents, list)
+            and any(
+                _upload_names_match(doc.get("nama_file"), file_name)
+                and item.get("versi") is not None
+                and doc.get("versi") is not None
+                and str(doc.get("versi")) == str(item.get("versi"))
+                for doc in documents
+                if isinstance(doc, dict)
+            )
+        )
+        if matched:
+            item["verified"] = True
+            item["authoritative"] = True
+        else:
+            item["ok"] = False
+            item["verified"] = False
+            item["authoritative"] = False
+            item["versi"] = None
+            if not isinstance(status, dict) or status.get("ok") is not True:
+                _reason = (
+                    status.get("error", "status endpoint tidak valid")
+                    if isinstance(status, dict)
+                    else "status endpoint tidak tersedia"
+                )
+                item["error"] = f"Verifikasi akhir daftar SPSE gagal: {_reason}"
+            else:
+                item["error"] = (
+                    f"{file_name} tidak ditemukan pada daftar SPSE setelah upload"
+                )
+        reconciled.append(item)
+    return reconciled
 
 
 def _is_duplicate_upload_error(result: dict) -> bool:
@@ -1371,7 +1389,7 @@ def hapus_semua_dokumen(kode_paket: str, versi_map: dict = None) -> dict:
     """
     Hapus semua dokumen (kak/kontrak/uraian/lainnya).
     versi_map: {jenis: [versi, ...]} dari session_state (lebih cepat).
-    Kalau tidak ada, fallback ke list_dokumen (Playwright goto).
+    Kalau tidak ada, fallback ke daftar dokumen API dari tab SPSE aktif.
     Return {"dihapus": N, "gagal": N}.
     """
     jenis_list = [k for k in _LIST_ENDPOINTS if k != "nd"]
@@ -2163,7 +2181,7 @@ def upload_dokumen_dari_folder(
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
-            status = "✅" if result["ok"] else "❌"
+            status = "✅" if result["ok"] and result.get("verified", False) else "❌"
             suffix = "" if result["ok"] else f": {result['error']}"
             _log(
                 f"{status} {result['nama']} → "

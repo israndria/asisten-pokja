@@ -13,7 +13,11 @@ import time
 from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
-from ui_state import activate_mode, invalidate_ppk_session_state
+from ui_state import (
+    activate_mode,
+    invalidate_ppk_session_state,
+    ppk_upload_expander_label,
+)
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
@@ -985,7 +989,12 @@ if _spse_role in ("PP", "POKJA", "PPK"):
 _previous_spse_identity = st.session_state.get("_spse_session_identity")
 if _current_spse_identity:
     if _previous_spse_identity != _current_spse_identity:
-        invalidate_ppk_session_state()
+        # SPSE dapat merotasi SPSE_SESSION pada request yang sah. Cookie
+        # rotation bukan ganti akun; jangan menutup expander aktif atau
+        # membuang state UI hanya karena fingerprint token berubah.
+        _previous_role = str(_previous_spse_identity or "").split(":", 1)[0]
+        if _previous_role and _previous_role != _spse_role:
+            invalidate_ppk_session_state()
     elif "_spse_session_epoch" not in st.session_state:
         st.session_state["_spse_session_epoch"] = time.time_ns()
     st.session_state["_spse_session_identity"] = _current_spse_identity
@@ -1561,13 +1570,26 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             {"key": "lainnya", "label": "Informasi Lainnya",    "icon": "ℹ️", "accept": ["txt","doc","docx","xls","xlsx","pdf","gif","jpeg","jpg","png","zip","rar","rtf"], "required": False},
             {"key": "nd",      "label": "Nota Dinas PPK",       "icon": "📨", "accept": ["pdf","jpg","jpeg","png"], "required": False},
         ]
-        st.session_state.setdefault("ppk_upload_active_package", None)
+        # Navigasi expander sengaja tidak memakai prefix ``ppk_`` karena
+        # invalidate_ppk_session_state membersihkan prefix tersebut saat
+        # SPSE_SESSION berotasi.
+        st.session_state.setdefault("active_ppk_upload_package", None)
+        _PPK_UPLOAD_STATE_SCHEMA = 3
+        if st.session_state.get("_ppk_upload_state_schema") != _PPK_UPLOAD_STATE_SCHEMA:
+            # Migrasi sekali dari cache lama yang meng-append hasil upload
+            # setelah refresh dan dapat menampilkan dokumen duplikat/hantu.
+            for _old_upload_key in list(st.session_state.keys()):
+                if _old_upload_key.startswith(
+                    ("ppk_versi_", "ppk_bulk", "ppk_folder_preview_cache")
+                ):
+                    st.session_state.pop(_old_upload_key, None)
+            st.session_state["_ppk_upload_state_schema"] = _PPK_UPLOAD_STATE_SCHEMA
         st.session_state.setdefault("ppk_bulk_results", {})
         st.session_state.setdefault("ppk_bulk_logs", {})
 
         def _activate_ppk_package(_package_code):
             """Pertahankan expander paket aktif saat widget memicu rerun."""
-            st.session_state["ppk_upload_active_package"] = _package_code
+            st.session_state["active_ppk_upload_package"] = _package_code
 
         # Satu CDP call untuk seluruh paket, bukan empat fetch serial per
         # paket. Isi tetap disimpan per paket agar rerun saat memilih file
@@ -1641,9 +1663,20 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
             _exp_label = f"{_folder_no_upload}. {_singkat}"
 
             _upload_package_container = st.container(key=f"ppk_upload_package_{_kode}")
+            # ``expanded`` hanya menjadi default pada saat expander dibuat;
+            # Streamlit dapat mempertahankan state frontend lama saat widget
+            # anak memicu rerun. Ubah label ketika paket aktif agar elemen
+            # expander dibuat ulang dengan default terbuka. Tanpa ini user
+            # dapat terlempar dari isi paket setelah upload/fetch selesai.
+            _is_upload_package_active = str(
+                st.session_state.get("active_ppk_upload_package") or ""
+            ) == str(_kode or "")
+            _render_exp_label = ppk_upload_expander_label(
+                _exp_label, _is_upload_package_active
+            )
             with _upload_package_container.expander(
-                _exp_label,
-                expanded=st.session_state.get("ppk_upload_active_package") == _kode,
+                _render_exp_label,
+                expanded=_is_upload_package_active,
             ):
                 st.caption(f"[{_status}] {_kode} — {_nama}")
                 if _ppk_workflow:
@@ -1828,6 +1861,7 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     st.caption(f"{len(_doc_files)} dokumen nomor 1-9/11-15 (tanpa Nota Dinas) siap diupload")
                                 if _other_files:
                                     st.caption(f"⏭ {len(_other_files)} file lain (mis. nomor 10) tidak ikut upload bulk")
+                                _bulk_upload_just_ran = False
                                 if st.button(
                                     f"⬆️ Upload Dokumen PPK + Pilih PP ({len(_doc_files)} file)",
                                     key=f"btn_folder_docs_{_kode}",
@@ -1836,7 +1870,8 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                     on_click=_activate_ppk_package,
                                     args=(_kode,),
                                 ):
-                                    st.session_state["ppk_upload_active_package"] = _kode
+                                    _bulk_upload_just_ran = True
+                                    st.session_state["active_ppk_upload_package"] = _kode
                                     st.session_state[f"ppk_bulk_logs_{_kode}"] = []
                                     with st.container(border=True):
                                         st.caption(
@@ -1852,12 +1887,17 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                             pdf_only=True,
                                             workflow=_ppk_workflow,
                                         )
-                                        st.session_state["ppk_bulk_results"][_kode] = _fres
+                                        # Daftar SPSE terakhir adalah sumber
+                                        # kebenaran. Jangan append hasil upload
+                                        # ke cache karena refresh ini sudah
+                                        # memuat file yang benar-benar ada.
+                                        _final_status_by_jenis = {}
                                         for _fresh_jenis in ("kak", "kontrak", "uraian", "lainnya"):
                                             _fresh_status = _ppk_up.list_dokumen_cdp(
                                                 _kode, _fresh_jenis
                                             )
                                             if _fresh_status.get("ok"):
+                                                _final_status_by_jenis[_fresh_jenis] = _fresh_status
                                                 st.session_state[
                                                     f"ppk_versi_{_kode}_{_fresh_jenis}"
                                                 ] = list(
@@ -1872,6 +1912,34 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                                     f"ppk_bulk_logs_{_kode}"
                                                 ].append(f"⚠️ {_refresh_warning}")
                                                 st.warning(f"⚠️ {_refresh_warning}")
+                                        _fres["results"] = _ppk_up.reconcile_upload_results(
+                                            _fres.get("results", []),
+                                            _final_status_by_jenis,
+                                        )
+                                        _fres["total_ok"] = sum(
+                                            1 for _fr in _fres["results"]
+                                            if _fr.get("ok") and _fr.get("verified")
+                                        )
+                                        _fres["total_err"] = len(_fres["results"]) - _fres["total_ok"]
+                                        # Koreksi baris log yang semula berasal
+                                        # dari response submit tetapi gagal
+                                        # pada sinkronisasi daftar terakhir.
+                                        _bulk_log_lines = st.session_state[
+                                            f"ppk_bulk_logs_{_kode}"
+                                        ]
+                                        for _fr in _fres["results"]:
+                                            if _fr.get("ok"):
+                                                continue
+                                            _log_prefix = f"{_fr.get('nama', '')} →"
+                                            for _log_i, _log_line in enumerate(_bulk_log_lines):
+                                                if _log_prefix in _log_line and _log_line.lstrip().startswith(("✅", "❌")):
+                                                    _bulk_log_lines[_log_i] = (
+                                                        f"❌ {_fr.get('nama', '-') } → "
+                                                        f"{_ppk_up.upload_target_label(_fr.get('jenis'))}: "
+                                                        f"{_fr.get('error', 'verifikasi akhir gagal')}"
+                                                    )
+                                                    break
+                                        st.session_state["ppk_bulk_results"][_kode] = _fres
                                         if _fres.get("total_err", 0) == 0:
                                             st.success(
                                                 f"Upload selesai: {_fres.get('total_ok', 0)} berhasil"
@@ -1881,20 +1949,9 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                                 f"Upload selesai: {_fres.get('total_ok', 0)} berhasil, "
                                                 f"{_fres.get('total_err', 0)} gagal"
                                             )
-                                    # Simpan versi hasil upload ke session_state
                                     for _fr in _fres.get("results", []):
-                                        if _fr.get("ok") and _fr.get("jenis") != "nd":
-                                            _fvk = f"ppk_versi_{_kode}_{_fr['jenis']}"
-                                            _replaced = set(_fr.get("replaced_versions", []))
-                                            _fvl = [
-                                                _doc for _doc in st.session_state.get(_fvk, [])
-                                                if _doc.get("versi") not in _replaced
-                                            ]
-                                            if _fr.get("versi") is not None:
-                                                _fvl.append({"nama_file": _fr["nama"], "versi": _fr["versi"]})
-                                            st.session_state[_fvk] = _fvl
-                                            for _warning in _fr.get("replacement_errors", []):
-                                                st.warning(f"⚠️ Replace {_fr['nama']}: {_warning}")
+                                        for _warning in _fr.get("replacement_errors", []):
+                                            st.warning(f"⚠️ Replace {_fr.get('nama', '-')}: {_warning}")
                                     if _fres.get("total_err", 0) == 0:
                                         st.success(f"✅ {_fres['total_ok']} dokumen PPK berhasil diupload!")
                                         st.toast(f"✅ {_fres['total_ok']} dokumen diupload", icon="✅")
@@ -1905,7 +1962,11 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
 
                                 _saved_bulk_logs = st.session_state.get(f"ppk_bulk_logs_{_kode}", [])
                                 _saved_bulk_result = st.session_state.get("ppk_bulk_results", {}).get(_kode)
-                                if _saved_bulk_result and _saved_bulk_logs:
+                                if (
+                                    _saved_bulk_result
+                                    and _saved_bulk_logs
+                                    and not _bulk_upload_just_ran
+                                ):
                                     st.caption(
                                         f"Hasil terakhir: {_saved_bulk_result.get('total_ok', 0)} terverifikasi, "
                                         f"{_saved_bulk_result.get('total_err', 0)} gagal"
@@ -2054,7 +2115,7 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                 on_click=_activate_ppk_package,
                                 args=(_kode,),
                             ):
-                                st.session_state["ppk_upload_active_package"] = _kode
+                                st.session_state["active_ppk_upload_package"] = _kode
                                 with st.container(border=True):
                                     st.caption(f"⏳ Mengupload {_up.name}...")
                                     def _mklog(container):
@@ -2070,31 +2131,32 @@ if st.session_state["app_mode"] in _PPK_MODE_OPTIONS:
                                         log_fn=_mklog(st),
                                     )
                                     if _res.get("ok"):
-                                        st.success("Berhasil!")
-                                        st.toast(f"✅ {_up.name} diupload", icon="✅")
-                                        # Simpan versi untuk hapus nanti
                                         _vkey = f"ppk_versi_{_kode}_{_sec['key']}"
-                                        _vlist = [
-                                            _doc for _doc in st.session_state.get(_vkey, [])
-                                            if _doc.get("versi") not in set(_res.get("replaced_versions", []))
-                                        ]
-                                        if _res.get("versi") is not None:
-                                            _vlist.append({"nama_file": _up.name, "versi": _res.get("versi")})
-                                        st.session_state[_vkey] = _vlist
-                                        for _warning in _res.get("replacement_errors", []):
-                                            st.warning(f"⚠️ Replace: {_warning}")
                                         # Refresh dari endpoint SPSE, bukan hanya cache lokal.
                                         _refresh_status = _ppk_up.list_dokumen_cdp(
                                             _kode, _sec["key"]
                                         )
-                                        if _refresh_status.get("ok"):
+                                        _sync_result = _ppk_up.reconcile_upload_results(
+                                            [{
+                                                **_res,
+                                                "jenis": _sec["key"],
+                                                "nama": _up.name,
+                                            }],
+                                            {_sec["key"]: _refresh_status},
+                                        )[0]
+                                        if _sync_result.get("ok"):
                                             st.session_state[_vkey] = list(
                                                 _refresh_status.get("documents", []) or []
                                             )
+                                            st.success("Berhasil dan terverifikasi pada daftar SPSE!")
+                                            st.toast(f"✅ {_up.name} diupload", icon="✅")
+                                            for _warning in _res.get("replacement_errors", []):
+                                                st.warning(f"⚠️ Replace: {_warning}")
                                         else:
-                                            st.warning(
-                                                "⚠️ Refresh daftar SPSE gagal; cache lama dipertahankan: "
-                                                f"{_refresh_status.get('error', 'respons tidak valid')}"
+                                            st.error(
+                                                "❌ Upload belum dikonfirmasi pada daftar SPSE; "
+                                                "cache lokal tidak diubah: "
+                                                f"{_sync_result.get('error', 'respons tidak valid')}"
                                             )
                                         st.rerun()
                                     else:
