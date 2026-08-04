@@ -15,6 +15,7 @@ KAK/Kontrak/Uraian/Lainnya: tugas PPK (bukan PP), tidak di-handle di sini.
 import re as _re
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 import spse_browser
 from config import SPSE_BASE_URL
@@ -25,6 +26,28 @@ HDRS = {
     "Origin": "https://spse.inaproc.id",
     "Referer": BASE + "/admin/pegawai",
 }
+
+
+def _http_post_result(response, operation: str) -> dict:
+    """Normalize POST result and reject login-page false-success."""
+    status = getattr(response, "status_code", 0)
+    redirect = str(getattr(response, "headers", {}).get("Location", "") or "")
+    body = str(getattr(response, "text", "") or "")
+    probe = f"{redirect}\n{body[:8000]}".lower()
+    login_page = (
+        "login" in redirect.lower()
+        or bool(_re.search(r"<title[^>]*>[^<]*(login|masuk)", body, _re.I))
+        or bool(_re.search(r"(?:name|id)=[\"'](?:username|j_username|password)[\"']", body, _re.I))
+        or "j_spring_security_check" in probe
+    )
+    ok_status = status in (200, 302)
+    return {
+        "ok": bool(ok_status and not login_page),
+        "status": status,
+        "redirect": redirect,
+        "body": body[:1500],
+        **({"error": f"{operation}: sesi SPSE mengembalikan halaman login."} if login_page else {}),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +166,7 @@ def scrap_checklist_context(kode_paket: str) -> dict:
     syarat_map = {}
     harga_map  = {}
     disabled_ckm_ids = set()
+    checked_ckm_ids = set()
 
     for inp in form.find_all("input"):
         name = inp.get("name", "")
@@ -153,8 +177,14 @@ def scrap_checklist_context(kode_paket: str) -> dict:
         prefix, idx, field = m.group(1), int(m.group(2)), m.group(3)
         bucket = {"syaratAdmin": admin_map, "syarat": syarat_map, "syaratHarga": harga_map}[prefix]
         bucket.setdefault(idx, {"chk_id": "", "ckm_id": ""})[field] = val
-        if field == "ckm_id" and inp.get("type") == "checkbox" and inp.has_attr("disabled"):
-            disabled_ckm_ids.add(val)
+        if field == "ckm_id" and inp.get("type") == "checkbox":
+            if inp.has_attr("disabled"):
+                disabled_ckm_ids.add(val)
+            if inp.has_attr("checked"):
+                checked_ckm_ids.add(val)
+
+    if not csrf:
+        raise RuntimeError("Form checklist tidak memiliki authenticityToken; sesi SPSE mungkin sudah kedaluwarsa.")
 
     def _ol(d):
         return [d[k] for k in sorted(d)]
@@ -170,6 +200,7 @@ def scrap_checklist_context(kode_paket: str) -> dict:
         "syarat_items": syarat_items,
         "harga_items":  harga_items,
         "disabled_ckm_ids": disabled_ckm_ids,
+        "checked_ckm_ids": checked_ckm_ids,
         # Backward compat:
         "admin_ids":    [d["ckm_id"] for d in admin_items],
         "syarat_ids":   [d["ckm_id"] for d in syarat_items],
@@ -221,6 +252,79 @@ def build_izin_usaha_jkk(sbu_baru: str, sbu_lama: str) -> list[dict]:
     ]
 
 
+def update_ijin_sbu_via_http(
+    kode_paket: str,
+    ijin_idx: int,
+    klas_baru: str,
+    base_url: str = "",
+    cookie: str = "",
+) -> dict:
+    """Update klasifikasi izin SBU dengan submit form LDK via HTTP langsung.
+
+    Form dibaca ulang agar ``chk_id`` dan seluruh hidden/native fields tetap
+    mengikuti state SPSE terbaru. Jalur ini sengaja tidak memakai browser/CDP.
+    """
+    from config import SPSE_BASE_URL
+
+    base = (base_url or SPSE_BASE_URL).rstrip("/") + "/"
+    cookie = cookie or spse_browser.get_spse_cookies()
+    if not cookie:
+        return {"ok": False, "error": "Cookie SPSE kosong."}
+
+    url_form = f"{base}dokumennontender/{kode_paket}/ldk"
+    headers = {**HDRS, "Cookie": cookie}
+    rg = requests.get(url_form, headers=headers, timeout=20)
+    if rg.status_code != 200:
+        return {"ok": False, "status": rg.status_code, "error": "GET form LDK gagal."}
+
+    soup = BeautifulSoup(rg.text, "html.parser")
+    form = next(
+        (f for f in soup.find_all("form") if "ldksubmitbaru" in (f.get("action") or "")),
+        None,
+    )
+    if form is None:
+        return {"ok": False, "error": "Form ldksubmitbaru tidak ditemukan."}
+
+    payload = {}
+    for field in form.find_all(["input", "textarea", "select"]):
+        name = field.get("name")
+        if not name:
+            continue
+        kind = (field.get("type") or "text").lower()
+        if kind in {"submit", "button", "file", "reset"}:
+            continue
+        if kind in {"checkbox", "radio"} and not field.has_attr("checked"):
+            continue
+        if field.name == "select":
+            option = field.find("option", selected=True) or field.find("option")
+            value = option.get("value", "") if option else ""
+        else:
+            value = field.get("value", "")
+        payload[name] = value
+
+    csrf = form.find("input", {"name": "authenticityToken"})
+    if csrf is None or not csrf.get("value", "").strip():
+        return {"ok": False, "status": 200, "error": "CSRF form LDK kosong."}
+    payload["authenticityToken"] = csrf.get("value", "").strip()
+    payload[f"ijin[{ijin_idx}].chk_klasifikasi"] = klas_baru
+
+    action = form.get("action") or f"dokumennontender/{kode_paket}/ldksubmitbaru"
+    url_submit = urljoin(url_form, action)
+    rp = requests.post(
+        url_submit,
+        data=payload,
+        headers={
+            **HDRS,
+            "Cookie": cookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": url_form,
+        },
+        allow_redirects=False,
+        timeout=30,
+    )
+    return _http_post_result(rp, "Update SBU")
+
+
 def submit_ldk_pl(
     kode_paket: str,
     sbu_baru: str = "",
@@ -240,8 +344,9 @@ def submit_ldk_pl(
       - kinerja_text: tambah row resmi via struktur native ckm_id=996
 
     UPDATE ijin[1] klasifikasi:
-      Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), server SPSE TIDAK bisa
-      update klasifikasi via requests POST biasa. Dipakai CDP Playwright via update_ijin_sbu_via_playwright().
+      Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), form LDK
+      dibaca ulang lalu dikirim ulang via HTTP langsung agar klasifikasi SBU
+      mengikuti nilai terbaru.
 
     PENTING: Server butuh chk_id VALUE ASLI dari hidden input.
     Kalau chk_id="" → server abaikan centang (row dianggap baru/orphan).
@@ -250,6 +355,8 @@ def submit_ldk_pl(
     _base = (base_url or SPSE_BASE_URL).rstrip("/") + "/"
 
     ctx = scrap_ldk_context(kode_paket)
+    if not str(ctx.get("csrf") or "").strip():
+        return {"ok": False, "status": 200, "error": "CSRF form LDK kosong."}
     # Mulai dari hidden fields native SPSE. Jangan hanya mengirim row yang dicentang:
     # server membutuhkan checklist_kualifikasi_* untuk seluruh row dan number1.
     payload = dict(ctx.get("hidden_fields", {}))
@@ -362,30 +469,27 @@ def submit_ldk_pl(
         timeout=30,
     )
 
-    ok = r.status_code in (200, 302)
-    result = {
-        "ok":       ok,
-        "status":   r.status_code,
-        "body":     (r.text or "")[:1500],
-        "redirect": r.headers.get("Location", ""),
-        "ijin_update": None,
-    }
+    result = _http_post_result(r, "Submit LDK")
+    ok = result["ok"]
+    result["ijin_update"] = None
 
-    # ── UPDATE ijin[1] klasifikasi via CDP Playwright ─────────────────────────
+    # ── UPDATE ijin[1] klasifikasi via HTTP langsung ─────────────────────────
     # Jika sbu_lama kosong DAN ijin[1] sudah ada di SPSE (chk_id asli ≠ ""),
-    # klasifikasi tidak bisa diubah via requests POST (server revert ke nilai lama).
-    # Wajib pakai browser real (CDP) untuk update teks ke hanya SBU 2020.
+    # Form dibaca ulang supaya chk_id/native fields berasal dari state terbaru.
     if ok and not sbu_lama and sbu_baru and len(ijin_existing_ids) >= 2:
-        # Row 0 = izin usaha; row 1 = SBU. Yang diubah via CDP adalah row SBU.
+        # Row 0 = izin usaha; row 1 = SBU.
         klas_target = izin_list[1].get("klasifikasi", "")
         try:
-            import spse_browser as _sb
-            cdp_result = _sb.update_ijin_sbu_via_playwright(
-                kode_paket, 1, klas_target, _base
+            http_result = update_ijin_sbu_via_http(
+                kode_paket,
+                1,
+                klas_target,
+                _base,
+                cookie=ctx["cookie"],
             )
-            result["ijin_update"] = cdp_result
+            result["ijin_update"] = http_result
         except Exception as e:
-            result["ijin_update"] = f"CDP error: {e}"
+            result["ijin_update"] = f"HTTP error: {e}"
 
     return result
 
@@ -409,7 +513,9 @@ def submit_masa_berlaku_pl(kode_paket: str, hari: int = 30) -> dict:
     csrf = ""
     csrf_inp = soup.find("input", {"name": "authenticityToken"})
     if csrf_inp:
-        csrf = csrf_inp.get("value", "")
+        csrf = csrf_inp.get("value", "").strip()
+    if not csrf:
+        return {"ok": False, "status": 200, "error": "CSRF form masa berlaku kosong."}
 
     payload = {"authenticityToken": csrf, "masaberlaku": str(hari)}
     rp = requests.post(
@@ -422,12 +528,7 @@ def submit_masa_berlaku_pl(kode_paket: str, hari: int = 30) -> dict:
         },
         allow_redirects=False, timeout=30,
     )
-    return {
-        "ok":       rp.status_code in (200, 302),
-        "status":   rp.status_code,
-        "redirect": rp.headers.get("Location", ""),
-        "body":     (rp.text or "")[:1000],
-    }
+    return _http_post_result(rp, "Submit masa berlaku")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -439,33 +540,56 @@ def submit_checklist_pl(
     centang_admin_all: bool = True,
     centang_syarat_all: bool = True,
     centang_harga_all: bool = True,
+    selected_ckm_ids: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> dict:
     """
     Submit checklist dokumen penawaran.
-    PLPK memakai aturan checklist Tender PK yang sudah dipakai di app:
-      - Administrasi: item terkunci dibiarkan dikelola sistem; KSO tidak dicentang.
+    PLPK memakai lima dokumen penawaran konstruksi yang ditetapkan user:
       - Teknis: ckm_id 341 (peralatan), 342 (personel), 344 (RKK).
-      - Harga: semua item yang tersedia (live PK saat ini 347 dan 348).
+      - Harga: ckm_id 347 (daftar kuantitas/keluaran dan harga), 348
+        (klarifikasi kewajaran harga di bawah 80% HPS).
     ID row/chk_id tetap selalu diambil dari form live.
     """
     ctx = scrap_checklist_context(kode_paket)
     payload = {"authenticityToken": ctx["csrf"]}
+    disabled_ckm_ids = {str(value) for value in ctx.get("disabled_ckm_ids", set())}
+    checked_ckm_ids = {str(value) for value in ctx.get("checked_ckm_ids", set())}
 
-    selected_admin_ids = set()
-    selected_teknis_ids = {"341", "342", "344"}
+    default_selected_ids = {"341", "342", "344", "347", "348"}
+    selected_ids = (
+        {str(value) for value in selected_ckm_ids}
+        if selected_ckm_ids is not None
+        else default_selected_ids
+    )
+    selected_teknis_ids = selected_ids & {"341", "342", "344"}
+    selected_harga_ids = selected_ids & {"347", "348"}
 
     for i, item in enumerate(ctx["admin_items"]):
         payload[f"syaratAdmin[{i}].chk_id"] = item["chk_id"]
-        if centang_admin_all and item["ckm_id"] in selected_admin_ids and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
+        # Form native tetap mengirim ckm_id tersembunyi untuk baris admin
+        # bawaan yang disabled (336/337). Tanpa ini SPSE menerima 302, tetapi
+        # tidak menyimpan keseluruhan checklist.
+        if item["ckm_id"] in disabled_ckm_ids or item["ckm_id"] in checked_ckm_ids:
             payload[f"syaratAdmin[{i}].ckm_id"] = item["ckm_id"]
     for i, item in enumerate(ctx["syarat_items"]):
         payload[f"syarat[{i}].chk_id"] = item["chk_id"]
-        if centang_syarat_all and item["ckm_id"] in selected_teknis_ids and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
+        if (
+            centang_syarat_all
+            and item["ckm_id"] in selected_teknis_ids
+            and (item["ckm_id"] not in disabled_ckm_ids or item["ckm_id"] in checked_ckm_ids)
+        ):
             payload[f"syarat[{i}].ckm_id"] = item["ckm_id"]
     for i, item in enumerate(ctx["harga_items"]):
         payload[f"syaratHarga[{i}].chk_id"] = item["chk_id"]
-        if centang_harga_all and item["ckm_id"] not in ctx.get("disabled_ckm_ids", set()):
+        if (
+            centang_harga_all
+            and item["ckm_id"] in selected_harga_ids
+            and (item["ckm_id"] not in disabled_ckm_ids or item["ckm_id"] in checked_ckm_ids)
+        ):
             payload[f"syaratHarga[{i}].ckm_id"] = item["ckm_id"]
+
+    # Native submit button ikut menjadi bagian FormData browser.
+    payload["simpan"] = "simpan"
 
     rp = requests.post(
         ctx["url_submit"],
@@ -477,9 +601,38 @@ def submit_checklist_pl(
         },
         allow_redirects=False, timeout=30,
     )
-    return {
-        "ok":       rp.status_code in (200, 302),
-        "status":   rp.status_code,
-        "redirect": rp.headers.get("Location", ""),
-        "body":     (rp.text or "")[:1000],
-    }
+    result = _http_post_result(rp, "Submit checklist")
+    if not result["ok"]:
+        return result
+
+    # HTTP 302 hanya berarti server menerima request/redirect. Baca ulang
+    # checklist untuk memastikan ckm_id benar-benar tersimpan di SPSE.
+    expected_ckm_ids = set()
+    if centang_syarat_all:
+        expected_ckm_ids.update(selected_teknis_ids)
+    if centang_harga_all:
+        expected_ckm_ids.update(selected_harga_ids)
+    try:
+        verified_ctx = scrap_checklist_context(kode_paket)
+        verified_ckm_ids = {
+            str(value) for value in verified_ctx.get("checked_ckm_ids", set())
+        }
+        missing_ckm_ids = expected_ckm_ids - verified_ckm_ids
+
+        def _sort_ckm(values):
+            return sorted(values, key=lambda value: (not str(value).isdigit(), int(value) if str(value).isdigit() else str(value)))
+
+        result["verified_ckm_ids"] = _sort_ckm(expected_ckm_ids & verified_ckm_ids)
+        result["missing_ckm_ids"] = _sort_ckm(missing_ckm_ids)
+        if missing_ckm_ids:
+            result["ok"] = False
+            result["error"] = (
+                "Submit checklist HTTP 302, tetapi SPSE belum menyimpan "
+                f"ckm_id: {', '.join(result['missing_ckm_ids'])}."
+            )
+    except Exception as exc:
+        result["ok"] = False
+        result["verified_ckm_ids"] = []
+        result["missing_ckm_ids"] = _sort_ckm(expected_ckm_ids)
+        result["error"] = f"Submit checklist HTTP 302, verifikasi state SPSE gagal: {exc}"
+    return result

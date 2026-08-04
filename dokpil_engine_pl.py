@@ -15,6 +15,7 @@ KAK/Kontrak/Uraian/Lainnya: tugas PPK (bukan PP), tidak di-handle di sini.
 import re as _re
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 import spse_browser
 from config import SPSE_BASE_URL
@@ -25,6 +26,28 @@ HDRS = {
     "Origin": "https://spse.inaproc.id",
     "Referer": BASE + "/admin/pegawai",
 }
+
+
+def _http_post_result(response, operation: str) -> dict:
+    """Normalize POST result and reject login-page false-success."""
+    status = getattr(response, "status_code", 0)
+    redirect = str(getattr(response, "headers", {}).get("Location", "") or "")
+    body = str(getattr(response, "text", "") or "")
+    probe = f"{redirect}\n{body[:8000]}".lower()
+    login_page = (
+        "login" in redirect.lower()
+        or bool(_re.search(r"<title[^>]*>[^<]*(login|masuk)", body, _re.I))
+        or bool(_re.search(r"(?:name|id)=[\"'](?:username|j_username|password)[\"']", body, _re.I))
+        or "j_spring_security_check" in probe
+    )
+    ok_status = status in (200, 302)
+    return {
+        "ok": bool(ok_status and not login_page),
+        "status": status,
+        "redirect": redirect,
+        "body": body[:1500],
+        **({"error": f"{operation}: sesi SPSE mengembalikan halaman login."} if login_page else {}),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,7 +82,9 @@ def scrap_ldk_context(kode_paket: str) -> dict:
         raise RuntimeError("Form ldksubmitbaru tidak ditemukan.")
 
     csrf_inp = form.find("input", {"name": "authenticityToken"})
-    csrf = csrf_inp["value"] if csrf_inp else None
+    csrf = csrf_inp["value"].strip() if csrf_inp and csrf_inp.get("value", "").strip() else None
+    if not csrf:
+        raise RuntimeError("CSRF form LDK kosong.")
 
     # Parse hidden chk_id + ckm_id per index berdasar nama field
     # Pattern: syaratAdmin[N].chk_id | syaratAdmin[N].ckm_id | ijin[N].chk_id
@@ -122,7 +147,9 @@ def scrap_checklist_context(kode_paket: str) -> dict:
         raise RuntimeError("Form checklist tidak ditemukan.")
 
     csrf_inp = form.find("input", {"name": "authenticityToken"})
-    csrf = csrf_inp["value"] if csrf_inp else None
+    csrf = csrf_inp["value"].strip() if csrf_inp and csrf_inp.get("value", "").strip() else None
+    if not csrf:
+        raise RuntimeError("CSRF form checklist kosong.")
 
     # Parse pasangan chk_id + ckm_id per index per kategori
     admin_map  = {}
@@ -202,6 +229,72 @@ def build_izin_usaha_jkk(sbu_baru: str, sbu_lama: str) -> list[dict]:
     ]
 
 
+def update_ijin_sbu_via_http(
+    kode_paket: str,
+    ijin_idx: int,
+    klas_baru: str,
+    base_url: str = "",
+    cookie: str = "",
+) -> dict:
+    """Update klasifikasi SBU JKK via GET form + POST native fields."""
+    from config import SPSE_BASE_URL
+
+    base = (base_url or SPSE_BASE_URL).rstrip("/") + "/"
+    cookie = cookie or spse_browser.get_spse_cookies()
+    if not cookie:
+        return {"ok": False, "status": 0, "error": "Cookie SPSE kosong."}
+
+    url_form = f"{base}dokumennontender/{kode_paket}/ldk"
+    rg = requests.get(url_form, headers={**HDRS, "Cookie": cookie}, timeout=20)
+    if rg.status_code != 200:
+        return {"ok": False, "status": rg.status_code, "error": "GET form LDK gagal."}
+
+    soup = BeautifulSoup(rg.text, "html.parser")
+    form = next(
+        (f for f in soup.find_all("form") if "ldksubmitbaru" in (f.get("action") or "")),
+        None,
+    )
+    if form is None:
+        return {"ok": False, "status": rg.status_code, "error": "Form ldksubmitbaru tidak ditemukan."}
+
+    csrf = form.find("input", {"name": "authenticityToken"})
+    if csrf is None or not csrf.get("value", "").strip():
+        return {"ok": False, "status": 200, "error": "CSRF form LDK kosong."}
+
+    payload = {}
+    for field in form.find_all(["input", "textarea", "select"]):
+        name = field.get("name")
+        if not name:
+            continue
+        kind = (field.get("type") or "text").lower()
+        if kind in {"submit", "button", "file", "reset"}:
+            continue
+        if kind in {"checkbox", "radio"} and not field.has_attr("checked"):
+            continue
+        if field.name == "select":
+            option = field.find("option", selected=True) or field.find("option")
+            value = option.get("value", "") if option else ""
+        else:
+            value = field.get("value", "")
+        payload[name] = value
+    payload[f"ijin[{ijin_idx}].chk_klasifikasi"] = klas_baru
+
+    action = form.get("action") or f"dokumennontender/{kode_paket}/ldksubmitbaru"
+    rp = requests.post(
+        urljoin(url_form, action),
+        data=payload,
+        headers={
+            **HDRS,
+            "Cookie": cookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": url_form,
+        },
+        allow_redirects=False,
+        timeout=30,
+    )
+    return _http_post_result(rp, "Update SBU")
+
+
 def submit_ldk_pl(
     kode_paket: str,
     sbu_baru: str = "",
@@ -230,8 +323,8 @@ def submit_ldk_pl(
       - kinerja_text → tambah custom row ckm_id=996
 
     UPDATE ijin[1] klasifikasi:
-      Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), server SPSE TIDAK bisa
-      update klasifikasi via requests POST biasa. Dipakai CDP Playwright via update_ijin_sbu_via_playwright().
+      Jika sbu_lama="" dan ijin[1] sudah ada di SPSE (chk_id asli), form LDK
+      dibaca ulang lalu dikirim ulang via HTTP langsung.
 
     PENTING: Server butuh chk_id VALUE ASLI dari hidden input.
     Kalau chk_id="" → server abaikan centang (row dianggap baru/orphan).
@@ -312,30 +405,23 @@ def submit_ldk_pl(
         timeout=30,
     )
 
-    ok = r.status_code in (200, 302)
-    result = {
-        "ok":       ok,
-        "status":   r.status_code,
-        "body":     (r.text or "")[:1500],
-        "redirect": r.headers.get("Location", ""),
-        "ijin_update": None,
-    }
+    result = _http_post_result(r, "Submit LDK")
+    ok = result["ok"]
+    result["ijin_update"] = None
 
-    # ── UPDATE ijin[1] klasifikasi via CDP Playwright ─────────────────────────
+    # ── UPDATE ijin[1] klasifikasi via HTTP langsung ─────────────────────────
     # Jika sbu_lama kosong DAN ijin[1] sudah ada di SPSE (chk_id asli ≠ ""),
-    # klasifikasi tidak bisa diubah via requests POST (server revert ke nilai lama).
-    # Wajib pakai browser real (CDP) untuk update teks ke hanya SBU 2020.
+    # form LDK dibaca ulang agar chk_id/native fields mengikuti state terbaru.
     if ok and not sbu_lama and sbu_baru and len(ijin_existing_ids) >= 2:
         # Teks target dari build_izin_usaha_jkk (sbu_lama="") — row[1].klasifikasi
         klas_target = build_izin_usaha_jkk(sbu_baru, "")[1]["klasifikasi"]
         try:
-            import spse_browser as _sb
-            cdp_result = _sb.update_ijin_sbu_via_playwright(
-                kode_paket, 1, klas_target, _base
+            http_result = update_ijin_sbu_via_http(
+                kode_paket, 1, klas_target, _base, cookie=ctx["cookie"]
             )
-            result["ijin_update"] = cdp_result
+            result["ijin_update"] = http_result
         except Exception as e:
-            result["ijin_update"] = f"CDP error: {e}"
+            result["ijin_update"] = f"HTTP error: {e}"
 
     return result
 
@@ -359,7 +445,9 @@ def submit_masa_berlaku_pl(kode_paket: str, hari: int = 30) -> dict:
     csrf = ""
     csrf_inp = soup.find("input", {"name": "authenticityToken"})
     if csrf_inp:
-        csrf = csrf_inp.get("value", "")
+        csrf = csrf_inp.get("value", "").strip()
+    if not csrf:
+        return {"ok": False, "status": 200, "error": "CSRF form masa berlaku kosong."}
 
     payload = {"authenticityToken": csrf, "masaberlaku": str(hari)}
     rp = requests.post(
@@ -372,12 +460,7 @@ def submit_masa_berlaku_pl(kode_paket: str, hari: int = 30) -> dict:
         },
         allow_redirects=False, timeout=30,
     )
-    return {
-        "ok":       rp.status_code in (200, 302),
-        "status":   rp.status_code,
-        "redirect": rp.headers.get("Location", ""),
-        "body":     (rp.text or "")[:1000],
-    }
+    return _http_post_result(rp, "Submit masa berlaku")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -424,9 +507,4 @@ def submit_checklist_pl(
         },
         allow_redirects=False, timeout=30,
     )
-    return {
-        "ok":       rp.status_code in (200, 302),
-        "status":   rp.status_code,
-        "redirect": rp.headers.get("Location", ""),
-        "body":     (rp.text or "")[:1000],
-    }
+    return _http_post_result(rp, "Submit checklist")

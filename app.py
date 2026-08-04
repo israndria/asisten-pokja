@@ -4031,18 +4031,55 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    _mb_state_key = "plsp_masa_berlaku_last_jkk"
+                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True, disabled=not _plsp_selected):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
-                        for _p in _plsp_selected:
+                        _mb_total = len(_plsp_selected)
+                        _mb_progress = st.progress(0.0, text=f"Menyiapkan masa berlaku untuk {_mb_total} paket...")
+                        _mb_live_log = st.empty()
+                        _mb_results = []
+                        for _mb_i, _p in enumerate(_plsp_selected, 1):
+                            _mb_name = _pl_label(_p)
+                            _mb_live_log.info(f"⏳ {_mb_name} — menyimpan {int(_ldk_masa_berlaku)} hari ke Supabase dan SPSE...")
+                            _mb_db_error = ""
                             try:
-                                _client_mb.table("draft_paket_pl").update({
-                                    "masa_berlaku": int(_ldk_masa_berlaku),
-                                }).eq("kode_paket", _p["kode_paket"]).execute()
-                            except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan masa berlaku {_pl_label(_p)}: {_e_mb}")
-                            _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
-                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_pl_label(_p)} — HTTP {_r_mb['status']}")
+                                _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
+                                _mb_ok = bool(_r_mb.get("ok"))
+                                _mb_status = _r_mb.get("status", "?")
+                                _mb_msg = f"HTTP {_mb_status} ({int(_ldk_masa_berlaku)} hari)"
+                            except Exception as _e_mb_post:
+                                _r_mb = {"ok": False, "status": "error"}
+                                _mb_ok = False
+                                _mb_msg = str(_e_mb_post)[:160]
+                            if _mb_ok:
+                                try:
+                                    _client_mb.table("draft_paket_pl").update({
+                                        "masa_berlaku": int(_ldk_masa_berlaku),
+                                    }).eq("kode_paket", _p["kode_paket"]).execute()
+                                except Exception as _e_mb:
+                                    _mb_db_error = str(_e_mb)
+                            else:
+                                _mb_db_error = "SPSE gagal; cache tidak diubah"
+                            _mb_results.append({
+                                "Paket": _mb_name,
+                                "Status": "✅" if _mb_ok else "❌",
+                                "SPSE": _mb_msg,
+                                "Cache": "✅" if not _mb_db_error else f"⚠️ {_mb_db_error[:80]}",
+                            })
+                            _mb_progress.progress(_mb_i / _mb_total, text=f"Masa berlaku {_mb_i}/{_mb_total}: {_mb_name}")
+                            _mb_live_log.write(f"{'✅' if _mb_ok else '❌'} {_mb_name} — {_mb_msg}")
+                        _mb_progress.empty()
+                        _mb_ok_count = sum(1 for _x in _mb_results if _x["Status"] == "✅")
+                        if _mb_ok_count == _mb_total:
+                            st.success(f"✅ Masa berlaku berhasil diposting: {_mb_ok_count}/{_mb_total} paket.")
+                        else:
+                            st.warning(f"⚠️ Masa berlaku berhasil: {_mb_ok_count}/{_mb_total} paket. Cek log per paket.")
+                        st.session_state[_mb_state_key] = _mb_results
+
+                    if st.session_state.get(_mb_state_key):
+                        st.caption("Hasil terakhir Masa Berlaku Penawaran")
+                        st.dataframe(st.session_state[_mb_state_key], use_container_width=True, hide_index=True)
 
                     st.divider()
 
@@ -4160,7 +4197,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
-                                _ijin_note = f" | ijin CDP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
+                                _ijin_note = f" | ijin HTTP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "LDK",
                                     "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}{_ijin_note}",
@@ -4171,14 +4208,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             # 2. Masa berlaku penawaran
                             try:
                                 _r_mb = _depl.submit_masa_berlaku_pl(_kp, int(_ldk_masa_berlaku))
-                                try:
-                                    from config import sb as _sb_mb_bulk
-                                    _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
-                                except Exception:
-                                    pass
+                                if _r_mb.get("ok"):
+                                    try:
+                                        from config import sb as _sb_mb_bulk
+                                        _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
+                                    except Exception:
+                                        pass
+                                _mb_note = f" — {_r_mb.get('error')}" if _r_mb.get("error") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Masa Berlaku",
-                                    "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari)",
+                                    "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari){_mb_note}",
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Masa Berlaku", "ok": False, "pesan": str(_e)[:80]})
@@ -4193,7 +4232,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Checklist Dok Penawaran",
-                                    "ok": _r_cd["ok"], "pesan": f"HTTP {_r_cd['status']}",
+                                    "ok": _r_cd["ok"],
+                                    "pesan": (
+                                        f"HTTP {_r_cd['status']} · tersimpan: "
+                                        f"{', '.join(_r_cd.get('verified_ckm_ids', [])) or '-'}"
+                                        + (
+                                            f" · BELUM tersimpan: {', '.join(_r_cd.get('missing_ckm_ids', []))}"
+                                            if _r_cd.get("missing_ckm_ids") else ""
+                                        )
+                                        + (f" — {_r_cd['error']}" if _r_cd.get("error") else "")
+                                    ),
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Checklist Dok Penawaran", "ok": False, "pesan": str(_e)[:80]})
@@ -7171,102 +7219,137 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         key="plsp_masa_berlaku",
                     )
 
-                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True):
+                    _mb_state_key = "plsp_masa_berlaku_last_pk"
+                    if st.button("💾 Submit Masa Berlaku Penawaran", key="plsp_btn_masa_berlaku", use_container_width=True, disabled=not _plsp_selected):
                         from config import sb as _sb_factory_mb
                         _client_mb = _sb_factory_mb()
-                        for _p in _plsp_selected:
+                        _mb_total = len(_plsp_selected)
+                        _mb_progress = st.progress(0.0, text=f"Menyiapkan masa berlaku untuk {_mb_total} paket...")
+                        _mb_live_log = st.empty()
+                        _mb_results = []
+                        for _mb_i, _p in enumerate(_plsp_selected, 1):
+                            _mb_name = _pl_label(_p)
+                            _mb_live_log.info(f"⏳ {_mb_name} — menyimpan {int(_ldk_masa_berlaku)} hari ke Supabase dan SPSE...")
+                            _mb_db_error = ""
                             try:
-                                _client_mb.table("draft_paket_pl").update({
-                                    "masa_berlaku": int(_ldk_masa_berlaku),
-                                }).eq("kode_paket", _p["kode_paket"]).execute()
-                            except Exception as _e_mb:
-                                st.warning(f"⚠️ Gagal simpan masa berlaku {_pl_label(_p)}: {_e_mb}")
-                            _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
-                            st.write(f"{'✅' if _r_mb['ok'] else '❌'} {_pl_label(_p)} — HTTP {_r_mb['status']}")
+                                _r_mb = _depl.submit_masa_berlaku_pl(_p["kode_paket"], int(_ldk_masa_berlaku))
+                                _mb_ok = bool(_r_mb.get("ok"))
+                                _mb_status = _r_mb.get("status", "?")
+                                _mb_msg = f"HTTP {_mb_status} ({int(_ldk_masa_berlaku)} hari)"
+                            except Exception as _e_mb_post:
+                                _r_mb = {"ok": False, "status": "error"}
+                                _mb_ok = False
+                                _mb_msg = str(_e_mb_post)[:160]
+                            if _mb_ok:
+                                try:
+                                    _client_mb.table("draft_paket_pl").update({
+                                        "masa_berlaku": int(_ldk_masa_berlaku),
+                                    }).eq("kode_paket", _p["kode_paket"]).execute()
+                                except Exception as _e_mb:
+                                    _mb_db_error = str(_e_mb)
+                            else:
+                                _mb_db_error = "SPSE gagal; cache tidak diubah"
+                            _mb_results.append({
+                                "Paket": _mb_name,
+                                "Status": "✅" if _mb_ok else "❌",
+                                "SPSE": _mb_msg,
+                                "Cache": "✅" if not _mb_db_error else f"⚠️ {_mb_db_error[:80]}",
+                            })
+                            _mb_progress.progress(_mb_i / _mb_total, text=f"Masa berlaku {_mb_i}/{_mb_total}: {_mb_name}")
+                            _mb_live_log.write(f"{'✅' if _mb_ok else '❌'} {_mb_name} — {_mb_msg}")
+                        _mb_progress.empty()
+                        _mb_ok_count = sum(1 for _x in _mb_results if _x["Status"] == "✅")
+                        if _mb_ok_count == _mb_total:
+                            st.success(f"✅ Masa berlaku berhasil diposting: {_mb_ok_count}/{_mb_total} paket.")
+                        else:
+                            st.warning(f"⚠️ Masa berlaku berhasil: {_mb_ok_count}/{_mb_total} paket. Cek log per paket.")
+                        st.session_state[_mb_state_key] = _mb_results
+
+                    if st.session_state.get(_mb_state_key):
+                        st.caption("Hasil terakhir Masa Berlaku Penawaran")
+                        st.dataframe(st.session_state[_mb_state_key], use_container_width=True, hide_index=True)
 
                     st.divider()
 
-                    # ── SEKSI 3: Dokumen Kualifikasi (LDK) ───────────────────
-                    st.markdown("#### 📋 Seksi 3 — Dokumen Kualifikasi (LDK)")
-                    st.caption("ℹ️ Di-submit ke SPSE bagian Persyaratan Kualifikasi (LDK).")
-
-                    st.markdown("**Syarat Administrasi PLPK** *(ID mengikuti skema PLPK SPSE)*")
-                    _ADMIN_LABEL = {
-                        "401": "401 — Persyaratan administrasi",
-                        "402": "402 — Persyaratan administrasi",
-                        "403": "403 — Persyaratan administrasi",
-                        "404": "404 — Persyaratan administrasi",
-                        "410": "410 — Persyaratan administrasi tambahan",
-                        "411": "411 — Persyaratan administrasi tambahan",
-                    }
-                    _ldk_centang_admin_ckm_ids = []
-                    _cols_adm = st.columns(2)
-                    for _idx_iter, (_cid, _lbl) in enumerate(_ADMIN_LABEL.items()):
-                        with _cols_adm[_idx_iter % 2]:
-                            _default_adm = _cid in ("401", "402", "403", "404")
-                            if st.checkbox(_lbl, value=_default_adm, key=f"plsp_admin_cid_{_cid}"):
-                                _ldk_centang_admin_ckm_ids.append(_cid)
-
-                    st.markdown("**Syarat Teknis PLPK** *(ID mengikuti skema PLPK SPSE)*")
-                    _TEKNIS_LABEL = {
-                        "437": "437 — Persyaratan teknis",
-                        "438": "438 — Persyaratan teknis",
-                        "439": "439 — Persyaratan teknis",
-                        "440": "440 — Persyaratan teknis",
-                        "441": "441 — Persyaratan teknis",
-                    }
-                    _ldk_teknis_ckm_ids = []
-                    _cols_tk = st.columns(2)
-                    for _idx_iter, (_cid, _lbl) in enumerate(_TEKNIS_LABEL.items()):
-                        with _cols_tk[_idx_iter % 2]:
-                            _default = _cid in ("437", "438", "439")
-                            if st.checkbox(_lbl, value=_default, key=f"plsp_teknis_cid_{_cid}"):
-                                _ldk_teknis_ckm_ids.append(_cid)
-
-                    import ldk_config as _ldk_cfg_pl
-                    # Kinerja penyedia wajib — text beda JKK vs PK
-                    _jenis_pl_paket = _plsp_selected[0].get("jenis_pl", "JKK").upper() if _plsp_selected else "JKK"
-                    _ldk_kinerja_text = _ldk_cfg_pl.KINERJA_PENYEDIA_JKK if _jenis_pl_paket == "JKK" else _ldk_cfg_pl.KINERJA_PENYEDIA_PK
-
+                    # ── SEKSI 3: Checklist Dokumen Penawaran ────────────────
+                    # Checklist fixed sesuai form SPSE PLPK. Detail checkbox
+                    # sengaja tidak ditampilkan; aksi dijalankan lewat satu tombol.
+                    st.markdown("#### 📋 Seksi 3 — Checklist Dokumen Penawaran")
                     st.caption(
-                        "ℹ️ PLPK mengikuti checklist Tender PK: admin inti 401–404, teknis inti 437–439. "
-                        "ID tambahan 410–411/440–441 opsional. Kinerja Penyedia wajib dikirim otomatis."
+                        "Post otomatis 5 dokumen penawaran konstruksi: peralatan, "
+                        "personel, RKK, daftar harga, dan kewajaran harga <80% HPS."
                     )
-
-                    if st.button("📋 Submit Dokumen Kualifikasi (LDK)", key="plsp_btn_ldk", use_container_width=True):
-                        from config import sb as _sb_factory_ldk
-                        _client_ldk = _sb_factory_ldk()
-                        for _p in _plsp_selected:
-                            try:
-                                _client_ldk.table("draft_paket_pl").update({
-                                    "sbu_baru": _sbu_baru_global if _sbu_baru_global is not None else (_p.get("sbu_baru") or ""),
-                                    "sbu_lama": _sbu_lama_global if _sbu_lama_global is not None else (_p.get("sbu_lama") or ""),
-                                }).eq("kode_paket", _p["kode_paket"]).execute()
-                            except Exception:
-                                pass
-                            _r_ldk = _depl.submit_ldk_pl(
-                                _p["kode_paket"],
-                                sbu_baru=_sbu_baru_global if _sbu_baru_global is not None else (_p.get("sbu_baru") or ""),
-                                sbu_lama=_sbu_lama_global if _sbu_lama_global is not None else (_p.get("sbu_lama") or ""),
-                                centang_admin_ckm_ids=_ldk_centang_admin_ckm_ids,
-                                teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
-                                kinerja_text=_ldk_kinerja_text,
-                            )
-                            st.write(f"{'✅' if _r_ldk['ok'] else '❌'} {_pl_label(_p)} — HTTP {_r_ldk['status']}")
-
-                    st.divider()
-
-                    # Seksi 4 — Checklist Dokumen Penawaran (hardcode semua wajib)
+                    _PLPK_CHECKLIST_IDS = ("341", "342", "344", "347", "348")
                     _cd_centang_admin = True
                     _cd_centang_syarat = True
                     _cd_centang_harga = True
+                    # Tetap pertahankan kompatibilitas tombol Push Setup: bila
+                    # tombol itu dipakai, LDK dikirim memakai default PLPK yang
+                    # sama dengan tombol SBU Custom + POST LDK. Pengaturan LDK
+                    # tidak lagi ditampilkan sebagai Seksi 3.
+                    _ldk_centang_admin_ckm_ids = ["401", "402", "403", "404"]
+                    _ldk_teknis_ckm_ids = ["437", "438", "439"]
+                    import ldk_config as _ldk_cfg_pl
+                    _ldk_kinerja_text = _ldk_cfg_pl.KINERJA_PENYEDIA_PK
+
+                    _cd_state_key = "plsp_checklist_last_pk"
+                    if st.button(
+                        f"📄 Post 5 Dokumen Penawaran ({len(_plsp_selected)} paket)",
+                        key="plsp_post_checklist_btn",
+                        use_container_width=True,
+                        disabled=not _plsp_selected,
+                    ):
+                        _cd_total = len(_plsp_selected)
+                        _cd_progress = st.progress(0.0, text=f"Menyiapkan checklist untuk {_cd_total} paket...")
+                        _cd_live_log = st.empty()
+                        _cd_results = []
+                        for _cd_i, _p in enumerate(_plsp_selected, 1):
+                            _cd_name = _pl_label(_p)
+                            try:
+                                _r_cd = _depl.submit_checklist_pl(
+                                    _p["kode_paket"],
+                                    centang_admin_all=_cd_centang_admin,
+                                    centang_syarat_all=_cd_centang_syarat,
+                                    centang_harga_all=_cd_centang_harga,
+                                    selected_ckm_ids=_PLPK_CHECKLIST_IDS,
+                                )
+                                _cd_ok = bool(_r_cd.get("ok"))
+                                _cd_verified = ", ".join(_r_cd.get("verified_ckm_ids", [])) or "-"
+                                _cd_missing = ", ".join(_r_cd.get("missing_ckm_ids", []))
+                                _cd_msg = f"HTTP {_r_cd.get('status', '?')} · tersimpan: {_cd_verified}"
+                                if _cd_missing:
+                                    _cd_msg += f" · BELUM tersimpan: {_cd_missing}"
+                                if _r_cd.get("error"):
+                                    _cd_msg += f" — {_r_cd['error']}"
+                            except Exception as _e_cd:
+                                _cd_ok = False
+                                _cd_msg = str(_e_cd)[:160]
+                            _cd_results.append({
+                                "Paket": _cd_name,
+                                "Status": "✅" if _cd_ok else "❌",
+                                "SPSE": _cd_msg,
+                                "ID": ", ".join(_PLPK_CHECKLIST_IDS),
+                            })
+                            _cd_progress.progress(_cd_i / _cd_total, text=f"Checklist {_cd_i}/{_cd_total}: {_cd_name}")
+                            _cd_live_log.write(f"{'✅' if _cd_ok else '❌'} {_cd_name} — {_cd_msg}")
+                        _cd_progress.empty()
+                        st.session_state[_cd_state_key] = _cd_results
+                        _cd_ok_count = sum(1 for _row in _cd_results if _row["Status"] == "✅")
+                        if _cd_ok_count == _cd_total:
+                            st.success(f"✅ Checklist dokumen penawaran berhasil: {_cd_ok_count}/{_cd_total} paket.")
+                        else:
+                            st.warning(f"⚠️ Checklist berhasil: {_cd_ok_count}/{_cd_total} paket. Cek hasil per paket.")
+
+                    if st.session_state.get(_cd_state_key):
+                        st.caption("Hasil terakhir Post 5 Dokumen Penawaran")
+                        st.dataframe(st.session_state[_cd_state_key], use_container_width=True, hide_index=True)
 
                     st.divider()
-                    st.caption("⬇️ Atau jalankan semua seksi sekaligus:")
+                    st.caption("⬇️ Satu tombol: simpan SBU + POST LDK + masa berlaku + 5 dokumen penawaran:")
 
                     # ── Submit All-in-One ─────────────────────────────────────
                     if st.button(
-                        f"🚀 Push Setup ke SPSE ({len(_plsp_selected)} paket)",
+                        f"🚀 Push Setup Lengkap ke SPSE ({len(_plsp_selected)} paket)",
                         key="plsp_submit_btn",
                         type="primary",
                         use_container_width=True,
@@ -7301,7 +7384,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
-                                _ijin_note = f" | ijin CDP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
+                                _ijin_note = f" | ijin HTTP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "LDK",
                                     "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}{_ijin_note}",
@@ -7312,14 +7395,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             # 2. Masa berlaku penawaran
                             try:
                                 _r_mb = _depl.submit_masa_berlaku_pl(_kp, int(_ldk_masa_berlaku))
-                                try:
-                                    from config import sb as _sb_mb_bulk
-                                    _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
-                                except Exception:
-                                    pass
+                                if _r_mb.get("ok"):
+                                    try:
+                                        from config import sb as _sb_mb_bulk
+                                        _sb_mb_bulk().table("draft_paket_pl").update({"masa_berlaku": int(_ldk_masa_berlaku)}).eq("kode_paket", _kp).execute()
+                                    except Exception:
+                                        pass
+                                _mb_note = f" — {_r_mb.get('error')}" if _r_mb.get("error") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Masa Berlaku",
-                                    "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari)",
+                                    "ok": _r_mb["ok"], "pesan": f"HTTP {_r_mb['status']} ({_ldk_masa_berlaku} hari){_mb_note}",
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Masa Berlaku", "ok": False, "pesan": str(_e)[:80]})
@@ -7331,10 +7416,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     centang_admin_all=_cd_centang_admin,
                                     centang_syarat_all=_cd_centang_syarat,
                                     centang_harga_all=_cd_centang_harga,
+                                    selected_ckm_ids=_PLPK_CHECKLIST_IDS,
                                 )
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "Checklist Dok Penawaran",
-                                    "ok": _r_cd["ok"], "pesan": f"HTTP {_r_cd['status']}",
+                                    "ok": _r_cd["ok"],
+                                    "pesan": (
+                                        f"HTTP {_r_cd['status']} · tersimpan: "
+                                        f"{', '.join(_r_cd.get('verified_ckm_ids', [])) or '-'}"
+                                        + (
+                                            f" · BELUM tersimpan: {', '.join(_r_cd.get('missing_ckm_ids', []))}"
+                                            if _r_cd.get("missing_ckm_ids") else ""
+                                        )
+                                        + (f" — {_r_cd['error']}" if _r_cd.get("error") else "")
+                                    ),
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Checklist Dok Penawaran", "ok": False, "pesan": str(_e)[:80]})
