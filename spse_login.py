@@ -183,23 +183,37 @@ def detect_login_role() -> str | None:
         return None
 
     try:
+        # Cache role hanya akselerator recovery, bukan syarat sesi valid.
+        # Sesi yang login manual/tertinggal dari profil browser bisa tidak punya
+        # last_role.txt, tetapi cookie + halaman authenticated tetap cukup untuk
+        # mendeteksi role. Ini juga memperbaiki fresh-start setelah cache lokal
+        # dibersihkan atau belum pernah dibuat.
+        cookie = _sb.get_spse_cookies(force=True)
+        current_fp = _cookie_fingerprint(cookie)
+        if not current_fp:
+            return None
+
+        record = {}
         if _ROLE_FILE.exists():
-            record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
-            cookie = _sb.get_spse_cookies(force=True)
-            if record.get("role") not in ("PP", "POKJA", "PPK", "E-Katalog"):
-                return None
-            current_fp = _cookie_fingerprint(cookie)
-            if not current_fp:
-                return None
-            cache_matches_session = record.get("cookie_fp") == current_fp
-            detected = _detect_role_from_session(cookie)
-            if detected:
-                if not cache_matches_session or detected != record.get("role"):
-                    _ROLE_FILE.write_text(
-                        json.dumps({"role": detected, "cookie_fp": current_fp}),
-                        encoding="utf-8",
-                    )
-                return detected
+            try:
+                record = json.loads(_ROLE_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                record = {}
+
+        cached_role = record.get("role")
+        if cached_role not in ("PP", "POKJA", "PPK", "E-Katalog"):
+            cached_role = None
+
+        cache_matches_session = record.get("cookie_fp") == current_fp
+        detected = _detect_role_from_session(cookie)
+        if detected:
+            if not cache_matches_session or detected != cached_role:
+                _ROLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                _ROLE_FILE.write_text(
+                    json.dumps({"role": detected, "cookie_fp": current_fp}),
+                    encoding="utf-8",
+                )
+            return detected
     except Exception:
         pass
     return None

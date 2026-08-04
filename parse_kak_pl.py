@@ -25,9 +25,21 @@ def _text_dari_pdf(pdf_path: str) -> str:
 
 
 def _extract_nama_ppk(teks: str) -> str:
-    m = re.search(r"NAMA PPK\s*:\s*(.+)", teks, re.IGNORECASE)
+    # Format tabel/metadata lama: ``NAMA PPK: ...``.
+    m = re.search(r"NAMA\s+PPK\s*[:\-]\s*([^\n]+)", teks, re.IGNORECASE)
     if m:
-        return m.group(1).strip()
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+
+    # KAK PK hasil SPSE biasanya menaruh heading tanpa label:
+    # ``PEJABAT PEMBUAT KOMITMEN`` lalu nama dan baris ``NIP. ...``.
+    lines = [re.sub(r"\s+", " ", line).strip() for line in teks.splitlines()]
+    for i, line in enumerate(lines):
+        if not re.fullmatch(r"PEJABAT\s+PEMBUAT\s+KOMITMEN", line, re.IGNORECASE):
+            continue
+        for candidate in lines[i + 1:i + 4]:
+            if not candidate or re.match(r"^(NIP|PROGRAM|KEGIATAN|SUB\s+KEG|PEKERJAAN)\b", candidate, re.IGNORECASE):
+                continue
+            return candidate
     return ""
 
 
@@ -36,6 +48,19 @@ def _extract_jangka_waktu(teks: str) -> str:
     Cari pola 'X hari / Y bulan kalender' → kembalikan string "X hari / Y bulan kalender".
     Fallback: cari pola 'X (kata) hari kalender' saja.
     """
+    # Prioritaskan window yang memiliki label pelaksanaan. Ini mencegah angka
+    # masa pemeliharaan, tahun anggaran, atau nomor pasal terbaca sebagai durasi.
+    for label in (r"JANGKA\s+WAKTU(?:\s+PELAKSANAAN)?", r"WAKTU\s+PELAKSANAAN"):
+        labeled = re.search(label, teks, re.IGNORECASE)
+        if labeled:
+            window = teks[labeled.end():labeled.end() + 220]
+            day = re.search(
+                r"(\d{1,4})\s*(?:\([^)]*\)\s*)?hari(?:\s+kalender)?",
+                window, re.IGNORECASE,
+            )
+            if day:
+                return f"{day.group(1)} hari kalender"
+
     # Pola lengkap: 30 hari / 1 bulan kalender
     m = re.search(
         r"(\d+)\s*\([^)]+\)\s*hari\s*/?\s*\d*\s*\([^)]+\)\s*bulan\s*kalender",
@@ -47,8 +72,8 @@ def _extract_jangka_waktu(teks: str) -> str:
         if hari and bulan:
             return f"{hari.group(1)} hari / {bulan.group(1)} bulan kalender"
 
-    # Fallback: X hari kalender
-    m2 = re.search(r"(\d+)\s*\([^)]+\)\s*(?:hari|kalender)", teks, re.IGNORECASE)
+    # Fallback: X hari kalender dengan/ tanpa terbilang.
+    m2 = re.search(r"(\d+)\s*(?:\([^)]+\)\s*)?(?:hari(?:\s+kalender)?|kalender)", teks, re.IGNORECASE)
     if m2:
         return m2.group(0).strip()
 
@@ -115,12 +140,51 @@ def _extract_jabatan_teknis(teks: str) -> str:
         raw = m2.group(1).strip().rstrip("/")
         return ("Ketua Tim " + raw).strip() if raw else "Ketua Tim"
 
+    # KAK PK memakai tabel ``Kebutuhan Personel Minimal``. Ambil jabatan
+    # teknis pertama secara eksplisit; jangan memasukkan kolom sertifikat/
+    # pengalaman yang pada PDF sering tersambung dalam satu baris.
+    personel = re.search(
+        r"KEBUTUHAN\s+PERSON(?:EL|IL)\s+MINIMAL(.{0,1200})",
+        teks, re.IGNORECASE | re.DOTALL,
+    )
+    window = personel.group(1) if personel else teks
+    for pattern in (
+        r"\b(Pelaksana\s+Lapangan)\b",
+        r"\b(Site\s+Manager)\b",
+        r"\b(Pelaksana\s+Pekerjaan)\b",
+        r"\b(Manajer\s+Pelaksanaan)\b",
+    ):
+        role = re.search(pattern, window, re.IGNORECASE)
+        if role:
+            return re.sub(r"\s+", " ", role.group(1)).strip().title()
+
     return ""
 
 
 def _extract_lokasi(teks: str) -> str:
-    """Default 'Kabupaten Tapin'. Tidak parse dari KAK karena selalu sama."""
-    return "Kabupaten Tapin"
+    """Ambil lokasi hanya jika KAK memberi label eksplisit.
+
+    Jika tidak ditemukan, kembalikan kosong agar lokasi authoritative dari
+    ``viewdraftpl`` tidak tertimpa fallback generik Kabupaten Tapin.
+    """
+    lines = [re.sub(r"\s+", " ", line).strip() for line in teks.splitlines()]
+    label_re = re.compile(
+        r"^\s*(?:\d+\.\s*)?LOKASI(?:\s+(?:KEGIATAN|PEKERJAAN))?\s*[:\-]?\s*(.*)$",
+        re.IGNORECASE,
+    )
+    for i, line in enumerate(lines):
+        m = label_re.match(line)
+        if not m:
+            continue
+        value = m.group(1).strip(" .:-")
+        if not value or value.lower() in {"kegiatan", "pekerjaan"}:
+            for candidate in lines[i + 1:i + 3]:
+                if candidate and not re.match(r"^(?:\d+\.\s*)?[A-Z][A-Z\s]+$", candidate):
+                    value = candidate.strip(" .:-")
+                    break
+        if value and value.lower() not in {"kegiatan", "pekerjaan"}:
+            return value
+    return ""
 
 
 def _extract_sub_kegiatan_dari_kak(teks: str) -> str:
@@ -144,9 +208,13 @@ def parse_kak(pdf_path: str) -> dict:
     if not teks:
         return {}
 
+    sbu_baru, sbu_lama = _extract_sbu(teks)
     return {
         "nama_ppk":     _extract_nama_ppk(teks),
         "jangka_waktu": _extract_jangka_waktu(teks),
+        "sbu_baru":     sbu_baru,
+        "sbu_lama":     sbu_lama,
+        "jabatan_teknis": _extract_jabatan_teknis(teks),
         "jabatan_k3":   _extract_jabatan_k3(teks),
         "lokasi":       _extract_lokasi(teks),
         "sub_kegiatan": _extract_sub_kegiatan_dari_kak(teks),
@@ -155,22 +223,45 @@ def parse_kak(pdf_path: str) -> dict:
 
 def cari_kak_di_folder(folder: str) -> str | None:
     """
-    Cari file KAK PDF di folder.
-    Prioritas: nama mengandung 'KAK' (case-insensitive).
+    Cari file KAK PDF di folder paket dan subfolder dokumen.
+
+    Jangan fallback ke PDF pertama: root paket juga berisi Draft_PL/HPS dan
+    fallback itu dapat membuat parser membaca dokumen yang salah sebagai KAK.
+    Download SPSE menaruh KAK di ``1. KAK & Spesifikasi Teknis``.
     """
     if not os.path.isdir(folder):
         return None
+
     candidates = []
-    for f in os.listdir(folder):
-        fl = f.lower()
-        if fl.endswith(".pdf") and "kak" in fl:
-            candidates.append(os.path.join(folder, f))
+    try:
+        for current, dirs, files in os.walk(folder):
+            # Dokumen paket hanya perlu dicari sampai satu level subfolder;
+            # batasi traversal agar tidak membaca backup/evaluator besar.
+            depth = os.path.relpath(current, folder).count(os.sep)
+            if depth > 1:
+                dirs[:] = []
+                continue
+            dirs[:] = [d for d in dirs if d.lower() not in {".workflow-backups", "__pycache__"}]
+            for f in files:
+                fl = f.lower()
+                if not fl.endswith(".pdf") or "kak" not in fl:
+                    continue
+                # SpekTek/Gambar/RK3 bukan KAK walaupun ada di area KAK.
+                if any(token in fl for token in ("spektek", "spesifikasi", "gambar", "rk3")):
+                    continue
+                score = 0
+                if re.match(r"^\s*\d+\.\s*kak\b", fl):
+                    score += 10
+                if os.path.basename(current).lower().startswith("1. kak"):
+                    score += 5
+                if "draft_pl" in fl or fl.startswith("_hps"):
+                    score -= 20
+                candidates.append((score, os.path.join(current, f)))
+    except OSError:
+        return None
+
     if candidates:
-        return sorted(candidates)[0]
-    # Fallback: PDF pertama
-    for f in os.listdir(folder):
-        if f.lower().endswith(".pdf"):
-            return os.path.join(folder, f)
+        return sorted(candidates, key=lambda item: (-item[0], item[1].lower()))[0][1]
     return None
 
 
@@ -806,6 +897,49 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
 
     Max 3 slot (slot Excel R32-R40 — praktisnya JKK biasanya 1-2 Tenaga Ahli).
     """
+    # PDF ListPersonil PK memiliki tabel native dengan kolom yang jelas.
+    # Ambil berdasarkan posisi tabel agar sertifikat yang terpotong newline
+    # tidak bergabung ke jabatan/pengalaman.
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                for table in page.extract_tables() or []:
+                    if not table:
+                        continue
+                    header = [re.sub(r"\s+", " ", str(x or "")).strip().lower() for x in table[0]]
+                    required = {"jabatan", "sertifikat", "pengalaman kerja"}
+                    if not required.issubset(set(header)):
+                        continue
+                    col = {name: header.index(name) for name in required}
+                    hasil_tabel = []
+                    for row in table[1:]:
+                        if not row or not str(row[0] or "").strip().isdigit():
+                            continue
+                        values = [re.sub(r"\s+", " ", str(x or "")).strip() for x in row]
+                        jabatan = values[col["jabatan"]] if col["jabatan"] < len(values) else ""
+                        sertifikat = values[col["sertifikat"]] if col["sertifikat"] < len(values) else ""
+                        pengalaman = values[col["pengalaman kerja"]] if col["pengalaman kerja"] < len(values) else ""
+                        if not jabatan:
+                            continue
+                        jumlah = 1
+                        jumlah_match = re.search(r"\((\d+)\s*orang\)", jabatan, re.IGNORECASE)
+                        if jumlah_match:
+                            jumlah = int(jumlah_match.group(1))
+                            jabatan = re.sub(r"\s*\(\d+\s*orang\)\s*", " ", jabatan, flags=re.IGNORECASE).strip()
+                        hasil_tabel.append({
+                            "jabatan": jabatan,
+                            "pengalaman": pengalaman,
+                            "sertifikat": sertifikat,
+                            "jumlah_orang": jumlah,
+                        })
+                    if hasil_tabel:
+                        return hasil_tabel[:3]
+    except Exception:
+        # Fallback text parser di bawah untuk PDF lama/non-table.
+        pass
+
     teks = _text_dari_pdf(pdf_path)
     if not teks:
         return []
@@ -817,10 +951,10 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
     # Pass 1: filter Tenaga Ahli (SKA / Ahli K3)
     ahli = [p for p in semua if _is_tenaga_ahli(p["jabatan"])]
 
-    # Pass 2: fallback ke baris nomor 1 jika tidak ada SKA ditemukan
+    # PK sering memakai SKK Pelaksana/Petugas, bukan SKA. Jika tidak ada
+    # penanda Tenaga Ahli, semua baris tetap merupakan kebutuhan minimal.
     if not ahli:
-        baris1 = next((p for p in semua if p["nomor"] == 1), semua[0])
-        ahli = [baris1]
+        ahli = semua
 
     return [
         {
@@ -882,7 +1016,8 @@ def ekstrak_personil_3layer(folder: str, fallback_jabatan_teknis: str = "", fall
             return result
         # HPS ada tapi parse kosong → skip fallback, kembalikan kosong
         # (HPS mungkin sedang ditulis atau formatnya berubah)
-        return []
+        if require_hps:
+            return []
 
     # HPS tidak ada sama sekali
     if require_hps:

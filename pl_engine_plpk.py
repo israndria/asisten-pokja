@@ -136,10 +136,21 @@ def update_status(kode_paket: str, status: str) -> dict:
 def tandai_folder_dibuat(kode_paket: str) -> dict:
     """Set folder_dibuat=True dan folder_dibuat_pada=now."""
     try:
-        _sb().table("draft_paket_pl").update({
+        query = _sb().table("draft_paket_pl").update({
             "folder_dibuat": True,
             "folder_dibuat_pada": datetime.now(timezone.utc).isoformat(),
-        }).eq("kode_paket", kode_paket).execute()
+        }).eq("kode_paket", kode_paket)
+        # Minta row hasil update. Mock lama mungkin belum punya select().
+        try:
+            query = query.select("kode_paket")
+        except (AttributeError, TypeError):
+            pass
+        response = query.execute()
+        data = getattr(response, "data", None)
+        if data is None and isinstance(response, dict):
+            data = response.get("data")
+        if isinstance(data, (list, tuple, dict)) and not data:
+            return {"ok": False, "error": f"Paket {kode_paket} tidak ditemukan saat menandai folder_dibuat."}
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -285,6 +296,21 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         except Exception as e:
             errors.append(f"{kode_paket}: gagal fetch viewdraft — {e}")
 
+        # Nama PPK di halaman detail SPSE adalah sumber paket. Jangan biarkan
+        # jalur PK mengosongkan field ini sementara jalur JKK mengisinya.
+        nama_ppk = ""
+        try:
+            from pl_engine import _lookup_nama_ppk_lengkap, _parse_nama_ppk_dari_view
+            r_view = requests.get(
+                f"{base_url}nontender/{kode_paket}",
+                headers=headers, timeout=15,
+            )
+            nama_ppk = _parse_nama_ppk_dari_view(r_view.text)
+            if nama_ppk:
+                nama_ppk = _lookup_nama_ppk_lengkap(nama_ppk)
+        except Exception as e:
+            errors.append(f"{kode_paket}: gagal fetch PPK — {e}")
+
         # HPS/Pagu wajib berasal dari halaman HPS live, bukan nilai stale di edit.
         try:
             from hps_engine import scrape_hps_pl
@@ -310,10 +336,25 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
 
+        # Boundary refresh paket: field hasil parsing harus diganti penuh.
+        # Upsert parsial tanpa reset akan membawa SBU/personil/provider dari
+        # donor atau paket sebelumnya saat parser baru belum menemukan data.
+        for _field in (
+            "nama_ppk", "nip_ppk", "no_sk_ppk", "sbu_baru", "sbu_lama",
+            "jabatan_teknis", "skk_teknis", "jabatan_k3", "skk_k3",
+            "dpa_nomor", "sub_kegiatan", "nama_file_uraian", "mak",
+            "nama_penyedia", "npwp_penyedia", "personil_json",
+            "nomor_nota_dinas", "nomor_rekomendasi", "tgl_rekomendasi",
+            "uraian_singkat", "masa_berlaku",
+        ):
+            data[_field] = None
+
         if viewdraft.get("sumber_anggaran"):
             data["sumber_anggaran"] = viewdraft["sumber_anggaran"]
         if viewdraft.get("lokasi"):
             data["lokasi"] = viewdraft["lokasi"]
+        if nama_ppk:
+            data["nama_ppk"] = nama_ppk
 
         if _hps_live.get("nilai_pagu"):
             data["nilai_pagu"] = _hps_live["nilai_pagu"]
@@ -578,6 +619,7 @@ def download_dokumen_paket_pl(
     progress_cb=None,
     cookie_str: str = "",
     skip_merge: bool = False,
+    force_clean: bool = False,
 ) -> dict:
     """
     Download dokumen dari endpoint non-tender PP ke folder_tujuan:
@@ -589,6 +631,10 @@ def download_dokumen_paket_pl(
 
     skip_merge=True: lewati gabung PDF (Excel COM tidak thread-safe untuk paralel).
                      Merge dilakukan sequential setelah pool selesai via gabung_draft_pl().
+
+    force_clean=True: hapus file lama hanya di subfolder dokumen pada
+                      SUBFOLDER_DOK_PPK sebelum download ulang. Root folder,
+                      template, dan 0. Draft Dokumen PPK tidak disentuh.
 
     Return: {"ok": [...], "error": [...]}
     """
@@ -604,6 +650,16 @@ def download_dokumen_paket_pl(
 
     os.makedirs(folder_tujuan, exist_ok=True)
     hasil = {"ok": [], "error": []}
+
+    if force_clean:
+        for sub_name in SUBFOLDER_DOK_PPK.values():
+            sub_path = os.path.join(folder_tujuan, sub_name)
+            if not os.path.isdir(sub_path):
+                continue
+            for name in os.listdir(sub_path):
+                path = os.path.join(sub_path, name)
+                if os.path.isfile(path):
+                    os.remove(path)
 
     if not cookie_str:
         cookie_str = spse_browser.get_spse_cookies()
@@ -667,13 +723,23 @@ def download_dokumen_paket_pl(
 
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
+        r = None
         try:
             r = requests.get(endpoint_url, headers=hdrs, timeout=15)
-            if r.status_code == 403:
-                log(f"  ⏭ {label}: 403 Forbidden")
+            if r.status_code in (401, 403) or r.status_code >= 500:
+                err = f"HTTP {r.status_code} — sesi SPSE tidak valid atau server gagal"
+                hasil["error"].append(f"{label}: {err}")
+                log(f"  ❌ {label}: {err}")
                 return
             r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
+            response_text = r.text
+            soup = BeautifulSoup(response_text, "html.parser")
+            lowered = response_text.lower()
+            if any(marker in lowered for marker in ("/login", "name=\"username\"", "id=\"username\"", "silakan login")):
+                err = "Sesi SPSE tidak valid — server mengembalikan halaman login"
+                hasil["error"].append(f"{label}: {err}")
+                log(f"  ❌ {label}: {err}")
+                return
             links = []
             for a in soup.find_all("a", href=True):
                 href = a["href"]
@@ -693,6 +759,7 @@ def download_dokumen_paket_pl(
 
             log(f"  📂 {label}: {len(links)} file")
             for url_dl, fname in links:
+                r_dl = None
                 try:
                     r_dl = _get_download_response_retry(url_dl)
                     r_dl.raise_for_status()
@@ -711,9 +778,19 @@ def download_dokumen_paket_pl(
                 except Exception as e:
                     hasil["error"].append(f"{fname}: {e}")
                     log(f"    ❌ {fname}: {e}")
+                finally:
+                    if r_dl is not None:
+                        close = getattr(r_dl, "close", None)
+                        if callable(close):
+                            close()
         except Exception as e:
             hasil["error"].append(f"{label}: {e}")
             log(f"  ❌ {label}: {e}")
+        finally:
+            if r is not None:
+                close = getattr(r, "close", None)
+                if callable(close):
+                    close()
 
     ENDPOINTS = [
         (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",      "KAK & Personil"),
@@ -774,7 +851,11 @@ def gabung_draft_pl(kode_paket: str, folder_tujuan: str, files_ok: list, progres
     ).maybe_single().execute()
     nama_paket = (nama_paket_row.data or {}).get("nama_paket", kode_paket) if nama_paket_row else kode_paket
     nama_clean = re.sub(r'[<>:"/\\|?*]', "_", nama_paket)[:60].strip()
-    draft_path = os.path.join(folder_tujuan, f"Draft_PL_{nama_clean}.pdf")
+    # Draft gabungan adalah artefak PPK; simpan bersama draft dokumen lain.
+    # Jangan taruh di root paket karena root dipakai untuk template/metadata.
+    draft_dir = os.path.join(folder_tujuan, "0. Draft Dokumen PPK")
+    os.makedirs(draft_dir, exist_ok=True)
+    draft_path = os.path.join(draft_dir, f"Draft_PL_{nama_clean}.pdf")
     ordered = sorted(files_ok, key=lambda p: _pl_pdf_sort_key(os.path.basename(p)))
     return _gabung_pdf_draft(draft_path, ordered, progress_cb)
 

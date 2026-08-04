@@ -2,6 +2,7 @@
 
 import os
 import re
+from html import unescape
 from decimal import Decimal, ROUND_HALF_UP
 from config import sb as _sb, SPSE_BASE_URL
 
@@ -15,6 +16,70 @@ def _parse_rp(s: str) -> float:
         return float(cleaned)
     except ValueError:
         return 0.0
+
+
+def _parse_amount_decimal(value) -> Decimal | None:
+    """Parse nominal Indonesia tanpa kehilangan presisi.
+
+    Nilai HPS resmi pada halaman edit dapat muncul sebagai ``Rp. 1.234.567,00``
+    atau sebagai value input ``1234567``.  Jangan lewatkan nominal ini melalui
+    float sebelum pembulatan karena satu rupiah dapat berubah pada angka besar.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r"[^0-9,.-]", "", text)
+    if not text or text in {"-", ".", ","}:
+        return None
+
+    # Format Indonesia: titik ribuan, koma desimal.  Untuk angka mentah tanpa
+    # pemisah, Decimal langsung mempertahankan nilai persisnya.
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1:
+        text = text.replace(".", "")
+    try:
+        return Decimal(text)
+    except Exception:
+        return None
+
+
+def _parse_official_hps_summary(html: str) -> Decimal | None:
+    """Ambil Nilai HPS resmi dari halaman ``/nontender/{kode}/edit``.
+
+    Parser sengaja konservatif: hanya menerima nominal pada window setelah
+    label *Nilai HPS*. Jika label/nominal tidak ditemukan, caller wajib
+    mempertahankan audit sum item dan tidak mengklaim angka resmi.
+    """
+    if not html:
+        return None
+    decoded = unescape(html)
+    text = re.sub(r"<[^>]+>", " ", decoded)
+    text = re.sub(r"\s+", " ", text)
+
+    label = re.search(r"nilai\s+hps\b", text, re.IGNORECASE)
+    if label:
+        window = text[label.end():label.end() + 700]
+        # Wajib ada prefix Rupiah pada teks tampilan agar angka lain di
+        # sekitar form tidak keliru dianggap sebagai HPS.
+        match = re.search(r"Rp\.?\s*([0-9][0-9.]*,?[0-9]{0,2})", window, re.IGNORECASE)
+        if match:
+            parsed = _parse_amount_decimal(match.group(1))
+            if parsed is not None:
+                return parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+    # Fallback untuk form yang menaruh nominal pada input bernama nilai_hps.
+    for tag in re.findall(r"<input\b[^>]*>", decoded, re.IGNORECASE):
+        if not re.search(r'name=["\'][^"\']*nilai[_-]?hps[^"\']*["\']', tag, re.IGNORECASE):
+            continue
+        match = re.search(r'value=["\']([^"\']+)', tag, re.IGNORECASE)
+        if match:
+            parsed = _parse_amount_decimal(match.group(1))
+            if parsed is not None:
+                return parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return None
 
 
 def _format_rp(value: float) -> str:
@@ -624,7 +689,11 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     try:
         from parse_kak_pl import ekstrak_personil_3layer
         from pl_engine import simpan_paket_pl
-        personil = ekstrak_personil_3layer(folder, require_hps=True)
+        # HPS JKK biasanya membawa section Tenaga Ahli sehingga strict HPS
+        # aman. HPS PK adalah BoQ; personil wajib diambil dari
+        # ListPersonilAlat.pdf bila section itu tidak ada.
+        _is_pk_folder = "PLPK" in os.path.basename(folder).upper()
+        personil = ekstrak_personil_3layer(folder, require_hps=not _is_pk_folder)
         if personil:
             simpan_paket_pl({"kode_paket": kode_paket, "personil_json": personil})
     except Exception:
@@ -678,7 +747,31 @@ def _fetch_hps_page_pl(kode_paket: str) -> dict:
     )
     if r.status_code != 200:
         return {"items": [], "nilai_pagu": ""}
-    return _parse_hps_page(r.text)
+    page = _parse_hps_page(r.text)
+
+    # Rincian /dokumennontender/.../hps dapat menyimpan total item dengan
+    # pecahan (contoh 313292323.48), sedangkan SPSE menampilkan nilai HPS
+    # resmi yang sudah dibulatkan di /nontender/{kode}/edit. Ambil sumber
+    # otoritatif itu bila tersedia; rincian item tetap dipertahankan untuk
+    # audit dan rekonsiliasi.
+    try:
+        edit = requests.get(
+            f"{SPSE_BASE_URL}nontender/{kode_paket}/edit",
+            headers={
+                "Cookie": cookie_str,
+                "User-Agent": "Mozilla/5.0",
+                "Referer": f"{SPSE_BASE_URL}nontender/{kode_paket}",
+            },
+            timeout=15,
+        )
+        if edit.status_code == 200:
+            official = _parse_official_hps_summary(edit.text)
+            if official is not None:
+                page["nilai_hps_official"] = official
+    except Exception:
+        # Rincian HPS tetap dapat dipakai bila halaman ringkasan gagal diambil.
+        pass
+    return page
 
 
 def _fetch_data_var_pl(kode_paket: str) -> list:
@@ -735,16 +828,33 @@ def scrape_hps_pl(kode_paket: str) -> dict:
             "selisih_ok":   selisih_ok,
         })
 
-    total_nilai = round(sum(float(d.get("total_harga") or 0) for d in raw), 2)
-    from math import ceil
-    total_nilai_bulat = float(ceil(total_nilai))
+    # Audit total: jumlah raw total_harga dari endpoint rincian, dibulatkan
+    # hanya ke 2 desimal. Ini bukan nilai HPS resmi.
+    total_nilai_decimal = sum(
+        (_parse_amount_decimal(d.get("total_harga") or 0) or Decimal("0"))
+        for d in raw
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    total_nilai = float(total_nilai_decimal)
+
+    official = page.get("nilai_hps_official")
+    if official is not None:
+        total_nilai_bulat_decimal = official.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        nilai_hps_source = "official_edit_page"
+    else:
+        # Backward-compatible fallback, tetapi eksplisit sebagai hasil
+        # pembulatan audit; tidak disebut sebagai angka resmi SPSE.
+        total_nilai_bulat_decimal = total_nilai_decimal.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        nilai_hps_source = "line_item_sum_rounded_fallback"
+    total_nilai_bulat = float(total_nilai_bulat_decimal)
 
     return {
         "items":             items,
         "total_nilai":       total_nilai,
         "total_nilai_bulat": total_nilai_bulat,
         "nilai_pagu":        page.get("nilai_pagu", ""),
-        "nilai_hps":         _format_rp(total_nilai),
+        "nilai_hps":         _format_rp(total_nilai_bulat),
+        "nilai_hps_official": float(official) if official is not None else "",
+        "nilai_hps_source":  nilai_hps_source,
     }
 
 

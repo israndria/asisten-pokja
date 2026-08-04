@@ -117,6 +117,29 @@ class SpseLoginHelpersTest(unittest.TestCase):
 
         self.assertEqual(detected, "PPK")
 
+    def test_detect_role_recovers_without_role_cache_file(self):
+        response = SimpleNamespace(
+            status_code=200,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Beranda Pejabat Pengadaan",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "nested" / "last_role.txt"
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch(
+                    "spse_browser.get_spse_cookies",
+                    return_value="SPSE_SESSION=current-session",
+                ),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+            self.assertEqual(detected, "PP")
+            saved = json.loads(role_file.read_text(encoding="utf-8"))
+            self.assertEqual(saved["role"], "PP")
+            self.assertEqual(saved["cookie_fp"], spse_login._cookie_fingerprint("SPSE_SESSION=current-session"))
+
     def test_detect_role_falls_back_to_authenticated_package_tab_when_home_is_403(self):
         response = SimpleNamespace(
             status_code=403,

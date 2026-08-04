@@ -259,7 +259,7 @@ def submit_ldk_pl(
     # Struktur izin PLPK berbeda dari JKK. Jangan mengirim label jasa
     # konsultansi ke paket pekerjaan konstruksi.
     izin_text = (
-        "Memiliki izin berusaha di bidang Jasa Konsultansi Konstruksi; "
+        "Memiliki izin berusaha di bidang Jasa Pekerjaan Konstruksi; "
         "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi; "
         "b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum "
         "terverifikasi, peserta menyampaikan NIB, Sertifikat Standar belum terverifikasi "
@@ -281,6 +281,11 @@ def submit_ldk_pl(
         izin_list.extend(izin_extra)
 
     ijin_rows = ctx.get("ijin_rows", {})
+    # Simpan daftar ID asli untuk menentukan apakah baris SBU lama memang
+    # sudah ada di SPSE. Tanpa assignment ini jalur SBU Custom baru meledak
+    # setelah POST sukses dengan NameError, sehingga seluruh paket dilaporkan
+    # gagal walaupun payload utama sudah terkirim.
+    ijin_existing_ids = ctx.get("ijin_chk_ids", [])
     for i, ij in enumerate(izin_list):
         # Row existing punya hidden chk_id; row hasil tombol Tambah Izin tidak.
         if i in ijin_rows:
@@ -371,7 +376,8 @@ def submit_ldk_pl(
     # klasifikasi tidak bisa diubah via requests POST (server revert ke nilai lama).
     # Wajib pakai browser real (CDP) untuk update teks ke hanya SBU 2020.
     if ok and not sbu_lama and sbu_baru and len(ijin_existing_ids) >= 2:
-        klas_target = izin_list[0].get("klasifikasi", "")
+        # Row 0 = izin usaha; row 1 = SBU. Yang diubah via CDP adalah row SBU.
+        klas_target = izin_list[1].get("klasifikasi", "")
         try:
             import spse_browser as _sb
             cdp_result = _sb.update_ijin_sbu_via_playwright(

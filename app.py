@@ -99,7 +99,7 @@ def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
         pass
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow
+from pl_ui_helpers import _baca_master_data_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -1005,6 +1005,7 @@ elif _previous_spse_identity:
 
 _PPK_MODE_OPTIONS = ["PPK - Konsultan", "PPK - Pekerjaan Konstruksi"]
 _PPK_DEFAULT_MODE = "PPK - Pekerjaan Konstruksi"
+_PL_DEFAULT_MODE = "PL - Konstruksi"
 _ALL_MODES = ["Tender", "PL - Konsultansi", "PL - Konstruksi", *_PPK_MODE_OPTIONS]
 if _spse_role == "PP":
     _MODE_OPTIONS = ["PL - Konsultansi", "PL - Konstruksi"]
@@ -1269,7 +1270,11 @@ if _spse_role == "PPK":
         st.stop()
 
 if _spse_role:
-    _default_mode = _PPK_DEFAULT_MODE if _spse_role == "PPK" else _MODE_OPTIONS[0]
+    _default_mode = (
+        _PPK_DEFAULT_MODE if _spse_role == "PPK"
+        else _PL_DEFAULT_MODE if _spse_role == "PP"
+        else _MODE_OPTIONS[0]
+    )
     if "app_mode" not in st.session_state:
         st.session_state["app_mode"] = _default_mode
 
@@ -2714,7 +2719,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
                                 _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
+                                _pl_live_events.append(f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
                                 _pl_live_events = _pl_live_events[-12:]
                                 _pl_bulk_status_line.code("\n".join(_pl_live_events))
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
@@ -2727,18 +2732,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pl_fail += 1
                             _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                             continue
-                        _pl_ok += 1
+                        _pl_final_ok = True
                         _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                         _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
                             _t_step = _pl_time.perf_counter()
                             try:
-                                _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
+                                _pl_merge_engine = _engine_for_jenis_pl(_pl_res.get("jenis_pl"))
+                                _pl_merged = _pl_merge_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
                                 if _pl_merged:
                                     _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
                                 _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _mg_e:
+                                _pl_final_ok = False
                                 _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
                                 _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
@@ -2781,18 +2788,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         if _pl_isi_excel:
                             _t_step = _pl_time.perf_counter()
                             try:
-                                _excel_logs = _proses_excel_paket_pl(
+                                _excel_res = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                 )
-                                for _el in _excel_logs:
+                                for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (
                                             "📝" if _el.startswith("Master Data") else (
                                             "🔄" if _el.startswith("Refresh") else "⚠"))
                                     _pl_paket_log.append(f"{_icon} {_el}")
+                                if not _excel_res.get("ok"):
+                                    _pl_final_ok = False
+                                    _pl_paket_log.append("❌ Excel: finalisasi gagal; paket tetap retryable")
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _xl_e:
+                                _pl_final_ok = False
                                 _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
@@ -2803,7 +2814,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
                             _pl_paket_log.append(f"🧩 Workflow: {_meta_wf.get('workflow_applied')}")
                         except Exception as _meta_wf_e:
+                            _pl_final_ok = False
                             _pl_paket_log.append(f"⚠ Metadata workflow: {_meta_wf_e}")
+                        if _pl_final_ok:
+                            try:
+                                _mark_res = pl_engine.tandai_folder_dibuat(_pl_kp_b)
+                                if not (_mark_res or {}).get("ok"):
+                                    raise RuntimeError((_mark_res or {}).get("error", "status DB tidak tersimpan"))
+                                _pl_ok += 1
+                                _pl_paket_log.append("✅ Status folder: tersimpan")
+                            except Exception as _mark_e:
+                                _pl_final_ok = False
+                                _pl_paket_log.append(f"❌ Status folder: {_mark_e}; paket tetap retryable")
+                        if not _pl_final_ok:
+                            _pl_fail += 1
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                     _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
@@ -5966,7 +5990,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
                                 _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events.append(f"✅ SELESAI: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
+                                _pl_live_events.append(f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
                                 _pl_live_events = _pl_live_events[-12:]
                                 _pl_bulk_status_line.code("\n".join(_pl_live_events))
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
@@ -5979,18 +6003,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pl_fail += 1
                             _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                             continue
-                        _pl_ok += 1
+                        _pl_final_ok = True
                         _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                         _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
                             _t_step = _pl_time.perf_counter()
                             try:
-                                _pl_merged = pl_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
+                                _pl_merge_engine = _engine_for_jenis_pl(_pl_res.get("jenis_pl"))
+                                _pl_merged = _pl_merge_engine.gabung_draft_pl(_pl_kp_b, _pl_target_b, _pl_res["files_ok"])
                                 if _pl_merged:
                                     _pl_paket_log.append(f"📎 Draft PDF: {_pl_os.path.basename(_pl_merged)}")
                                 _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _mg_e:
+                                _pl_final_ok = False
                                 _pl_paket_log.append(f"⚠ Gabung Draft PDF: {_mg_e}")
                                 _pl_paket_log.append(f"⏱ merge draft: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
@@ -6033,18 +6059,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         if _pl_isi_excel:
                             _t_step = _pl_time.perf_counter()
                             try:
-                                _excel_logs = _proses_excel_paket_pl(
+                                _excel_res = _proses_excel_paket_pl(
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                 )
-                                for _el in _excel_logs:
+                                for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (
                                             "📝" if _el.startswith("Master Data") else (
                                             "🔄" if _el.startswith("Refresh") else "⚠"))
                                     _pl_paket_log.append(f"{_icon} {_el}")
+                                if not _excel_res.get("ok"):
+                                    _pl_final_ok = False
+                                    _pl_paket_log.append("❌ Excel: finalisasi gagal; paket tetap retryable")
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)}")
                             except Exception as _xl_e:
+                                _pl_final_ok = False
                                 _pl_paket_log.append(f"⚠ Excel Master Data: {_xl_e}")
                                 _pl_paket_log.append(f"⏱ Excel: {_fmt_step_seconds(_pl_time.perf_counter() - _t_step)} error")
                         else:
@@ -6055,7 +6085,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
                             _pl_paket_log.append(f"🧩 Workflow: {_meta_wf.get('workflow_applied')}")
                         except Exception as _meta_wf_e:
+                            _pl_final_ok = False
                             _pl_paket_log.append(f"⚠ Metadata workflow: {_meta_wf_e}")
+                        if _pl_final_ok:
+                            try:
+                                _mark_res = pl_engine.tandai_folder_dibuat(_pl_kp_b)
+                                if not (_mark_res or {}).get("ok"):
+                                    raise RuntimeError((_mark_res or {}).get("error", "status DB tidak tersimpan"))
+                                _pl_ok += 1
+                                _pl_paket_log.append("✅ Status folder: tersimpan")
+                            except Exception as _mark_e:
+                                _pl_final_ok = False
+                                _pl_paket_log.append(f"❌ Status folder: {_mark_e}; paket tetap retryable")
+                        if not _pl_final_ok:
+                            _pl_fail += 1
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                     _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
@@ -7089,8 +7132,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 except Exception as _e:
                                     st.error(f"❌ {_pl_label(_p)}: {_e}")
                             _save_pl_sbu_history(_sbu_baru_global, _sbu_lama_global or "")
-                            st.success(f"✅ {_ok_c}/{len(_plsp_selected)} paket disimpan ke Supabase")
+                            # Bedakan status penyimpanan SBU dari status POST
+                            # LDK. Sebelumnya pesan sukses tampil dulu, lalu
+                            # semua POST bisa gagal sehingga log terlihat
+                            # kontradiktif.
+                            st.info(f"ℹ️ SBU tersimpan: {_ok_c}/{len(_plsp_selected)} paket. LDK diproses...")
                             import ldk_config as _ldk_cfg_custom_pk
+                            _ok_ldk_custom = 0
                             for _p in _plsp_selected:
                                 try:
                                     _r_custom_ldk = _depl_pk.submit_ldk_pl(
@@ -7101,9 +7149,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         teknis_centang_ckm_ids=["437", "438", "439"],
                                         kinerja_text=_ldk_cfg_custom_pk.KINERJA_PENYEDIA_PK,
                                     )
+                                    if _r_custom_ldk.get("ok"):
+                                        _ok_ldk_custom += 1
                                     st.write(f"{'✅' if _r_custom_ldk['ok'] else '❌'} {_pl_label(_p)} — POST LDK HTTP {_r_custom_ldk['status']}")
                                 except Exception as _e_ldk_custom:
                                     st.error(f"❌ {_pl_label(_p)} — POST LDK gagal: {_e_ldk_custom}")
+                            if _ok_ldk_custom == len(_plsp_selected):
+                                st.success(f"✅ SBU tersimpan dan LDK berhasil: {_ok_ldk_custom}/{len(_plsp_selected)} paket")
+                            else:
+                                st.warning(f"⚠️ SBU tersimpan {_ok_c}/{len(_plsp_selected)}; LDK berhasil {_ok_ldk_custom}/{len(_plsp_selected)} paket")
 
                     st.divider()
 

@@ -264,7 +264,10 @@ def load_draft_pl() -> list[dict]:
         for row in hasil:
             if row.get("nama_ppk"):
                 row["nama_ppk"] = _lookup_nama_ppk_lengkap(row["nama_ppk"])
-            row["lokasi"] = "Kabupaten Tapin"
+            # Lokasi authoritative berasal dari viewdraftpl. Hanya fallback
+            # bila row lama belum punya nilai sama sekali.
+            if not str(row.get("lokasi") or "").strip():
+                row["lokasi"] = "Kabupaten Tapin"
         return hasil
     except Exception as e:
         return []
@@ -445,10 +448,21 @@ def update_status(kode_paket: str, status: str) -> dict:
 def tandai_folder_dibuat(kode_paket: str) -> dict:
     """Set folder_dibuat=True dan folder_dibuat_pada=now."""
     try:
-        _sb().table("draft_paket_pl").update({
+        query = _sb().table("draft_paket_pl").update({
             "folder_dibuat": True,
             "folder_dibuat_pada": datetime.now(timezone.utc).isoformat(),
-        }).eq("kode_paket", kode_paket).execute()
+        }).eq("kode_paket", kode_paket)
+        # Minta row hasil update. Mock lama mungkin belum punya select().
+        try:
+            query = query.select("kode_paket")
+        except (AttributeError, TypeError):
+            pass
+        response = query.execute()
+        data = getattr(response, "data", None)
+        if data is None and isinstance(response, dict):
+            data = response.get("data")
+        if isinstance(data, (list, tuple, dict)) and not data:
+            return {"ok": False, "error": f"Paket {kode_paket} tidak ditemukan saat menandai folder_dibuat."}
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -700,7 +714,10 @@ def _scrape_viewdraftpl(kode_paket: str, headers: dict, base_url: str) -> dict:
     import requests
     from bs4 import BeautifulSoup
     result = {"sumber_anggaran": "", "lokasi": ""}
-    _SUMBER_VALID = {"APBD", "APBN", "DAK", "BLU", "BLUD", "APBD Provinsi"}
+    _SUMBER_VALID = {
+        "APBD", "APBDP", "APBD-P", "APBN", "DAK", "BLU", "BLUD",
+        "APBD Provinsi",
+    }
     try:
         r = requests.get(f"{base_url}nontender/{kode_paket}/viewdraftpl",
                          headers=headers, timeout=15)
@@ -718,7 +735,7 @@ def _scrape_viewdraftpl(kode_paket: str, headers: dict, base_url: str) -> dict:
         for td in soup.find_all(["td", "th"]):
             txt = td.get_text(strip=True)
             if txt in _SUMBER_VALID:
-                result["sumber_anggaran"] = txt
+                result["sumber_anggaran"] = "APBDP" if txt == "APBD-P" else txt
                 break
     except Exception:
         pass
@@ -845,7 +862,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         except Exception:
             pass
 
-        # 2c. Fetch sumber_anggaran dari viewdraftpl (lokasi selalu hardcode)
+        # 2c. Fetch sumber_anggaran + lokasi authoritative dari viewdraftpl
         viewdraft = _scrape_viewdraftpl(kode_paket, headers, base_url)
 
         # 3. Deteksi jenis PL (dari metode, fallback nama)
@@ -860,12 +877,25 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_pl":          jenis_pl,
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
-            "lokasi":            "Kabupaten Tapin",
+            "lokasi":            viewdraft.get("lokasi") or "Kabupaten Tapin",
             "status":            status_spse.lower() if status_spse else "draft",
             "is_ulang":          is_ulang,
             "tahap_spse":        tahap_map.get(kode_paket),  # None jika belum ada tahapan
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
+
+        # Serap adalah boundary paket baru/refresh. Parser berikutnya mengisi
+        # kembali field ini dari KAK/ND/Draft; jangan biarkan nilai donor atau
+        # hasil paket lama hidup karena upsert parsial Supabase.
+        for _field in (
+            "nama_ppk", "nip_ppk", "no_sk_ppk", "sbu_baru", "sbu_lama",
+            "jabatan_teknis", "skk_teknis", "jabatan_k3", "skk_k3",
+            "dpa_nomor", "sub_kegiatan", "nama_file_uraian", "mak",
+            "nama_penyedia", "npwp_penyedia", "personil_json",
+            "nomor_nota_dinas", "nomor_rekomendasi", "tgl_rekomendasi",
+            "uraian_singkat", "masa_berlaku",
+        ):
+            data[_field] = None
 
         if nama_ppk:
             data["nama_ppk"] = _lookup_nama_ppk_lengkap(nama_ppk)
@@ -1249,13 +1279,23 @@ def download_dokumen_paket_pl(
 
     def _download_links_dari_endpoint(endpoint_url, label):
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
+        r = None
         try:
             r = requests.get(endpoint_url, headers=hdrs, timeout=15)
-            if r.status_code == 403:
-                log(f"  ⏭ {label}: 403 Forbidden")
+            if r.status_code in (401, 403) or r.status_code >= 500:
+                err = f"HTTP {r.status_code} — sesi SPSE tidak valid atau server gagal"
+                hasil["error"].append(f"{label}: {err}")
+                log(f"  ❌ {label}: {err}")
                 return
             r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
+            response_text = r.text
+            soup = BeautifulSoup(response_text, "html.parser")
+            lowered = response_text.lower()
+            if any(marker in lowered for marker in ("/login", "name=\"username\"", "id=\"username\"", "silakan login")):
+                err = "Sesi SPSE tidak valid — server mengembalikan halaman login"
+                hasil["error"].append(f"{label}: {err}")
+                log(f"  ❌ {label}: {err}")
+                return
             links = []
             for a in soup.find_all("a", href=True):
                 href = a["href"]
@@ -1278,6 +1318,7 @@ def download_dokumen_paket_pl(
             def _download_satu(link):
                 url_dl, fname = link
                 t0 = time.perf_counter()
+                r_dl = None
                 try:
                     r_dl = _get_download_response_retry(url_dl)
                     r_dl.raise_for_status()
@@ -1299,6 +1340,11 @@ def download_dokumen_paket_pl(
                     return True, os.path.basename(dst), "", time.perf_counter() - t0
                 except Exception as e:
                     return False, fname, str(e), time.perf_counter() - t0
+                finally:
+                    if r_dl is not None:
+                        close = getattr(r_dl, "close", None)
+                        if callable(close):
+                            close()
 
             t_ep = time.perf_counter()
             max_workers = max(1, min(int(per_file_workers or 1), len(links) or 1))
@@ -1314,6 +1360,11 @@ def download_dokumen_paket_pl(
         except Exception as e:
             hasil["error"].append(f"{label}: {e}")
             log(f"  ❌ {label}: {e}")
+        finally:
+            if r is not None:
+                close = getattr(r, "close", None)
+                if callable(close):
+                    close()
 
     ENDPOINTS = [
         (f"{BASE_URL}/dokumennontender/{kode_paket}/spek",      "KAK & Personil"),

@@ -12,6 +12,19 @@ from functools import lru_cache
 import pl_engine
 
 
+def _engine_for_jenis_pl(jenis_pl):
+    """Pilih engine downloader/merger sesuai family paket.
+
+    Bulk worker berjalan di helper module, sehingga assignment ``pl_engine``
+    pada scope ``app.py`` tidak ikut berubah saat mode PK aktif. Tanpa resolver
+    ini worker PK diam-diam memakai endpoint/cleanup engine JKK.
+    """
+    if str(jenis_pl or "").upper().strip() == "PK":
+        import pl_engine_plpk
+        return pl_engine_plpk
+    return pl_engine
+
+
 @lru_cache(maxsize=1)
 def _core_workflow_config():
     """Muat registry dari procurement_core tanpa menabrak config UI lokal."""
@@ -36,6 +49,47 @@ def _fmt_elapsed(seconds):
 def _fmt_step_seconds(seconds):
     return f"{seconds:.1f}s"
 
+
+def _pl_output_dasar_valid(target_dir):
+    """Validasi minimum output setup sebelum paket dianggap selesai."""
+    if not os.path.isdir(target_dir):
+        return False, "folder output tidak ditemukan"
+    if not _cari_xlsm_pl(target_dir):
+        return False, "workbook .xlsm tidak ditemukan"
+    if not os.path.isfile(os.path.join(target_dir, ".template-meta.json")):
+        return False, "metadata .template-meta.json tidak ditemukan"
+    required_dirs = (
+        "0. Draft Dokumen PPK",
+        "1. KAK & Spesifikasi Teknis",
+        "2. Rancangan Kontrak",
+        "3. Uraian Singkat Pekerjaan",
+        "4. Informasi Lainnya",
+    )
+    missing_dirs = [
+        name for name in required_dirs
+        if not os.path.isdir(os.path.join(target_dir, name))
+    ]
+    if missing_dirs:
+        return False, "subfolder inti hilang: " + ", ".join(missing_dirs)
+    return True, ""
+
+
+def _pl_io_success(res, download_requested):
+    """Predikat murni status I/O, dapat diuji tanpa SPSE/network."""
+    if not res.get("setup_ok") or not res.get("output_ok") or not res.get("hps_ok"):
+        return False
+    return not download_requested or bool(res.get("download_ok"))
+
+
+def _pl_download_success(files_ok, errors):
+    """Validasi download; Nota Dinas opsional karena diproses lewat email."""
+    if not files_ok:
+        return False
+    return not any(
+        not str(error or "").startswith("Nota Dinas PPK:")
+        for error in (errors or [])
+    )
+
 def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     """Fase I/O murni per paket PL (thread-safe, TANPA st.* dan TANPA COM).
 
@@ -58,10 +112,13 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     kode = item["kode_paket"]
     out_base = item["out_base"]
     jenis_pl = item["jenis_pl"]
+    _engine = _engine_for_jenis_pl(jenis_pl)
     target = _o.path.join(out_base, nama_folder)
     res = {"kode": kode, "nama_folder": nama_folder, "out_base": out_base,
            "jenis_pl": jenis_pl, "workflow": item.get("workflow", ""), "target": target, "template_dir": item.get("template_dir", ""),
-           "ok": False, "log": [], "files_ok": []}
+           "ok": False, "setup_ok": False, "output_ok": False,
+           "download_ok": not bool(cfg.get("dl_dokumen")), "hps_ok": False,
+           "log": [], "files_ok": []}
     log = res["log"].append
 
     def _step(label, t0, suffix=""):
@@ -86,6 +143,13 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             _cmd_setup,
             capture_output=True, text=True, timeout=120, creationflags=cfg["no_win"],
         )
+        if r2.returncode == 0:
+            res["setup_ok"] = True
+            res["output_ok"], _output_error = _pl_output_dasar_valid(target)
+            if not res["output_ok"]:
+                log(f"Validasi output gagal: {_output_error}")
+                _emit("output dasar tidak valid")
+                return res
         if r2.returncode != 0:
             log(f"❌ Gagal buat folder: rc={r2.returncode}\nout_base={out_base!r}\nfolder={nama_folder!r}\n{r2.stderr}")
             _emit("❌ gagal buat folder")
@@ -138,12 +202,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             log(f"⚠ Evaluator copy: {_ev_e}")
             _step("evaluator", _t_step, " error")
 
-        # tandai folder dibuat
-        try:
-            pl_engine.tandai_folder_dibuat(kode)
-        except Exception as _e_upd:
-            log(f"⚠ tandai_folder_dibuat: {_e_upd}")
-
+        # Status DB ditandai setelah finalisasi di app.py.
         if cfg["dl_dokumen"] and kode:
             # 3. Download dokumen SPSE (cookie di-pass, merge ditunda → serial pasca-pool)
             if not cookie_str:
@@ -152,24 +211,39 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 try:
                     _emit("⬇️ mulai download")
                     _t_step = _tm.perf_counter()
-                    _dl = pl_engine.download_dokumen_paket_pl(
+                    _dl = _engine.download_dokumen_paket_pl(
                         kode, target, cookie_str=cookie_str, skip_merge=True,
+                        force_clean=True,
                     )
                     res["files_ok"] = _dl.get("ok", [])
+                    _download_errors = _dl.get("error", [])
+                    res["download_ok"] = _pl_download_success(
+                        res["files_ok"], _download_errors
+                    )
                     log(f"📎 Download: ✅{len(_dl.get('ok', []))} file")
                     _step("download", _t_step)
                     _emit(f"✅ download {len(_dl.get('ok', []))} file")
-                    for _e in _dl.get("error", []):
-                        log(f"  ❌ {_e}")
+                    for _e in _download_errors:
+                        _optional_nd = str(_e or "").startswith("Nota Dinas PPK:")
+                        log(f"  {'⚠️' if _optional_nd else '❌'} {_e}")
                 except Exception as _dl_e:
                     log(f"❌ Download error: {_dl_e}")
                     _step("download", _t_step, " error")
+            if not res["download_ok"]:
+                log("Validasi download gagal: paket tetap retryable")
+                _emit("download gagal")
+                return res
             # 4. Parse KAK
             try:
                 _t_step = _tm.perf_counter()
                 _kak_p = _pkpl.cari_kak_di_folder(target)
                 if _kak_p:
                     _kak_u = {k: v for k, v in _pkpl.parse_kak(_kak_p).items() if v}
+                    # Untuk paket SPSE, lokasi dari /viewdraftpl adalah sumber
+                    # otoritatif. KAK tetap dipakai untuk durasi/SBU/jabatan,
+                    # tetapi hasil parsing lokasi tidak boleh menimpa format
+                    # lokasi resmi SPSE (mis. "Kecamatan ... - Tapin (Kab.)").
+                    _kak_u.pop("lokasi", None)
                     if _kak_u:
                         pl_engine.simpan_paket_pl({"kode_paket": kode, **_kak_u})
                         log(f"📋 KAK: {','.join(_kak_u.keys())}")
@@ -203,6 +277,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             _hps = _hps_eng.scrape_hps_pl(kode)
             if _hps and _hps.get("items") and _xlsm:
                 _hps_eng._tulis_hps_ke_md(kode, _xlsm, _hps)
+                res["hps_ok"] = True
                 log(f"📄 HPS.md: {len(_hps['items'])} item")
                 _emit(f"📄 HPS {len(_hps['items'])} item")
             else:
@@ -212,7 +287,9 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             log(f"⚠ HPS.md: {_hps_e}")
             _step("HPS.md", _t_step, " error")
 
-        res["ok"] = True
+        res["ok"] = _pl_io_success(res, bool(cfg.get("dl_dokumen")))
+        if not res["ok"]:
+            log("I/O belum lengkap; paket tetap retryable")
         _emit("🏁 selesai I/O")
     except _sp.TimeoutExpired:
         log("❌ Timeout buat folder")
@@ -318,7 +395,7 @@ def _baca_master_data_pl(row: dict) -> dict:
 def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
                             template_dir_jkk, template_dir_pk):
     """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->
-    1 sesi COM gabungan (HPS + Master Data). Return list[str] log lines.
+    1 sesi COM gabungan (HPS + Master Data). Return status terstruktur.
     Urutan BENAR: Refresh dulu (hapus xlsm lama, copy fresh), baru
     resolve xlsm (nama mungkin berubah), lalu tulis HPS + IsiDataPLByKode
     dalam 1x DispatchEx.
@@ -326,6 +403,11 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     import hps_engine as _hps_eng2
     import isi_master_data_pl as _imd2
     logs = []
+    result = {
+        "ok": False, "refresh_ok": not refresh_on, "hps_ok": False,
+        "master_data_ok": False, "logs": logs, "xlsm": "",
+        "hps_source": "", "hps_sync_ok": False,
+    }
 
     # 1. Refresh template DULU (hapus xlsm lama, copy fresh)
     if refresh_on:
@@ -336,6 +418,7 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
             _rt_src2  = _rt_P2(template_dir_jkk if jenis_pl == "JKK" else template_dir_pk)
             _rt_fn2([_rt_P2(target_dir)], _rt_src2, _rt_mode2, auto_relink=True, dry_run=False)
             logs.append("Refresh Template: selesai")
+            result["refresh_ok"] = True
         except Exception as _rt_e2:
             logs.append(f"WARN Refresh Template: {_rt_e2}")
 
@@ -343,7 +426,8 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     xlsm = _cari_xlsm_pl(target_dir)
     if not xlsm:
         logs.append("WARN Excel dilewati -- tidak ada .xlsm setelah refresh")
-        return logs
+        return result
+    result["xlsm"] = xlsm
 
     # 3. Fetch HPS dict (tanpa COM) via scrape_hps_pl
     hps_hasil = None
@@ -352,6 +436,20 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
         if not hps_hasil.get("items"):
             logs.append("WARN HPS: tidak ada item (fetch gagal/kosong)")
             hps_hasil = None
+        else:
+            result["hps_ok"] = True
+            result["hps_source"] = hps_hasil.get("nilai_hps_source", "")
+
+            # VBA membaca nilai_hps dari Supabase. Sinkronkan summary resmi
+            # sebelum macro dijalankan agar C14 tidak mengambil angka raw lama.
+            try:
+                result["hps_sync_ok"] = bool(
+                    _hps_eng2._sync_pl_summary(kode_paket, hps_hasil)
+                )
+                if not result["hps_sync_ok"]:
+                    logs.append("WARN HPS summary: gagal sinkron ke Supabase")
+            except Exception as _hps_sync_e:
+                logs.append(f"WARN HPS summary: {_hps_sync_e}")
     except Exception as _hps_e2:
         logs.append(f"WARN HPS fetch: {_hps_e2}")
 
@@ -360,11 +458,15 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
         _res2 = _imd2.proses_hps_dan_master_data(kode_paket, xlsm, hps_hasil)
         _hps_r2 = _res2.get("hps", {})
         _md_r2  = _res2.get("md", {})
+        if hps_hasil:
+            result["hps_ok"] = bool(_hps_r2.get("ok") and _hps_r2.get("count", 0) > 0)
         if _hps_r2.get("ok") and _hps_r2.get("count", 0) > 0:
-            logs.append(f"HPS: {_hps_r2['count']} baris -> Excel")
+            source = result.get("hps_source") or "tidak diketahui"
+            logs.append(f"HPS: {_hps_r2['count']} baris -> Excel ({source})")
         elif hps_hasil:
             logs.append(f"WARN HPS tulis: {_hps_r2.get('pesan','-')}")
         if _md_r2.get("ok"):
+            result["master_data_ok"] = True
             logs.append("Master Data: terisi")
         else:
             logs.append(f"WARN Master Data: {_md_r2.get('pesan','-')}")
@@ -378,7 +480,13 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
         except Exception as _md_e2:
             logs.append(f"WARN HPS MD: {_md_e2}")
 
-    return logs
+    result["ok"] = bool(
+        result["refresh_ok"]
+        and result["hps_ok"]
+        and result["hps_sync_ok"]
+        and result["master_data_ok"]
+    )
+    return result
 
 def _template_dir_pl_jkk(row, default_dir):
     # V2: pilih donor berdasarkan subjenis paket, bukan hanya JKK/PK.
