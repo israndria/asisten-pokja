@@ -173,6 +173,128 @@ class SpseLoginHelpersTest(unittest.TestCase):
 
         self.assertEqual(detected, "PPK")
 
+    def test_detect_role_uses_matching_cache_when_detail_has_no_role_label(self):
+        response = SimpleNamespace(
+            status_code=403,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Akses Ditolak",
+        )
+
+        class FakePage:
+            url = "https://spse.inaproc.id/tapinkab/nontender/10975369000/edit"
+
+            def is_closed(self):
+                return False
+
+            def locator(self, _selector):
+                return SimpleNamespace(
+                    inner_text=lambda **_kwargs: "Form paket non tender authenticated"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({
+                    "role": "PPK",
+                    "cookie_fp": spse_login._cookie_fingerprint("SPSE_SESSION=current-session"),
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_spse_cookies", return_value="SPSE_SESSION=current-session"),
+                patch("spse_browser._get_page", return_value=FakePage()),
+                patch("spse_browser._run", return_value="Form paket non tender authenticated"),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertEqual(detected, "PPK")
+
+    def test_detect_role_rejects_matching_cache_on_public_root(self):
+        response = SimpleNamespace(
+            status_code=403,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Akses Ditolak",
+        )
+
+        class FakePage:
+            url = "https://spse.inaproc.id/tapinkab/"
+
+            def is_closed(self):
+                return False
+
+            def locator(self, _selector):
+                return SimpleNamespace(inner_text=lambda **_kwargs: "BERANDA LOGIN")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({
+                    "role": "PP",
+                    "cookie_fp": spse_login._cookie_fingerprint("SPSE_SESSION=current-session"),
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_spse_cookies", return_value="SPSE_SESSION=current-session"),
+                patch("spse_browser._get_page", return_value=FakePage()),
+                patch("spse_browser._run", return_value="BERANDA LOGIN"),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertIsNone(detected)
+
+    def test_detect_role_scans_authenticated_tab_when_selected_page_is_root(self):
+        response = SimpleNamespace(
+            status_code=403,
+            url="https://spse.inaproc.id/tapinkab/home",
+            text="Akses Ditolak",
+        )
+
+        class FakePage:
+            def __init__(self, url, body):
+                self.url = url
+                self._body = body
+
+            def is_closed(self):
+                return False
+
+            def locator(self, _selector):
+                return SimpleNamespace(
+                    inner_text=lambda **_kwargs: self._body
+                )
+
+        root = FakePage("https://spse.inaproc.id/tapinkab/", "BERANDA LOGIN")
+        detail = FakePage(
+            "https://spse.inaproc.id/tapinkab/nontender/10975369000/edit",
+            "Form paket non tender authenticated",
+        )
+        context = SimpleNamespace(pages=[root, detail])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({
+                    "role": "PPK",
+                    "cookie_fp": spse_login._cookie_fingerprint("SPSE_SESSION=current-session"),
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_spse_cookies", return_value="SPSE_SESSION=current-session"),
+                patch("spse_browser._get_ctx", return_value=context),
+                patch("spse_browser._get_page", return_value=root),
+                patch("spse_browser._run", return_value="Form paket non tender authenticated"),
+                patch("requests.get", return_value=response),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertEqual(detected, "PPK")
+
 
 class SpseSessionFirstTest(unittest.IsolatedAsyncioTestCase):
     async def test_fetch_captcha_uses_displayed_dom_image_without_second_get(self):

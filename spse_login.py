@@ -147,10 +147,53 @@ def detect_login_role() -> str | None:
     """
     import spse_browser as _sb
 
+    def _is_login_page(url: str, text: str) -> bool:
+        """Bedakan halaman publik/login dari tab authenticated yang belum memuat label role."""
+        from urllib.parse import urlsplit
+
+        normalized = " ".join((text or "").casefold().split())
+        path = urlsplit(url or "").path.casefold()
+        if any(marker in path for marker in ("/login", "/loginpass", "/logout")):
+            return True
+        # Halaman root publik SPSE memuat tombol LOGIN, sedangkan halaman
+        # detail authenticated dapat tidak memuat nama role sama sekali.
+        return bool(
+            re.search(r"\blogin\b", normalized)
+            or "nama pengguna" in normalized
+            or "kata sandi" in normalized
+        )
+
+    def _is_known_authenticated_path(url: str) -> bool:
+        """Route yang hanya berguna setelah user masuk sebagai panitia."""
+        from urllib.parse import urlsplit
+
+        path = urlsplit(url or "").path.casefold().rstrip("/")
+        return any(
+            marker in path
+            for marker in (
+                "/nontender/",
+                "/lelang/",
+                "/paketnontender",
+                "/paketlelang",
+                "/paketpanitia",
+                "/dokumen/",
+                "/jadwal/",
+                "/peserta/",
+                "/penjelasan/",
+            )
+        )
+
     def _detect_role_from_session(cookie: str) -> str | None:
-        """Validasi role dari /home, bukan tab detail yang bisa tanpa label role."""
+        """Validasi role dari /home atau tab detail tanpa navigasi.
+
+        Return tuple ``(role, authenticated_evidence)``. Evidence kedua
+        penting: akun PPK sering mendapat 403 dari ``/home`` dan halaman detail
+        tidak selalu menampilkan label role. Cache role hanya boleh dipakai
+        bila ada evidence halaman authenticated, bukan sekadar cookie tersisa.
+        """
         import requests
         from bs4 import BeautifulSoup
+        authenticated = False
         try:
             from config import SPSE_BASE_URL
             response = requests.get(
@@ -162,25 +205,61 @@ def detect_login_role() -> str | None:
             final_url = response.url.lower()
             if response.status_code == 200 and "loginpass" not in final_url:
                 text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
-                if not _sb._is_spse_access_error_text(text):
+                if not _sb._is_spse_access_error_text(text) and not _is_login_page(final_url, text):
+                    authenticated = True
                     detected = _role_from_text(text)
                     if detected:
-                        return detected
+                        return detected, True
 
-            # Pada akun PPK, route /home kadang 403 meski session valid dan
-            # halaman edit paket tetap authenticated. Fallback ke tab yang
-            # sudah dipilih oleh spse_browser tanpa navigasi baru.
-            page = _sb._get_page()
-            if page is not None and not page.is_closed():
-                body = _sb._run(
-                    page.locator("body").inner_text(timeout=3000),
-                    timeout=5,
-                )
-                if not _sb._is_spse_access_error_text(body):
-                    return _role_from_text(body)
+            # Pada akun PPK, route /home kadang 403 meski tab edit paket tetap
+            # authenticated. Pastikan Playwright connect dulu, lalu inspect
+            # semua tab berdasarkan URL; _get_page() bisa stale/root setelah
+            # Brave restore. Tidak ada goto/navigasi di jalur recovery ini.
+            try:
+                if _sb._get_ctx() is None and _sb._get_page() is None:
+                    _sb.buka_browser(navigate=False)
+            except Exception:
+                pass
+            pages = []
+            try:
+                context = _sb._get_ctx()
+                if context is not None:
+                    pages = list(context.pages)
+            except Exception:
+                pages = []
+            if not pages:
+                page = _sb._get_page()
+                pages = [page] if page is not None else []
+            pages.sort(
+                key=lambda item: 0 if _is_known_authenticated_path(
+                    str(getattr(item, "url", "") or "")
+                ) else 1
+            )
+            for page in pages:
+                if page is None or page.is_closed():
+                    continue
+                page_url = str(getattr(page, "url", "") or "")
+                if page_url and not _is_known_authenticated_path(page_url):
+                    continue
+                try:
+                    body = _sb._run(
+                        page.locator("body").inner_text(timeout=3000),
+                        timeout=5,
+                    )
+                except Exception:
+                    continue
+                if (
+                    not _sb._is_spse_access_error_text(body)
+                    and not _is_login_page(page_url, body)
+                    and (not page_url or _is_known_authenticated_path(page_url))
+                ):
+                    authenticated = True
+                    detected = _role_from_text(body)
+                    if detected:
+                        return detected, True
         except Exception:
             pass
-        return None
+        return None, authenticated
 
     try:
         # Cache role hanya akselerator recovery, bukan syarat sesi valid.
@@ -205,7 +284,7 @@ def detect_login_role() -> str | None:
             cached_role = None
 
         cache_matches_session = record.get("cookie_fp") == current_fp
-        detected = _detect_role_from_session(cookie)
+        detected, authenticated = _detect_role_from_session(cookie)
         if detected:
             if not cache_matches_session or detected != cached_role:
                 _ROLE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +293,11 @@ def detect_login_role() -> str | None:
                     encoding="utf-8",
                 )
             return detected
+        # Jangan menganggap sesi putus hanya karena label role tidak ada di
+        # halaman detail. Gunakan cache hanya jika fingerprint cocok DAN body
+        # tab menunjukkan route authenticated; root publik/login tidak lolos.
+        if cached_role and cache_matches_session and authenticated:
+            return cached_role
     except Exception:
         pass
     return None

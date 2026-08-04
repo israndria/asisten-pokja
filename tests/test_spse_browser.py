@@ -32,6 +32,21 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
                 patch("urllib.request.urlopen", return_value=_InvalidResponse()):
             self.assertFalse(spse_browser._cek_cdp_aktif())
 
+    def test_cdp_ready_waits_for_transient_cold_start(self):
+        with patch.object(
+            spse_browser,
+            "_cek_cdp_aktif",
+            side_effect=[False, False, True],
+        ), patch.object(spse_browser.time, "sleep") as sleep:
+            self.assertTrue(
+                spse_browser.tunggu_cdp_ready(
+                    timeout_seconds=1,
+                    interval_seconds=0,
+                )
+            )
+
+        self.assertEqual(sleep.call_count, 2)
+
     def test_brave_gui_command_does_not_inherit_hidden_startup(self):
         command = spse_browser._visible_brave_command(with_cdp=True)
 
@@ -71,6 +86,65 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
         self.assertFalse(
             spse_browser._is_spse_access_error_text("Selamat datang Pejabat Pembuat Komitmen")
         )
+
+    def test_auto_refresh_accepts_home_root_but_not_detail_form(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+
+        self.assertTrue(spse_browser._boleh_auto_refresh(base + "/"))
+        self.assertTrue(spse_browser._boleh_auto_refresh(base + "/paketnontender"))
+        self.assertFalse(spse_browser._boleh_auto_refresh(base + "/nontender/10975369000/edit"))
+
+    def test_public_login_body_is_not_authenticated_tab(self):
+        self.assertTrue(spse_browser._is_spse_login_page_text("BERANDA LOGIN"))
+        self.assertTrue(spse_browser._is_spse_login_page_text("Nama Pengguna Kata Sandi"))
+        self.assertFalse(
+            spse_browser._is_spse_login_page_text("Daftar Paket Pejabat Pembuat Komitmen")
+        )
+
+    def test_refresh_does_not_claim_success_for_login_body(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+
+        class FakePage:
+            def is_closed(self):
+                return False
+
+            def title(self):
+                return "Daftar Paket"
+
+            def locator(self, _selector):
+                return self
+
+            def inner_text(self, **_kwargs):
+                return "BERANDA LOGIN"
+
+            def reload(self, **_kwargs):
+                return None
+
+        fake_page = FakePage()
+        run_values = iter([fake_page, None, "Daftar Paket", "BERANDA LOGIN"])
+
+        def fake_run(value, **_kwargs):
+            close = getattr(value, "close", None)
+            if close is not None:
+                close()
+            return next(run_values)
+
+        with (
+            patch("requests.get") as get,
+            patch.object(
+                spse_browser,
+                "_get_ctx",
+                return_value=SimpleNamespace(),
+            ),
+            patch.object(spse_browser, "_pilih_tab_spse", return_value={"url": base + "/home"}),
+            patch.object(spse_browser, "_find_page_for_tab_async"),
+            patch.object(spse_browser, "_run", side_effect=fake_run),
+            patch.object(spse_browser, "_cek_cdp_aktif", return_value=True),
+            patch.object(spse_browser, "diskonek"),
+            patch.object(spse_browser, "buka_browser"),
+        ):
+            get.return_value.json.return_value = [{"type": "page", "url": base + "/home"}]
+            self.assertFalse(spse_browser.refresh_browser())
 
     def test_authenticated_duplicate_url_beats_stale_error_tab(self):
         base = spse_browser.SPSE_BASE_URL.rstrip("/")

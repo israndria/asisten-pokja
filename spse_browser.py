@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import asyncio
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -151,6 +152,7 @@ CDP_PORT = 9222
 # Auto-refresh hanya halaman navigasi aman. Jangan reload halaman form/detail
 # karena dapat menghilangkan input manual yang sedang dikerjakan user.
 _AUTO_REFRESH_PATHS = {
+    "/",                # home publik/authenticated SPSE
     "/home",
     "/paket",           # halaman paket Pokja yang dipakai Brave saat ini
     "/paketnontender",    # PP/PPK
@@ -163,12 +165,14 @@ def _boleh_auto_refresh(url: str) -> bool:
     from urllib.parse import urlsplit
     base = urlsplit(SPSE_BASE_URL)
     current = urlsplit(url or "")
+    allowed_paths = {
+        f"{base.path.rstrip('/')}{path}".rstrip("/")
+        for path in _AUTO_REFRESH_PATHS
+    }
     return (
         current.scheme == base.scheme
         and current.netloc == base.netloc
-        and current.path.rstrip("/") in {
-            f"{base.path.rstrip('/')}{path}" for path in _AUTO_REFRESH_PATHS
-        }
+        and current.path.rstrip("/") in allowed_paths
     )
 
 
@@ -179,6 +183,18 @@ _SPSE_ACCESS_ERROR_MARKERS = (
     "sesi telah habis",
     "terjadi kesalahan",
 )
+
+
+def _is_spse_login_page_text(text: str) -> bool:
+    """Deteksi halaman publik/login yang bukan sesi authenticated."""
+    import re
+
+    normalized = " ".join((text or "").casefold().split())
+    return bool(
+        re.search(r"\blogin\b", normalized)
+        or "nama pengguna" in normalized
+        or "kata sandi" in normalized
+    )
 
 
 def _is_spse_access_error_text(text: str) -> bool:
@@ -246,7 +262,7 @@ async def _deskripsikan_page_spse(page, *, inspect_body: bool = False) -> dict:
     if inspect_body and score >= 0:
         try:
             body = await page.locator("body").inner_text(timeout=1500)
-            if _is_spse_access_error_text(body):
+            if _is_spse_access_error_text(body) or _is_spse_login_page_text(body):
                 is_error = True
                 score = -100
         except Exception:
@@ -799,7 +815,39 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
             "Brave SPSE belum terbuka. "
             "Buka Brave dengan remote debugging port 9222 terlebih dahulu."
         )
-    return _run(_connect_cdp_async(url, navigate=navigate))
+    last_error = None
+    # Setelah boot/restart, port CDP dapat sudah listen sementara websocket
+    # browser belum siap dipakai Playwright. Satu reconnect bersih mencegah
+    # error intermiten yang sebelumnya langsung dilempar ke UI.
+    for attempt in range(2):
+        if not _cek_cdp_aktif():
+            raise RuntimeError(
+                "Brave SPSE belum terbuka. "
+                "Buka Brave dengan remote debugging port 9222 terlebih dahulu."
+            )
+        try:
+            return _run(_connect_cdp_async(url, navigate=navigate), timeout=45)
+        except Exception as exc:
+            last_error = exc
+            diskonek()
+            if attempt == 0:
+                time.sleep(0.75)
+                continue
+            raise RuntimeError(
+                "Koneksi Brave/CDP gagal setelah reconnect: "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            ) from exc
+    raise RuntimeError(f"Koneksi Brave/CDP gagal: {last_error}")
+
+
+def tunggu_cdp_ready(timeout_seconds: float = 20.0, interval_seconds: float = 0.5) -> bool:
+    """Tunggu endpoint CDP benar-benar sehat setelah Brave baru diluncurkan."""
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while time.monotonic() <= deadline:
+        if _cek_cdp_aktif():
+            return True
+        time.sleep(max(0.05, float(interval_seconds)))
+    return False
 
 
 async def _buka_tab_baru_async(url: str):
@@ -889,34 +937,48 @@ def refresh_browser():
     """Reload tab SPSE yang sedang berada di halaman navigasi aman."""
     import requests as _req
     global _cdp_tabs_cache, _cdp_tabs_cache_ts
-    try:
-        tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
-        page_tabs = [t for t in tabs if t.get("type") == "page"]
-        target_tabs = [t for t in page_tabs if _boleh_auto_refresh(t.get("url", ""))]
-        if not target_tabs:
-            return False
-        # Reload background — jangan activate (foreground takeover).
-        tab = _pilih_tab_spse(target_tabs)
-        if tab is None:
-            return False
+    for attempt in range(2):
         try:
+            tabs = _req.get(f"http://localhost:{CDP_PORT}/json", timeout=2).json()
+            page_tabs = [t for t in tabs if t.get("type") == "page"]
+            target_tabs = [t for t in page_tabs if _boleh_auto_refresh(t.get("url", ""))]
+            if not target_tabs:
+                return False
+            # Reload background — jangan activate (foreground takeover).
+            tab = _pilih_tab_spse(target_tabs)
+            if tab is None:
+                return False
             if _get_ctx() is None:
                 _run(_connect_cdp_async(navigate=False), timeout=15)
             page = _run(_find_page_for_tab_async(tab), timeout=8)
+            if page is None or page.is_closed():
+                raise RuntimeError("Context Playwright tidak punya tab CDP yang cocok")
+            _run(page.reload(timeout=15000), timeout=20)
+            # Reload HTTP sukses belum berarti sesi SPSE valid. Validasi body
+            # setelah reload agar daemon tidak mencatat 403/login sebagai
+            # refresh berhasil.
+            title = _run(page.title(), timeout=5)
+            body = _run(page.locator("body").inner_text(timeout=3000), timeout=5)
+            if _is_spse_access_error_text(title) or _is_spse_access_error_text(body):
+                return False
+            if _is_spse_login_page_text(title) or _is_spse_login_page_text(body):
+                return False
+            _set_page(page)
+            _cdp_tabs_cache = []
+            _cdp_tabs_cache_ts = 0.0
+            return True
         except Exception:
-            page = None
-        if page and not page.is_closed():
-            try:
-                _run(page.reload(timeout=15000), timeout=20)
-                _set_page(page)
-                _cdp_tabs_cache = []
-                _cdp_tabs_cache_ts = 0.0
-                return True
-            except Exception:
-                pass
-        return False
-    except Exception:
-        return False
+            if attempt == 0 and _cek_cdp_aktif():
+                # Context lama dapat tetap non-None walau websocket CDP sudah
+                # mati. Reset lalu sambung ulang tanpa navigasi pada retry.
+                diskonek()
+                try:
+                    buka_browser(navigate=False)
+                except Exception:
+                    pass
+                continue
+            return False
+    return False
 
 
 def diskonek():
@@ -1350,7 +1412,16 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
                             if len(cells) >= 2:
                                 nama_hasil = cells[1]
                     break
-            return {"ok": True, "nama": nama_hasil, "mode": "sudah_terpilih", "pesan": "Penyedia sudah terpilih sebelumnya"}
+            return {
+                "ok": True,
+                "nama": nama_hasil,
+                "nama_penyedia": nama_hasil,
+                "npwp": npwp16,
+                "npwp_penyedia": npwp16,
+                "rkn_npwp_16": npwp16,
+                "mode": "sudah_terpilih",
+                "pesan": "Penyedia sudah terpilih sebelumnya",
+            }
 
     # Step 1+2a gabung: Search by NPWP16 (format 16-digit leading-zero) + ambil CSRF
     # SPSE hanya match NPWP jika format 16-digit dengan leading zero persis
@@ -1427,6 +1498,13 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
     return {
         "ok": ok,
         "nama": nama_hasil,
+        "nama_penyedia": nama_hasil,
+        "npwp": d.get("rkn_npwp_16") or d.get("rkn_npwp") or npwp,
+        "npwp_penyedia": d.get("rkn_npwp_16") or d.get("rkn_npwp") or npwp,
+        "rkn_id": d.get("rkn_id", ""),
+        "rkn_npwp": d.get("rkn_npwp", ""),
+        "rkn_npwp_16": d.get("rkn_npwp_16", ""),
+        "kabupaten_id": d.get("kabupaten_id", ""),
         "mode": search_mode,
         "status": rp.status_code,
         "pesan": rp.headers.get("Location", "") if ok else f"HTTP {rp.status_code}: {rp.text[:200]}",
