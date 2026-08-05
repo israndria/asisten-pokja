@@ -11,8 +11,12 @@ Protokol lengkap ada di PROTOKOL_*.md dalam folder paket — AI baca sendiri.
 """
 
 import os
+import hashlib
 import subprocess
 import shutil
+import time
+import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from config import POKJA_ROOT
@@ -31,7 +35,10 @@ CODEX_BIN = os.environ.get(
 PL_JKK_ROOT = Path(POKJA_ROOT) / "@ Pejabat Pengadaan 2026" / "@ Pengadaan Langsung JKK"
 PL_PK_ROOT = Path(POKJA_ROOT) / "@ Pejabat Pengadaan 2026" / "@ Pengadaan Langsung PK"
 SOP_ROOT = Path(POKJA_ROOT) / "_SOP Evaluator"
-PATCH_MANUAL_SOP = SOP_ROOT / "PANDUAN_PATCH_MANUAL_EVALUASI.md"
+CORE_SOP = SOP_ROOT / "SOP_ISI_REVIU_DPP_CORE.md"
+DOMAIN_SOP = SOP_ROOT / "SOP_ISI_REVIU_DPP_DOMAIN.md"
+# Alias dipertahankan agar caller/clone lama yang melakukan monkeypatch tetap aman.
+PATCH_MANUAL_SOP = CORE_SOP
 EVALUASI_BIAYA_PLJKK_SOP = SOP_ROOT / "EVALUATOR_BIAYA_PL_JKK.md"
 
 
@@ -164,34 +171,207 @@ def _find_reviu_docm(folder: Path, jenis: str = "tender_pk") -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime_ns) if candidates else None
 
 
+def _reviu_fix_docx_path(folder: Path) -> Path:
+    """Path output stabil untuk hasil patch AI; source DOCM tidak pernah ditimpa."""
+    return Path(folder) / "2. Isi Reviu Fix.docx"
+
+
+def _file_fingerprint(path: Path):
+    """Fingerprint mtime, ukuran, dan isi file untuk guardrail immutable source."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size, digest.hexdigest()
+
+
+def _backup_existing_reviu_output(output_path: Path) -> Path | None:
+    """Backup unik output lama sebelum konversi menggantinya."""
+    output_path = Path(output_path)
+    if not output_path.is_file():
+        return None
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = output_path.with_name(
+        f"{output_path.stem}.backup_{stamp}_{uuid.uuid4().hex[:8]}{output_path.suffix}"
+    )
+    shutil.copy2(output_path, backup)
+    return backup
+
+
+def _validate_docx_zip(docx_path: Path) -> None:
+    """Validasi DOCX sebagai ZIP Open XML sebelum diserahkan ke AI/user."""
+    docx_path = Path(docx_path)
+    if not docx_path.is_file():
+        raise RuntimeError(f"Output DOCX tidak ditemukan: {docx_path}")
+    try:
+        with zipfile.ZipFile(docx_path) as archive:
+            broken = archive.testzip()
+            if broken:
+                raise RuntimeError(f"DOCX ZIP rusak pada entry: {broken}")
+            if "word/document.xml" not in archive.namelist():
+                raise RuntimeError("DOCX tidak memiliki word/document.xml")
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError(f"Output bukan DOCX ZIP valid: {docx_path}") from exc
+
+
+def _validate_docx_with_word(docx_path: Path) -> None:
+    """Buka ulang output DOCX via Word COM secara read-only."""
+    word = None
+    document = None
+    com_initialized = False
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        com_initialized = True
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        document = word.Documents.Open(
+            str(Path(docx_path).resolve()),
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False,
+        )
+        if hasattr(document, "Repaginate"):
+            document.Repaginate()
+    except Exception as exc:
+        raise RuntimeError(f"Validasi buka Word COM gagal untuk {docx_path}: {exc}") from exc
+    finally:
+        if document is not None:
+            try:
+                document.Close(False)
+            except Exception:
+                pass
+        if word is not None:
+            try:
+                word.Quit(False)
+            except Exception:
+                pass
+        if com_initialized:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+
+def _convert_reviu_docm_to_docx(docm_path: Path, output_path: Path):
+    """Konversi DOCM merge ke DOCX baru memakai Word COM SaveAs2(FileFormat=12)."""
+    docm_path = Path(docm_path)
+    output_path = Path(output_path)
+    if not docm_path.is_file():
+        raise RuntimeError(f"DOCM sumber tidak ditemukan: {docm_path}")
+    if docm_path.resolve() == output_path.resolve():
+        raise RuntimeError("Source DOCM dan output DOCX tidak boleh sama.")
+
+    temp_path = output_path.with_name(
+        f".{output_path.stem}.convert_{uuid.uuid4().hex[:8]}{output_path.suffix}"
+    )
+    word = None
+    document = None
+    com_initialized = False
+    backup_path = None
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        com_initialized = True
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        document = word.Documents.Open(
+            str(docm_path.resolve()),
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False,
+        )
+        # wdFormatXMLDocument = 12; SaveAs2 mengubah format secara nyata,
+        # bukan sekadar mengganti ekstensi file.
+        document.SaveAs2(str(temp_path.resolve()), FileFormat=12, AddToRecentFiles=False)
+    except Exception as exc:
+        raise RuntimeError(f"Konversi DOCM ke DOCX gagal: {exc}") from exc
+    finally:
+        if document is not None:
+            try:
+                document.Close(False)
+            except Exception:
+                pass
+        if word is not None:
+            try:
+                word.Quit(False)
+            except Exception:
+                pass
+        if com_initialized:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+    try:
+        _validate_docx_zip(temp_path)
+        backup_path = _backup_existing_reviu_output(output_path)
+        os.replace(temp_path, output_path)
+        return output_path, backup_path
+    except Exception:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+        raise
+
+
 def _domain_sop(jenis: str) -> Path:
-    if jenis == "pl_jkk":
-        return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_PL_JKK.md"
-    if jenis == "pl_pk":
-        return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_PL_PK.md"
-    return SOP_ROOT / "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md"
+    """Return canonical domain matrix; section selection happens in prompt."""
+    return DOMAIN_SOP
 
 
-def _prompt_pra_reviu(folder_paket: Path, nama_paket: str, docm_path: Path, jenis: str) -> str:
+def _domain_section(jenis: str) -> str:
+    return {
+        "pl_jkk": "PL_JKK",
+        "pl_pk": "PL_PK",
+        "tender_pk": "TENDER_PK",
+    }.get(jenis, "TENDER_PK")
+
+
+def _prompt_pra_reviu(
+    folder_paket: Path,
+    nama_paket: str,
+    docm_path: Path,
+    jenis: str,
+    docx_path: Path | None = None,
+) -> str:
     domain_sop = _domain_sop(jenis)
+    docx_path = docx_path or _reviu_fix_docx_path(folder_paket)
     return f"""Lakukan reviu DPP langsung pada dokumen Word berikut.
 
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
-File DOCM target (WAJIB hasil mail merge): {docm_path}
-File target harus berakhiran `(Merged).docm`. Template DOCM sumber tidak boleh diubah.
+File DOCM sumber hasil mail merge (READ-ONLY, jangan diubah): {docm_path}
+File DOCX target patch AI (WAJIB ditulis): {docx_path}
+Target final wajib bernama `2. Isi Reviu Fix.docx`; jangan menulis file output lain.
+Runner sudah mengonversi DOCM ke DOCX memakai Word COM sebelum tugas ini dimulai.
 Mail merge dilakukan lebih dahulu melalui tombol VBA `Buka Isi Reviu` pada workbook paket.
-SOP teknis patch DOCM: {PATCH_MANUAL_SOP}
+SOP teknis patch DOCX: {PATCH_MANUAL_SOP}
 SOP domain/checklist: {domain_sop}
+Section domain yang wajib dipakai: `{_domain_section(jenis)}`. Abaikan dua section domain lain.
 
-Baca kedua SOP, inventarisasi Content Control yang benar-benar ada di DOCM, lalu
+Baca kedua SOP, inventarisasi Content Control yang benar-benar ada di DOCX target, lalu
 baca dokumen sumber relevan di folder paket. Jawab setiap pertanyaan berdasarkan
 bukti dokumen. Gunakan "Perlu klarifikasi ..." bila ambigu dan jangan mengarang
-fakta. Untuk PL PK, patuhi whitelist 45 CC Bagian I pada SOP; jangan membuat CC
-baru dan jangan menyentuh Bagian II atau marker peralatan.
+fakta. Patuhi scope/whitelist section `{_domain_section(jenis)}`; pada PL PK,
+ini berarti whitelist 45 CC Bagian I. Jangan membuat CC baru dan jangan
+menyentuh bagian atau marker yang dikecualikan domain; khusus PL PK jangan menyentuh Bagian II
+atau marker peralatan.
 
 WAJIB:
-1. Buat backup unik sebelum mengubah DOCM.
+1. Patch hanya DOCX target. DOCM sumber read-only dan hash/mtime-nya wajib tetap sama.
 2. Isi jawaban reviu ke CC aktif yang sudah ada dan rekomendasi ke CC rekomen
    yang sudah ada; jangan membuat CC yang hilang.
 3. Jika ada tanggapan_* yang memang ada dan diizinkan SOP domain, isi sebagai
@@ -204,12 +384,15 @@ WAJIB:
    SOP domain; jangan membuat pertanyaan atau fakta baru tanpa dasar.
 6. Tulis _HASIL_PRA_REVIU_DPP.md di root paket sebagai audit temuan, klarifikasi,
    sumber dokumen, dan daftar CC yang diisi.
-7. Pertahankan VBA, tabel, format, dan struktur DOCM. Verifikasi buka ulang via Word COM.
+7. Pertahankan tabel, Content Control, MERGEFIELD, format, dan struktur DOCX.
+   Konversi DOCM ke DOCX memang tidak membawa VBA; jangan membuat atau memulihkan VBA.
+8. Verifikasi DOCX target dapat dibuka ulang via Word COM.
 
-Jangan hanya membuat analisis Markdown; patch file DOCM secara langsung. Jika
+Jangan hanya membuat analisis Markdown; patch DOCX target secara langsung. Jangan
+ubah atau ganti nama DOCM sumber. Jika
 dokumen sumber tidak ditemukan, jangan mengisi fakta generik: isi CC aktif dengan
 "Perlu klarifikasi: sumber ... tidak ditemukan" dan catat sumber yang hilang di
-audit Markdown. Jika target DOCM tidak ditemukan atau tidak dapat dibaca, tulis
+audit Markdown. Jika target DOCX tidak ditemukan atau tidak dapat dibaca, tulis
 ERROR spesifik dan jangan mengarang fakta.
 
 Mulai sekarang."""
@@ -343,42 +526,51 @@ Langkah:
 Mulai sekarang."""
 
 
-def _prompt_patch_manual_isi_reviu(folder_paket: Path, docm_path: Path, nama_paket: str) -> str:
+def _prompt_patch_manual_isi_reviu(
+    folder_paket: Path,
+    docm_path: Path,
+    nama_paket: str,
+    docx_path: Path | None = None,
+) -> str:
     """Prompt satu-klik untuk patch manual Isi Reviu PK Tender."""
+    docx_path = docx_path or _reviu_fix_docx_path(folder_paket)
     return f"""Lakukan patch manual Isi Reviu PK untuk paket berikut.
 
 Paket: {nama_paket}
 Folder paket: {folder_paket}
-File target hasil mail merge: {docm_path}
-Jangan menambal template DOCM sumber; target wajib berakhiran `(Merged).docm`.
+File DOCM sumber hasil mail merge (READ-ONLY): {docm_path}
+File DOCX target patch AI: {docx_path}
+Target final wajib bernama `2. Isi Reviu Fix.docx`; jangan membuat output lain.
+Runner sudah mengonversi DOCM ke DOCX memakai Word COM sebelum prompt ini.
 SOP WAJIB: {PATCH_MANUAL_SOP}
 SOP checklist/domain: {_domain_sop("tender_pk")}
+Section domain yang wajib dipakai: `TENDER_PK`. Abaikan section PL_JKK dan PL_PK.
 
 Ikuti kedua SOP tersebut sepenuhnya. Baca SOP dan seluruh dokumen sumber paket yang relevan,
 validasi identitas paket sebelum menjawab, lalu periksa seluruh pertanyaan Content Control
 di file target. Koreksi/isi jawaban berdasarkan bukti dokumen; jangan mengarang fakta.
 
-Untuk file DOCM:
-- buat backup unik di folder paket sebelum mengubah file;
-- ungroup/un-nest seluruh Content Control jika ada;
-- audit dan isi ulang semua Content Control bertag cat_, rekomen_, atau tanggapan_
-  berdasarkan pertanyaan dan bukti paket, termasuk CC yang sudah berisi teks;
+Untuk file DOCX target:
+- backup unik output lama sudah dibuat runner sebelum konversi jika diperlukan;
+- audit Content Control, nested/duplikat, field, dan batas Bagian I sesuai CORE
+  dan section TENDER_PK;
+- isi hanya CC aktif yang benar-benar ada dan berada dalam scope; jangan membuat
+  ulang CC yang hilang, meng-unlock CC, atau mengubah Bagian II;
   koreksi jawaban lama bila tidak sesuai;
-- buat Content Control Rich Text baru untuk tag wajib yang hilang pada sel
-  jawaban yang tepat, setelah memastikan posisi pertanyaannya;
-  (LockContents=False dan LockContentControl=False);
 - isi `tanggapan_*` sebagai DRAFT tanggapan PPK berdasarkan rekomendasi; jangan
   menulis seolah-olah tanggapan tersebut sudah disetujui PPK;
 - teks nyata lama bukan bukti benar dan boleh diganti setelah dibandingkan dengan
   sumber paket; jangan menghapus perubahan manual tanpa membuat backup;
-- pertahankan VBA, format, tabel, dan isi lain yang tidak perlu diubah;
+- pertahankan format, tabel, MERGEFIELD, Content Control, dan isi lain yang tidak perlu diubah;
+- jangan mengubah DOCM sumber; VBA memang tidak dibawa ke output DOCX;
 - simpan file target dan buka ulang melalui Word COM untuk verifikasi;
-- pastikan seluruh tag wajib hadir, seluruh CC tidak terkunci, dan VBA tetap ada.
+- pastikan tag/CC aktual tetap sesuai target dan seluruh CC di luar scope tidak
+  disentuh.
 
 Setelah selesai, tulis log singkat ke folder paket dengan nama
 PATCH_MANUAL_ISI_REVIU_LOG.md yang memuat file target, backup, jumlah CC sebelum/sesudah,
 perubahan jawaban, tanggapan draft, dan hasil verifikasi. Jangan hanya menjelaskan
-langkah; kerjakan langsung.
+langkah; kerjakan langsung pada DOCX target.
 Selain log teknis, tulis `_HASIL_PRA_REVIU_DPP.md` di root paket berisi ringkasan
 temuan, daftar klarifikasi, rekomendasi, dan sumber dokumen yang dipakai.
 Jika sumber atau file target tidak ditemukan, tulis ERROR dan jangan mengarang.
@@ -386,23 +578,88 @@ Jika sumber atau file target tidak ditemukan, tulis ERROR dan jangan mengarang.
 Mulai sekarang."""
 
 
+def _validate_reviu_patch_result(
+    *,
+    source_path: Path,
+    source_before,
+    target_path: Path,
+    target_before,
+    audit_path: Path,
+    audit_before,
+    output: str,
+) -> None:
+    """Pastikan AI menulis output baru tanpa mengubah source DOCM."""
+    import re as _re
+
+    errors = [
+        line.strip(" -*")
+        for line in (output or "").splitlines()
+        if _re.search(r"(?i)\bERROR\b", line)
+    ]
+    if errors:
+        raise RuntimeError(" | ".join(errors[:3]))
+    if _file_fingerprint(source_path) != source_before:
+        raise RuntimeError("DOCM sumber berubah; proses dihentikan karena source wajib immutable.")
+    target_after = _file_fingerprint(target_path)
+    if target_after is None:
+        raise RuntimeError(f"DOCX target tidak dibuat: {target_path}")
+    if target_after == target_before:
+        raise RuntimeError("DOCX target tidak berubah setelah AI selesai; patch belum terbukti dilakukan.")
+    _validate_docx_zip(target_path)
+    _validate_docx_with_word(target_path)
+    audit_after = _file_fingerprint(audit_path)
+    if audit_after is None or audit_after == audit_before:
+        raise RuntimeError("DOCX berubah, tetapi _HASIL_PRA_REVIU_DPP.md belum dibuat/diperbarui.")
+
+
 def patch_manual_isi_reviu_single(folder_paket, nama_paket: str, engine: str = "codex") -> dict:
     """Jalankan patch manual Isi Reviu PK satu paket via AI CLI."""
     folder = Path(folder_paket)
     docm_path = _find_reviu_docm(folder, "tender_pk")
+    docx_path = _reviu_fix_docx_path(folder)
     if not docm_path:
         return {"nama": nama_paket, "status": "error", "output": "", "error": "File hasil mail merge 2. Isi Reviu PK - *(Merged).docm tidak ditemukan. Jalankan Buka Isi Reviu dari Excel terlebih dahulu."}
     if not PATCH_MANUAL_SOP.is_file():
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"SOP tidak ditemukan: {PATCH_MANUAL_SOP}"}
+    output = ""
     try:
-        prompt = _prompt_patch_manual_isi_reviu(folder, docm_path, nama_paket)
+        source_before = _file_fingerprint(docm_path)
+        audit_path = folder / "_HASIL_PRA_REVIU_DPP.md"
+        audit_before = _file_fingerprint(audit_path)
+        docx_path, backup_path = _convert_reviu_docm_to_docx(docm_path, docx_path)
+        target_before = _file_fingerprint(docx_path)
+        prompt = _prompt_patch_manual_isi_reviu(folder, docm_path, nama_paket, docx_path)
         output = _run_evaluator(
             prompt, model=DEFAULT_MODEL, timeout=1800,
             add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
         )
-        return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(docm_path)}
+        _validate_reviu_patch_result(
+            source_path=docm_path,
+            source_before=source_before,
+            target_path=docx_path,
+            target_before=target_before,
+            audit_path=audit_path,
+            audit_before=audit_before,
+            output=output,
+        )
+        return {
+            "nama": nama_paket,
+            "status": "ok",
+            "output": output,
+            "error": "",
+            "file": str(docx_path),
+            "source_file": str(docm_path),
+            "backup_file": str(backup_path) if backup_path else "",
+        }
     except Exception as e:
-        return {"nama": nama_paket, "status": "error", "output": "", "error": str(e), "file": str(docm_path)}
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": output,
+            "error": str(e),
+            "file": str(docx_path),
+            "source_file": str(docm_path),
+        }
 
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
@@ -420,31 +677,45 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         domain_sop = _domain_sop(jenis)
         if not domain_sop.is_file() or not PATCH_MANUAL_SOP.is_file():
             return {"nama": nama_paket, "status": "error", "output": "", "error": "SOP reviu atau SOP patch tidak ditemukan."}
-        sebelum = docm_path.stat().st_mtime_ns
+        output = ""
+        docx_path = _reviu_fix_docx_path(folder)
+        source_before = _file_fingerprint(docm_path)
         audit_path = folder / "_HASIL_PRA_REVIU_DPP.md"
-        audit_sebelum = audit_path.stat().st_mtime_ns if audit_path.exists() else 0
-        prompt = _prompt_pra_reviu(folder, nama_paket, docm_path, jenis)
+        audit_before = _file_fingerprint(audit_path)
+        docx_path, backup_path = _convert_reviu_docm_to_docx(docm_path, docx_path)
+        target_before = _file_fingerprint(docx_path)
+        prompt = _prompt_pra_reviu(folder, nama_paket, docm_path, jenis, docx_path)
         output = _run_evaluator(
             prompt, model=model, timeout=900,
             add_dirs=[folder, PATCH_MANUAL_SOP.parent], engine=engine,
         )
-        setelah = docm_path.stat().st_mtime_ns
-        audit_setelah = audit_path.stat().st_mtime_ns if audit_path.exists() else 0
-        import re as _re
-        _errors = [
-            line.strip(" -*")
-            for line in (output or "").splitlines()
-            if _re.search(r"(?i)\bERROR\b", line)
-        ]
-        if _errors:
-            return {"nama": nama_paket, "status": "error", "output": output, "error": " | ".join(_errors[:3]), "file": str(docm_path)}
-        if setelah == sebelum:
-            return {"nama": nama_paket, "status": "error", "output": output, "error": "DOCM tidak berubah setelah Codex selesai; patch belum terbukti dilakukan.", "file": str(docm_path)}
-        if audit_setelah <= audit_sebelum:
-            return {"nama": nama_paket, "status": "error", "output": output, "error": "DOCM berubah, tetapi _HASIL_PRA_REVIU_DPP.md belum dibuat/diperbarui.", "file": str(docm_path)}
-        return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(docm_path)}
+        _validate_reviu_patch_result(
+            source_path=docm_path,
+            source_before=source_before,
+            target_path=docx_path,
+            target_before=target_before,
+            audit_path=audit_path,
+            audit_before=audit_before,
+            output=output,
+        )
+        return {
+            "nama": nama_paket,
+            "status": "ok",
+            "output": output,
+            "error": "",
+            "file": str(docx_path),
+            "source_file": str(docm_path),
+            "backup_file": str(backup_path) if backup_path else "",
+        }
     except Exception as e:
-        return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": output,
+            "error": str(e),
+            "file": str(locals().get("docx_path", "")),
+            "source_file": str(locals().get("docm_path", "")),
+        }
 
 
 def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:

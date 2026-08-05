@@ -9079,8 +9079,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md",
                                 ]
                                 _t_draft_eval_files = [
-                                    "EVALUATOR_PRA_REVIU_DPP_TENDER_PK.md",
-                                    "PANDUAN_PATCH_MANUAL_EVALUASI.md",
+                                    "SOP_ISI_REVIU_DPP_CORE.md",
+                                    "SOP_ISI_REVIU_DPP_DOMAIN.md",
                                 ]
                                 _t_eval_copied = []
                                 _t_eval_src_dir = os.path.join(_POKJA_ROOT, "_SOP Evaluator")

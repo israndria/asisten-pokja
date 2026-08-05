@@ -1,4 +1,16 @@
+import zipfile
+
 import ai_evaluator
+
+
+def _write_minimal_docx(path, text):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            "<?xml version='1.0'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>"
+            "<Default Extension='xml' ContentType='application/xml'/></Types>",
+        )
+        archive.writestr("word/document.xml", f"<document>{text}</document>")
 
 
 def test_kualifikasi_prompt_requires_decision_and_package_dokpil(tmp_path):
@@ -82,12 +94,82 @@ def test_reviu_target_missing_merged_does_not_fallback_to_source(tmp_path):
     assert ai_evaluator._find_reviu_docm(tmp_path, "pl_pk") is None
 
 
+def test_reviu_fix_output_has_stable_docx_name(tmp_path):
+    assert ai_evaluator._reviu_fix_docx_path(tmp_path).name == "2. Isi Reviu Fix.docx"
+
+
+def test_pra_reviu_converts_source_and_patches_docx_output(tmp_path, monkeypatch):
+    source = tmp_path / "2. Isi Reviu PLPK - Paket Uji (Merged).docm"
+    source.write_bytes(b"immutable-source")
+    sop = tmp_path / "sop.md"
+    sop.write_text("SOP", encoding="utf-8")
+    audit = tmp_path / "_HASIL_PRA_REVIU_DPP.md"
+
+    def fake_convert(source_path, output_path):
+        assert source_path == source
+        _write_minimal_docx(output_path, "before")
+        return output_path, None
+
+    def fake_run(prompt, **kwargs):
+        target = ai_evaluator._reviu_fix_docx_path(tmp_path)
+        assert str(target) in prompt
+        assert "READ-ONLY" in prompt
+        _write_minimal_docx(target, "after")
+        audit.write_text("patched", encoding="utf-8")
+        return "Selesai patch DOCX"
+
+    monkeypatch.setattr(ai_evaluator, "_folder_paket", lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(ai_evaluator, "_domain_sop", lambda *args, **kwargs: sop)
+    monkeypatch.setattr(ai_evaluator, "PATCH_MANUAL_SOP", sop)
+    monkeypatch.setattr(ai_evaluator, "_convert_reviu_docm_to_docx", fake_convert)
+    monkeypatch.setattr(ai_evaluator, "_validate_docx_with_word", lambda path: None)
+    monkeypatch.setattr(ai_evaluator, "_run_evaluator", fake_run)
+
+    source_before = source.read_bytes()
+    result = ai_evaluator.evaluasi_pra_reviu_single(
+        1, "Paket Uji", jenis_pl="PK", engine="codex"
+    )
+
+    assert result["status"] == "ok"
+    assert result["file"] == str(ai_evaluator._reviu_fix_docx_path(tmp_path))
+    assert source.read_bytes() == source_before
+
+
 def test_plpk_prompt_enforces_merged_and_part_one_scope(tmp_path):
     target = tmp_path / "2. Isi Reviu PLPK - Paket Uji (Merged).docm"
     prompt = ai_evaluator._prompt_pra_reviu(tmp_path, "Paket Uji", target, "pl_pk")
 
     assert "Buka Isi Reviu" in prompt
     assert "(Merged).docm" in prompt
+    assert "2. Isi Reviu Fix.docx" in prompt
+    assert "READ-ONLY" in prompt
     assert "whitelist 45 CC Bagian I" in prompt
     assert "jangan menyentuh Bagian II" in prompt
     assert "Jangan membuat Content Control baru" in prompt
+
+
+def test_domain_router_uses_one_canonical_matrix(tmp_path):
+    expected = ai_evaluator.SOP_ROOT / "SOP_ISI_REVIU_DPP_DOMAIN.md"
+
+    for kind, section in (("tender_pk", "TENDER_PK"), ("pl_jkk", "PL_JKK"), ("pl_pk", "PL_PK")):
+        assert ai_evaluator._domain_sop(kind) == expected
+        prompt = ai_evaluator._prompt_pra_reviu(
+            tmp_path,
+            "Paket Uji",
+            tmp_path / "hasil (Merged).docm",
+            kind,
+        )
+        assert f"Section domain yang wajib dipakai: `{section}`" in prompt
+
+
+def test_patch_prompt_does_not_recreate_missing_controls(tmp_path):
+    prompt = ai_evaluator._prompt_patch_manual_isi_reviu(
+        tmp_path,
+        tmp_path / "hasil (Merged).docm",
+        "Paket Uji",
+    )
+
+    assert "SOP_ISI_REVIU_DPP_CORE.md" in prompt
+    assert "SOP_ISI_REVIU_DPP_DOMAIN.md" in prompt
+    assert "jangan membuat" in prompt.lower()
+    assert "meng-unlock" in prompt.lower()
