@@ -64,3 +64,30 @@ def test_teknis_handles_missing_package_folder(monkeypatch):
 
     assert result["status"] == "error"
     assert "Folder paket tidak ditemukan" in result["error"]
+
+
+def test_reviu_target_must_be_merged_docm(tmp_path):
+    source = tmp_path / "2. Isi Reviu PLPK - Paket Uji.docm"
+    merged = tmp_path / "2. Isi Reviu PLPK - Paket Uji (Merged).docm"
+    source.write_bytes(b"source")
+    merged.write_bytes(b"merged")
+
+    assert ai_evaluator._find_reviu_docm(tmp_path, "pl_pk") == merged
+
+
+def test_reviu_target_missing_merged_does_not_fallback_to_source(tmp_path):
+    source = tmp_path / "2. Isi Reviu PLPK - Paket Uji.docm"
+    source.write_bytes(b"source")
+
+    assert ai_evaluator._find_reviu_docm(tmp_path, "pl_pk") is None
+
+
+def test_plpk_prompt_enforces_merged_and_part_one_scope(tmp_path):
+    target = tmp_path / "2. Isi Reviu PLPK - Paket Uji (Merged).docm"
+    prompt = ai_evaluator._prompt_pra_reviu(tmp_path, "Paket Uji", target, "pl_pk")
+
+    assert "Buka Isi Reviu" in prompt
+    assert "(Merged).docm" in prompt
+    assert "whitelist 45 CC Bagian I" in prompt
+    assert "jangan menyentuh Bagian II" in prompt
+    assert "Jangan membuat Content Control baru" in prompt

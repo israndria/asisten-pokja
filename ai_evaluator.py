@@ -147,20 +147,21 @@ def _run_evaluator(prompt: str, model: str = DEFAULT_MODEL, timeout: int = 600, 
 # ── PROMPT TEMPLATES ──────────────────────────────────────────────────────────
 
 def _find_reviu_docm(folder: Path, jenis: str = "tender_pk") -> Path | None:
-    """Cari DOCM utama; arsip Merged/backup tidak boleh dipilih."""
+    """Cari hasil mail merge ``(Merged).docm``; template sumber tidak boleh dipatch."""
     prefixes = {
         "pl_jkk": "2. Isi Reviu PLJKK - ",
         "pl_pk": "2. Isi Reviu PLPK - ",
         "tender_pk": "2. Isi Reviu PK - ",
     }
     prefix = prefixes.get(jenis, prefixes["tender_pk"])
-    candidates = sorted(
+    candidates = [
         p for p in folder.glob(f"{prefix}*.docm")
-        if "(merged)" not in p.name.lower()
+        if "(merged)" in p.name.lower()
         and ".backup" not in p.name.lower()
         and ".bak_" not in p.name.lower()
-    )
-    return candidates[0] if candidates else None
+        and not p.name.startswith("~$")
+    ]
+    return max(candidates, key=lambda p: p.stat().st_mtime_ns) if candidates else None
 
 
 def _domain_sop(jenis: str) -> Path:
@@ -177,35 +178,38 @@ def _prompt_pra_reviu(folder_paket: Path, nama_paket: str, docm_path: Path, jeni
 
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
-File DOCM target: {docm_path}
+File DOCM target (WAJIB hasil mail merge): {docm_path}
+File target harus berakhiran `(Merged).docm`. Template DOCM sumber tidak boleh diubah.
+Mail merge dilakukan lebih dahulu melalui tombol VBA `Buka Isi Reviu` pada workbook paket.
 SOP teknis patch DOCM: {PATCH_MANUAL_SOP}
 SOP domain/checklist: {domain_sop}
 
-Baca kedua SOP, seluruh Content Control bertag cat_*, rekomen_*, dan tanggapan_*
-di DOCM, lalu baca dokumen sumber relevan di folder paket. Jawab setiap pertanyaan
-berdasarkan bukti dokumen. Gunakan "Perlu klarifikasi ..." bila ambigu dan jangan
-mengarang fakta.
+Baca kedua SOP, inventarisasi Content Control yang benar-benar ada di DOCM, lalu
+baca dokumen sumber relevan di folder paket. Jawab setiap pertanyaan berdasarkan
+bukti dokumen. Gunakan "Perlu klarifikasi ..." bila ambigu dan jangan mengarang
+fakta. Untuk PL PK, patuhi whitelist 45 CC Bagian I pada SOP; jangan membuat CC
+baru dan jangan menyentuh Bagian II atau marker peralatan.
 
 WAJIB:
 1. Buat backup unik sebelum mengubah DOCM.
-2. Isi jawaban reviu ke cat_* dan rekomendasi ke rekomen_*.
-3. Isi tanggapan_* sebagai DRAFT tanggapan PPK yang logis berdasarkan rekomendasi.
+2. Isi jawaban reviu ke CC aktif yang sudah ada dan rekomendasi ke CC rekomen
+   yang sudah ada; jangan membuat CC yang hilang.
+3. Jika ada tanggapan_* yang memang ada dan diizinkan SOP domain, isi sebagai
+   DRAFT tanggapan PPK; jangan menulis seolah-olah sudah disetujui PPK.
    Tanggapan boleh diedit PPK; jangan menulis seolah-olah sudah disetujui PPK.
 4. Audit dan isi ulang setiap CC yang sudah ada. Teks lama hanya bahan
    pembanding, bukan jawaban yang dianggap benar; koreksi, hapus, atau ganti
    bila tidak sesuai bukti paket.
-5. Jika tag CC wajib belum ada, buat Content Control Rich Text baru pada sel
-   jawaban yang tepat, dengan tag pertanyaan yang sesuai. Jangan membuat
-   pertanyaan/fakta baru tanpa dasar.
+5. Jangan membuat Content Control baru. CC yang hilang/gap adalah manual sesuai
+   SOP domain; jangan membuat pertanyaan atau fakta baru tanpa dasar.
 6. Tulis _HASIL_PRA_REVIU_DPP.md di root paket sebagai audit temuan, klarifikasi,
    sumber dokumen, dan daftar CC yang diisi.
 7. Pertahankan VBA, tabel, format, dan struktur DOCM. Verifikasi buka ulang via Word COM.
 
 Jangan hanya membuat analisis Markdown; patch file DOCM secara langsung. Jika
-dokumen sumber tidak ditemukan, tetap isi CC dengan "Tidak ditemukan dalam
-dokumen sumber paket" dan buat rekomendasi/klarifikasi. Catat sebagai temuan di
-audit Markdown, tetapi jangan memakai kata ERROR hanya untuk temuan dokumen
-yang hilang. Jika target DOCM tidak ditemukan atau tidak dapat dibaca, tulis
+dokumen sumber tidak ditemukan, jangan mengisi fakta generik: isi CC aktif dengan
+"Perlu klarifikasi: sumber ... tidak ditemukan" dan catat sumber yang hilang di
+audit Markdown. Jika target DOCM tidak ditemukan atau tidak dapat dibaca, tulis
 ERROR spesifik dan jangan mengarang fakta.
 
 Mulai sekarang."""
@@ -345,7 +349,8 @@ def _prompt_patch_manual_isi_reviu(folder_paket: Path, docm_path: Path, nama_pak
 
 Paket: {nama_paket}
 Folder paket: {folder_paket}
-File target: {docm_path}
+File target hasil mail merge: {docm_path}
+Jangan menambal template DOCM sumber; target wajib berakhiran `(Merged).docm`.
 SOP WAJIB: {PATCH_MANUAL_SOP}
 SOP checklist/domain: {_domain_sop("tender_pk")}
 
@@ -386,7 +391,7 @@ def patch_manual_isi_reviu_single(folder_paket, nama_paket: str, engine: str = "
     folder = Path(folder_paket)
     docm_path = _find_reviu_docm(folder, "tender_pk")
     if not docm_path:
-        return {"nama": nama_paket, "status": "error", "output": "", "error": "File 2. Isi Reviu PK - *.docm tidak ditemukan."}
+        return {"nama": nama_paket, "status": "error", "output": "", "error": "File hasil mail merge 2. Isi Reviu PK - *(Merged).docm tidak ditemukan. Jalankan Buka Isi Reviu dari Excel terlebih dahulu."}
     if not PATCH_MANUAL_SOP.is_file():
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"SOP tidak ditemukan: {PATCH_MANUAL_SOP}"}
     try:
@@ -411,7 +416,7 @@ def evaluasi_pra_reviu_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, 
         jenis = "pl_jkk" if jenis_pl == "JKK" else "pl_pk"
         docm_path = _find_reviu_docm(folder, jenis)
         if not docm_path:
-            return {"nama": nama_paket, "status": "error", "output": "", "error": f"DOCM reviu {jenis} tidak ditemukan di {folder}"}
+            return {"nama": nama_paket, "status": "error", "output": "", "error": f"DOCM hasil mail merge {jenis} tidak ditemukan di {folder}. Jalankan Buka Isi Reviu dari Excel terlebih dahulu."}
         domain_sop = _domain_sop(jenis)
         if not domain_sop.is_file() or not PATCH_MANUAL_SOP.is_file():
             return {"nama": nama_paket, "status": "error", "output": "", "error": "SOP reviu atau SOP patch tidak ditemukan."}
