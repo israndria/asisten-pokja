@@ -1,4 +1,4 @@
-﻿"""Asisten Pokja — SPSE Automation (Streamlit)."""
+"""Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
 import glob as _glob_mod
@@ -34,7 +34,7 @@ from ui_pl_pk import (
 )
 from ui_pl_common import render_package_selection
 
-APP_VERSION = "v2026.07.19.a"
+APP_VERSION = "v2026.07.19.b"
 
 _PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_undangan_dates.json"
 _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sbu_history.json"
