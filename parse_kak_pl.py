@@ -1064,12 +1064,20 @@ def _nomor_dari_folder(folder_basename: str) -> str:
     return m.group(1) if m else ""
 
 
-def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: bool = False) -> tuple[str | None, str]:
+def _resolve_folder_pl(
+    nomor_urut,
+    nama_paket: str,
+    jenis_pl: str,
+    is_ulang: bool = False,
+    strict_name: bool = False,
+) -> tuple[str | None, str]:
     """Cari folder paket PL di OUTPUT_DIR_PL_{JKK|PK}.
 
     Return: (path_folder | None, nomor_urut_dari_folder)
     nomor_urut_dari_folder terisi jika folder ditemukan via scan (bukan dari arg).
     Caller bisa pakai ini untuk auto-update nomor_urut ke Supabase.
+    ``strict_name=True`` dipakai gate UI operasional agar nomor urut stale tidak
+    pernah fallback ke folder paket lain dengan prefix nomor sama.
     """
     from config import OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK, sanitasi_nama_folder
 
@@ -1097,6 +1105,11 @@ def _resolve_folder_pl(nomor_urut, nama_paket: str, jenis_pl: str, is_ulang: boo
     if os.path.isdir(candidate):
         if not is_ulang:
             return _ret(candidate)
+
+    if strict_name:
+        if is_ulang:
+            return (None, "")
+        return (None, "")
 
     # Prioritas 0.5: match by nomor prefix saja (kalau nomor ada)
     if nomor:

@@ -315,36 +315,40 @@ def _sidebar_login_form():
             use_container_width=True,
         ):
             _clear_login_failure_state()
+            _login_logs: list[str] = []
+
+            # Buffer log sejak tahap preflight; sebelumnya log baru dibuat
+            # setelah connect CDP sehingga error cold-start tampil generik.
+            def _log(msg: str):
+                _login_logs.append(msg)
+
             try:
                 import spse_login as _spse_login
-                _login_logs: list[str] = []
 
                 with st.spinner("Meluncurkan Brave SPSE..."):
                     # Pakai CDP existing bila sudah aktif; jangan launch instance kedua.
                     if not spse_browser._cek_cdp_aktif():
+                        _log("CDP belum aktif; meluncurkan Brave...")
                         spse_browser.launch_chrome_dengan_cdp()
-                        # Tunggu CDP ready (max 15 detik)
-                        import time as _t
-                        for _i in range(15):
-                            _t.sleep(1)
-                            if spse_browser._cek_cdp_aktif():
-                                break
+                    if not spse_browser.tunggu_cdp_ready(timeout_seconds=20):
+                        raise RuntimeError("CDP port 9222 belum siap setelah Brave diluncurkan.")
+                    _log("CDP siap; menghubungkan Playwright...")
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
+                    _log("Koneksi CDP berhasil; memeriksa tab SPSE...")
                     # Jika Brave hidup tanpa tab (misalnya semua tab ditutup
                     # sebelum Brave ditutup), buat ulang satu tab SPSE.
                     if spse_browser.pastikan_tab_spse() is None:
                         raise RuntimeError("Brave hidup, tetapi tab SPSE tidak dapat dibuka.")
+                    _log("Tab SPSE tersedia; membersihkan tab restore stale...")
                     # Brave dapat me-restore banyak tab error lama.
                     # Tutup hanya tab error, pertahankan tab normal, lalu fokuskan terbaik.
                     spse_browser.rapikan_tab_spse()
                     if spse_browser.fokuskan_tab_spse() is None:
                         raise RuntimeError("Brave hidup, tetapi tidak ada tab SPSE yang dapat difokuskan.")
+                    _log("Preflight Brave/SPSE selesai.")
 
                 _log_box = st.empty()
-                # log_fn hanya buffer ke list — JANGAN update Streamlit dari background thread
-                def _log(msg: str):
-                    _login_logs.append(msg)
 
                 with st.spinner("Auto-login SPSE..."):
                     _login_ok = _spse_login.login_spse(role=_login_role, log_fn=_log)

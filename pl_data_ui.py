@@ -6,6 +6,8 @@ query SPSE/Supabase dan supaya JKK/PK memiliki cache key yang eksplisit.
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 
@@ -19,9 +21,63 @@ def fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
         return {}
 
 
+def filter_local_pl_rows(rows: list[dict]) -> list[dict]:
+    """Kembalikan hanya paket yang benar-benar siap di disk lokal.
+
+    ``folder_dibuat`` di Supabase adalah status workflow, bukan bukti bahwa
+    folder masih ada di komputer aktif. Tab operasi tidak boleh menampilkan
+    row yang statusnya stale, foldernya hilang, atau workbook utama belum ada.
+    Bukti lokal (folder + workbook) menjadi sumber gate; status Supabase boleh
+    stale atau belum tersimpan tanpa membuat paket fisik yang valid menghilang.
+    Tab 1 sengaja dapat memanggil loader dengan ``only_local=False`` agar paket
+    baru tetap bisa dipilih untuk proses Create Folder.
+    """
+    from parse_kak_pl import _resolve_folder_pl
+    from pl_ui_helpers import _cari_xlsm_pl
+
+    result = []
+    for row in rows or []:
+        if not row.get("kode_paket"):
+            continue
+        try:
+            folder, _ = _resolve_folder_pl(
+                row.get("nomor_urut"),
+                row.get("nama_paket") or "",
+                row.get("jenis_pl") or "JKK",
+                is_ulang=bool(row.get("is_ulang")),
+                strict_name=True,
+            )
+            xlsm = _cari_xlsm_pl(folder) if folder and os.path.isdir(folder) else None
+            if not xlsm or not os.path.isfile(xlsm):
+                continue
+            enriched = dict(row)
+            enriched["_folder_lokal"] = folder
+            enriched["_xlsm_lokal"] = xlsm
+            result.append(enriched)
+        except (OSError, TypeError, ValueError):
+            continue
+    return result
+
+
+def _hydrate_provider_from_excel(rows: list[dict]) -> list[dict]:
+    """Gunakan C51:C52 Excel sebagai fallback identitas authoritative lokal."""
+    from pl_ui_helpers import _baca_identitas_penyedia_pl
+
+    result = []
+    for row in rows or []:
+        current = dict(row)
+        if not current.get("nama_penyedia") or not current.get("npwp_penyedia"):
+            identity = _baca_identitas_penyedia_pl(current)
+            for key in ("nama_penyedia", "npwp_penyedia"):
+                if identity.get(key) and not current.get(key):
+                    current[key] = identity[key]
+        result.append(current)
+    return result
+
+
 @st.cache_data(ttl=60, show_spinner=False)
-def load_draft_pl_cached(engine_kind: str = "JKK") -> list:
-    """Load draft PL dengan cache terpisah untuk JKK dan PK."""
+def load_draft_pl_cached(engine_kind: str = "JKK", only_local: bool = True) -> list:
+    """Load draft PL; cache terpisah dan gate disk untuk tab operasional."""
     if str(engine_kind).upper() == "PK":
         import pl_engine_plpk as engine
     else:
@@ -31,7 +87,11 @@ def load_draft_pl_cached(engine_kind: str = "JKK") -> list:
     # agar label/nomor folder tetap identik dengan workflow JKK.
     from pl_engine import _hydrate_nomor_urut_folder
     hydrate = _hydrate_nomor_urut_folder
-    return hydrate(rows) if hydrate and any(not r.get("nomor_urut") for r in rows) else rows
+    rows = hydrate(rows) if hydrate and any(not r.get("nomor_urut") for r in rows) else rows
+    if only_local:
+        rows = filter_local_pl_rows(rows)
+        rows = _hydrate_provider_from_excel(rows)
+    return rows
 
 
 def clear_draft_pl_cache() -> None:
@@ -64,8 +124,10 @@ def load_verifikasi_pl_rows_cached(engine_kind: str = "JKK") -> tuple[list[dict]
         rows = engine._sb().table("draft_paket_pl").select(
             "kode_paket, id_nontender, nama_paket, kode_unik, nama_penyedia, "
             "npwp_penyedia, tgl_negosiasi, tgl_undangan_verifikasi, "
-            "status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse"
+            "status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse, "
+            "folder_dibuat, nomor_urut"
         ).order("kode_paket").execute().data or []
-        return rows, ""
+        rows = filter_local_pl_rows(rows)
+        return _hydrate_provider_from_excel(rows), ""
     except Exception as exc:
         return [], str(exc)

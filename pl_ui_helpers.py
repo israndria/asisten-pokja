@@ -369,6 +369,106 @@ def _cari_xlsm_pl(folder):
     xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
     return os.path.join(folder, xs[0])
 
+
+def _baca_identitas_penyedia_pl(row: dict) -> dict:
+    """Baca nama/NPWP penyedia dari ``@ Master Data!C51:C52`` read-only."""
+    try:
+        import parse_kak_pl as _pkl_id
+        folder = row.get("_folder_lokal")
+        if not folder:
+            folder, _ = _pkl_id._resolve_folder_pl(
+                row.get("nomor_urut"), row.get("nama_paket") or "",
+                row.get("jenis_pl") or "JKK", is_ulang=bool(row.get("is_ulang")),
+            )
+        xlsm = (
+            row.get("_xlsm_lokal") or _cari_xlsm_pl(folder)
+            if folder else None
+        )
+        if not xlsm or not os.path.isfile(xlsm):
+            return {}
+        from openpyxl import load_workbook
+        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
+        try:
+            ws = wb["@ Master Data"]
+            return {
+                "nama_penyedia": str(ws["C51"].value or "").strip(),
+                "npwp_penyedia": str(ws["C52"].value or "").strip(),
+            }
+        finally:
+            wb.close()
+    except Exception:
+        return {}
+
+
+def sinkronkan_identitas_penyedia_pl(row: dict, provider: dict, progress_cb=None) -> dict:
+    """Persist identitas API SPSE ke Supabase dan Excel Master Data.
+
+    API SPSE menjadi sumber authoritative. Supabase tetap disimpan untuk cache
+    UI, sedangkan Excel ``C51:C52`` menjadi source-of-truth lokal generator.
+    """
+    def log(message):
+        if progress_cb:
+            progress_cb(message)
+
+    nama = str(provider.get("nama_penyedia") or provider.get("nama") or "").strip()
+    npwp = str(
+        provider.get("npwp_penyedia")
+        or provider.get("rkn_npwp_16")
+        or provider.get("rkn_npwp")
+        or provider.get("npwp")
+        or ""
+    ).strip()
+    if not nama and not npwp:
+        return {"ok": False, "excel_ok": False, "db_ok": False, "pesan": "Response SPSE tidak membawa nama/NPWP."}
+
+    excel_result = {"ok": False, "pesan": "Workbook tidak ditemukan."}
+    try:
+        from isi_master_data_pl import tulis_identitas_penyedia_ke_excel
+        folder = row.get("_folder_lokal")
+        xlsm = row.get("_xlsm_lokal")
+        if not xlsm:
+            import parse_kak_pl as _pkl_x
+            folder, _ = _pkl_x._resolve_folder_pl(
+                row.get("nomor_urut"), row.get("nama_paket") or "",
+                row.get("jenis_pl") or "JKK", is_ulang=bool(row.get("is_ulang")),
+            )
+            xlsm = _cari_xlsm_pl(folder) if folder else None
+        if xlsm:
+            excel_result = tulis_identitas_penyedia_ke_excel(
+                xlsm, nama, npwp, progress_cb=log,
+            )
+    except Exception as exc:
+        excel_result = {"ok": False, "pesan": str(exc)}
+
+    db_ok = False
+    db_message = ""
+    try:
+        from config import sb as _sb_provider
+        payload = {"nama_penyedia": nama, "npwp_penyedia": npwp}
+        _sb_provider().table("draft_paket_pl").update(payload).eq(
+            "kode_paket", str(row.get("kode_paket") or "")
+        ).execute()
+        db_ok = True
+    except Exception as exc:
+        db_message = str(exc)
+
+    excel_ok = bool(excel_result.get("ok"))
+    if excel_ok and db_ok:
+        message = "Nama/NPWP SPSE tersimpan ke Excel C51:C52 dan Supabase."
+    elif excel_ok:
+        message = f"Excel tersimpan; Supabase gagal: {db_message}"
+    elif db_ok:
+        message = f"Supabase tersimpan; Excel gagal: {excel_result.get('pesan', '-') }"
+    else:
+        message = f"Excel gagal: {excel_result.get('pesan', '-')}; Supabase gagal: {db_message}"
+    return {"ok": excel_ok and db_ok, "excel_ok": excel_ok, "db_ok": db_ok, "pesan": message}
+
+
+# Compatibility alias: app.py memakai nama private lama, sedangkan helper
+# canonical memakai nama public tanpa underscore. Jangan pecahkan startup
+# lintas-PC hanya karena salah satu clone membawa salah satu nama.
+_sinkronkan_identitas_penyedia_pl = sinkronkan_identitas_penyedia_pl
+
 def _baca_master_data_pl(row: dict) -> dict:
     """Baca field authoritative workbook PL tanpa pernah menyimpan .xlsm."""
     try:

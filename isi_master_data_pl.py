@@ -10,6 +10,81 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 import os
 
 
+def tulis_identitas_penyedia_ke_excel(
+    excel_path: str,
+    nama_penyedia: str,
+    npwp_penyedia: str,
+    progress_cb=None,
+) -> dict:
+    """Tulis identitas penyedia langsung ke ``@ Master Data!C51:C52`` via COM."""
+    def _log(message):
+        if progress_cb:
+            progress_cb(message)
+
+    excel_path = os.path.abspath(excel_path)
+    if not os.path.isfile(excel_path):
+        return {"ok": False, "pesan": f"File tidak ditemukan: {excel_path}"}
+    if not str(nama_penyedia or "").strip() and not str(npwp_penyedia or "").strip():
+        return {"ok": False, "pesan": "Nama dan NPWP penyedia kosong."}
+
+    import pythoncom
+    import pywintypes
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    xl = None
+    wb = None
+    try:
+        xl = win32com.client.DispatchEx("Excel.Application")
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        try:
+            xl.AutomationSecurity = 1
+        except Exception:
+            pass
+        _log(f"Membuka Excel: {os.path.basename(excel_path)}")
+        wb = xl.Workbooks.Open(
+            excel_path,
+            UpdateLinks=0,
+            ReadOnly=False,
+            IgnoreReadOnlyRecommended=True,
+            AddToMru=False,
+        )
+        if bool(wb.ReadOnly):
+            return {"ok": False, "pesan": "Workbook terbuka ReadOnly; tutup Excel paket lalu ulangi."}
+        ws = wb.Worksheets("@ Master Data")
+        ws.Range("C51").Value = str(nama_penyedia or "").strip()
+        ws.Range("C52").NumberFormat = "@"
+        ws.Range("C52").Value = str(npwp_penyedia or "").strip()
+        wb.Save()
+
+        saved_name = str(ws.Range("C51").Value or "").strip()
+        saved_npwp = str(ws.Range("C52").Value or "").strip()
+        if saved_name != str(nama_penyedia or "").strip() or saved_npwp != str(npwp_penyedia or "").strip():
+            return {"ok": False, "pesan": "Verifikasi C51:C52 setelah Save tidak cocok."}
+        _log("@ Master Data C51:C52 tersimpan dan terverifikasi.")
+        return {"ok": True, "pesan": "Nama/NPWP penyedia tersimpan ke C51:C52."}
+    except pywintypes.com_error as exc:
+        return {"ok": False, "pesan": f"Excel COM error: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "pesan": str(exc)}
+    finally:
+        if wb is not None:
+            try:
+                wb.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if xl is not None:
+            try:
+                xl.Quit()
+            except Exception:
+                pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
 def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> dict:
     """Buka xlsm via COM, jalankan macro IsiDataPLByKode(kode_paket) dalam silent mode.
 
