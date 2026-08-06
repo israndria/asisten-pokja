@@ -1120,8 +1120,46 @@ def _resolve_folder_pl(
         pass
 
     if strict_name:
-        if is_ulang:
-            return (None, "")
+        # Folder lama kadang dibuat dari nama paket yang dipendekkan, misalnya
+        # nama DB memuat uraian pekerjaan lengkap tetapi folder hanya memakai
+        # nama induk. Tetap jaga identitas: nomor + jenis PL harus sama, lalu
+        # nama fisik harus menjadi prefix nama DB (atau sebaliknya), dan hanya
+        # kandidat tunggal yang boleh dipilih.
+        def _nama_pencocokan(value: str) -> str:
+            value = re.sub(r"[^\w]+", " ", str(value or "").casefold(), flags=re.UNICODE)
+            return re.sub(r"\s+", " ", value).strip()
+
+        def _kandidat_nama(folder_label: str) -> tuple[str, bool] | None:
+            prefix_re = rf"^\s*{re.escape(str(nomor).strip())}\.\s*PL{re.escape(jenis)}\s*-\s*(.+?)\s*$"
+            match = re.match(prefix_re, folder_label, flags=re.IGNORECASE)
+            if not match:
+                return None
+            suffix = match.group(1)
+            ulang_match = re.search(r"\s*\(\s*PL\s*-\s*Ulang\s*\)\s*$", suffix, flags=re.IGNORECASE)
+            if ulang_match:
+                suffix = suffix[: ulang_match.start()]
+            return _nama_pencocokan(suffix), bool(ulang_match)
+
+        expected_name = _nama_pencocokan(nama_clean)
+        matches = []
+        for folder_label in os.listdir(root):
+            full = os.path.join(root, folder_label)
+            if not os.path.isdir(full):
+                continue
+            parsed = _kandidat_nama(folder_label)
+            if not parsed:
+                continue
+            physical_name, physical_is_ulang = parsed
+            if physical_is_ulang != bool(is_ulang) or not physical_name or not expected_name:
+                continue
+            if (
+                physical_name == expected_name
+                or physical_name.startswith(expected_name + " ")
+                or expected_name.startswith(physical_name + " ")
+            ):
+                matches.append(full)
+        if len(matches) == 1:
+            return _ret(matches[0])
         return (None, "")
 
     # Prioritas 0.5: match by nomor prefix saja (kalau nomor ada)

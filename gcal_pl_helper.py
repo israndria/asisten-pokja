@@ -186,7 +186,8 @@ def push_jadwal_pl_ke_gcal(
         deleted = _delete_events_by_kode(service, kode_paket)
 
         inserted = 0
-        for tahap in jadwal_list:
+        errors = []
+        for index, tahap in enumerate(jadwal_list, 1):
             mulai: datetime = tahap["mulai"]
             selesai: datetime = tahap["selesai"]
             evt = {
@@ -206,9 +207,14 @@ def push_jadwal_pl_ke_gcal(
                 service.events().insert(calendarId=CALENDAR_ID, body=evt).execute()
                 inserted += 1
             except Exception as e:
-                pass
+                errors.append(f"Tahap {index} ({tahap.get('nama', '-')}) gagal: {e}")
 
-        return {"ok": True, "inserted": inserted, "deleted": deleted, "error": ""}
+        return {
+            "ok": not errors and inserted == len(jadwal_list),
+            "inserted": inserted,
+            "deleted": deleted,
+            "error": " | ".join(errors)[:1000],
+        }
     except Exception as e:
         return {"ok": False, "inserted": 0, "deleted": 0, "error": str(e)}
 
@@ -253,7 +259,15 @@ def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
 
     base = SPSE_BASE_URL.rstrip("/")
     url = f"{base}/nontender/{kode_paket}/jadwal"
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    r = requests.get(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+        timeout=20,
+    )
     if r.status_code != 200:
         raise RuntimeError(f"GET jadwal gagal: HTTP {r.status_code}")
 
@@ -274,7 +288,7 @@ def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
 
 def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
     """
-    1. Baca jadwal aktual dari SPSE /jadwalnontender/{kode}/list
+    1. Baca jadwal aktual dari SPSE /nontender/{kode}/jadwal
     2. Push ke GCal (delete lama + insert baru)
     3. Upsert tgl_evaluasi/tgl_negosiasi/tgl_penetapan ke Supabase
 

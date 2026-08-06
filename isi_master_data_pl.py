@@ -15,8 +15,15 @@ def tulis_identitas_penyedia_ke_excel(
     nama_penyedia: str,
     npwp_penyedia: str,
     progress_cb=None,
+    *,
+    name_cell: str = "C51",
+    npwp_cell: str = "C52",
 ) -> dict:
-    """Tulis identitas penyedia langsung ke ``@ Master Data!C51:C52`` via COM."""
+    """Tulis identitas penyedia ke cell authoritative ``@ Master Data`` via COM.
+
+    Default C51:C52 menjaga kompatibilitas PLJKK. PLPK memanggil helper ini
+    dengan C77:C78.
+    """
     def _log(message):
         if progress_cb:
             progress_cb(message)
@@ -53,17 +60,17 @@ def tulis_identitas_penyedia_ke_excel(
         if bool(wb.ReadOnly):
             return {"ok": False, "pesan": "Workbook terbuka ReadOnly; tutup Excel paket lalu ulangi."}
         ws = wb.Worksheets("@ Master Data")
-        ws.Range("C51").Value = str(nama_penyedia or "").strip()
-        ws.Range("C52").NumberFormat = "@"
-        ws.Range("C52").Value = str(npwp_penyedia or "").strip()
+        ws.Range(name_cell).Value = str(nama_penyedia or "").strip()
+        ws.Range(npwp_cell).NumberFormat = "@"
+        ws.Range(npwp_cell).Value = str(npwp_penyedia or "").strip()
         wb.Save()
 
-        saved_name = str(ws.Range("C51").Value or "").strip()
-        saved_npwp = str(ws.Range("C52").Value or "").strip()
+        saved_name = str(ws.Range(name_cell).Value or "").strip()
+        saved_npwp = str(ws.Range(npwp_cell).Value or "").strip()
         if saved_name != str(nama_penyedia or "").strip() or saved_npwp != str(npwp_penyedia or "").strip():
-            return {"ok": False, "pesan": "Verifikasi C51:C52 setelah Save tidak cocok."}
-        _log("@ Master Data C51:C52 tersimpan dan terverifikasi.")
-        return {"ok": True, "pesan": "Nama/NPWP penyedia tersimpan ke C51:C52."}
+            return {"ok": False, "pesan": f"Verifikasi {name_cell}:{npwp_cell} setelah Save tidak cocok."}
+        _log(f"@ Master Data {name_cell}:{npwp_cell} tersimpan dan terverifikasi.")
+        return {"ok": True, "pesan": f"Nama/NPWP penyedia tersimpan ke {name_cell}:{npwp_cell}."}
     except pywintypes.com_error as exc:
         return {"ok": False, "pesan": f"Excel COM error: {exc}"}
     except Exception as exc:

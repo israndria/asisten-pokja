@@ -10,6 +10,8 @@ import os
 
 import streamlit as st
 
+_LOCAL_DRAFT_CACHE_VERSION = "folder-identity-v2"
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
@@ -60,17 +62,21 @@ def filter_local_pl_rows(rows: list[dict]) -> list[dict]:
 
 
 def _hydrate_provider_from_excel(rows: list[dict]) -> list[dict]:
-    """Gunakan C51:C52 Excel sebagai fallback identitas authoritative lokal."""
+    """Gunakan cell identitas Excel sebagai nilai authoritative lokal.
+
+    Nilai Excel sengaja menimpa cache Supabase bila tersedia. Ini mencegah
+    hasil parser PDF yang keliru (contoh: ``1 Unit``) tampil atau dikirim
+    kembali ke SPSE pada Tab 4.
+    """
     from pl_ui_helpers import _baca_identitas_penyedia_pl
 
     result = []
     for row in rows or []:
         current = dict(row)
-        if not current.get("nama_penyedia") or not current.get("npwp_penyedia"):
-            identity = _baca_identitas_penyedia_pl(current)
-            for key in ("nama_penyedia", "npwp_penyedia"):
-                if identity.get(key) and not current.get(key):
-                    current[key] = identity[key]
+        identity = _baca_identitas_penyedia_pl(current)
+        for key in ("nama_penyedia", "npwp_penyedia"):
+            if identity.get(key):
+                current[key] = identity[key]
         result.append(current)
     return result
 
@@ -79,7 +85,7 @@ def _hydrate_dokpil_from_excel(rows: list[dict]) -> list[dict]:
     """Timpa metadata Dokpil dari workbook lokal tiap paket.
 
     Ini menutup cache Supabase lama yang pernah menyimpan nomor hasil parser
-    PDF, termasuk nomor dengan tanda ?. Jika C20 kosong/invalid, nomor
+    PDF, termasuk nomor dengan tanda ``?``. Jika C20 kosong/invalid, nomor
     dikosongkan dan error disimpan untuk ditampilkan/menahan upload.
     """
     from pl_ui_helpers import _resolve_nomor_dokpil_excel_pl
@@ -100,8 +106,17 @@ def _hydrate_dokpil_from_excel(rows: list[dict]) -> list[dict]:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_draft_pl_cached(engine_kind: str = "JKK", only_local: bool = True) -> list:
-    """Load draft PL; cache terpisah dan gate disk untuk tab operasional."""
+def load_draft_pl_cached(
+    engine_kind: str = "JKK",
+    only_local: bool = True,
+    cache_version: str = _LOCAL_DRAFT_CACHE_VERSION,
+) -> list:
+    """Load draft PL; cache terpisah dan gate disk untuk tab operasional.
+
+    ``cache_version`` dinaikkan saat aturan identitas folder berubah agar hasil
+    lama tidak menahan paket yang baru berhasil di-resolve.
+    """
+    _ = cache_version
     if str(engine_kind).upper() == "PK":
         import pl_engine_plpk as engine
     else:

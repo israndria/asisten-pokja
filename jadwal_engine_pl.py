@@ -46,6 +46,11 @@ def _tambah_hari_kerja(dt: datetime, n: int) -> datetime:
     return result
 
 
+def _mulai_setelah_selesai(selesai: datetime) -> datetime:
+    """Mulai tahap berikutnya satu menit setelah tahap sebelumnya selesai."""
+    return selesai + timedelta(minutes=1)
+
+
 def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung 5 tahap PL dari tanggal mulai (T1).
@@ -55,7 +60,7 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     - T2: T1.selesai → T1.selesai + 65 menit (hari sama, no geser)
     - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 1 hari kerja replace(hour=16)
     - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
-    - T5: geser_ke_hari_kerja(T4.selesai + 1 day) replace(hour=8) → +26 hari kerja replace(hour=16)
+    - T5: mulai satu menit setelah T4.selesai → selesai +7 hari jam 16:00
     """
     # T1 Upload Penawaran — 5 hari KALENDER, geser ke hari kerja jika jatuh di weekend/libur
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
@@ -79,8 +84,7 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     t4_selesai = t3_selesai.replace(hour=15, minute=45, second=0, microsecond=0)
 
     # T5 Penandatanganan Kontrak
-    t5_mulai_kand = t4_selesai + timedelta(days=1)
-    t5_mulai = geser_ke_hari_kerja(t5_mulai_kand).replace(hour=8, minute=0, second=0, microsecond=0)
+    t5_mulai = _mulai_setelah_selesai(t4_selesai)
     t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
     t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
@@ -105,7 +109,7 @@ def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
     - T2: mulai = T1.selesai + 1 menit, selesai = T2.mulai + 30 menit (geser weekend)
     - T3: mulai = T2.selesai + 1 menit, selesai = T4.selesai + 30 menit (hari sama T4, geser weekend)
     - T4: hari berikutnya dari T2 (geser weekend), jam 08:30 - 13:00
-    - T5: mulai = T3.selesai + 30 menit (hari sama, no geser), selesai = mulai + 7 hari jam 16:00
+    - T5: mulai satu menit setelah T4.selesai (hari sama), selesai = mulai + 7 hari jam 16:00
     """
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
     t1_selesai = geser_ke_hari_kerja(t1_mulai + timedelta(days=2))
@@ -121,7 +125,7 @@ def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
 
     t3_selesai = t4_selesai + timedelta(minutes=30)
 
-    t5_mulai = t3_selesai + timedelta(minutes=30)
+    t5_mulai = _mulai_setelah_selesai(t4_selesai)
     t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
     t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
@@ -156,8 +160,8 @@ def hitung_jadwal_pl_standar(tgl_mulai: datetime) -> list[dict]:
     t4_mulai = t3_selesai.replace(hour=9, minute=0, second=0, microsecond=0)
     t4_selesai = t3_selesai.replace(hour=15, minute=30, second=0, microsecond=0)
 
-    # T5 mulai hari SAMA dengan T4 selesai (bukan geser ke hari kerja berikutnya)
-    t5_mulai = t4_selesai + timedelta(minutes=1)
+    # T5 selalu mengikuti T4 secara langsung.
+    t5_mulai = _mulai_setelah_selesai(t4_selesai)
     t5_selesai = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
 
     return [

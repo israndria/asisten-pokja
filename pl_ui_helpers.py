@@ -370,8 +370,22 @@ def _cari_xlsm_pl(folder):
     return os.path.join(folder, xs[0])
 
 
+def _provider_master_cells(row: dict) -> tuple[str, str]:
+    """Pilih cell identitas penyedia sesuai template workflow PL."""
+    jenis = str(row.get("jenis_pl") or "").strip().upper()
+    if jenis in {"PK", "PLPK", "KONSTRUKSI", "PL - KONSTRUKSI"}:
+        return "C77", "C78"
+    return "C51", "C52"
+
+
 def _baca_identitas_penyedia_pl(row: dict) -> dict:
-    """Baca nama/NPWP penyedia dari ``@ Master Data!C51:C52`` read-only."""
+    """Baca identitas penyedia dari cell authoritative workbook secara read-only.
+
+    Template PLJKK menyimpan identitas pada ``C51:C52``. Template PLPK
+    menyimpan identitas pada ``C77:C78``; jangan memakai hasil parser PDF
+    sebagai pengganti nilai workbook karena isi PDF dapat terbaca sebagai
+    personil/peralatan (misalnya ``1 Unit``).
+    """
     try:
         import parse_kak_pl as _pkl_id
         folder = row.get("_folder_lokal")
@@ -390,9 +404,10 @@ def _baca_identitas_penyedia_pl(row: dict) -> dict:
         wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
         try:
             ws = wb["@ Master Data"]
+            name_cell, npwp_cell = _provider_master_cells(row)
             return {
-                "nama_penyedia": str(ws["C51"].value or "").strip(),
-                "npwp_penyedia": str(ws["C52"].value or "").strip(),
+                "nama_penyedia": str(ws[name_cell].value or "").strip(),
+                "npwp_penyedia": str(ws[npwp_cell].value or "").strip(),
             }
         finally:
             wb.close()
@@ -403,8 +418,9 @@ def _baca_identitas_penyedia_pl(row: dict) -> dict:
 def sinkronkan_identitas_penyedia_pl(row: dict, provider: dict, progress_cb=None) -> dict:
     """Persist identitas API SPSE ke Supabase dan Excel Master Data.
 
-    API SPSE menjadi sumber authoritative. Supabase tetap disimpan untuk cache
-    UI, sedangkan Excel ``C51:C52`` menjadi source-of-truth lokal generator.
+    API SPSE menjadi sumber authoritative setelah pemilihan berhasil. Supabase
+    tetap disimpan untuk cache UI, sedangkan cell identitas workbook menjadi
+    source-of-truth lokal generator (PLJKK ``C51:C52``; PLPK ``C77:C78``).
     """
     def log(message):
         if progress_cb:
@@ -434,8 +450,14 @@ def sinkronkan_identitas_penyedia_pl(row: dict, provider: dict, progress_cb=None
             )
             xlsm = _cari_xlsm_pl(folder) if folder else None
         if xlsm:
+            name_cell, npwp_cell = _provider_master_cells(row)
             excel_result = tulis_identitas_penyedia_ke_excel(
-                xlsm, nama, npwp, progress_cb=log,
+                xlsm,
+                nama,
+                npwp,
+                name_cell=name_cell,
+                npwp_cell=npwp_cell,
+                progress_cb=log,
             )
     except Exception as exc:
         excel_result = {"ok": False, "pesan": str(exc)}
@@ -453,8 +475,9 @@ def sinkronkan_identitas_penyedia_pl(row: dict, provider: dict, progress_cb=None
         db_message = str(exc)
 
     excel_ok = bool(excel_result.get("ok"))
+    name_cell, npwp_cell = _provider_master_cells(row)
     if excel_ok and db_ok:
-        message = "Nama/NPWP SPSE tersimpan ke Excel C51:C52 dan Supabase."
+        message = f"Nama/NPWP SPSE tersimpan ke Excel {name_cell}:{npwp_cell} dan Supabase."
     elif excel_ok:
         message = f"Excel tersimpan; Supabase gagal: {db_message}"
     elif db_ok:
@@ -496,7 +519,7 @@ def _baca_master_data_pl(row: dict) -> dict:
 def _resolve_nomor_dokpil_excel_pl(row: dict) -> dict:
     """Resolve nomor Dokpil dari workbook paket, bukan cache/PDF/Supabase.
 
-    @ Master Data!C20 menjadi sumber tunggal. Nilai invalid dikembalikan
+    ``@ Master Data!C20`` menjadi sumber tunggal. Nilai invalid dikembalikan
     sebagai kosong supaya caller tidak diam-diam jatuh ke generator legacy.
     """
     from upload_dokpil_pl import validate_nomor_dokpil

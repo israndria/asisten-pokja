@@ -130,6 +130,37 @@ def _tender_display_label(row: dict) -> str:
     return f"{nomor}. {nama}" if nomor else nama
 
 
+def _render_gcal_push_log(results: list[dict]) -> None:
+    """Tampilkan hasil push GCal otomatis per paket setelah SPSE sukses."""
+    if not results:
+        return
+    attempted = [row for row in results if row.get("gcal_attempted")]
+    synced = [row for row in attempted if row.get("gcal_ok")]
+    failed = [row for row in attempted if not row.get("gcal_ok")]
+    if not attempted:
+        st.info("Google Calendar: tidak ada paket diproses karena push SPSE gagal.")
+    elif failed:
+        st.warning(
+            f"Google Calendar: {len(synced)}/{len(attempted)} paket berhasil; "
+            f"{len(failed)} paket perlu sync ulang."
+        )
+    else:
+        st.success(f"Google Calendar: {len(synced)}/{len(attempted)} paket berhasil disinkronkan.")
+
+    with st.expander(f"📋 Log Google Calendar otomatis ({len(results)} paket)", expanded=bool(failed)):
+        for row in results:
+            if not row.get("gcal_attempted"):
+                status = "⏭️ Tidak diproses karena push SPSE gagal"
+            elif row.get("gcal_ok"):
+                status = (
+                    f"✅ {row.get('gcal_inserted', 0)} event masuk, "
+                    f"{row.get('gcal_deleted', 0)} event lama dihapus"
+                )
+            else:
+                status = f"❌ Gagal: {row.get('gcal_error') or 'error tidak diketahui'}"
+            st.write(f"**{row.get('paket', row.get('kode_paket', '-'))}** — {status}")
+
+
 def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     """Gabung global_paket_draft + global_paket_aktif, deduplikasi by kode.
     filter_selesai=True (default): sembunyikan paket yang sudah Hasil Evaluasi/Masa Sanggah/dll.
@@ -846,7 +877,11 @@ _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 # tab stale/error bisa membuat get_url() kosong walau cookie masih terbaca.
 # Dua probe kosong berturut-turut baru dianggap session putus.
 _cdp_role_last_check = st.session_state.get("_cdp_role_last_check", 0.0)
-if time.time() - _cdp_role_last_check >= 30:
+_role_probe_needed = (
+    _spse_role not in ("PP", "POKJA", "PPK")
+    or bool(st.session_state.get("login_failed"))
+)
+if time.time() - _cdp_role_last_check >= 30 or _role_probe_needed:
     st.session_state["_cdp_role_last_check"] = time.time()
     try:
         import spse_browser as _sb_detect
@@ -857,9 +892,11 @@ if time.time() - _cdp_role_last_check >= 30:
                 if _detected == _spse_role:
                     st.session_state["_cdp_role_miss_count"] = 0
                 elif _detected:
-                    st.session_state.pop("spse_role", None)
+                    st.session_state["spse_role"] = _detected
+                    st.session_state.pop("login_failed", None)
+                    st.session_state.pop("login_failed_role", None)
                     st.session_state["_cdp_role_miss_count"] = 0
-                    _spse_role = None
+                    _spse_role = _detected
                 else:
                     _miss_count = st.session_state.get("_cdp_role_miss_count", 0) + 1
                     st.session_state["_cdp_role_miss_count"] = _miss_count
@@ -869,6 +906,8 @@ if time.time() - _cdp_role_last_check >= 30:
                         st.session_state["_cdp_role_miss_count"] = 0
             elif _detected:
                 st.session_state["spse_role"] = _detected
+                st.session_state.pop("login_failed", None)
+                st.session_state.pop("login_failed_role", None)
                 st.session_state["_cdp_role_miss_count"] = 0
                 _spse_role = _detected
     except Exception:
@@ -895,12 +934,33 @@ with _login_popover:
     # Auto-reconnect Playwright hanya saat dibutuhkan (lazy) — sidebar info pakai CDP HTTP saja
     # buka_browser() dipanggil oleh engine saat submit, bukan di sini setiap refresh
 
-    url_aktif = spse_browser.get_url() if spse_browser._cek_cdp_aktif() else None
+    _cdp_active = spse_browser._cek_cdp_aktif()
+    _spse_base = SPSE_BASE_URL.rstrip("/")
+    url_aktif = spse_browser.get_url() if _cdp_active else None
+
+    # Endpoint CDP bisa sehat saat cache tab/Playwright belum terisi (misalnya
+    # user baru mengganti akun di Brave). Probe role langsung dari metadata/CDP
+    # agar UI tidak salah menampilkan "Brave belum terhubung".
+    if _cdp_active and not url_aktif:
+        try:
+            import spse_login as _sl_empty_tab
+            _recovered_empty_tab = _sl_empty_tab.detect_login_role()
+            if _recovered_empty_tab:
+                st.session_state["spse_role"] = _recovered_empty_tab
+                st.session_state.pop("login_failed", None)
+                st.session_state.pop("login_failed_role", None)
+                st.session_state["_cdp_role_miss_count"] = 0
+                _role_label_empty_tab = _recovered_empty_tab
+                url_aktif = f"{_spse_base}/home"
+            else:
+                _role_label_empty_tab = None
+        except Exception:
+            _role_label_empty_tab = None
     if url_aktif:
         _role_label = st.session_state.get("spse_role", None)
         _at_loginpass = "loginpass" in url_aktif
         # URL root /tapinkab/ atau /tapinkab (tanpa path lain) = halaman setelah logout
-        _base = SPSE_BASE_URL.rstrip("/")
+        _base = _spse_base
         _at_logout_root = url_aktif.rstrip("/") == _base
 
         # Deteksi logout paksa: Brave masih jalan tapi halaman sudah kembali ke login/root
@@ -3583,12 +3643,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
-                            _hasil.append({
+                            _hasil_row = {
                                 "paket":  _pl_label(_p),
                                 "ok":     _sub["ok"],
                                 "pesan":  f"HTTP {_sub['status']}",
                                 "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
-                            })
+                                "gcal_attempted": False,
+                                "gcal_ok": False,
+                                "gcal_inserted": 0,
+                                "gcal_deleted": 0,
+                                "gcal_error": "",
+                            }
+                            _hasil.append(_hasil_row)
                             # Simpan tgl ke Supabase + push GCal
                             if _sub["ok"]:
                                 try:
@@ -3605,9 +3671,21 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     pass
                                 try:
                                     import gcal_pl_helper as _gcalpl
-                                    _gcalpl.push_jadwal_pl_ke_gcal(_kp, _p["nama_paket"], _r["jadwal_list"])
-                                except Exception:
-                                    pass
+                                    _gcal_result = _gcalpl.push_jadwal_pl_ke_gcal(
+                                        _kp, _p["nama_paket"], _r["jadwal_list"]
+                                    )
+                                    _hasil_row.update(
+                                        gcal_attempted=True,
+                                        gcal_ok=bool(_gcal_result.get("ok")),
+                                        gcal_inserted=_gcal_result.get("inserted", 0),
+                                        gcal_deleted=_gcal_result.get("deleted", 0),
+                                        gcal_error=_gcal_result.get("error", ""),
+                                    )
+                                except Exception as _gcal_e:
+                                    _hasil_row.update(
+                                        gcal_attempted=True,
+                                        gcal_error=str(_gcal_e)[:1000],
+                                    )
                         except Exception as _e:
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": str(_e)[:100]})
 
@@ -3621,6 +3699,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     for h in _hasil:
                         _ic = "✅" if h["ok"] else "❌"
                         st.markdown(f"{_ic} **{h['paket']}** — {h['pesan']}" + (f" — mulai {h.get('mulai','')}" if h["ok"] else ""))
+                    _render_gcal_push_log(_hasil)
 
                     # Expander preview jadwal per paket sukses
                     _hasil_sukses = [h for h in _hasil if h["ok"]]
@@ -3775,7 +3854,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             label_visibility="collapsed",
                         )
                         if _dokpil_up:
-                            _ku_prev = _rr.get("kode_unik") or "?"
+                            _ku_prev = _rr.get("kode_unik") or ""
                             _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
                             # Tanggal: dari DB (tgl_dokpil) → fallback session → hari ini
                             _tgl_db = _rr.get("tgl_dokpil")
@@ -4277,12 +4356,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _dokpil_file = _p.get("_dokpil_file")
                             if _dokpil_file and _id_nt:
                                 try:
-                                    _tgl_excel = _p.get("tgl_dokpil")
-                                    if _tgl_excel:
-                                        from datetime import date as _date_excel
-                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
-                                    else:
-                                        _tgl_excel = datetime.now().date()
                                     _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
                                     if not _nomor_dokpil:
                                         _hasil_sp.append({
@@ -4291,6 +4364,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
                                         })
                                         continue
+                                    _tgl_excel = _p.get("tgl_dokpil")
+                                    if _tgl_excel:
+                                        from datetime import date as _date_excel
+                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
+                                    else:
+                                        _tgl_excel = datetime.now().date()
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
                                         file_bytes=_dokpil_file.getvalue(),
@@ -6757,12 +6836,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
-                            _hasil.append({
+                            _hasil_row = {
                                 "paket":  _pl_label(_p),
                                 "ok":     _sub["ok"],
                                 "pesan":  f"HTTP {_sub['status']}",
                                 "mulai":  _t1.strftime("%d/%m/%Y %H:%M"),
-                            })
+                                "gcal_attempted": False,
+                                "gcal_ok": False,
+                                "gcal_inserted": 0,
+                                "gcal_deleted": 0,
+                                "gcal_error": "",
+                            }
+                            _hasil.append(_hasil_row)
                             # Simpan tgl ke Supabase + push GCal
                             if _sub["ok"]:
                                 try:
@@ -6779,9 +6864,21 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     pass
                                 try:
                                     import gcal_pl_helper as _gcalpl
-                                    _gcalpl.push_jadwal_pl_ke_gcal(_kp, _p["nama_paket"], _r["jadwal_list"])
-                                except Exception:
-                                    pass
+                                    _gcal_result = _gcalpl.push_jadwal_pl_ke_gcal(
+                                        _kp, _p["nama_paket"], _r["jadwal_list"]
+                                    )
+                                    _hasil_row.update(
+                                        gcal_attempted=True,
+                                        gcal_ok=bool(_gcal_result.get("ok")),
+                                        gcal_inserted=_gcal_result.get("inserted", 0),
+                                        gcal_deleted=_gcal_result.get("deleted", 0),
+                                        gcal_error=_gcal_result.get("error", ""),
+                                    )
+                                except Exception as _gcal_e:
+                                    _hasil_row.update(
+                                        gcal_attempted=True,
+                                        gcal_error=str(_gcal_e)[:1000],
+                                    )
                         except Exception as _e:
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": str(_e)[:100]})
 
@@ -6795,6 +6892,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     for h in _hasil:
                         _ic = "✅" if h["ok"] else "❌"
                         st.markdown(f"{_ic} **{h['paket']}** — {h['pesan']}" + (f" — mulai {h.get('mulai','')}" if h["ok"] else ""))
+                    _render_gcal_push_log(_hasil)
 
                     # Expander preview jadwal per paket sukses
                     _hasil_sukses = [h for h in _hasil if h["ok"]]
@@ -6949,7 +7047,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             label_visibility="collapsed",
                         )
                         if _dokpil_up:
-                            _ku_prev = _rr.get("kode_unik") or "?"
+                            _ku_prev = _rr.get("kode_unik") or ""
                             _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
                             # Tanggal: dari DB (tgl_dokpil) → fallback session → hari ini
                             _tgl_db = _rr.get("tgl_dokpil")
@@ -7464,12 +7562,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _dokpil_file = _p.get("_dokpil_file")
                             if _dokpil_file and _id_nt:
                                 try:
-                                    _tgl_excel = _p.get("tgl_dokpil")
-                                    if _tgl_excel:
-                                        from datetime import date as _date_excel
-                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
-                                    else:
-                                        _tgl_excel = datetime.now().date()
                                     _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
                                     if not _nomor_dokpil:
                                         _hasil_sp.append({
@@ -7478,6 +7570,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
                                         })
                                         continue
+                                    _tgl_excel = _p.get("tgl_dokpil")
+                                    if _tgl_excel:
+                                        from datetime import date as _date_excel
+                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
+                                    else:
+                                        _tgl_excel = datetime.now().date()
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
                                         file_bytes=_dokpil_file.getvalue(),

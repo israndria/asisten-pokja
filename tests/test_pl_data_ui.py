@@ -3,7 +3,7 @@
 import parse_kak_pl
 import pl_engine
 import pl_ui_helpers
-from pl_data_ui import filter_local_pl_rows
+from pl_data_ui import _hydrate_provider_from_excel, filter_local_pl_rows
 
 
 def test_provider_sync_private_alias_matches_canonical_helper():
@@ -11,6 +11,112 @@ def test_provider_sync_private_alias_matches_canonical_helper():
         pl_ui_helpers._sinkronkan_identitas_penyedia_pl
         is pl_ui_helpers.sinkronkan_identitas_penyedia_pl
     )
+
+
+def test_plpk_provider_uses_c77_c78_and_overrides_stale_cache(monkeypatch, tmp_path):
+    folder = tmp_path / "30. PLPK - Paket Fisik"
+    folder.mkdir()
+    workbook = folder / "0. BAPLPK - Paket Fisik.xlsm"
+    workbook.write_bytes(b"placeholder")
+
+    monkeypatch.setattr(
+        parse_kak_pl,
+        "_resolve_folder_pl",
+        lambda *_args, **_kwargs: (str(folder), "30"),
+    )
+    monkeypatch.setattr(
+        pl_ui_helpers,
+        "_cari_xlsm_pl",
+        lambda candidate: str(workbook) if candidate == str(folder) else None,
+    )
+
+    class FakeSheet:
+        values = {
+            "C51": "1 Unit",
+            "C52": "1 Unit",
+            "C77": "CV. HARAPAN GROUP",
+            "C78": "0503336018733000",
+        }
+
+        def __getitem__(self, cell):
+            return type("Cell", (), {"value": self.values[cell]})()
+
+    class FakeWorkbook:
+        def __getitem__(self, sheet):
+            assert sheet == "@ Master Data"
+            return FakeSheet()
+
+        def close(self):
+            pass
+
+    import openpyxl
+    monkeypatch.setattr(openpyxl, "load_workbook", lambda *args, **kwargs: FakeWorkbook())
+
+    row = {
+        "kode_paket": "PK-30",
+        "nama_paket": "Paket fisik",
+        "jenis_pl": "PK",
+        "folder_dibuat": True,
+        "nama_penyedia": "1 Unit",
+        "npwp_penyedia": "1 Unit",
+    }
+
+    result = _hydrate_provider_from_excel([row])
+
+    assert result[0]["nama_penyedia"] == "CV. HARAPAN GROUP"
+    assert result[0]["npwp_penyedia"] == "0503336018733000"
+
+
+def test_pljkk_provider_keeps_c51_c52_source(monkeypatch, tmp_path):
+    folder = tmp_path / "10. PLJKK - Paket Konsultan"
+    folder.mkdir()
+    workbook = folder / "0. BAPLJKK - Paket Konsultan.xlsm"
+    workbook.write_bytes(b"placeholder")
+
+    monkeypatch.setattr(
+        parse_kak_pl,
+        "_resolve_folder_pl",
+        lambda *_args, **_kwargs: (str(folder), "10"),
+    )
+    monkeypatch.setattr(
+        pl_ui_helpers,
+        "_cari_xlsm_pl",
+        lambda candidate: str(workbook) if candidate == str(folder) else None,
+    )
+
+    class FakeSheet:
+        values = {
+            "C51": "CV. RAHMAT BANUA KONSULTAN",
+            "C52": "911052223733000",
+            "C77": "CV. WRONG",
+            "C78": "0000000000000000",
+        }
+
+        def __getitem__(self, cell):
+            return type("Cell", (), {"value": self.values[cell]})()
+
+    class FakeWorkbook:
+        def __getitem__(self, sheet):
+            assert sheet == "@ Master Data"
+            return FakeSheet()
+
+        def close(self):
+            pass
+
+    import openpyxl
+    monkeypatch.setattr(openpyxl, "load_workbook", lambda *args, **kwargs: FakeWorkbook())
+
+    row = {
+        "kode_paket": "JKK-10",
+        "nama_paket": "Paket konsultan",
+        "jenis_pl": "JKK",
+        "folder_dibuat": True,
+    }
+
+    result = _hydrate_provider_from_excel([row])
+
+    assert result[0]["nama_penyedia"] == "CV. RAHMAT BANUA KONSULTAN"
+    assert result[0]["npwp_penyedia"] == "911052223733000"
 
 
 def test_row_without_local_folder_is_hidden(monkeypatch, tmp_path):
@@ -133,3 +239,41 @@ def test_strict_resolver_accepts_officially_truncated_folder(monkeypatch, tmp_pa
 
     assert resolved == str(folder)
     assert number == "28"
+
+
+def test_strict_resolver_accepts_unique_short_physical_name(monkeypatch, tmp_path):
+    import config
+
+    root = tmp_path / "plpk"
+    folder = root / "28. PLPK - Belanja Modal Bangunan Gedung Pertokoan-Koperasi-Pasar Pembangunan"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_PK", str(root))
+
+    resolved, nomor = parse_kak_pl._resolve_folder_pl(
+        28,
+        "Belanja Modal Bangunan Gedung Pertokoan/Koperasi/Pasar Pembangunan Gapura Pintu Gerbang",
+        "PK",
+        strict_name=True,
+    )
+
+    assert resolved == str(folder)
+    assert nomor == "28"
+
+
+def test_strict_resolver_rejects_ambiguous_short_physical_name(monkeypatch, tmp_path):
+    import config
+
+    root = tmp_path / "plpk"
+    (root / "28. PLPK - Belanja Modal Pembangunan A").mkdir(parents=True)
+    (root / "28. PLPK - Belanja Modal Pembangunan B").mkdir(parents=True)
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_PK", str(root))
+
+    resolved, nomor = parse_kak_pl._resolve_folder_pl(
+        28,
+        "Belanja Modal Pembangunan",
+        "PK",
+        strict_name=True,
+    )
+
+    assert resolved is None
+    assert nomor == ""
