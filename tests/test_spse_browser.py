@@ -47,6 +47,31 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
 
         self.assertEqual(sleep.call_count, 2)
 
+    def test_spse_tab_ready_waits_for_tab_after_cdp(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+
+        class FakePage:
+            def __init__(self, url):
+                self.url = url
+
+            def is_closed(self):
+                return False
+
+        external = FakePage("https://example.test/")
+        spse = FakePage(base + "/")
+        context = SimpleNamespace(pages=[external, spse])
+
+        with patch.object(spse_browser, "_get_ctx", return_value=context), \
+                patch.object(spse_browser, "_get_page", return_value=external), \
+                patch.object(spse_browser, "_set_page") as set_page:
+            selected = spse_browser.tunggu_tab_spse_ready(
+                timeout_seconds=0.1,
+                interval_seconds=0,
+            )
+
+        self.assertIs(selected, spse)
+        set_page.assert_called_once_with(spse)
+
     def test_brave_gui_command_does_not_inherit_hidden_startup(self):
         command = spse_browser._visible_brave_command(with_cdp=True)
 

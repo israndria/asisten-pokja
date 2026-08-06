@@ -183,6 +183,31 @@ def detect_login_role() -> str | None:
             )
         )
 
+    def _has_authenticated_cdp_tab() -> bool:
+        """Deteksi bukti sesi dari metadata CDP tanpa membuka Playwright.
+
+        Recovery dipanggil saat startup Streamlit. ``connect_over_cdp`` dapat
+        menggantung bila Brave sedang memulihkan banyak tab SPSE, padahal URL
+        tab dan fingerprint cookie sudah cukup untuk memulihkan role cache.
+        Validasi body tetap dipakai sebagai fallback bila bukti ringan ini
+        tidak tersedia.
+        """
+        try:
+            tabs = _sb._cdp_tabs(force=True)
+        except Exception:
+            return False
+        from urllib.parse import urlsplit
+
+        for tab in tabs or []:
+            if str(tab.get("type") or "") != "page":
+                continue
+            parsed = urlsplit(str(tab.get("url") or ""))
+            if parsed.netloc != "spse.inaproc.id":
+                continue
+            if _is_known_authenticated_path(parsed.path):
+                return True
+        return False
+
     def _detect_role_from_session(cookie: str) -> str | None:
         """Validasi role dari /home atau tab detail tanpa navigasi.
 
@@ -284,6 +309,11 @@ def detect_login_role() -> str | None:
             cached_role = None
 
         cache_matches_session = record.get("cookie_fp") == current_fp
+        # Fast path startup: URL authenticated dari endpoint CDP + fingerprint
+        # cookie yang sama cukup untuk memakai role cache. Jangan memanggil
+        # Playwright di sini; Brave dengan banyak tab restore bisa blocking.
+        if cached_role and cache_matches_session and _has_authenticated_cdp_tab():
+            return cached_role
         detected, authenticated = _detect_role_from_session(cookie)
         if detected:
             if not cache_matches_session or detected != cached_role:

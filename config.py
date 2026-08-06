@@ -85,10 +85,13 @@ BROWSER_SESSION_DIR = os.path.join(RUNTIME_ROOT, "browser_session")
 STATE_DIR = os.path.join(RUNTIME_ROOT, "state")
 LOG_DIR = os.path.join(RUNTIME_ROOT, "logs")
 
-# Secret juga dicari di folder lokal terlebih dahulu. Fallback ke lokasi lama
-# hanya untuk kompatibilitas saat migrasi; secret tidak pernah masuk Git.
+# Secret canonical per-PC berada di LOCALAPPDATA. Folder repo hanya fallback
+# migrasi; secret tidak pernah diletakkan di working tree Git.
 SECRET_ROOT = os.path.normpath(
-    os.environ.get("POKJA_SECRET_ROOT", os.path.join(CODE_ROOT, "Secrets"))
+    os.environ.get(
+        "POKJA_SECRET_ROOT",
+        os.path.join(LOCALAPPDATA, "POKJA2026", "Secrets"),
+    )
 )
 # Kredensial SPSE tetap terisolasi di profile user per-PC. Ini menjaga
 # kompatibilitas workflow PC kantor/laptop tanpa mencampur credential SPSE
@@ -111,8 +114,9 @@ def find_secret(filename: str) -> pathlib.Path:
         candidates.append(pathlib.Path(SPSE_SECRET_ROOT) / filename)
     candidates.extend(
         [
-            pathlib.Path(CODE_ROOT) / "Secrets" / filename,
             pathlib.Path(SECRET_ROOT) / filename,
+            pathlib.Path(LOCALAPPDATA) / "POKJA2026" / "Secrets" / filename,
+            pathlib.Path(CODE_ROOT) / "Secrets" / filename,
             pathlib.Path(BASE_DIR) / filename,
             pathlib.Path(V19_ROOT) / filename,
         ]

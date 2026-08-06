@@ -1,4 +1,5 @@
 Dim shell, fso, port, checkResult, cmd, python, appDir, appPy
+Dim secretRoot, driveRoot
 
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
@@ -15,9 +16,18 @@ shell.Environment("Process")("POKJA_CODE_ROOT") = appDir
 shell.Environment("Process")("POKJA_PYTHON") = python
 If Len(shell.Environment("Process")("POKJA_V19_ROOT")) = 0 Then _
     shell.Environment("Process")("POKJA_V19_ROOT") = fso.GetAbsolutePathName(appDir & "\..\procurement_core")
-If Len(shell.Environment("Process")("POKJA_DRIVE_ROOT")) = 0 Then _
-    shell.Environment("Process")("POKJA_DRIVE_ROOT") = "C:\POKJA2026"
-shell.Environment("Process")("POKJA_SECRET_ROOT") = fso.GetAbsolutePathName(appDir & "\..\Secrets")
+driveRoot = shell.Environment("Process")("POKJA_DRIVE_ROOT")
+If Len(driveRoot) = 0 Then driveRoot = shell.Environment("User")("POKJA_DRIVE_ROOT")
+If Len(driveRoot) = 0 Then
+    driveRoot = "G:\Other computers\My Laptop\@ POKJA 2026"
+    If Not fso.FolderExists(driveRoot) Then driveRoot = "C:\POKJA2026"
+End If
+shell.Environment("Process")("POKJA_DRIVE_ROOT") = driveRoot
+secretRoot = shell.Environment("Process")("POKJA_SECRET_ROOT")
+If Len(secretRoot) = 0 Then secretRoot = shell.Environment("User")("POKJA_SECRET_ROOT")
+If Len(secretRoot) = 0 Then _
+    secretRoot = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\POKJA2026\Secrets")
+shell.Environment("Process")("POKJA_SECRET_ROOT") = secretRoot
 shell.CurrentDirectory = appDir
 If Not fso.FileExists(appDir & "\ui_dpa.py") Then WScript.Quit
 

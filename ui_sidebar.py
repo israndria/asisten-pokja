@@ -336,17 +336,12 @@ def _sidebar_login_form():
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
                     _log("Koneksi CDP berhasil; memeriksa tab SPSE...")
-                    # Jika Brave hidup tanpa tab (misalnya semua tab ditutup
-                    # sebelum Brave ditutup), buat ulang satu tab SPSE.
-                    if spse_browser.pastikan_tab_spse() is None:
-                        raise RuntimeError("Brave hidup, tetapi tab SPSE tidak dapat dibuka.")
-                    _log("Tab SPSE tersedia; membersihkan tab restore stale...")
-                    # Brave dapat me-restore banyak tab error lama.
-                    # Tutup hanya tab error, pertahankan tab normal, lalu fokuskan terbaik.
-                    spse_browser.rapikan_tab_spse()
-                    if spse_browser.fokuskan_tab_spse() is None:
-                        raise RuntimeError("Brave hidup, tetapi tidak ada tab SPSE yang dapat difokuskan.")
-                    _log("Preflight Brave/SPSE selesai.")
+                    # Cold-start bisa membuat CDP sehat sebelum tab SPSE muncul
+                    # di context Playwright. Jangan inspeksi/cleanup DOM di sini;
+                    # _open_loginpass akan menstabilkan home setelah tab tersedia.
+                    if spse_browser.tunggu_tab_spse_ready() is None:
+                        raise RuntimeError("Brave hidup, tetapi tab SPSE belum tersedia.")
+                    _log("Tab SPSE tersedia; melanjutkan ke pipeline login.")
 
                 _log_box = st.empty()
 

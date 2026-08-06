@@ -211,6 +211,34 @@ class SpseLoginHelpersTest(unittest.TestCase):
 
         self.assertEqual(detected, "PPK")
 
+    def test_detect_role_fast_path_uses_authenticated_cdp_url_without_playwright(self):
+        current_cookie = "SPSE_SESSION=current-session"
+        with tempfile.TemporaryDirectory() as tmp:
+            role_file = Path(tmp) / "last_role.txt"
+            role_file.write_text(
+                json.dumps({
+                    "role": "PP",
+                    "cookie_fp": spse_login._cookie_fingerprint(current_cookie),
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(spse_login, "_ROLE_FILE", role_file),
+                patch("spse_browser.get_spse_cookies", return_value=current_cookie),
+                patch(
+                    "spse_browser._cdp_tabs",
+                    return_value=[{
+                        "type": "page",
+                        "url": "https://spse.inaproc.id/tapinkab/nontender/10975369000/edit",
+                    }],
+                ),
+                patch("spse_browser.buka_browser", side_effect=AssertionError("Playwright tidak boleh dipanggil")),
+                patch("requests.get", side_effect=AssertionError("HTTP probe tidak diperlukan")),
+            ):
+                detected = spse_login.detect_login_role()
+
+        self.assertEqual(detected, "PP")
+
     def test_detect_role_rejects_matching_cache_on_public_root(self):
         response = SimpleNamespace(
             status_code=403,

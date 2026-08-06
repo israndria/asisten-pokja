@@ -277,6 +277,14 @@ async def _deskripsikan_page_spse(page, *, inspect_body: bool = False) -> dict:
     }
 
 
+async def _deskripsikan_page_pemilihan(page) -> dict:
+    """Metadata ringan; inspeksi body hanya untuk URL login/root."""
+    info = await _deskripsikan_page_spse(page, inspect_body=False)
+    if 0 <= info["score"] <= 1:
+        info = await _deskripsikan_page_spse(page, inspect_body=True)
+    return info
+
+
 async def _find_page_for_tab_async(tab: dict):
     """Cocokkan tab CDP ke Playwright memakai URL + title, bukan URL saja."""
     context = _get_ctx()
@@ -321,7 +329,7 @@ async def _fokuskan_tab_spse_async():
         if page.is_closed():
             continue
         try:
-            info = await _deskripsikan_page_spse(page, inspect_body=True)
+            info = await _deskripsikan_page_pemilihan(page)
         except Exception:
             continue
         if _urlsplit(info["url"]).netloc == base_netloc:
@@ -746,9 +754,7 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
             if page.is_closed():
                 continue
             try:
-                _page_candidates.append(
-                    await _deskripsikan_page_spse(page, inspect_body=True)
-                )
+                _page_candidates.append(await _deskripsikan_page_pemilihan(page))
             except Exception:
                 continue
         # Jika ada page SPSE, jangan biarkan tab eksternal mengalahkannya.
@@ -848,6 +854,40 @@ def tunggu_cdp_ready(timeout_seconds: float = 20.0, interval_seconds: float = 0.
             return True
         time.sleep(max(0.05, float(interval_seconds)))
     return False
+
+
+def tunggu_tab_spse_ready(
+    timeout_seconds: float = 15.0,
+    interval_seconds: float = 0.25,
+):
+    """Tunggu tab SPSE hasil cold-start tersedia tanpa inspeksi/cleanup DOM.
+
+    Setelah Brave baru diluncurkan, endpoint CDP dapat sehat beberapa saat
+    sebelum tab dengan URL SPSE masuk ke context Playwright. Boundary login
+    hanya perlu menunggu tabnya muncul; inspeksi body dan cleanup tab publik
+    dilakukan setelah login agar race cold-start tidak menggagalkan pipeline.
+    """
+    from urllib.parse import urlsplit
+
+    base_netloc = urlsplit(SPSE_BASE_URL).netloc
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while time.monotonic() <= deadline:
+        context = _get_ctx()
+        if context is not None:
+            pages = [page for page in context.pages if not page.is_closed()]
+            current = _get_page()
+            candidates = ([current] if current in pages else []) + [
+                page for page in pages if page is not current
+            ]
+            for page in candidates:
+                try:
+                    if urlsplit(page.url).netloc == base_netloc:
+                        _set_page(page)
+                        return page
+                except Exception:
+                    continue
+        time.sleep(max(0.05, float(interval_seconds)))
+    return None
 
 
 async def _buka_tab_baru_async(url: str):

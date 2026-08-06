@@ -814,16 +814,9 @@ _login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
 
-# Brave dapat me-restore tab error lama saat laptop baru dinyalakan. Bersihkan
-# otomatis sebelum deteksi role agar tab yang terlihat user bukan stale error.
-# Fingerprint di spse_browser membuat operasi ini idempoten antar-rerun dan
-# tetap retry jika browser baru saja restart.
-try:
-    import spse_browser as _sb_restore
-    if _sb_restore._cek_cdp_aktif():
-        _sb_restore.ensure_spse_restore_cleaned()
-except Exception:
-    pass
+# Jangan reconnect Playwright/cleanup DOM secara blocking saat startup.
+# Deteksi role memakai CDP HTTP dan cleanup tab stale dijalankan lazy oleh flow
+# login/operasi browser, sehingga UI tidak tertahan oleh sesi Brave yang lambat.
 
 # Auto-detect + validasi role dari CDP. Tidak bergantung URL tab aktif karena
 # tab stale/error bisa membuat get_url() kosong walau cookie masih terbaca.
@@ -4347,18 +4340,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
-        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_jkk", help="Parse ulang 4. Informasi Lainnya/8. ND.pdf (fallback Draft_PL) → update nama & NPWP penyedia di Supabase"):
-            _ref_bar_jkk = st.progress(0.0, text="Memulai...")
-            _ref_log_jkk = st.empty()
-            import parse_kak_pl as _pkpl_ref_jkk
-            def _ref_cb_jkk(p, m):
-                _ref_bar_jkk.progress(min(float(p), 1.0), text=m[:120])
-                _ref_log_jkk.caption(m)
-            _ref_res_jkk = _pkpl_ref_jkk.serap_penyedia_pl(progress_cb=_ref_cb_jkk)
-            _ref_bar_jkk.progress(1.0, text="Selesai")
-            st.success(f"✅ {_ref_res_jkk.get('updated',0)} diperbarui, {_ref_res_jkk.get('not_found',0)} tidak ditemukan, {len(_ref_res_jkk.get('errors',[]))} error")
-            if _ref_res_jkk.get("errors"):
-                st.warning("\n".join(_ref_res_jkk["errors"][:5]))
+        if st.button("🔄 Baca Penyedia dari Excel", key="pp_refresh_penyedia_jkk", help="Muat ulang identitas dari @ Master Data workbook: PLJKK C51:C52, PLPK C77:C78"):
             _load_draft_pl_cached.clear()
             st.rerun()
         _pp_rows = _load_draft_pl_cached()
@@ -7560,18 +7542,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
 
-        if st.button("🔄 Refresh Data Penyedia", key="pp_refresh_penyedia_pk", help="Parse ulang 4. Informasi Lainnya/8. ND.pdf (fallback Draft_PL) → update nama & NPWP penyedia di Supabase"):
-            _ref_bar_pk = st.progress(0.0, text="Memulai...")
-            _ref_log_pk = st.empty()
-            import parse_kak_pl as _pkpl_ref_pk
-            def _ref_cb_pk(p, m):
-                _ref_bar_pk.progress(min(float(p), 1.0), text=m[:120])
-                _ref_log_pk.caption(m)
-            _ref_res_pk = _pkpl_ref_pk.serap_penyedia_pl(progress_cb=_ref_cb_pk)
-            _ref_bar_pk.progress(1.0, text="Selesai")
-            st.success(f"✅ {_ref_res_pk.get('updated',0)} diperbarui, {_ref_res_pk.get('not_found',0)} tidak ditemukan, {len(_ref_res_pk.get('errors',[]))} error")
-            if _ref_res_pk.get("errors"):
-                st.warning("\n".join(_ref_res_pk["errors"][:5]))
+        if st.button("🔄 Baca Penyedia dari Excel", key="pp_refresh_penyedia_pk", help="Muat ulang identitas dari @ Master Data workbook: PLPK C77:C78"):
             _load_draft_pl_cached.clear()
             st.rerun()
         _pp_rows = _load_draft_pl_cached("PK")
