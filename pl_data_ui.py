@@ -75,6 +75,30 @@ def _hydrate_provider_from_excel(rows: list[dict]) -> list[dict]:
     return result
 
 
+def _hydrate_dokpil_from_excel(rows: list[dict]) -> list[dict]:
+    """Timpa metadata Dokpil dari workbook lokal tiap paket.
+
+    Ini menutup cache Supabase lama yang pernah menyimpan nomor hasil parser
+    PDF, termasuk nomor dengan tanda ?. Jika C20 kosong/invalid, nomor
+    dikosongkan dan error disimpan untuk ditampilkan/menahan upload.
+    """
+    from pl_ui_helpers import _resolve_nomor_dokpil_excel_pl
+
+    result = []
+    for row in rows or []:
+        current = dict(row)
+        resolved = _resolve_nomor_dokpil_excel_pl(current)
+        master = resolved.get("master_data") or {}
+        if master:
+            current["kode_unik"] = str(master.get("kode_unik") or "").strip()
+            current["nomor_dokpil"] = resolved.get("nomor_dokpil", "")
+            current["tgl_dokpil"] = master.get("tgl_dokpil") or ""
+        current["_nomor_dokpil_excel_ok"] = bool(resolved.get("ok"))
+        current["_nomor_dokpil_excel_error"] = resolved.get("error", "")
+        result.append(current)
+    return result
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_draft_pl_cached(engine_kind: str = "JKK", only_local: bool = True) -> list:
     """Load draft PL; cache terpisah dan gate disk untuk tab operasional."""
@@ -90,6 +114,8 @@ def load_draft_pl_cached(engine_kind: str = "JKK", only_local: bool = True) -> l
     rows = hydrate(rows) if hydrate and any(not r.get("nomor_urut") for r in rows) else rows
     if only_local:
         rows = filter_local_pl_rows(rows)
+    rows = _hydrate_dokpil_from_excel(rows)
+    if only_local:
         rows = _hydrate_provider_from_excel(rows)
     return rows
 

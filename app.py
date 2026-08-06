@@ -396,6 +396,15 @@ def _enrich_kode_unik_pl_excel(row: dict) -> str:
     except Exception as exc:
         return f"gagal baca Excel: {exc}"
 
+
+def _nomor_dokpil_pl_row(row: dict) -> tuple[str, str]:
+    """Ambil nomor Dokpil valid hasil hydration Excel untuk UI/upload PL."""
+    value = str(row.get("nomor_dokpil") or "").strip()
+    error = str(row.get("_nomor_dokpil_excel_error") or "").strip()
+    if row.get("_nomor_dokpil_excel_ok") and value:
+        return value, ""
+    return "", error or "Nomor Dokpil Excel belum tersedia/valid"
+
 _TENDER_SELESAI_KW = (
     "surat penunjukan penyedia", "penunjukan penyedia",
     "penandatanganan kontrak", "penandatanganan",
@@ -3763,17 +3772,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _tgl_prev = datetime.now().date()
                             else:
                                 _tgl_prev = datetime.now().date()
-                            # Nomor: dari DB → fallback generate
-                            _no_prev = _rr.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                nama_paket=_rr["nama_paket"],
-                                kode_unik=_ku_prev,
-                                skpd_singkat=_sk_prev,
-                                tahun=_tgl_prev.year,
-                                paket_ulang=_pl_paket_ulang(_rr),
-                                nomor_urut=_rr.get("nomor_urut"),
-                            )
-                            st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
-                            if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
+                            _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
+                            if _no_prev:
+                                st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                            else:
+                                st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
+                            if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
                                 with st.spinner("Mengupload dokpil..."):
                                     try:
                                         _r_up_only = _udpl.upload_dokpil_pl(
@@ -3817,8 +3821,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         for _rr_up in _all_with_file:
                             _kp_up = _rr_up["kode_paket"]
                             _f_up = _rr_up["_dokpil_file"]
-                            _ku_up = _rr_up.get("kode_unik") or "?"
-                            _sk_up = _lookup_singkatan_dinas(_rr_up.get("satker", ""))
+                            _no_up, _no_up_error = _nomor_dokpil_pl_row(_rr_up)
+                            if not _no_up:
+                                st.error(f"❌ {_pl_label(_rr_up)} — Nomor Dokpil tidak valid dari Excel: {_no_up_error}")
+                                continue
                             # Tanggal dari DB, fallback session
                             _tgl_db_up = _rr_up.get("tgl_dokpil")
                             if _tgl_db_up:
@@ -3829,15 +3835,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _tgl_up = datetime.now().date()
                             else:
                                 _tgl_up = datetime.now().date()
-                            # Nomor dari DB, fallback generate
-                            _no_up = _rr_up.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                nama_paket=_rr_up["nama_paket"],
-                                kode_unik=_ku_up,
-                                skpd_singkat=_sk_up,
-                                tahun=_tgl_up.year,
-                                paket_ulang=_pl_paket_ulang(_rr_up),
-                                nomor_urut=_rr_up.get("nomor_urut"),
-                            )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
                                     kode_paket=_kp_up,
@@ -4271,17 +4268,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
                                     else:
                                         _tgl_excel = datetime.now().date()
-                                    # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
-                                    _kode_unik = _p.get("kode_unik") or ""
-                                    _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
-                                    _nomor_dokpil = _p.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                        nama_paket=_p["nama_paket"],
-                                        kode_unik=_kode_unik,
-                                        skpd_singkat=_skpd_singkat,
-                                        tahun=_tgl_excel.year,
-                                        paket_ulang=_pl_paket_ulang(_p),
-                                        nomor_urut=_p.get("nomor_urut"),
-                                    )
+                                    _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
+                                    if not _nomor_dokpil:
+                                        _hasil_sp.append({
+                                            "paket": _nm, "step": "Upload Dokpil",
+                                            "ok": False,
+                                            "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
+                                        })
+                                        continue
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
                                         file_bytes=_dokpil_file.getvalue(),
@@ -6952,17 +6946,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _tgl_prev = datetime.now().date()
                             else:
                                 _tgl_prev = datetime.now().date()
-                            # Nomor: dari DB → fallback generate
-                            _no_prev = _rr.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                nama_paket=_rr["nama_paket"],
-                                kode_unik=_ku_prev,
-                                skpd_singkat=_sk_prev,
-                                tahun=_tgl_prev.year,
-                                paket_ulang=_pl_paket_ulang(_rr),
-                                nomor_urut=_rr.get("nomor_urut"),
-                            )
-                            st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
-                            if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True):
+                            _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
+                            if _no_prev:
+                                st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                            else:
+                                st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
+                            if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
                                 with st.spinner("Mengupload dokpil..."):
                                     try:
                                         _r_up_only = _udpl.upload_dokpil_pl(
@@ -7006,8 +6995,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         for _rr_up in _all_with_file:
                             _kp_up = _rr_up["kode_paket"]
                             _f_up = _rr_up["_dokpil_file"]
-                            _ku_up = _rr_up.get("kode_unik") or "?"
-                            _sk_up = _lookup_singkatan_dinas(_rr_up.get("satker", ""))
+                            _no_up, _no_up_error = _nomor_dokpil_pl_row(_rr_up)
+                            if not _no_up:
+                                st.error(f"❌ {_pl_label(_rr_up)} — Nomor Dokpil tidak valid dari Excel: {_no_up_error}")
+                                continue
                             # Tanggal dari DB, fallback session
                             _tgl_db_up = _rr_up.get("tgl_dokpil")
                             if _tgl_db_up:
@@ -7018,15 +7009,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _tgl_up = datetime.now().date()
                             else:
                                 _tgl_up = datetime.now().date()
-                            # Nomor dari DB, fallback generate
-                            _no_up = _rr_up.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                nama_paket=_rr_up["nama_paket"],
-                                kode_unik=_ku_up,
-                                skpd_singkat=_sk_up,
-                                tahun=_tgl_up.year,
-                                paket_ulang=_pl_paket_ulang(_rr_up),
-                                nomor_urut=_rr_up.get("nomor_urut"),
-                            )
                             try:
                                 _r_upall = _udpl.upload_dokpil_pl(
                                     kode_paket=_kp_up,
@@ -7473,17 +7455,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
                                     else:
                                         _tgl_excel = datetime.now().date()
-                                    # Generate Nomor Dokpil: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
-                                    _kode_unik = _p.get("kode_unik") or ""
-                                    _skpd_singkat = _lookup_singkatan_dinas(_p.get("satker", ""))
-                                    _nomor_dokpil = _p.get("nomor_dokpil") or _udpl.generate_nomor_dokpil(
-                                        nama_paket=_p["nama_paket"],
-                                        kode_unik=_kode_unik,
-                                        skpd_singkat=_skpd_singkat,
-                                        tahun=_tgl_excel.year,
-                                        paket_ulang=_pl_paket_ulang(_p),
-                                        nomor_urut=_p.get("nomor_urut"),
-                                    )
+                                    _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
+                                    if not _nomor_dokpil:
+                                        _hasil_sp.append({
+                                            "paket": _nm, "step": "Upload Dokpil",
+                                            "ok": False,
+                                            "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
+                                        })
+                                        continue
                                     _r_up = _udpl.upload_dokpil_pl(
                                         kode_paket=_kp,
                                         file_bytes=_dokpil_file.getvalue(),

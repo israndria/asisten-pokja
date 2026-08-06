@@ -492,6 +492,32 @@ def _baca_master_data_pl(row: dict) -> dict:
     except Exception:
         return {}
 
+
+def _resolve_nomor_dokpil_excel_pl(row: dict) -> dict:
+    """Resolve nomor Dokpil dari workbook paket, bukan cache/PDF/Supabase.
+
+    @ Master Data!C20 menjadi sumber tunggal. Nilai invalid dikembalikan
+    sebagai kosong supaya caller tidak diam-diam jatuh ke generator legacy.
+    """
+    from upload_dokpil_pl import validate_nomor_dokpil
+
+    master = _baca_master_data_pl(row)
+    if not master:
+        return {
+            "ok": False,
+            "nomor_dokpil": "",
+            "master_data": {},
+            "error": "workbook paket atau sheet @ Master Data tidak ditemukan",
+        }
+    raw = str(master.get("nomor_dokpil") or "").strip()
+    ok, error = validate_nomor_dokpil(raw)
+    return {
+        "ok": ok,
+        "nomor_dokpil": raw if ok else "",
+        "master_data": master,
+        "error": error,
+    }
+
 def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
                             template_dir_jkk, template_dir_pk):
     """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->

@@ -32,6 +32,25 @@ HDRS = {
 # Generate Nomor Dokpil
 # ─────────────────────────────────────────────────────────────────────────────
 
+_NOMOR_DOKPIL_RE = re.compile(
+    r"^000\.3\.3(?:/PLU)?/\d+/PL/PP-\d+/[^/?\s]+/[^/?\s]+/\d{4}$"
+)
+
+
+def validate_nomor_dokpil(nomor: str | None) -> tuple[bool, str]:
+    """Validasi nomor Dokpil authoritative dari ``@ Master Data!C20``."""
+    value = str(nomor or "").strip()
+    if not value:
+        return False, "@ Master Data!C20 kosong"
+    if "?" in value:
+        return False, "@ Master Data!C20 masih mengandung tanda '?'"
+    if any(not part or part != part.strip() for part in value.split("/")):
+        return False, "@ Master Data!C20 memiliki komponen kosong/spasi"
+    if not _NOMOR_DOKPIL_RE.fullmatch(value):
+        return False, "format @ Master Data!C20 tidak sesuai pola nomor Dokpil PL"
+    return True, ""
+
+
 def _extract_digit_paket(nama_paket: str) -> str:
     """Ekstrak NN dari akhir nama paket. 'Paket 1' -> '01', 'Paket 12' -> '12'."""
     # Cari semua angka di nama paket, ambil yang terakhir
@@ -275,6 +294,10 @@ def upload_dokpil_pl(
     Return:
         {"ok": bool, "status": int, "fileId": str, "path": str, "nomor": str, "tanggal": str, ...}
     """
+    nomor_ok, nomor_error = validate_nomor_dokpil(nomor_dokpil)
+    if not nomor_ok:
+        return {"ok": False, "error": f"Nomor Dokpil tidak valid: {nomor_error}"}
+
     cookie = spse_browser.get_spse_cookies()
     if not cookie:
         return {"ok": False, "error": "Cookie SPSE kosong."}
