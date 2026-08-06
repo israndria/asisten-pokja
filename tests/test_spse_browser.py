@@ -171,6 +171,25 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
             get.return_value.json.return_value = [{"type": "page", "url": base + "/home"}]
             self.assertFalse(spse_browser.refresh_browser())
 
+    def test_refresh_uses_direct_cdp_when_playwright_context_missing(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+        tab = {
+            "type": "page",
+            "url": base + "/paketnontender",
+            "title": "LPSE Kabupaten Tapin - Daftar Paket",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+        }
+        with (
+            patch("requests.get") as get,
+            patch.object(spse_browser, "_get_ctx", return_value=None),
+            patch.object(spse_browser, "_cek_cdp_aktif", return_value=True),
+            patch.object(spse_browser, "_reload_tab_via_cdp", return_value=True) as reload_tab,
+        ):
+            get.return_value.json.return_value = [tab]
+            self.assertTrue(spse_browser.refresh_browser())
+
+        reload_tab.assert_called_once_with(tab)
+
     def test_authenticated_duplicate_url_beats_stale_error_tab(self):
         base = spse_browser.SPSE_BASE_URL.rstrip("/")
         selected = spse_browser._pilih_tab_spse(

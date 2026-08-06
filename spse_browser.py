@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+import json
 import threading
 import time
 from pathlib import Path
@@ -989,7 +990,11 @@ def refresh_browser():
             if tab is None:
                 return False
             if _get_ctx() is None:
-                _run(_connect_cdp_async(navigate=False), timeout=15)
+                # Daemon harus tetap bisa refresh walau context Playwright
+                # belum pernah tersambung atau sudah stale. connect_over_cdp
+                # dapat menggantung saat Brave memulihkan banyak tab; CDP
+                # WebSocket langsung cukup untuk Page.reload + validasi DOM.
+                return _reload_tab_via_cdp(tab)
             page = _run(_find_page_for_tab_async(tab), timeout=8)
             if page is None or page.is_closed():
                 raise RuntimeError("Context Playwright tidak punya tab CDP yang cocok")
@@ -1010,14 +1015,102 @@ def refresh_browser():
         except Exception:
             if attempt == 0 and _cek_cdp_aktif():
                 # Context lama dapat tetap non-None walau websocket CDP sudah
-                # mati. Reset lalu sambung ulang tanpa navigasi pada retry.
+                # mati. Reset lalu fallback ke CDP langsung; jangan membuat
+                # daemon memanggil buka_browser() yang bisa blocking.
                 diskonek()
-                try:
-                    buka_browser(navigate=False)
-                except Exception:
-                    pass
-                continue
+                return _reload_tab_via_cdp(tab)
             return False
+    return False
+
+
+def _cdp_page_command(tab: dict, method: str, params: dict | None = None, timeout: float = 8.0) -> dict:
+    """Kirim satu command CDP ke tab tanpa Playwright/context global."""
+    ws_url = str(tab.get("webSocketDebuggerUrl") or "").strip()
+    if not ws_url:
+        raise RuntimeError("Tab CDP tidak memiliki websocketDebuggerUrl")
+
+    result: list[dict | None] = [None]
+    error: list[BaseException | None] = [None]
+
+    def _worker() -> None:
+        async def _send() -> dict:
+            import websockets as _ws
+
+            async with _ws.connect(
+                ws_url,
+                open_timeout=min(3.0, timeout),
+                close_timeout=1.0,
+            ) as ws:
+                await ws.send(json.dumps({
+                    "id": 1,
+                    "method": method,
+                    "params": params or {},
+                }))
+                deadline = asyncio.get_running_loop().time() + timeout
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError(f"Timeout CDP {method}")
+                    message = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+                    if message.get("id") != 1:
+                        continue
+                    if message.get("error"):
+                        raise RuntimeError(str(message["error"]))
+                    return message.get("result") or {}
+
+        loop = asyncio.ProactorEventLoop()
+        asyncio.set_event_loop(loop)
+        try:
+            result[0] = loop.run_until_complete(_send())
+        except BaseException as exc:  # diteruskan ke caller dengan timeout terbatas
+            error[0] = exc
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=max(1.0, float(timeout)) + 2.0)
+    if thread.is_alive():
+        raise TimeoutError(f"Timeout thread CDP {method}")
+    if error[0] is not None:
+        raise error[0]
+    return result[0] or {}
+
+
+def _reload_tab_via_cdp(tab: dict) -> bool:
+    """Reload + validasi tab aman melalui CDP langsung.
+
+    Jalur ini khusus refresh background/user; tidak mengambil alih foreground
+    dan tidak menyentuh form/detail. False berarti sesi sudah login/error atau
+    tab tidak dapat divalidasi.
+    """
+    _cdp_page_command(tab, "Page.reload", {"ignoreCache": False}, timeout=6.0)
+    expression = (
+        "JSON.stringify({title: document.title || '', "
+        "body: document.body ? document.body.innerText : ''})"
+    )
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        try:
+            payload = _cdp_page_command(
+                tab,
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+                timeout=3.0,
+            )
+            value = ((payload.get("result") or {}).get("result") or {}).get("value")
+            data = json.loads(value) if isinstance(value, str) else {}
+            title = str(data.get("title") or "")
+            body = str(data.get("body") or "")
+            if _is_spse_access_error_text(title) or _is_spse_access_error_text(body):
+                return False
+            if _is_spse_login_page_text(title) or _is_spse_login_page_text(body):
+                return False
+            if body.strip():
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
     return False
 
 
