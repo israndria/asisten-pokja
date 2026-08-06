@@ -41,16 +41,32 @@ def load_paket_cache() -> dict:
             data = json.load(f)
         if time.time() - data.get("_ts", 0) > _CACHE_TTL:
             return None  # expired
+        # Cache sebelum integrasi stage belum membawa tahap Tender. Beri
+        # default agar caller dapat membedakan cache lama tanpa error.
+        data.setdefault("tahap_map", {})
         return data
     except Exception:
         return None
 
 
-def save_paket_cache(draft: dict, aktif: dict):
-    """Simpan hasil fetch ke cache file."""
+def save_paket_cache(draft: dict, aktif: dict, tahap_map: dict | None = None):
+    """Simpan paket dan tahap Tender ke cache file.
+
+    ``tahap_map`` opsional agar caller lama tetap kompatibel; cache lama tanpa
+    field ini tetap dapat dibaca dan akan di-refresh oleh app saat diperlukan.
+    """
     try:
         with open(_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"draft": draft, "aktif": aktif, "_ts": time.time()}, f, ensure_ascii=False)
+            json.dump(
+                {
+                    "draft": draft,
+                    "aktif": aktif,
+                    "tahap_map": dict(tahap_map or {}),
+                    "_ts": time.time(),
+                },
+                f,
+                ensure_ascii=False,
+            )
     except Exception:
         pass
 

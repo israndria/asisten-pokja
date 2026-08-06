@@ -18,6 +18,7 @@ from ui_state import (
     invalidate_ppk_session_state,
     ppk_upload_expander_label,
 )
+from tender_package_filters import filter_tender_candidates, package_code, stale_selection_keys
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
@@ -157,6 +158,11 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
     draft_list = st.session_state.get("global_paket_draft", {}).get("paket", [])
     aktif_list = st.session_state.get("global_paket_aktif", {}).get("paket", [])
     tahap_map = st.session_state.get("tender_tahap_map", {})
+    draft_kodes = {
+        str(p.get("kode") or p.get("id_lelang") or "").strip()
+        for p in draft_list
+        if str(p.get("kode") or p.get("id_lelang") or "").strip()
+    }
     # DataTables SPSE tidak membawa nomor folder; ambil metadata lokal/cache DB.
     _folder_meta = {}
     try:
@@ -169,21 +175,50 @@ def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
         pass
     seen, result = set(), []
     for p in draft_list + aktif_list:
-        if p["kode"] not in seen:
-            seen.add(p["kode"])
+        _kode = str(p.get("kode") or p.get("id_lelang") or "").strip()
+        if _kode not in seen:
+            seen.add(_kode)
             if _is_tender_excluded(p):
                 continue
             if filter_selesai:
-                tahap = tahap_map.get(p["kode"]) or p.get("status") or ""
+                tahap = tahap_map.get(_kode) or p.get("status") or ""
                 if _is_tender_selesai({"status": tahap}):
                     continue
-            _meta = _folder_meta.get(str(p["kode"]), {})
+            _meta = _folder_meta.get(_kode, {})
             result.append({
                 **p,
+                "_tender_source": "draft" if _kode in draft_kodes else "aktif",
                 "nomor_urut": p.get("nomor_urut") or _meta.get("nomor_urut") or "",
                 "folder_dibuat": p.get("folder_dibuat") or _meta.get("folder_dibuat") or "",
             })
     return result
+
+
+def _tender_known_draft_kodes() -> set[str]:
+    """Kode Draft yang sedang dimuat dari SPSE; dipakai juga loader fallback."""
+    return {
+        str(p.get("kode") or p.get("id_lelang") or "").strip()
+        for p in st.session_state.get("global_paket_draft", {}).get("paket", [])
+        if str(p.get("kode") or p.get("id_lelang") or "").strip()
+    }
+
+
+def _get_tender_tab_candidates(tab: int, rows: list[dict] | None = None) -> list[dict]:
+    """Kandidat UI per tab Tender; tidak mengubah status DB/SPSE."""
+    source = rows if rows is not None else _get_paket_gabungan(filter_selesai=False)
+    return filter_tender_candidates(
+        source,
+        tab,
+        tahap_map=st.session_state.get("tender_tahap_map", {}),
+        draft_kodes=_tender_known_draft_kodes(),
+    )
+
+
+def _reset_tender_stale_widget_keys(prefix: str, rows: list[dict]) -> None:
+    """Buang state checkbox paket yang sudah tidak menjadi kandidat tab."""
+    valid_codes = {package_code(row) for row in rows if package_code(row)}
+    for key in stale_selection_keys(list(st.session_state.keys()), prefix, valid_codes):
+        st.session_state.pop(key, None)
 
 
 def _enrich_kode_unik_tender_excel(
@@ -8621,6 +8656,38 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             if _cache:
                 st.session_state["global_paket_draft"] = _cache["draft"]
                 st.session_state["global_paket_aktif"] = _cache["aktif"]
+                # Cache lama hanya membawa daftar paket, bukan tahap aktif.
+                # Pulihkan map cache terlebih dahulu, lalu refresh hanya kode
+                # aktif yang belum memiliki tahap agar gate Tab 4-8 tidak
+                # kosong diam-diam pada sesi Streamlit baru.
+                _cache_had_tahap = bool(_cache.get("tahap_map"))
+                _tahap_cache = dict(_cache.get("tahap_map") or {})
+                for _p_cache in _cache.get("aktif", {}).get("paket", []):
+                    _kode_cache = str(_p_cache.get("kode") or _p_cache.get("id_lelang") or "").strip()
+                    _status_tahap_cache = str(_p_cache.get("status_tahap") or "").strip()
+                    if _kode_cache and _status_tahap_cache:
+                        _tahap_cache.setdefault(_kode_cache, _status_tahap_cache)
+                _tahap_startup = dict(st.session_state.get("tender_tahap_map") or {})
+                _tahap_startup.update(_tahap_cache)
+                _tahap_missing_rows = [
+                    _p_cache for _p_cache in _cache.get("aktif", {}).get("paket", [])
+                    if str(_p_cache.get("kode") or _p_cache.get("id_lelang") or "").strip()
+                    and not _tahap_startup.get(str(_p_cache.get("kode") or _p_cache.get("id_lelang") or "").strip())
+                ]
+                _tahap_refreshed = {}
+                if _tahap_missing_rows:
+                    try:
+                        _tahap_refreshed = kirimpesan_engine.fetch_tahap_tender(_tahap_missing_rows)
+                    except Exception:
+                        _tahap_refreshed = {}
+                    _tahap_startup.update(_tahap_refreshed)
+                st.session_state["tender_tahap_map"] = _tahap_startup
+                if _tahap_refreshed or (_tahap_cache and not _cache_had_tahap):
+                    kirimpesan_engine.save_paket_cache(
+                        _cache["draft"],
+                        _cache["aktif"],
+                        tahap_map=_tahap_startup,
+                    )
             else:
                 with st.spinner("Memuat daftar paket dari SPSE..."):
                     _gd0 = kirimpesan_engine.fetch_paket_draft()
@@ -8631,7 +8698,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state["tender_tahap_map"] = _tahap0
                     st.session_state["global_paket_draft"] = _gd0
                     st.session_state["global_paket_aktif"] = _ga0
-                    kirimpesan_engine.save_paket_cache(_gd0, _ga0)
+                    kirimpesan_engine.save_paket_cache(_gd0, _ga0, tahap_map=_tahap0)
 
         # Supabase fallback baru bisa memakai daftar SPSE setelah global state
         # terisi; refresh sumber Tab 0 pada startup yang sebelumnya kosong.
@@ -8681,7 +8748,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     st.session_state["tender_tahap_map"] = _tahap_r
                     st.session_state["global_paket_draft"] = _gd_r
                     st.session_state["global_paket_aktif"] = _ga_r
-                    kirimpesan_engine.save_paket_cache(_gd_r, _ga_r)
+                    kirimpesan_engine.save_paket_cache(_gd_r, _ga_r, tahap_map=_tahap_r)
                     _load_draft_paket_cached.clear()
                     _tender_rows_dirty = True
                 st.toast("✅ Data paket SPSE tersinkronkan!", icon="🔄")
@@ -8840,6 +8907,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 kirimpesan_engine.save_paket_cache(
                     st.session_state.get("global_paket_draft", {"paket": []}),
                     st.session_state.get("global_paket_aktif", {"paket": []}),
+                    tahap_map=st.session_state.get("tender_tahap_map", {}),
                 )
             _load_draft_paket_cached.clear()
             return _hasil_inbox, _hasil_spse
@@ -9616,11 +9684,12 @@ if _tender_active_tab == "3️⃣ Setup Paket":
             if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
+                st.caption(f"📋 {len(_get_tender_tab_candidates(3))} paket Draft tersedia")
 
         sp_selected = []
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
-            paket_list_sp = _get_paket_gabungan()
+            paket_list_sp = _get_tender_tab_candidates(3)
+            _reset_tender_stale_widget_keys("sp_chk_", paket_list_sp)
             if not paket_list_sp:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
@@ -9790,14 +9859,46 @@ if _tender_active_tab == "3️⃣ Setup Paket":
             _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
 
             def _load_sbu_history():
+                values = []
+
+                def _add(value):
+                    value = str(value or "").strip()
+                    if value and value not in values:
+                        values.append(value)
+
                 try:
                     with open(_SBU_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        values = _json.load(f)
-                    return [str(v).strip() for v in values if str(v).strip()]
+                        local_values = _json.load(f)
+                    for value in local_values if isinstance(local_values, list) else []:
+                        _add(value)
                 except Exception:
-                    return []
+                    pass
 
-            def _save_sbu_history(value):
+                # Histori lokal bersifat per-PC. Ambil juga nilai yang sudah
+                # tersimpan pada draft_paket agar histori tersedia lintas laptop
+                # dan PC kantor. sbu_gabungan dipakai sebagai fallback untuk row
+                # lama yang belum memiliki sbu_baru.
+                try:
+                    from config import sb as _sb_sbu_history
+
+                    rows = (
+                        _sb_sbu_history()
+                        .table("draft_paket")
+                        .select("sbu_baru,sbu_lama,sbu_gabungan")
+                        .order("diambil_pada", desc=True)
+                        .limit(200)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    for row in rows:
+                        _add(row.get("sbu_baru") or row.get("sbu_gabungan"))
+                except Exception:
+                    pass
+
+                return values[:20]
+
+            def _save_sbu_history(value, package_rows=None):
                 value = str(value or "").strip()
                 if not value:
                     return
@@ -9808,8 +9909,32 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            if "tender_sbu_history" not in st.session_state:
+                # Simpan ke row paket yang sedang diproses supaya pilihan SBU
+                # berikutnya ikut tersedia lintas perangkat. Gagal sync DB tidak
+                # boleh menggagalkan submit SPSE karena file lokal tetap tersimpan.
+                try:
+                    kode_list = [
+                        str(row.get("id_lelang") or row.get("kode") or "").strip()
+                        for row in (package_rows or [])
+                    ]
+                    kode_list = list(dict.fromkeys(kode for kode in kode_list if kode))
+                    if kode_list:
+                        from config import sb as _sb_save_sbu
+
+                        (
+                            _sb_save_sbu()
+                            .table("draft_paket")
+                            .update({"sbu_baru": value})
+                            .in_("kode_tender", kode_list)
+                            .execute()
+                        )
+                except Exception:
+                    pass
+
+            _TENDER_SBU_HISTORY_VERSION = "supabase-draft-paket-v1"
+            if st.session_state.get("tender_sbu_history_version") != _TENDER_SBU_HISTORY_VERSION:
                 st.session_state["tender_sbu_history"] = _load_sbu_history()
+                st.session_state["tender_sbu_history_version"] = _TENDER_SBU_HISTORY_VERSION
 
             # Inisialisasi default SBU dari file — hanya sekali per session, SEBELUM widget dirender
             if "sbu_last_loaded" not in st.session_state:
@@ -9972,7 +10097,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"📋 Submit Syarat Kualifikasi + Kinerja ({len(sp_selected)} paket)",
                 key="sp_submit_ldk_fixed", use_container_width=True, disabled=not sp_selected,
             ):
-                _save_sbu_history(_t_sbu_desc)
+                _save_sbu_history(_t_sbu_desc, sp_selected)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_ldk(
@@ -9987,7 +10112,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"🛂 Submit 2 Syarat Izin Usaha ({len(sp_selected)} paket)",
                 key="sp_submit_ijin_fixed", use_container_width=True, disabled=not sp_selected,
             ):
-                _save_sbu_history(_t_sbu_desc)
+                _save_sbu_history(_t_sbu_desc, sp_selected)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_izin_usaha(_p["id_lelang"], _t_default_ijin)
@@ -9999,7 +10124,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 f"📄 Submit Checklist Dokumen ({len(sp_selected)} paket)",
                 key="sp_submit_checklist_fixed", use_container_width=True, disabled=not sp_selected,
             ):
-                _save_sbu_history(_t_sbu_desc)
+                _save_sbu_history(_t_sbu_desc, sp_selected)
                 for _p in sp_selected:
                     try:
                         _r = tender_setup_engine.submit_checklist(
@@ -10022,7 +10147,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 import tempfile
 
                 _sbu_for_history = st.session_state["ijin_rows"][1].get("klasifikasi", "").replace(_SBU_PREFIX, "", 1).strip() if len(st.session_state.get("ijin_rows", [])) > 1 else ""
-                _save_sbu_history(_sbu_for_history)
+                _save_sbu_history(_sbu_for_history, sp_selected)
 
                 # Default dari form (dipakai jika paket tidak punya DOKPIL)
                 _default_ijin = _t_default_ijin
@@ -10106,11 +10231,12 @@ if _tender_active_tab == "4️⃣ Pemberian Penjelasan":
             if "global_paket_draft" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
+                st.caption(f"📋 {len(_get_tender_tab_candidates(4))} paket aktif pada/belum Pemberian Penjelasan")
 
         pj_selected = []
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
-            paket_list_pj = _get_paket_gabungan()
+            paket_list_pj = _get_tender_tab_candidates(4)
+            _reset_tender_stale_widget_keys("pj_chk_", paket_list_pj)
             if not paket_list_pj:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
@@ -10327,11 +10453,12 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
             if "global_paket_draft" not in st.session_state:
                 st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
             else:
-                st.caption(f"📋 {len(_get_paket_gabungan())} paket tersedia (draft + aktif)")
+                st.caption(f"📋 {len(_get_tender_tab_candidates(2))} paket Draft tersedia")
 
         jd_selected = []
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
-            paket_list = _get_paket_gabungan()
+            paket_list = _get_tender_tab_candidates(2)
+            _reset_tender_stale_widget_keys("jd_chk_", paket_list)
             if not paket_list:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
@@ -10680,11 +10807,12 @@ if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
         if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
             st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
         else:
-            paket_list = _get_paket_gabungan()
+            paket_list = _get_tender_tab_candidates(1)
+            _reset_tender_stale_widget_keys("kp_chk_", paket_list)
             if not paket_list:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
-                st.caption(f"📋 {len(paket_list)} paket tersedia (draft + aktif) — pilih target:")
+                st.caption(f"📋 {len(paket_list)} paket Draft tersedia — pilih target:")
 
                 _kp_sel_col1, _kp_sel_col2 = st.columns(2)
                 with _kp_sel_col1:
@@ -10922,7 +11050,8 @@ if _tender_active_tab == "1️⃣ Kirim Undangan DPP":
 
         ba_selected = []
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
-            _ba_paket_list = _get_paket_gabungan()
+            _ba_paket_list = _get_tender_tab_candidates(1)
+            _reset_tender_stale_widget_keys("r1_ba_chk_", _ba_paket_list)
             if not _ba_paket_list:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
@@ -11019,11 +11148,12 @@ if _tender_active_tab == "8️⃣ Upload & Cetak 5 BA":
     if "global_paket_draft" not in st.session_state and "global_paket_aktif" not in st.session_state:
         st.info("⚠️ Data paket belum disinkronkan. Silakan ke **Tab 0** dan klik **🔄 Sinkronkan Paket**.")
     else:
-        paket_list_ba = _get_paket_gabungan()
+        paket_list_ba = _get_tender_tab_candidates(8)
+        _reset_tender_stale_widget_keys("ba_chk_", paket_list_ba)
         if not paket_list_ba:
             st.warning("⚠️ Tidak ada paket ditemukan.")
         else:
-            st.caption(f"📋 {len(paket_list_ba)} paket tersedia (draft + aktif) — pilih:")
+            st.caption(f"📋 {len(paket_list_ba)} paket aktif pada tahap evaluasi/penetapan — pilih:")
             _ba_sel_c1, _ba_sel_c2 = st.columns(2)
             with _ba_sel_c1:
                 if st.button("✅ Semua", key="ba_sel_all", use_container_width=True):
@@ -11357,7 +11487,7 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
     try:
         from config import sb as _sb_upt
         _upt_db_rows = _sb_upt().table("draft_paket").select(
-            "kode_tender,nama_tender,kode_pokja,nomor_urut,folder_dibuat"
+            "kode_tender,nama_tender,kode_pokja,nomor_urut,folder_dibuat,status_tahap"
         ).order("nomor_urut").execute().data or []
         _upt_all_rows = [
             {
@@ -11367,6 +11497,7 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
                 "pokja": r.get("kode_pokja") or "",
                 "nomor_urut": r.get("nomor_urut") or "",
                 "folder_dibuat": r.get("folder_dibuat") or "",
+                "status_tahap": r.get("status_tahap") or "",
                 "status": "aktif",
                 "tanggal": "",
             }
@@ -11377,6 +11508,7 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
         _upt_all_rows = _get_paket_gabungan()
     _upt_all_rows = [p for p in (_upt_all_rows or []) if p.get("kode") and p.get("kode") != "00000000000"]
     _upt_all_rows = [p for p in _upt_all_rows if not _is_tender_excluded(p)]
+    _upt_all_rows = _get_tender_tab_candidates(5, _upt_all_rows)
     _upt_all_rows = sorted(_upt_all_rows, key=lambda p: str(p.get("tanggal", "")), reverse=True)
 
     # Tab 5 hanya menampilkan paket yang sudah memiliki event tahap evaluasi
@@ -11632,7 +11764,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
         try:
             from config import sb as _sb_kl
             _kl_rows = _sb_kl().table("draft_paket").select(
-                "kode_tender,nama_tender,kode_pokja,nomor_urut"
+                "kode_tender,nama_tender,kode_pokja,nomor_urut,status_tahap"
             ).order("nomor_urut").execute().data or []
             _kl_rows = [r for r in _kl_rows if not _is_tender_excluded(r)]
             # Adapter: sesuaikan format dengan yang diharapkan _get_paket_gabungan()
@@ -11644,6 +11776,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                     "id_lelang": r["kode_tender"],
                     "pokja": r.get("kode_pokja") or "",
                     "nomor_urut": r.get("nomor_urut") or "",
+                    "status_tahap": r.get("status_tahap") or "",
                     "status": "aktif",
                     "tanggal": "",
                 }
@@ -11655,7 +11788,8 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
             st.warning(f"⚠️ Gagal memuat paket dari Supabase: {_kl_fe}. Coba klik 'Sinkronkan Paket' di Tab 0.")
 
     def _kl_get_paket_gabungan() -> list[dict]:
-        return _kl_source_paket if _kl_source_paket is not None else _get_paket_gabungan()
+        base = _kl_source_paket if _kl_source_paket is not None else _get_paket_gabungan(filter_selesai=False)
+        return _get_tender_tab_candidates(6, base)
 
     _kl_has_source = _kl_source_paket is not None or (
         "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state
@@ -11663,6 +11797,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
     _kl_source_list = [
         p for p in _kl_get_paket_gabungan() if p.get("kode") != "00000000000"
     ]
+    _reset_tender_stale_widget_keys("kl_chk_v3_", _kl_source_list)
     _kl_auto_check = 0 < len(_kl_source_list) <= 20
     if _kl_auto_check:
         for _kl_auto_p in _kl_source_list:
@@ -12420,11 +12555,7 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     if _dp_items_raw and any("status_tahap" not in _item for _item in _dp_items_raw):
         _dp_items_raw = _pe.lookup_supabase(_dp_items_raw)
         st.session_state["dp_scan_result"] = _dp_items_raw
-    _dp_items = [
-        _item for _item in _dp_items_raw
-        if not _is_tender_selesai(_item)
-        and _is_tender_sudah_pembukaan(_item)
-    ]
+    _dp_items = _get_tender_tab_candidates(7, _dp_items_raw)
 
     with _dp_col_info:
         if _dp_items:
@@ -12441,20 +12572,21 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         st.success(st.session_state.pop("dp_notif"))
 
     # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
-    _dp_paket_candidates = [
+    _dp_paket_base = [
         _r for _r in _load_draft_paket_cached()
         if _r.get("folder_dibuat")
         and not _is_tender_excluded(_r)
         and not _is_tender_selesai(_r)
     ]
-    _dp_paket_rows = [
-        _r for _r in _dp_paket_candidates
-        if _is_tender_sudah_pembukaan(_r)
-    ]
+    _dp_paket_candidates = _get_tender_tab_candidates(7, _dp_paket_base)
+    _dp_paket_rows = _dp_paket_candidates
+    _dp_ready_codes = {package_code(_r) for _r in _dp_paket_rows}
     _dp_paket_pra_pembukaan = [
-        _r for _r in _dp_paket_candidates
-        if not _is_tender_sudah_pembukaan(_r)
+        _r for _r in _dp_paket_base
+        if package_code(_r) not in _dp_ready_codes
     ]
+    _reset_tender_stale_widget_keys("dp_chk_", _dp_paket_rows)
+    _reset_tender_stale_widget_keys("gab2_chk_", _dp_paket_rows)
     _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
 
     st.divider()
