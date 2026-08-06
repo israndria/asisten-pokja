@@ -31,6 +31,26 @@ def _clear_login_failure_state() -> None:
     st.session_state.pop("manual_spse_captcha", None)
 
 
+def _finalize_authenticated_spse_login(role: str, log_fn=None) -> None:
+    """Simpan sesi valid sebelum cleanup tab yang sifatnya best-effort."""
+    import spse_login as _spse_login
+
+    _spse_login.remember_login_role(role)
+    st.session_state["spse_role"] = role
+    st.session_state["_spse_session_epoch"] = time.time_ns()
+    _clear_login_failure_state()
+
+    try:
+        spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
+        spse_browser.rapikan_tab_spse()
+        spse_browser.fokuskan_tab_spse()
+    except Exception as exc:
+        logging.warning("Cleanup tab pasca-login dilewati: %s", exc)
+        if log_fn is not None:
+            log_fn(f"Sesi {role} tervalidasi; cleanup tab dilewati: {exc}")
+    spse_browser.mulai_auto_refresh()
+
+
 @st.cache_data(show_spinner=False)
 def _get_dark_css() -> str:
     return """
@@ -352,16 +372,7 @@ def _sidebar_login_form():
 
                 # Tampilkan log setelah selesai (di main thread)
                 _log_box.info("\n".join(_login_logs))
-                _spse_login.remember_login_role(_login_role)
-
-                # Connect CDP setelah login berhasil. Jangan buka /home di tab
-                # baru: route dashboard ini mengembalikan 403 pada sesi PPK.
-                spse_browser.buka_browser(SPSE_BASE_URL, navigate=False)
-                spse_browser.rapikan_tab_spse()
-                spse_browser.fokuskan_tab_spse()
-                st.session_state["spse_role"] = _login_role
-                st.session_state["_spse_session_epoch"] = time.time_ns()
-                spse_browser.mulai_auto_refresh()
+                _finalize_authenticated_spse_login(_login_role, log_fn=_log)
                 st.success(f"✅ Brave & SPSE login sebagai {_login_role} berhasil!")
                 st.rerun(scope="app")
             except Exception as e:

@@ -1106,6 +1106,19 @@ def _resolve_folder_pl(
         if not is_ulang:
             return _ret(candidate)
 
+    # Folder PL dibuat memakai truncate_nama_folder() agar workbook tidak
+    # melewati batas MAX_PATH Windows. Strict mode tetap boleh menerima nama
+    # truncated resmi, selama nomor + jenis + prefix nama paket sama persis.
+    try:
+        from pl_engine import truncate_nama_folder
+
+        truncated_name = truncate_nama_folder(root, folder_name)
+        truncated_candidate = os.path.join(root, truncated_name)
+        if truncated_name != folder_name and os.path.isdir(truncated_candidate):
+            return _ret(truncated_candidate)
+    except (ImportError, OSError, TypeError, ValueError):
+        pass
+
     if strict_name:
         if is_ulang:
             return (None, "")

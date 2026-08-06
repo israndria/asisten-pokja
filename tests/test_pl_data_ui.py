@@ -1,6 +1,7 @@
 """Regression gate folder lokal/workbook untuk daftar operasional PL."""
 
 import parse_kak_pl
+import pl_engine
 import pl_ui_helpers
 from pl_data_ui import filter_local_pl_rows
 
@@ -108,3 +109,27 @@ def test_stale_number_cannot_resolve_other_package(monkeypatch, tmp_path):
     }
 
     assert filter_local_pl_rows([row]) == []
+
+
+def test_strict_resolver_accepts_officially_truncated_folder(monkeypatch, tmp_path):
+    root = tmp_path / "pk"
+    root.mkdir()
+    package_name = "Belanja Modal Bangunan Gedung Pertokoan Koperasi Pasar Pembangunan Gapura Pintu Gerbang Pasar Binuang Jalan Bay Pass"
+    full_name = f"28. PLPK - {package_name}"
+    truncated_name = pl_engine.truncate_nama_folder(str(root), full_name)
+    folder = root / truncated_name
+    folder.mkdir()
+
+    import config
+
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_PK", str(root))
+
+    resolved, number = parse_kak_pl._resolve_folder_pl(
+        28,
+        package_name,
+        "PK",
+        strict_name=True,
+    )
+
+    assert resolved == str(folder)
+    assert number == "28"
