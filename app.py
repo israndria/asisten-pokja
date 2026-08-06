@@ -42,33 +42,13 @@ _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sb
 
 
 def _load_pl_sbu_history() -> list[dict[str, str]]:
-    """Load histori SBU custom PL; format lama berupa string tetap didukung."""
-    try:
-        raw = json.loads(_PL_SBU_HISTORY_PATH.read_text(encoding="utf-8"))
-        result = []
-        for item in raw if isinstance(raw, list) else []:
-            if isinstance(item, dict):
-                baru, lama = str(item.get("baru") or "").strip(), str(item.get("lama") or "").strip()
-            else:
-                baru, lama = str(item).strip(), ""
-            if baru and not any(x["baru"] == baru and x["lama"] == lama for x in result):
-                result.append({"baru": baru, "lama": lama})
-        return result[:20]
-    except (OSError, TypeError, ValueError):
-        return []
+    """Histori SBU custom sengaja nonaktif; pengguna mengisi manual."""
+    return []
 
 
 def _save_pl_sbu_history(baru: str, lama: str = "") -> None:
-    baru, lama = str(baru or "").strip(), str(lama or "").strip()
-    if not baru:
-        return
-    history = [x for x in _load_pl_sbu_history() if x["baru"] != baru or x["lama"] != lama]
-    history.insert(0, {"baru": baru, "lama": lama})
-    try:
-        _PL_SBU_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PL_SBU_HISTORY_PATH.write_text(json.dumps(history[:20], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    """Jangan membuat histori baru; nilai SBU paket tetap disimpan oleh caller."""
+    return
 
 
 def _load_last_pl_invitation_dates() -> dict[str, str]:
@@ -9859,59 +9839,16 @@ if _tender_active_tab == "3️⃣ Setup Paket":
             _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
 
             def _load_sbu_history():
-                values = []
-
-                def _add(value):
-                    value = str(value or "").strip()
-                    if value and value not in values:
-                        values.append(value)
-
-                try:
-                    with open(_SBU_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        local_values = _json.load(f)
-                    for value in local_values if isinstance(local_values, list) else []:
-                        _add(value)
-                except Exception:
-                    pass
-
-                # Histori lokal bersifat per-PC. Ambil juga nilai yang sudah
-                # tersimpan pada draft_paket agar histori tersedia lintas laptop
-                # dan PC kantor. sbu_gabungan dipakai sebagai fallback untuk row
-                # lama yang belum memiliki sbu_baru.
-                try:
-                    from config import sb as _sb_sbu_history
-
-                    rows = (
-                        _sb_sbu_history()
-                        .table("draft_paket")
-                        .select("sbu_baru,sbu_lama,sbu_gabungan")
-                        .order("diambil_pada", desc=True)
-                        .limit(200)
-                        .execute()
-                        .data
-                        or []
-                    )
-                    for row in rows:
-                        _add(row.get("sbu_baru") or row.get("sbu_gabungan"))
-                except Exception:
-                    pass
-
-                return values[:20]
+                # SBU Tender tetap diisi manual. Nilai yang sudah tersimpan pada
+                # draft_paket tidak dihapus dan tidak dijadikan opsi dropdown.
+                return []
 
             def _save_sbu_history(value, package_rows=None):
                 value = str(value or "").strip()
                 if not value:
                     return
-                history = [value] + [v for v in _load_sbu_history() if v != value]
-                try:
-                    with open(_SBU_HISTORY_FILE, "w", encoding="utf-8") as f:
-                        _json.dump(history[:20], f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
-
-                # Simpan ke row paket yang sedang diproses supaya pilihan SBU
-                # berikutnya ikut tersedia lintas perangkat. Gagal sync DB tidak
-                # boleh menggagalkan submit SPSE karena file lokal tetap tersimpan.
+                # Simpan ke row paket yang sedang diproses, tetapi jangan membuat
+                # histori dropdown. Data SBU paket tetap dipertahankan lintas PC.
                 try:
                     kode_list = [
                         str(row.get("id_lelang") or row.get("kode") or "").strip()
@@ -9931,7 +9868,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _TENDER_SBU_HISTORY_VERSION = "supabase-draft-paket-v1"
+            _TENDER_SBU_HISTORY_VERSION = "manual-only-v2"
             if st.session_state.get("tender_sbu_history_version") != _TENDER_SBU_HISTORY_VERSION:
                 st.session_state["tender_sbu_history"] = _load_sbu_history()
                 st.session_state["tender_sbu_history_version"] = _TENDER_SBU_HISTORY_VERSION
