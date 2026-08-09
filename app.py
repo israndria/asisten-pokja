@@ -18,7 +18,7 @@ from ui_state import (
     invalidate_ppk_session_state,
     ppk_upload_expander_label,
 )
-from tender_package_filters import filter_tender_candidates, package_code, stale_selection_keys
+from tender_package_filters import filter_tender_candidates, is_draft, package_code, stale_selection_keys
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
@@ -42,13 +42,55 @@ _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sb
 
 
 def _load_pl_sbu_history() -> list[dict[str, str]]:
-    """Histori SBU custom sengaja nonaktif; pengguna mengisi manual."""
-    return []
+    """Baca histori lokal SBU custom, terbaru berada di urutan pertama."""
+    try:
+        raw = json.loads(_PL_SBU_HISTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    history: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        baru = str(item.get("baru") or "").strip()
+        lama = str(item.get("lama") or "").strip()
+        if not baru or (baru, lama) in seen:
+            continue
+        seen.add((baru, lama))
+        history.append({"baru": baru, "lama": lama})
+    return history[:20]
 
 
 def _save_pl_sbu_history(baru: str, lama: str = "") -> None:
-    """Jangan membuat histori baru; nilai SBU paket tetap disimpan oleh caller."""
-    return
+    """Simpan pasangan SBU terbaru ke histori lokal terbatas.
+
+    Histori ini hanya untuk pilihan ulang di UI; tidak mengubah paket atau
+    mengirim apa pun ke Supabase/SPSE.
+    """
+    baru = str(baru or "").strip()
+    lama = str(lama or "").strip()
+    if not baru:
+        return
+
+    entry = {"baru": baru, "lama": lama}
+    history = [
+        item for item in _load_pl_sbu_history()
+        if (item.get("baru"), item.get("lama")) != (baru, lama)
+    ]
+    history.insert(0, entry)
+    try:
+        _PL_SBU_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = _PL_SBU_HISTORY_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(history[:20], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp_path.replace(_PL_SBU_HISTORY_PATH)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def _load_last_pl_invitation_dates() -> dict[str, str]:
@@ -7278,6 +7320,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             if _sbu_lama_global:
                                 st.caption(f"🔸 Lama: `{_sbu_lama_global}`")
                         else:
+                            # Histori pilihan disimpan lokal oleh helper di
+                            # atas. Simpan nilai terakhir di session_state
+                            # agar input manual tetap ada saat pindah
+                            # paket/tab sebelum memilih histori.
+                            _pk_last_sbu_baru_key = "pk_last_sbu_baru_session"
+                            _pk_last_sbu_lama_key = "pk_last_sbu_lama_session"
+                            if "pk_custom_sbu_baru" not in st.session_state:
+                                st.session_state["pk_custom_sbu_baru"] = st.session_state.get(
+                                    _pk_last_sbu_baru_key, ""
+                                )
+                            if "pk_custom_sbu_lama" not in st.session_state:
+                                st.session_state["pk_custom_sbu_lama"] = st.session_state.get(
+                                    _pk_last_sbu_lama_key, ""
+                                )
                             _sbu_baru_global = st.text_input(
                                 "SBU Baru (teks bebas)", key="pk_custom_sbu_baru",
                                 placeholder="Contoh: RE201 — Jasa Desain Rekayasa untuk Konstruksi Pondasi serta Struktur Bangunan",
@@ -7286,6 +7342,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 "SBU Lama (teks bebas, opsional)", key="pk_custom_sbu_lama",
                                 placeholder="Kosongkan jika tidak dipersyaratkan",
                             ) or None
+                            st.session_state[_pk_last_sbu_baru_key] = _sbu_baru_global or ""
+                            st.session_state[_pk_last_sbu_lama_key] = _sbu_lama_global or ""
+                            if _sbu_baru_global:
+                                st.caption("ℹ️ Nilai terakhir sesi ini dipakai sebagai default saat pindah paket.")
                         if st.button(
                             f"💾 Simpan SBU Custom + POST LDK ke {len(_plsp_selected)} paket",
                             key="pk_save_sbu_custom_btn", use_container_width=True,
@@ -9069,6 +9129,12 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             if _r.get("folder_dibuat")
             and (_t_show_done or str(_r.get("kode_tender", "")) not in _selesai_kodes)
         ]
+        _draft_kodes = _tender_known_draft_kodes()
+        _tahap_map = st.session_state.get("tender_tahap_map", {})
+        _rows_sudah = [
+            _r for _r in _rows_sudah
+            if is_draft(_r, draft_kodes=_draft_kodes, tahap_map=_tahap_map)
+        ]
 
         # Plan nama folder per paket belum-folder (auto-nomor)
         _max_urut_db = max((int(_r.get("nomor_urut") or 0) for _r in _rows_tahun_ini), default=0)
@@ -9382,195 +9448,295 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
         else:
             st.info("Tidak ada paket dengan status folder untuk direset.")
 
-        # ── Cek Semua Dokumen PPK (batch) ── (Dipindah ke sini agar selalu di bawah seksi 2)
-        st.divider()
-        if st.button("🔍 Cek Semua Dokumen PPK", use_container_width=True, key="btn_cek_semua_dok"):
-            import dokumen_ppk_engine as _dpk_batch
-            # Ambil semua paket yg punya dokumen_snapshot dari Supabase
-            _snap_rows = inbox_engine._sb().table("draft_paket") \
-                .select("kode_tender, folder_dibuat, dokumen_snapshot") \
-                .not_.is_("dokumen_snapshot", "null") \
-                .execute()
-            # Hanya cek paket yang sedang tampil di Tab 0 (tahun/status aktif).
-            # Query snapshot sebelumnya mengambil seluruh histori draft_paket,
-            # sehingga paket lama ikut muncul kembali.
-            _kode_tender_valid = {
-                str(r.get("kode_tender", "")) for r in _rows_valid
-                if r.get("kode_tender")
-            }
-            _kode_tender_terkini = {
-                str(p.get("kode", "")) for p in _get_paket_gabungan(filter_selesai=False)
-                if p.get("kode")
-            }
-            _snap_paket = [
-                r for r in (_snap_rows.data if _snap_rows.data else [])
-                if not _is_tender_excluded(r)
-                and str(r.get("kode_tender", "")) in _kode_tender_valid
-                and str(r.get("kode_tender", "")) in _kode_tender_terkini
-            ]
-            if not _snap_paket:
-                st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
-            else:
-                _nama_map = {p["kode"]: p["nama"] for p in _get_paket_gabungan()}
-                _hasil_batch = []
-                with st.status(f"Memeriksa {len(_snap_paket)} paket...", expanded=True) as _cek_st:
-                    for _sp in _snap_paket:
-                        _kt = _sp["kode_tender"]
-                        _nama = _nama_map.get(_kt) or _sp.get("folder_dibuat") or _kt
-                        _cek_st.write(f"🔍 {_nama[:50]}...")
-                        try:
-                            _diff = _dpk_batch.cek_update_dokumen(_kt)
-                            _snap_baru_total = sum(len(v) for v in _diff["snapshot_baru"].values())
-                            _cookie_invalid = _snap_baru_total == 0
-                            _ada_update = (not _cookie_invalid) and bool(
-                                _diff["berubah"] or _diff["baru"] or _diff.get("hilang")
-                            )
-                            _hasil_batch.append({
-                                "kode": _kt,
-                                "nama": _nama,
-                                "berubah": _diff["berubah"],
-                                "baru": _diff["baru"],
-                                "hilang": _diff.get("hilang", []),
-                                "ada_update": _ada_update,
-                                "cookie_invalid": _cookie_invalid,
-                            })
-                        except Exception as _e_cek:
-                            _hasil_batch.append({
-                                "kode": _kt,
-                                "nama": _nama,
-                                "error": str(_e_cek),
-                                "ada_update": False,
-                            })
-                    _cek_st.update(label="✅ Selesai cek dokumen PPK", state="complete")
-                _folder_map = {r["kode_tender"]: r.get("folder_dibuat", "") for r in _snap_paket}
-                st.session_state["_batch_cek_hasil"] = _hasil_batch
-                st.session_state["_batch_folder_map"] = _folder_map
-
-        # Tampil hasil batch (persist setelah rerun)
-        if "_batch_cek_hasil" in st.session_state:
-            _bh = st.session_state["_batch_cek_hasil"]
-            _ada_update_list = [x for x in _bh if x.get("ada_update")]
-            _error_list = [x for x in _bh if x.get("error")]
-            _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
-            _sama_list = [
-                x for x in _bh
-                if not x.get("ada_update") and not x.get("error") and not x.get("cookie_invalid")
-            ]
-            if _cookie_invalid_list:
-                st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Brave.")
-            if _ada_update_list:
-                st.warning(f"⚠️ {len(_ada_update_list)} paket ada update dokumen PPK")
-                _folder_map_bh = st.session_state.get("_batch_folder_map", {})
-                for _item in _ada_update_list:
-                    with st.expander(f"📄 {_item['nama'][:60]}"):
-                        if _item.get("cookie_invalid"):
-                            st.error("⚠️ Cookie SPSE expired — login ulang di Brave lalu cek lagi")
-                        for _b in _item.get("berubah", []):
-                            st.markdown(f"- **Berubah** [{_b['jenis']}]: `{_b['nama_lama']}` → `{_b['nama_baru']}`")
-                        for _b in _item.get("baru", []):
-                            st.markdown(f"- **File Baru** [{_b['jenis']}]: `{_b['nama']}`")
-                        for _b in _item.get("hilang", []):
-                            st.markdown(f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti")
-                        _kt_dl = _item["kode"]
-                        _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                        _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
-                        if _folder_dl and _os.path.exists(_folder_dl):
-                            st.button("⬇️ Download Update", key=f"btn_dl_upd_{_kt_dl}", type="primary")
-                        else:
-                            st.caption(f"⚠️ Folder tidak ditemukan: `{_folder_dl or 'tidak diketahui'}`")
-
-                # Proses download di luar expander
-                for _item in _ada_update_list:
-                    _kt_dl = _item["kode"]
-                    if st.session_state.get(f"btn_dl_upd_{_kt_dl}"):
-                        _fd_dl = _folder_map_bh.get(_kt_dl, "")
-                        _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
-                        import dokumen_ppk_engine as _dpk_dl
-                        _sn_r2 = inbox_engine._sb().table("draft_paket").select("dokumen_snapshot").eq("kode_tender", _kt_dl).execute()
-                        _sn_lama2 = {}
-                        if _sn_r2.data and _sn_r2.data[0].get("dokumen_snapshot"):
-                            _raw2 = _sn_r2.data[0]["dokumen_snapshot"]
-                            _sn_lama2 = _raw2 if isinstance(_raw2, dict) else __import__("json").loads(_raw2)
-                        _diff_dl = _dpk_dl.cek_update_dokumen(_kt_dl)
-                        _dl_log4 = []
-                        _dl_st4 = st.status(f"⬇️ Mengunduh update {_item['nama'][:40]}...", expanded=True)
-                        _dl_area4 = _dl_st4.empty()
-                        def _dl_cb4(msg, _log=_dl_log4, _area=_dl_area4, _st=_dl_st4):
-                            _log.append(msg)
-                            _area.code("\n".join(_log[-15:]))
-                            _st.update(label=f"⬇️ {msg[:60]}...")
-                        _dl_res4 = _dpk_dl.download_update_dokumen(
-                            _kt_dl, _folder_dl,
-                            _diff_dl["berubah"], _diff_dl["baru"],
-                            _sn_lama2, progress_cb=_dl_cb4,
-                        )
-                        _download_final_ok = False
-                        if _dl_res4["error"]:
-                            _dl_st4.update(
-                                label=f"❌ {len(_dl_res4['ok'])} file diupdate, {len(_dl_res4['error'])} gagal — snapshot tidak dimajukan",
-                                state="error", expanded=True,
-                            )
-                            for _e6 in _dl_res4["error"]:
-                                st.error(_e6)
-                        else:
-                            # Download sukses penuh: parse Draft lokal + isi @ Master Data
-                            # sebelum snapshot dimajukan. Jika Excel sedang terbuka atau
-                            # COM gagal, snapshot ditahan agar update bisa dicoba ulang.
-                            _row_update = next(
-                                (r for r in _draft_rows if str(r.get("kode_tender", "")) == str(_kt_dl)),
-                                None,
-                            )
-                            _md_logs = _proses_excel_paket_tender(
-                                _folder_dl, _kt_dl, row_data=_row_update
-                            )
-                            _md_gagal = any(
-                                "WARN" in str(_line).upper()
-                                or "ERROR" in str(_line).upper()
-                                for _line in _md_logs
-                            )
-                            _dl_log4.extend(f"🧾 {_line}" for _line in _md_logs)
-                            if _md_gagal:
-                                _dl_st4.update(
-                                    label="⚠️ File terunduh, sinkronisasi @ Master Data gagal — snapshot ditahan",
-                                    state="error", expanded=True,
-                                )
-                                st.warning(
-                                    f"⚠️ {_item['nama'][:50]} — file sudah terunduh, "
-                                    "tetapi @ Master Data belum tersinkron. Perbaiki Excel lalu ulangi."
-                                )
-                                _dl_area4.code("\n".join(_dl_log4[-20:]))
-                            else:
-                                _dpk_dl.simpan_snapshot(_kt_dl, _diff_dl["snapshot_baru"])
-                                _download_final_ok = True
-                                _dl_st4.update(
-                                    label=f"✅ {len(_dl_res4['ok'])} file diupdate + @ Master Data tersinkron",
-                                    state="complete", expanded=True,
-                                )
-                                _dl_area4.code("\n".join(_dl_log4[-20:]))
-                                st.success(f"✅ {_item['nama'][:50]} — dokumen dan @ Master Data sudah diperbarui.")
-                        if _download_final_ok:
-                            st.session_state["_batch_cek_hasil"] = [
-                                x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
-                            ]
-                        st.rerun()
-            else:
-                st.success(f"✅ Semua {len(_bh)} paket — tidak ada update dokumen PPK")
-            if _sama_list:
-                st.caption(
-                    f"ℹ️ {_sama_list[0]['nama'][:70]}"
-                    if len(_sama_list) == 1
-                    else f"ℹ️ {len(_sama_list)} paket diperiksa tanpa perubahan: "
-                    + ", ".join(x["nama"][:45] for x in _sama_list)
-                )
-            if _error_list:
-                with st.expander(f"⚠️ {len(_error_list)} paket gagal dicek"):
-                    for _item in _error_list:
-                        st.caption(f"`{_item['kode']}` — {_item['error'][:80]}")
-
     # ── Paket sudah-folder: expander per-paket dengan aksi kompak (tiru PL) ──
     if _rows_sudah:
         st.divider()
         st.markdown("#### 3. Status Folder")
+        if False:  # Legacy batch checker; replaced by per-package controls below.
+            # Cek perubahan dokumen PPK (batch), khusus paket Draft berfolder
+            _visible_status_codes = {
+                str(r.get("kode_tender")) for r in _rows_sudah if r.get("kode_tender")
+            }
+            if "_batch_cek_hasil" in st.session_state:
+                st.session_state["_batch_cek_hasil"] = [
+                    item for item in st.session_state["_batch_cek_hasil"]
+                    if str(item.get("kode")) in _visible_status_codes
+                ]
+                st.session_state["_batch_folder_map"] = {
+                    code: folder
+                    for code, folder in st.session_state.get("_batch_folder_map", {}).items()
+                    if str(code) in _visible_status_codes
+                }
+
+            st.divider()
+            if st.button(
+                "🔍 Cek Semua Dokumen PPK",
+                use_container_width=True,
+                key="btn_cek_semua_dok",
+                on_click=_buka_expander_cek_ppk,
+            ):
+                import dokumen_ppk_engine as _dpk_batch
+                # Ambil semua paket yg punya dokumen_snapshot dari Supabase
+                _snap_rows = inbox_engine._sb().table("draft_paket") \
+                    .select("kode_tender, folder_dibuat, dokumen_snapshot") \
+                    .not_.is_("dokumen_snapshot", "null") \
+                    .execute()
+                # Hanya cek paket yang sedang tampil di Tab 0 (tahun/status aktif).
+                # Query snapshot sebelumnya mengambil seluruh histori draft_paket,
+                # sehingga paket lama ikut muncul kembali.
+                _kode_tender_valid = {
+                    str(r.get("kode_tender", "")) for r in _rows_sudah
+                    if r.get("kode_tender")
+                }
+                _snap_paket = [
+                    r for r in (_snap_rows.data if _snap_rows.data else [])
+                    if not _is_tender_excluded(r)
+                    and str(r.get("kode_tender", "")) in _kode_tender_valid
+                ]
+                if not _snap_paket:
+                    st.info("Belum ada paket dengan snapshot dokumen. Buat folder paket dulu.")
+                else:
+                    _nama_map = {
+                        str(r.get("kode_tender")): str(r.get("nama_tender") or r.get("folder_dibuat") or r.get("kode_tender"))
+                        for r in _rows_sudah
+                    }
+                    _hasil_batch = []
+                    # `st.status` adalah container sejenis expander dan tidak
+                    # boleh dibuat di dalam expander Status Folder.
+                    with st.container(border=True):
+                        _cek_st = st.empty()
+                        for _sp in _snap_paket:
+                            _kt = _sp["kode_tender"]
+                            _nama = _nama_map.get(_kt) or _sp.get("folder_dibuat") or _kt
+                            _cek_st.write(f"🔍 {_nama[:50]}...")
+                            try:
+                                _diff = _dpk_batch.cek_update_dokumen(_kt)
+                                _snap_baru_total = sum(len(v) for v in _diff["snapshot_baru"].values())
+                                _cookie_invalid = _snap_baru_total == 0
+                                _ada_update = (not _cookie_invalid) and bool(
+                                    _diff["berubah"]
+                                    or _diff["baru"]
+                                    or _diff.get("perlu_verifikasi")
+                                    or _diff.get("hilang")
+                                )
+                                _hasil_batch.append({
+                                    "kode": _kt,
+                                    "nama": _nama,
+                                    "berubah": _diff["berubah"],
+                                    "baru": _diff["baru"],
+                                    "perlu_verifikasi": _diff.get("perlu_verifikasi", []),
+                                    "hilang": _diff.get("hilang", []),
+                                    "ada_update": _ada_update,
+                                    "cookie_invalid": _cookie_invalid,
+                                    "snapshot_baru": _diff["snapshot_baru"],
+                                    "snapshot_lama": _sp.get("dokumen_snapshot") or {},
+                                })
+                            except Exception as _e_cek:
+                                _hasil_batch.append({
+                                    "kode": _kt,
+                                    "nama": _nama,
+                                    "error": str(_e_cek),
+                                    "ada_update": False,
+                                })
+                        _cek_st.success("✅ Selesai cek dokumen PPK")
+                    _folder_map = {r["kode_tender"]: r.get("folder_dibuat", "") for r in _snap_paket}
+                    st.session_state["_batch_cek_hasil"] = _hasil_batch
+                    st.session_state["_batch_folder_map"] = _folder_map
+
+            # Tampil hasil batch (persist setelah rerun)
+            if "_batch_cek_hasil" in st.session_state:
+                _bh = st.session_state["_batch_cek_hasil"]
+                _ada_update_list = [x for x in _bh if x.get("ada_update")]
+                _error_list = [x for x in _bh if x.get("error")]
+                _cookie_invalid_list = [x for x in _bh if x.get("cookie_invalid") and not x.get("error")]
+                _sama_list = [
+                    x for x in _bh
+                    if not x.get("ada_update") and not x.get("error") and not x.get("cookie_invalid")
+                ]
+                if _cookie_invalid_list:
+                    st.error(f"⚠️ Cookie SPSE expired ({len(_cookie_invalid_list)} paket tidak bisa dicek). Login ulang di Brave.")
+                if _ada_update_list:
+                    st.warning(f"⚠️ {len(_ada_update_list)} paket ada update dokumen PPK")
+                    _folder_map_bh = st.session_state.get("_batch_folder_map", {})
+                    for _item in _ada_update_list:
+                        with st.container(border=True):
+                            st.markdown(f"**📄 {_item['nama'][:60]}**")
+                            if _item.get("cookie_invalid"):
+                                st.error("⚠️ Cookie SPSE expired — login ulang di Brave lalu cek lagi")
+                            for _b in _item.get("berubah", []):
+                                st.markdown(f"- **Berubah** [{_b['jenis']}]: `{_b['nama_lama']}` → `{_b['nama_baru']}`")
+                            for _b in _item.get("baru", []):
+                                st.markdown(f"- **File Baru** [{_b['jenis']}]: `{_b['nama']}`")
+                            for _b in _item.get("perlu_verifikasi", []):
+                                _nama_lama_v = _b.get("nama_lama", "-")
+                                _nama_baru_v = _b.get("nama_baru", "-")
+                                _alasan_v = _b.get("alasan") or "nama tidak memiliki kecocokan kuat"
+                                st.warning(
+                                    f"Perlu verifikasi [{_b.get('jenis', '-')}] — "
+                                    f"`{_nama_lama_v}` → `{_nama_baru_v}` ({_alasan_v})"
+                                )
+                            for _b in _item.get("hilang", []):
+                                st.markdown(f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti")
+                            _kt_dl = _item["kode"]
+                            _fd_dl = _folder_map_bh.get(_kt_dl, "")
+                            _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
+                            _ada_download_aman = bool(
+                                _item.get("berubah") or _item.get("baru")
+                            )
+                            if _folder_dl and _os.path.exists(_folder_dl):
+                                if _ada_download_aman:
+                                    st.button(
+                                        "⬇️ Download Update",
+                                        key=f"btn_dl_upd_{_kt_dl}",
+                                        type="primary",
+                                        on_click=_minta_download_update,
+                                        args=(_kt_dl,),
+                                    )
+                                else:
+                                    st.caption(
+                                        "⏸️ Tidak ada file yang aman diunduh otomatis. "
+                                        "Selesaikan verifikasi manual terlebih dahulu."
+                                    )
+                            else:
+                                st.caption(f"⚠️ Folder tidak ditemukan: `{_folder_dl or 'tidak diketahui'}`")
+
+                    # Proses download di luar kartu hasil; tidak perlu rerun paksa.
+                    _download_request = st.session_state.pop("_batch_download_request", None)
+                    for _item in _ada_update_list:
+                        _kt_dl = _item["kode"]
+                        if str(_download_request or "") == str(_kt_dl):
+                            _fd_dl = _folder_map_bh.get(_kt_dl, "")
+                            _folder_dl = _os.path.join(_TENDER_ROOT, _fd_dl) if _fd_dl else ""
+                            import dokumen_ppk_engine as _dpk_dl
+                            _sn_lama2 = _item.get("snapshot_lama") or {}
+                            _diff_dl = {
+                                "berubah": _item.get("berubah", []),
+                                "baru": _item.get("baru", []),
+                                "perlu_verifikasi": _item.get("perlu_verifikasi", []),
+                                "hilang": _item.get("hilang", []),
+                                "snapshot_baru": _item.get("snapshot_baru") or {},
+                            }
+                            # Hasil sesi lama belum membawa snapshot_baru; fallback
+                            # satu kali ke cek live agar tombol tetap kompatibel.
+                            if not _diff_dl["snapshot_baru"]:
+                                _diff_dl = _dpk_dl.cek_update_dokumen(_kt_dl)
+                            _dl_log4 = []
+                            _dl_st4 = st.status(f"⬇️ Mengunduh update {_item['nama'][:40]}...", expanded=True)
+                            _dl_area4 = _dl_st4.empty()
+                            def _dl_cb4(msg, _log=_dl_log4, _area=_dl_area4, _st=_dl_st4):
+                                _log.append(msg)
+                                _area.code("\n".join(_log[-15:]))
+                                _st.update(label=f"⬇️ {msg[:60]}...")
+                            _dl_res4 = _dpk_dl.download_update_dokumen(
+                                _kt_dl, _folder_dl,
+                                _diff_dl["berubah"], _diff_dl["baru"],
+                                _sn_lama2, progress_cb=_dl_cb4,
+                                organize_by_type=True,
+                            )
+                            _download_final_ok = False
+                            if _dl_res4["error"]:
+                                _dl_st4.update(
+                                    label=f"❌ {len(_dl_res4['ok'])} file diupdate, {len(_dl_res4['error'])} gagal — snapshot tidak dimajukan",
+                                    state="error", expanded=True,
+                                )
+                                for _e6 in _dl_res4["error"]:
+                                    st.error(_e6)
+                            else:
+                                # Download sukses penuh: parse Draft lokal + isi @ Master Data
+                                # sebelum snapshot dimajukan. Jika Excel sedang terbuka atau
+                                # COM gagal, snapshot ditahan agar update bisa dicoba ulang.
+                                _row_update = next(
+                                    (r for r in _draft_rows if str(r.get("kode_tender", "")) == str(_kt_dl)),
+                                    None,
+                                )
+                                _md_logs = _proses_excel_paket_tender(
+                                    _folder_dl, _kt_dl, row_data=_row_update
+                                )
+                                _md_gagal = any(
+                                    "WARN" in str(_line).upper()
+                                    or "ERROR" in str(_line).upper()
+                                    for _line in _md_logs
+                                )
+                                _dl_log4.extend(f"🧾 {_line}" for _line in _md_logs)
+                                if _md_gagal:
+                                    _dl_st4.update(
+                                        label="⚠️ File terunduh, sinkronisasi @ Master Data gagal — snapshot ditahan",
+                                        state="error", expanded=True,
+                                    )
+                                    st.warning(
+                                        f"⚠️ {_item['nama'][:50]} — file sudah terunduh, "
+                                        "tetapi @ Master Data belum tersinkron. Perbaiki Excel lalu ulangi."
+                                    )
+                                    _dl_area4.code("\n".join(_dl_log4[-20:]))
+                                else:
+                                    _snapshot_aman = _dpk_dl.snapshot_setelah_download_aman(
+                                        _sn_lama2,
+                                        _diff_dl["snapshot_baru"],
+                                        _diff_dl["berubah"],
+                                        _diff_dl["baru"],
+                                    )
+                                    _dpk_dl.simpan_snapshot(_kt_dl, _snapshot_aman)
+                                    _ada_unresolved = bool(
+                                        _diff_dl.get("perlu_verifikasi")
+                                        or _diff_dl.get("hilang")
+                                    )
+                                    _download_final_ok = not _ada_unresolved
+                                    if _ada_unresolved:
+                                        # Safe items sudah diproses; item ambigu/hilang
+                                        # tetap dipertahankan agar tidak hilang dari radar.
+                                        _item["berubah"] = []
+                                        _item["baru"] = []
+                                        _item["snapshot_lama"] = _snapshot_aman
+                                        _dl_st4.update(
+                                            label=(
+                                                f"✅ {len(_dl_res4['ok'])} file aman diunduh; "
+                                                "sebagian perlu verifikasi manual"
+                                            ),
+                                            state="complete", expanded=True,
+                                        )
+                                        st.warning(
+                                            "File aman sudah diunduh. Snapshot dimajukan "
+                                            "secara parsial; file ambigu/hilang tetap ditahan."
+                                        )
+                                    else:
+                                        _dl_st4.update(
+                                            label=f"✅ {len(_dl_res4['ok'])} file diupdate + @ Master Data tersinkron",
+                                            state="complete", expanded=True,
+                                        )
+                                    _dl_area4.code("\n".join(_dl_log4[-20:]))
+                                    st.success(
+                                        f"✅ {_item['nama'][:50]} — dokumen aman dan @ Master Data sudah diperbarui."
+                                    )
+                            if _download_final_ok:
+                                st.session_state["_batch_cek_hasil"] = [
+                                    x for x in st.session_state["_batch_cek_hasil"] if x["kode"] != _kt_dl
+                                ]
+                else:
+                    st.success(f"✅ Semua {len(_bh)} paket — tidak ada update dokumen PPK")
+                if _sama_list:
+                    st.caption(
+                        f"ℹ️ {_sama_list[0]['nama'][:70]}"
+                        if len(_sama_list) == 1
+                        else f"ℹ️ {len(_sama_list)} paket diperiksa tanpa perubahan: "
+                        + ", ".join(x["nama"][:45] for x in _sama_list)
+                    )
+                if _error_list:
+                    with st.container(border=True):
+                        st.markdown(f"**⚠️ {len(_error_list)} paket gagal dicek**")
+                        for _item in _error_list:
+                            st.caption(f"`{_item['kode']}` — {_item['error'][:80]}")
+
+        def _request_cek_dokumen(_kode):
+            _kode = str(_kode)
+            st.session_state["_tender_dokumen_cek_request"] = _kode
+            st.session_state[f"_tender_dokumen_open_{_kode}"] = True
+
+        def _request_download_dokumen(_kode):
+            _kode = str(_kode)
+            st.session_state["_tender_dokumen_download_request"] = _kode
+            st.session_state[f"_tender_dokumen_open_{_kode}"] = True
+
+        _dok_cek_map = st.session_state.setdefault("_tender_dokumen_cek", {})
         st.write("")
         for _r in _rows_sudah:
             _kt = _r.get("kode_tender", "")
@@ -9585,11 +9751,182 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             _fd = _r.get("folder_dibuat", "")
             _tpath = _os.path.join(_TENDER_ROOT, _fd) if _fd else ""
             _ada = bool(_tpath and _os.path.exists(_tpath))
-            with st.expander(f"✅ [Pokja {_pk}] {_nm_display}"):
+            _dok_key = str(_kt)
+            _dok_item = _dok_cek_map.get(_dok_key)
+            with st.expander(
+                f"✅ [Pokja {_pk}] {_nm_display}",
+                expanded=bool(
+                    _dok_item
+                    or st.session_state.get(f"_tender_dokumen_open_{_dok_key}")
+                ),
+            ):
                 st.caption(f"`{_kt}` | Folder: {'✅ ada' if _ada else '⚠️ tidak ditemukan'}")
                 if not _ada:
                     st.warning(f"Folder fisik tidak ditemukan: `{_tpath}`")
                     continue
+
+                with st.container(border=True):
+                    st.markdown("**📄 Dokumen PPK**")
+                    st.caption("Cek perubahan hanya untuk paket ini.")
+                    st.button(
+                        "🔍 Cek ulang Dokumen PPK" if _dok_item else "🔍 Cek Dokumen PPK",
+                        key=f"t_cek_dok_{_kt}",
+                        use_container_width=True,
+                        on_click=_request_cek_dokumen,
+                        args=(_kt,),
+                    )
+
+                    if st.session_state.get("_tender_dokumen_cek_request") == _dok_key:
+                        st.session_state.pop("_tender_dokumen_cek_request", None)
+                        import dokumen_ppk_engine as _dpk_one
+                        _cek_box = st.empty()
+                        _cek_box.info(f"🔍 Memeriksa {_nm[:50]}...")
+                        try:
+                            _diff_one = _dpk_one.cek_update_dokumen(_kt)
+                            _snap_total_one = sum(
+                                len(v) for v in _diff_one["snapshot_baru"].values()
+                            )
+                            _cookie_invalid_one = _snap_total_one == 0
+                            _dok_item = {
+                                "kode": _dok_key,
+                                "nama": _nm,
+                                "berubah": _diff_one["berubah"],
+                                "baru": _diff_one["baru"],
+                                "perlu_verifikasi": _diff_one.get("perlu_verifikasi", []),
+                                "hilang": _diff_one.get("hilang", []),
+                                "ada_update": (not _cookie_invalid_one) and bool(
+                                    _diff_one["berubah"]
+                                    or _diff_one["baru"]
+                                    or _diff_one.get("perlu_verifikasi")
+                                    or _diff_one.get("hilang")
+                                ),
+                                "cookie_invalid": _cookie_invalid_one,
+                                "snapshot_baru": _diff_one["snapshot_baru"],
+                                "snapshot_lama": _r.get("dokumen_snapshot") or {},
+                            }
+                            _dok_cek_map[_dok_key] = _dok_item
+                            _cek_box.success("✅ Selesai cek dokumen PPK")
+                        except Exception as _cek_one_error:
+                            _dok_item = {
+                                "kode": _dok_key,
+                                "nama": _nm,
+                                "error": str(_cek_one_error),
+                                "ada_update": False,
+                            }
+                            _dok_cek_map[_dok_key] = _dok_item
+                            _cek_box.error(f"❌ Cek dokumen gagal: {_cek_one_error}")
+
+                    _dok_item = _dok_cek_map.get(_dok_key)
+                    if _dok_item:
+                        if _dok_item.get("error"):
+                            st.error(_dok_item["error"])
+                        elif _dok_item.get("cookie_invalid"):
+                            st.error("⚠️ Cookie SPSE expired — login ulang di Brave lalu cek lagi")
+                        elif not _dok_item.get("ada_update"):
+                            st.success("✅ Tidak ada perubahan Dokumen PPK.")
+                        else:
+                            for _b in _dok_item.get("berubah", []):
+                                st.markdown(
+                                    f"- **Berubah** [{_b['jenis']}]: "
+                                    f"`{_b['nama_lama']}` → `{_b['nama_baru']}`"
+                                )
+                            for _b in _dok_item.get("baru", []):
+                                st.markdown(f"- **File Baru** [{_b['jenis']}]: `{_b['nama']}`")
+                            for _b in _dok_item.get("perlu_verifikasi", []):
+                                st.warning(
+                                    f"Perlu verifikasi [{_b.get('jenis', '-')}]: "
+                                    f"`{_b.get('nama_lama', '-')}` → `{_b.get('nama_baru', '-')}` "
+                                    f"({_b.get('alasan') or 'relasi revisi tidak tersedia dari SPSE'})"
+                                )
+                            for _b in _dok_item.get("hilang", []):
+                                st.markdown(
+                                    f"- **File Hilang** [{_b['jenis']}]: `{_b['nama']}` — mungkin diganti"
+                                )
+
+                            _ada_download_aman_one = bool(
+                                _dok_item.get("berubah") or _dok_item.get("baru")
+                            )
+                            if _ada_download_aman_one:
+                                st.button(
+                                    "⬇️ Download File Aman",
+                                    key=f"t_dl_dok_ppk_{_kt}",
+                                    type="primary",
+                                    use_container_width=True,
+                                    on_click=_request_download_dokumen,
+                                    args=(_kt,),
+                                )
+                            else:
+                                st.caption(
+                                    "⏸️ Tidak ada file yang aman diunduh otomatis; "
+                                    "verifikasi manual diperlukan."
+                                )
+
+                    if st.session_state.get("_tender_dokumen_download_request") == _dok_key:
+                        st.session_state.pop("_tender_dokumen_download_request", None)
+                        if _dok_item and not _dok_item.get("error") and not _dok_item.get("cookie_invalid"):
+                            import dokumen_ppk_engine as _dpk_dl_one
+                            _sn_lama_one = _dok_item.get("snapshot_lama") or {}
+                            _diff_dl_one = {
+                                "berubah": _dok_item.get("berubah", []),
+                                "baru": _dok_item.get("baru", []),
+                                "perlu_verifikasi": _dok_item.get("perlu_verifikasi", []),
+                                "hilang": _dok_item.get("hilang", []),
+                                "snapshot_baru": _dok_item.get("snapshot_baru") or {},
+                            }
+                            _dl_box_one = st.container(border=True)
+                            _dl_label_one = _dl_box_one.empty()
+                            _dl_area_one = _dl_box_one.empty()
+                            _dl_label_one.info(f"⬇️ Mengunduh file aman {_nm[:40]}...")
+                            _dl_log_one = []
+
+                            def _dl_cb_one(msg, _log=_dl_log_one, _area=_dl_area_one, _label=_dl_label_one):
+                                _log.append(msg)
+                                _area.code("\n".join(_log[-15:]))
+                                _label.info(f"⬇️ {msg[:60]}...")
+
+                            _dl_res_one = _dpk_dl_one.download_update_dokumen(
+                                _kt,
+                                _tpath,
+                                _diff_dl_one["berubah"],
+                                _diff_dl_one["baru"],
+                                _sn_lama_one,
+                                progress_cb=_dl_cb_one,
+                                organize_by_type=True,
+                            )
+                            if _dl_res_one["error"]:
+                                _dl_label_one.error(
+                                    f"❌ {len(_dl_res_one['ok'])} file berhasil, "
+                                    f"{len(_dl_res_one['error'])} gagal; snapshot ditahan"
+                                )
+                                for _dl_error_one in _dl_res_one["error"]:
+                                    st.error(_dl_error_one)
+                            else:
+                                # Tombol ini hanya mengunduh dokumen; jangan parse/update Excel.
+                                _snapshot_aman_one = _dpk_dl_one.snapshot_setelah_download_aman(
+                                    _sn_lama_one,
+                                    _diff_dl_one["snapshot_baru"],
+                                    _diff_dl_one["berubah"],
+                                    _diff_dl_one["baru"],
+                                )
+                                _dpk_dl_one.simpan_snapshot(_kt, _snapshot_aman_one)
+                                _ada_unresolved_one = bool(
+                                    _diff_dl_one.get("perlu_verifikasi")
+                                    or _diff_dl_one.get("hilang")
+                                )
+                                if _ada_unresolved_one:
+                                    _dok_item["berubah"] = []
+                                    _dok_item["baru"] = []
+                                    _dok_item["snapshot_lama"] = _snapshot_aman_one
+                                    _dok_cek_map[_dok_key] = _dok_item
+                                    _dl_label_one.success(
+                                        f"✅ {len(_dl_res_one['ok'])} file aman diunduh; "
+                                        "sebagian tetap perlu verifikasi manual"
+                                    )
+                                else:
+                                    _dok_cek_map.pop(_dok_key, None)
+                                    st.success("✅ Dokumen aman berhasil diunduh.")
+                                _dl_area_one.code("\n".join(_dl_log_one[-20:]))
+
                 _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
                 # 🔄 Serap satu paket
                 if _ac1.button(
@@ -9935,18 +10272,49 @@ if _tender_active_tab == "3️⃣ Setup Paket":
 
             _SBU_HISTORY_FILE = os.path.join(_RUNTIME_ROOT, "_sbu_history.json")
             _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
+            _TENDER_SBU_HISTORY_DEFAULTS = [
+                "SBU BS002 Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass KBLI 42102",
+                "SBU BS001 Konstruksi Bangunan Sipil Jalan atau Konstruksi Jalan Pada Permukaan Tanah KBLI 42101",
+            ]
 
             def _load_sbu_history():
-                # SBU Tender tetap diisi manual. Nilai yang sudah tersimpan pada
-                # draft_paket tidak dihapus dan tidak dijadikan opsi dropdown.
-                return []
+                try:
+                    with open(_SBU_HISTORY_FILE, "r", encoding="utf-8") as f:
+                        raw = _json.load(f)
+                except (OSError, ValueError, TypeError):
+                    raw = []
+                if not isinstance(raw, list):
+                    raw = []
+
+                history = []
+                seen = set()
+                for item in list(raw) + _TENDER_SBU_HISTORY_DEFAULTS:
+                    value = str(item or "").strip()
+                    if value and value not in seen:
+                        seen.add(value)
+                        history.append(value)
+                return history[:20]
 
             def _save_sbu_history(value, package_rows=None):
                 value = str(value or "").strip()
                 if not value:
                     return
-                # Simpan ke row paket yang sedang diproses, tetapi jangan membuat
-                # histori dropdown. Data SBU paket tetap dipertahankan lintas PC.
+
+                # Simpan histori lokal terbaru; ini hanya sumber pilihan UI.
+                history = [value] + [item for item in _load_sbu_history() if item != value]
+                try:
+                    os.makedirs(os.path.dirname(_SBU_HISTORY_FILE), exist_ok=True)
+                    _history_tmp = _SBU_HISTORY_FILE + ".tmp"
+                    with open(_history_tmp, "w", encoding="utf-8") as f:
+                        _json.dump(history[:20], f, ensure_ascii=False, indent=2)
+                        f.write("\n")
+                    os.replace(_history_tmp, _SBU_HISTORY_FILE)
+                    st.session_state["tender_sbu_history"] = history[:20]
+                except (OSError, TypeError, ValueError):
+                    pass
+
+                # Simpan juga ke row paket yang sedang diproses. Histori lokal
+                # tidak otomatis mengubah paket lain atau mengirim ke SPSE.
                 try:
                     kode_list = [
                         str(row.get("id_lelang") or row.get("kode") or "").strip()
@@ -9966,7 +10334,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _TENDER_SBU_HISTORY_VERSION = "manual-only-v2"
+            _TENDER_SBU_HISTORY_VERSION = "local-history-v3"
             if st.session_state.get("tender_sbu_history_version") != _TENDER_SBU_HISTORY_VERSION:
                 st.session_state["tender_sbu_history"] = _load_sbu_history()
                 st.session_state["tender_sbu_history_version"] = _TENDER_SBU_HISTORY_VERSION
@@ -13397,4 +13765,3 @@ Mulai sekarang."""
                             st.session_state.get("iba_do_teknis", True),
                             st.session_state.get("iba_do_gcal", True),
                         )
-
