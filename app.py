@@ -10270,7 +10270,9 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _SBU_HISTORY_FILE = os.path.join(_RUNTIME_ROOT, "_sbu_history.json")
+            _SBU_HISTORY_FILE = os.path.join(
+                os.path.dirname(__file__), "data", "tender_sbu_history.json"
+            )
             _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
             _TENDER_SBU_HISTORY_DEFAULTS = [
                 "SBU BS002 Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass KBLI 42102",
