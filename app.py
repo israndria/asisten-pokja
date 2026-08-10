@@ -338,6 +338,7 @@ def _enrich_kode_unik_tender_excel(
                     if p.lower().endswith(".xlsm")
                     and "backup" not in p.lower()
                     and ".bak_" not in p.lower()
+                    and ".pre-" not in p.lower()
                 )
             except OSError:
                 continue
@@ -361,7 +362,8 @@ def _enrich_kode_unik_tender_excel(
                     for _candidate in sorted(_ku_os.listdir(_dir_path)):
                         if (not _candidate.lower().endswith(".xlsm")
                                 or "backup" in _candidate.lower()
-                                or ".bak_" in _candidate.lower()):
+                                or ".bak_" in _candidate.lower()
+                                or ".pre-" in _candidate.lower()):
                             continue
                         _path = _ku_os.path.join(_dir_path, _candidate)
                         _stat = _ku_os.stat(_path)
@@ -414,7 +416,9 @@ def _tender_folder_identity_valid(folder_name: str, kode_tender: str) -> bool:
         if not os.path.isdir(_folder):
             return False
         for _f in os.listdir(_folder):
-            if not (_f.lower().endswith(".xlsm") and ".bak_" not in _f.lower()):
+            if not (_f.lower().endswith(".xlsm")
+                    and ".bak_" not in _f.lower()
+                    and ".pre-" not in _f.lower()):
                 continue
             _path = os.path.join(_folder, _f)
             _stat = os.stat(_path)
@@ -455,7 +459,9 @@ def _find_tender_folder_local(kode_tender: str, kode_pokja: str = "", nama: str 
             for _d in _dirs:
                 _folder = os.path.join(_root, _d)
                 for _f in os.listdir(_folder):
-                    if not (_f.lower().endswith(".xlsm") and ".bak_" not in _f.lower()):
+                    if not (_f.lower().endswith(".xlsm")
+                            and ".bak_" not in _f.lower()
+                            and ".pre-" not in _f.lower()):
                         continue
                     _path = os.path.join(_folder, _f)
                     _stat = os.stat(_path)
@@ -10104,10 +10110,34 @@ if _tender_active_tab == "3️⃣ Setup Paket":
         sp_selected = []
         if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
             paket_list_sp = _get_tender_tab_candidates(3)
+            # Source of truth kode unik Tender = @ Master Data!G2 workbook.
+            # DB hanya pembanding; jangan pakai generator/fallback DB untuk
+            # nomor Dokpil yang akan dikirim ke SPSE.
+            _sp_kode_mismatch = []
+            for _p_sp in paket_list_sp:
+                _has_folder_meta_sp = bool(str(_p_sp.get("folder_dibuat") or "").strip())
+                _kode_sp_xl, _kode_sp_db, _kode_sp_status = _enrich_kode_unik_tender_excel(
+                    _p_sp,
+                    folder_dibuat=_p_sp.get("folder_dibuat"),
+                    skip_folder_lookup=_has_folder_meta_sp,
+                )
+                # Excel authoritative, termasuk mengosongkan nilai DB stale
+                # jika workbook/G2 belum tersedia.
+                _p_sp["kode_unik"] = _kode_sp_xl
+                _p_sp["_kode_unik_excel_status"] = _kode_sp_status
+                if _kode_sp_status == "beda" and _kode_sp_db:
+                    _sp_kode_mismatch.append(
+                        f"{_p_sp.get('kode')}: Excel `{_kode_sp_xl}` ≠ DB `{_kode_sp_db}`"
+                    )
             _reset_tender_stale_widget_keys("sp_chk_", paket_list_sp)
             if not paket_list_sp:
                 st.warning("⚠️ Tidak ada paket ditemukan.")
             else:
+                if _sp_kode_mismatch:
+                    st.warning(
+                        "⚠️ Kode Unik berbeda dengan cache DB. Nomor upload memakai Excel:\n\n"
+                        + "\n".join(f"- {x}" for x in _sp_kode_mismatch)
+                    )
                 with col_spall:
                     if st.button("✅ Semua", key="sp_sel_all", use_container_width=True):
                         for p in paket_list_sp:
@@ -10147,9 +10177,24 @@ if _tender_active_tab == "3️⃣ Setup Paket":
         st.markdown("### 2. Upload Dokumen Pemilihan")
         st.caption("Menggunakan file DOKPIL yang sudah diupload di atas. Tanggal upload, lalu klik Upload.")
 
-        _dp_dengan_file = [p for p in sp_selected if p.get("_dokpil")]
+        _dp_dengan_file = [
+            p for p in sp_selected
+            if p.get("_dokpil") and str(p.get("kode_unik") or "").strip()
+        ]
         _dp_tanpa_file  = [p for p in sp_selected if not p.get("_dokpil")]
+        _dp_tanpa_kode_unik = [
+            p for p in sp_selected
+            if p.get("_dokpil") and not str(p.get("kode_unik") or "").strip()
+        ]
         dp_selected     = _dp_dengan_file
+
+        if _dp_tanpa_kode_unik:
+            st.caption(
+                f"⚠️ **{len(_dp_tanpa_kode_unik)} paket** DOKPIL ada, "
+                "tetapi G2 Excel kosong/tidak terbaca (dilewati):"
+            )
+            for _p in _dp_tanpa_kode_unik:
+                st.markdown(f"- {_pokja_label(_p)[:80]}")
 
         if not sp_selected:
             st.info("Pilih paket dan upload DOKPIL di atas terlebih dahulu.")
@@ -10165,11 +10210,6 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 st.caption(f"⚠️ **{len(_dp_tanpa_file)} paket** tanpa DOKPIL (dilewati):")
                 for _p in _dp_tanpa_file:
                     st.markdown(f"- {_pokja_label(_p)[:80]}")
-
-        # Cek apakah ada paket terpilih dengan kode_unik null
-        _dp_tanpa_kode_unik = [p for p in _dp_dengan_file if not p.get("kode_unik")]
-        if _dp_tanpa_kode_unik:
-            st.warning(f"⚠️ **{len(_dp_tanpa_kode_unik)} paket** belum punya Kode Unik — generate dulu via tombol 'Kode Unik Surat' di Excel.")
 
         _dp_col_tgl, _dp_col_btn = st.columns([2, 3])
         with _dp_col_tgl:
@@ -10199,7 +10239,12 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                             st.error(f"❌ Paket {_pokja_label(_p)} tidak memiliki kode tender valid.")
                             continue
                             
-                        _ku = _p.get("kode_unik") or "?"
+                        _ku = str(_p.get("kode_unik") or "").strip()
+                        if not _ku:
+                            st.error(
+                                f"❌ Paket {_pokja_label(_p)} dilewati: `@ Master Data!G2` kosong/tidak terbaca."
+                            )
+                            continue
                         _kp = _p.get("kode_pokja") or "?"
                         _nomor_auto = f"000.3.3/01/T/{_ku}/POKJA{_kp}/UKPBJ/2026"
                         _tgl_str = dp_tgl.strftime('%d-%m-%Y')
