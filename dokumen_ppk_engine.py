@@ -144,6 +144,12 @@ def _nama_file_key(nama: str) -> tuple[str, str]:
     return " ".join(stem.split()), ext.lower()
 
 
+def _nama_file_format_key(nama: str) -> tuple[str, str]:
+    """Samakan variasi nama yang hanya berbeda separator/spasi."""
+    stem, ext = _nama_file_key(nama)
+    return "".join(char for char in stem if char.isalnum()), ext
+
+
 def _nama_file_semantic_key(nama: str) -> set[str]:
     """Token nama yang berguna untuk mencari kandidat ambigu secara konservatif."""
     stem, _ = _nama_file_key(nama)
@@ -280,6 +286,62 @@ def cek_update_dokumen(kode_tender: str) -> dict:
                         key, lama_list[old_i], baru_list[new_i], 1.0,
                         "nama sama tetapi kandidat lebih dari satu",
                     ))
+
+        # SPSE kadang menghapus spasi/tanda baca saat menyimpan nama upload.
+        # Cocokkan variasi format secara terpisah dari semantic key agar rename
+        # nyata tetap masuk verifikasi manual.
+        lama_by_format = {}
+        baru_by_format = {}
+        for i, item in enumerate(lama_list):
+            if i not in lama_used:
+                lama_by_format.setdefault(_nama_file_format_key(item.get("nama")), []).append(i)
+        for i, item in enumerate(baru_list):
+            if i not in baru_used:
+                baru_by_format.setdefault(_nama_file_format_key(item.get("nama")), []).append(i)
+
+        for format_key in lama_by_format.keys() & baru_by_format.keys():
+            old_ids = lama_by_format[format_key]
+            new_ids = baru_by_format[format_key]
+            if len(old_ids) == len(new_ids) == 1:
+                old_i, new_i = old_ids[0], new_ids[0]
+                f_lama, f_baru = lama_list[old_i], baru_list[new_i]
+                lama_used.add(old_i)
+                baru_used.add(new_i)
+                if str(f_lama.get("tanggal", "")).strip() != str(f_baru.get("tanggal", "")).strip():
+                    berubah.append({
+                        "jenis": key,
+                        "nama_lama": f_lama["nama"],
+                        "tanggal_lama": f_lama["tanggal"],
+                        "nama_baru": f_baru["nama"],
+                        "tanggal_baru": f_baru["tanggal"],
+                        "url_dl": f_baru["url_dl"],
+                    })
+
+        # Jika file compact sudah ada di snapshot lama dan masih aktif di SPSE,
+        # record lama dengan format nama berbeda hanyalah histori superseded.
+        # Sembunyikan hanya kasus satu-per-satu; duplikat ambigu tetap tampil.
+        active_by_format = {}
+        for i, item in enumerate(baru_list):
+            active_by_format.setdefault(_nama_file_format_key(item.get("nama")), []).append(i)
+        for format_key, current_ids in active_by_format.items():
+            if len(current_ids) != 1 or current_ids[0] not in baru_used:
+                continue
+            used_old_ids = [
+                i for i in lama_used
+                if _nama_file_format_key(lama_list[i].get("nama")) == format_key
+            ]
+            unresolved_old_ids = [
+                i for i in range(len(lama_list))
+                if i not in lama_used
+                and _nama_file_format_key(lama_list[i].get("nama")) == format_key
+            ]
+            if len(used_old_ids) == len(unresolved_old_ids) == 1:
+                used_old_i = used_old_ids[0]
+                unresolved_old_i = unresolved_old_ids[0]
+                if _nama_file_key(lama_list[used_old_i].get("nama")) != _nama_file_key(
+                    lama_list[unresolved_old_i].get("nama")
+                ):
+                    lama_used.add(unresolved_old_i)
 
         # Different names are never auto-paired. Only expose a high-similarity
         # pair for manual verification; unrelated files remain genuinely new.

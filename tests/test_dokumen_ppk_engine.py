@@ -96,6 +96,61 @@ def test_same_filename_with_new_upload_date_is_safe_update():
     assert result["perlu_verifikasi"] == []
 
 
+def test_filename_separator_change_is_safe_update():
+    old = {"spek": [{"nama": "KAK Banua Hanyar.pdf", "tanggal": "1 Januari 2026", "url_dl": "old"}]}
+    new = {"spek": [{"nama": "KAKBanuaHanyar.pdf", "tanggal": "2 Januari 2026", "url_dl": "new"}]}
+
+    result = _cek_diff(old, new)
+
+    assert len(result["berubah"]) == 1
+    assert result["berubah"][0]["nama_lama"] == "KAK Banua Hanyar.pdf"
+    assert result["berubah"][0]["nama_baru"] == "KAKBanuaHanyar.pdf"
+    assert result["baru"] == []
+    assert result["hilang"] == []
+    assert result["perlu_verifikasi"] == []
+
+
+def test_historical_spaced_filename_is_not_reported_missing_when_compact_record_is_active():
+    old = {
+        "spek": [
+            {"nama": "KAK Banua Hanyar.pdf", "tanggal": "1 Januari 2026", "url_dl": "old"},
+            {"nama": "KAKBanuaHanyar.pdf", "tanggal": "2 Januari 2026", "url_dl": "current-old"},
+        ],
+    }
+    new = {
+        "spek": [
+            {"nama": "KAKBanuaHanyar.pdf", "tanggal": "2 Januari 2026", "url_dl": "current"},
+        ],
+    }
+
+    result = _cek_diff(old, new)
+
+    assert result["berubah"] == []
+    assert result["baru"] == []
+    assert result["hilang"] == []
+    assert result["perlu_verifikasi"] == []
+
+
+def test_same_filename_historical_record_stays_missing():
+    old = {
+        "spek": [
+            {"nama": "KAK Banua.pdf", "tanggal": "1 Januari 2026", "url_dl": "old"},
+            {"nama": "KAK Banua.pdf", "tanggal": "2 Januari 2026", "url_dl": "current-old"},
+        ],
+    }
+    new = {
+        "spek": [
+            {"nama": "KAK Banua.pdf", "tanggal": "2 Januari 2026", "url_dl": "current"},
+        ],
+    }
+
+    result = _cek_diff(old, new)
+
+    assert result["berubah"] == []
+    assert result["baru"] == []
+    assert result["hilang"][0]["nama"] == "KAK Banua.pdf"
+
+
 def test_unrelated_rename_is_not_paired_by_order():
     old = {"spek": [{"nama": "KAK lama.pdf", "tanggal": "1 Januari 2026", "url_dl": "old"}]}
     new = {"spek": [{"nama": "Gambar baru.pdf", "tanggal": "2 Januari 2026", "url_dl": "new"}]}
