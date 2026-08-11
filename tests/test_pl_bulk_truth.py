@@ -107,6 +107,52 @@ def test_download_http_403_is_recorded_as_error(monkeypatch, tmp_path, engine):
     assert len(http_errors) == 5
 
 
+@pytest.mark.parametrize("engine", [pl_engine, pl_engine_plpk])
+def test_download_edit_page_login_link_does_not_hide_nota_dinas(monkeypatch, tmp_path, engine):
+    class _Response:
+        def __init__(self, url, text="", headers=None, chunks=()):
+            self.url = url
+            self.status_code = 200
+            self.text = text
+            self.headers = headers or {}
+            self._chunks = chunks
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _chunk_size):
+            return iter(self._chunks)
+
+        def close(self):
+            pass
+
+    def fake_get(url, **_kwargs):
+        if "/dl/" in url:
+            return _Response(
+                url,
+                headers={
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": 'attachment; filename="8. ND PPK.pdf"',
+                },
+                chunks=(b"%PDF-1.4",),
+            )
+        html = (
+            '<a href="/tapinkab/login/homeotp">Enable 2FA</a>'
+            '<a href="/tapinkab/dl/nota-dinas">8. ND PPK.pdf</a>'
+            if url.endswith("/nontender/X/edit")
+            else "<html></html>"
+        )
+        return _Response(url, text=html)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    result = engine.download_dokumen_paket_pl(
+        "X", str(tmp_path), cookie_str="SPSE_SESSION=test", skip_merge=True
+    )
+
+    assert any(path.endswith("8. ND PPK.pdf") for path in result["ok"])
+    assert not any("server mengembalikan halaman login" in error for error in result["error"])
+
+
 def test_pk_download_force_clean_is_scoped_to_document_subfolders(monkeypatch, tmp_path):
     class _EmptyEndpointResponse:
         status_code = 200

@@ -1291,7 +1291,12 @@ def download_dokumen_paket_pl(
             response_text = r.text
             soup = BeautifulSoup(response_text, "html.parser")
             lowered = response_text.lower()
-            if any(marker in lowered for marker in ("/login", "name=\"username\"", "id=\"username\"", "silakan login")):
+            response_path = urllib.parse.urlsplit(getattr(r, "url", endpoint_url)).path.lower().rstrip("/")
+            login_page = response_path.endswith("/login") or any(
+                marker in lowered
+                for marker in ("name=\"username\"", "id=\"username\"", "silakan login")
+            )
+            if login_page:
                 err = "Sesi SPSE tidak valid — server mengembalikan halaman login"
                 hasil["error"].append(f"{label}: {err}")
                 log(f"  ❌ {label}: {err}")
