@@ -598,9 +598,10 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     is_ulang = "(PL - Ulang)" in nama_folder or "(PL-Ulang)" in nama_folder
 
     if mode == "tender":
-        # Folder tender: "N. Nama Paket - Pokja XXX"
-        # Buang prefix "N. " dan suffix " - Pokja XXX"
+        # Folder tender lama: "N. Nama Paket - Pokja XXX";
+        # format baru: "N. [Pokja-XXX] Nama Paket".
         nama_paket = _re.sub(r'^\d+\.\s*', '', nama_folder).strip()
+        nama_paket = _re.sub(r'^\[Pokja\s*[-]?\s*\d+\]\s*', '', nama_paket, flags=_re.IGNORECASE).strip()
         nama_paket = _re.sub(r'\s*-\s*Pokja\s*\d+\s*$', '', nama_paket, flags=_re.IGNORECASE).strip()
     else:
         # Folder PL: "N. PLJKK - Nama Paket" atau "N. PLPK - Nama Paket"

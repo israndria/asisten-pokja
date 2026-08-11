@@ -172,6 +172,19 @@ def _tender_display_label(row: dict) -> str:
     return f"{nomor}. {nama}" if nomor else nama
 
 
+def _format_tender_folder_name(nomor_urut, nama_tender: str, kode_pokja: str) -> str:
+    """Nama folder Tender baru; format lama tetap dibaca oleh resolver."""
+    _nomor = str(nomor_urut or "").strip()
+    _nama = str(nama_tender or "").strip()
+    _pokja_raw = re.sub(r"\D", "", str(kode_pokja or ""))
+    _pokja = _pokja_raw.zfill(3) if _pokja_raw else ""
+    _label = f"{_nomor}. " if _nomor else ""
+    if _pokja:
+        _label += f"[Pokja-{_pokja}] "
+    _label += _nama
+    return re.sub(r'[/<>:"\|?*\\]', "-", _label).strip()
+
+
 def _render_gcal_push_log(results: list[dict]) -> None:
     """Tampilkan hasil push GCal otomatis per paket setelah SPSE sukses."""
     if not results:
@@ -9100,13 +9113,20 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
         # Folder di DB belum dianggap sehat bila workbook tidak menyimpan C4
         # paket target. Tampilkan kembali sebagai "belum" agar create-folder
         # dapat retry folder existing tanpa scrub data.
+        _tender_reset_codes = {
+            str(_code)
+            for _code in st.session_state.get("_tender_folder_reset_codes", set())
+        }
         for _r_local in _draft_rows:
             _folder_db = _r_local.get("folder_dibuat")
             if _folder_db and not _tender_folder_identity_valid(
                 str(_folder_db), str(_r_local.get("kode_tender") or "")
             ):
                 _r_local["folder_dibuat"] = None
-            if not _r_local.get("folder_dibuat"):
+            if (
+                not _r_local.get("folder_dibuat")
+                and str(_r_local.get("kode_tender") or "") not in _tender_reset_codes
+            ):
                 _folder_local = _find_tender_folder_local(
                     _r_local.get("kode_tender"),
                     _r_local.get("kode_pokja"),
@@ -9157,7 +9177,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                 "kode_tender": _r["kode_tender"],
                 "nomor_urut": _n,
                 "kode_unik": _ku,
-                "nama_folder": re.sub(r'[/<>:"\|?*\\]', "-", f"{_n}. {_nama_tender} - Pokja {str(_r.get('kode_pokja','')).strip()}").strip(),
+                "nama_folder": _format_tender_folder_name(
+                    _n, _nama_tender, _r.get("kode_pokja", "")
+                ),
                 "id_pesan": _r.get("id_pesan", ""),
                 "kode_pokja": _r.get("kode_pokja", ""),
                 "row": _r,
@@ -9741,6 +9763,9 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                         _sb_reset_one().table("draft_paket").update(
                             {"folder_dibuat": None}
                         ).eq("kode_tender", _kt).execute()
+                        st.session_state.setdefault(
+                            "_tender_folder_reset_codes", set()
+                        ).add(str(_kt))
                         _load_draft_paket_cached.clear()
                         st.success(f"✅ Status folder {_nm[:45]} direset.")
                         st.rerun()

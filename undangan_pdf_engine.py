@@ -55,6 +55,7 @@ def _nama_pekerjaan_tender(data: dict) -> str:
         return nama
     folder = str(data.get("folder_dibuat") or "").strip()
     folder = re.sub(r"^\s*\d+\.\s*", "", folder)
+    folder = re.sub(r"^\[Pokja\s*[-]?\s*\d+\]\s*", "", folder, flags=re.IGNORECASE)
     folder = re.sub(r"\s+-\s+Pokja\s+\d+\s*$", "", folder, flags=re.IGNORECASE)
     return folder
 

@@ -222,11 +222,16 @@ def _resolve_folder_paket(kode_pokja: str) -> str | None:
     if not kode_pokja:
         return None
     import os
-    label = f"Pokja {kode_pokja.zfill(3)}"
+    _pokja_digits = re.sub(r"\D", "", str(kode_pokja or ""))
+    _pokja_base = _pokja_digits.lstrip("0") or "0"
+    label_re = re.compile(
+        rf"Pokja\s*[-]?\s*0*{re.escape(_pokja_base)}(?!\d)",
+        re.IGNORECASE,
+    )
     try:
         for d in os.listdir(TENDER_ROOT):
             full = os.path.join(TENDER_ROOT, d)
-            if os.path.isdir(full) and label in d:
+            if os.path.isdir(full) and label_re.search(d):
                 return full
     except Exception:
         pass

@@ -448,7 +448,7 @@ def scrape_dan_upsert_semua(kode_tender: str, progress_cb=None,
             # Gabung semua PDF → DokkualifFull_{nama}_{nomor_pokja}.pdf (selalu dilakukan)
             if folder_peserta:
                 import re as _re
-                _m = _re.search(r"Pokja\s+(\d+)", folder_dibuat, _re.IGNORECASE) if folder_dibuat else None
+                _m = _re.search(r"Pokja\s*[-]?\s*(\d+)", folder_dibuat, _re.IGNORECASE) if folder_dibuat else None
                 _nomor_pokja = _m.group(1) if _m else ""
                 gabung_pdf_peserta(folder_peserta, nama, nomor_pokja=_nomor_pokja, log=_safe_log)
 

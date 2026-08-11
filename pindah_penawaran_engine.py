@@ -16,7 +16,7 @@ SKIP_DIRS         = {"harga rhs"}
 
 def _nomor_pokja(folder_dibuat: str) -> str:
     """Ekstrak nomor pokja dari nama folder, misal '1. Pokja 086 - ...' → '086'."""
-    m = re.search(r"Pokja\s+(\d+)", folder_dibuat, re.IGNORECASE)
+    m = re.search(r"Pokja\s*[-]?\s*(\d+)", folder_dibuat, re.IGNORECASE)
     return m.group(1) if m else ""
 
 

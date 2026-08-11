@@ -133,7 +133,7 @@ def _derive_suffix(folder_name: str) -> str:
     PL JKK : "1. PLJKK - Nama Paket" → "Nama Paket"
     PL PK  : "1. PLPK - Nama Paket"  → "Nama Paket"
     """
-    m_pokja = re.search(r"Pokja\s+(\d+)", folder_name, re.IGNORECASE)
+    m_pokja = re.search(r"Pokja\s*[-]?\s*(\d+)", folder_name, re.IGNORECASE)
     if m_pokja:
         return m_pokja.group(1)
     m_pl = re.search(r"PL(?:JKK|PK)\s+-\s+(.+)$", folder_name, re.IGNORECASE)
