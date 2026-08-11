@@ -16,11 +16,11 @@ INPUT_ROWS = {
     "nomor_pp": 10, "kode_pokja": 11, "jangka_waktu": 12,
     "nama_dinas": 14, "nama_ppk": 15, "nip_ppk": 16, "sk_ppk": 17,
     "anggota_1": 18, "anggota_2": 19, "anggota_3": 20,
-    "sumber_anggaran": 22, "sbu_baru": 26, "sbu_lama": 27,
+    "sumber_anggaran": 22, "sbu_baru": 26,
 }
 
 REVIU_ROWS = {
-    "E2": 25, "E6": 26, "E7": 27, "E9": 28, "E10": 29, "E11": 30,
+    "E6": 26, "E7": 27, "E9": 28, "E10": 29, "E11": 30,
     "E12": 31, "E13": 32, "E14": 33, "E15": 34, "E16": 35,
     "E17": 36, "E18": 37, "E19": 38, "E20": 39, "E21": 40,
     "E22": 41, "E23": 42, "E24": 43, "E25": 44, "E26": 45,
@@ -30,7 +30,7 @@ REVIU_ROWS = {
 
 DOKPIL_ROWS = {
     "E6": 56, "E7": 57, "E8": 58, "E9": 59, "E10": 60, "E11": 61,
-    "E12": 62, "E13": 63, "E14": 64, "E15": 65, "E16": 66,
+    "E12": 62, "E13": 63, "E14": 64, "E15": 65,
 }
 
 
@@ -63,13 +63,10 @@ def _isi_master_data_dari_row(wb, row: dict):
         20: row.get("anggota_3"),
         22: row.get("sumber_anggaran"),
         26: row.get("sbu_baru"),
-        27: row.get("sbu_lama"),
     }
     for r, v in values.items():
         if v not in (None, ""):
             ws.Cells(r, 3).Value = v
-    if row.get("kode_unik"):
-        ws.Range("G2").Value = row["kode_unik"]
 
 
 def _cari_draft_pdf(folder: Path, kode_pokja: str) -> Path | None:
@@ -338,16 +335,20 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
 
         # Template dapat membawa nilai paket donor; kosongkan semua field data
         # sebelum menulis data paket target agar tidak ada identitas stale.
-        _clear_rows = set(INPUT_ROWS.values()) | set(REVIU_ROWS.values()) | set(DOKPIL_ROWS.values())
+        _clear_rows = (
+            set(INPUT_ROWS.values())
+            | set(REVIU_ROWS.values())
+            | set(DOKPIL_ROWS.values())
+            | {25, 27, 66}
+        )
         for _row in _clear_rows:
             ws.Cells(_row, 3).Value = ""
+        ws.Range("G2").Value = ""
 
         for key, row in INPUT_ROWS.items():
             v = _hari_angka(row_data.get(key)) if key == "jangka_waktu" else row_data.get(key)
             if v not in (None, ""):
                 ws.Cells(row, 3).Value = v
-        if row_data.get("kode_unik"):
-            ws.Range("G2").Value = row_data["kode_unik"]
         _isi_ppk_dari_sheet_ref_com(wb, ws, row_data.get("nama_ppk"))
 
         src = data.get("input_data", {})
@@ -363,10 +364,6 @@ def _proses_com_direct(kode_tender: str, excel_path: str, row_data: dict, progre
                 nilai = data.get(sec, {}).get(cell, {}).get("nilai")
                 if nilai not in (None, ""):
                     ws.Cells(row, 3).Value = nilai
-
-        fungsi = _fungsi_bangunan_gemini(row_data.get("nama_tender") or "") or _fallback_fungsi_bangunan(row_data.get("nama_tender") or "")
-        if fungsi:
-            ws.Cells(25, 3).Value = fungsi
 
         wb.Save()
         return {"ok": True, "pesan": "@ Master Data terisi via COM direct"}
