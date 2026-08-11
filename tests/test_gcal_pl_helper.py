@@ -47,6 +47,23 @@ class _FakeService:
 
 
 class GcalPlHelperTest(unittest.TestCase):
+    def test_tapin_uses_wita_timezone(self):
+        self.assertEqual(gcal_pl_helper.TZ, "Asia/Makassar")
+
+    def test_automatic_sync_skips_unchanged_schedule(self):
+        jadwal = _jadwal_lima_tahap()
+        schedule_hash = gcal_pl_helper._schedule_hash(jadwal)
+        with patch.object(gcal_pl_helper, "parse_jadwal_pl_dari_spse", return_value=jadwal), patch.object(
+            gcal_pl_helper, "_load_schedule_state", return_value={"123": schedule_hash}
+        ), patch.object(gcal_pl_helper, "push_jadwal_pl_ke_gcal") as push:
+            result = gcal_pl_helper.sync_jadwal_pl(
+                "123", "Paket Uji", skip_unchanged=True
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["skipped"])
+        push.assert_not_called()
+
     def test_all_events_inserted(self):
         service = _FakeService()
         with patch.object(gcal_pl_helper, "_build_service", return_value=service), patch.object(

@@ -15,6 +15,7 @@ Format event GCal PL:
 
 import os
 import json
+import hashlib
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -27,7 +28,10 @@ from config import RUNTIME_ROOT
 # State OAuth per-PC; gunakan lokasi runtime yang sama dengan app utama.
 TOKEN_PATH = os.path.normpath(os.path.join(RUNTIME_ROOT, "state", "token.json"))
 CALENDAR_ID = "primary"
-TZ = "Asia/Jakarta"
+TZ = "Asia/Makassar"
+_SCHEDULE_STATE_PATH = os.path.normpath(
+    os.path.join(RUNTIME_ROOT, "state", "pl_schedule_hashes.json")
+)
 
 _TOKEN_CHECK_CACHE = {"key": None, "until": 0.0, "ok": False}
 
@@ -56,6 +60,37 @@ def _token_cache_key():
 def _cache_token_result(ok: bool, ttl: float = 60.0) -> bool:
     _TOKEN_CHECK_CACHE.update(key=_token_cache_key(), until=time.monotonic() + ttl, ok=ok)
     return ok
+
+
+def _schedule_hash(jadwal_list: list[dict]) -> str:
+    """Hash jadwal SPSE untuk menghindari write GCal berulang oleh scheduler."""
+    payload = [
+        {
+            "nama": str(tahap.get("nama", "")),
+            "mulai": tahap["mulai"].isoformat(),
+            "selesai": tahap["selesai"].isoformat(),
+        }
+        for tahap in jadwal_list
+    ]
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _load_schedule_state() -> dict[str, str]:
+    try:
+        with open(_SCHEDULE_STATE_PATH, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_schedule_state(state: dict[str, str]) -> None:
+    os.makedirs(os.path.dirname(_SCHEDULE_STATE_PATH), exist_ok=True)
+    temp_path = f"{_SCHEDULE_STATE_PATH}.{os.getpid()}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(temp_path, _SCHEDULE_STATE_PATH)
 
 # Mapping index tahap → kolom Supabase yang di-upsert
 # index 0-based sesuai urutan 5 tahap
@@ -286,7 +321,12 @@ def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
                 hasil.append({"nama": tds[1], "mulai": mulai, "selesai": selesai})
     return hasil
 
-def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
+def sync_jadwal_pl(
+    kode_paket: str,
+    nama_paket: str,
+    *,
+    skip_unchanged: bool = False,
+) -> dict:
     """
     1. Baca jadwal aktual dari SPSE /nontender/{kode}/jadwal
     2. Push ke GCal (delete lama + insert baru)
@@ -301,6 +341,17 @@ def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
 
     if not jadwal_list:
         return {"ok": False, "gcal": {}, "supabase": {}, "jadwal": [], "error": "Jadwal kosong di SPSE (belum diisi)."}
+
+    schedule_hash = _schedule_hash(jadwal_list)
+    if skip_unchanged and _load_schedule_state().get(str(kode_paket)) == schedule_hash:
+        return {
+            "ok": True,
+            "skipped": True,
+            "gcal": {"ok": True, "inserted": 0, "deleted": 0, "error": ""},
+            "supabase": {"ok": True, "updated": {}},
+            "jadwal": jadwal_list,
+            "error": "",
+        }
 
     # Push GCal
     gcal_result = push_jadwal_pl_ke_gcal(kode_paket, nama_paket, jadwal_list)
@@ -331,20 +382,34 @@ def sync_jadwal_pl(kode_paket: str, nama_paket: str) -> dict:
         except Exception as e:
             sb_result = {"ok": False, "error": str(e)}
 
-    return {
+    result = {
         "ok": gcal_result["ok"] and sb_result["ok"],
+        "skipped": False,
         "gcal": gcal_result,
         "supabase": sb_result,
         "jadwal": jadwal_list,
         "error": gcal_result.get("error") or sb_result.get("error") or "",
     }
+    if result["ok"]:
+        state = _load_schedule_state()
+        state[str(kode_paket)] = schedule_hash
+        try:
+            _save_schedule_state(state)
+        except OSError:
+            # State hanya optimasi; kegagalan simpan tidak membatalkan sync GCal.
+            pass
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bulk sync semua paket PL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sync_semua_paket_pl(progress_cb=None) -> list[dict]:
+def sync_semua_paket_pl(
+    progress_cb=None,
+    *,
+    skip_unchanged: bool = False,
+) -> list[dict]:
     """
     Loop semua paket dari Supabase draft_paket_pl → sync_jadwal_pl per paket.
     progress_cb(frac, msg) opsional.
@@ -362,11 +427,12 @@ def sync_semua_paket_pl(progress_cb=None) -> list[dict]:
         nama = row["nama_paket"] or kode
         if progress_cb:
             progress_cb((i + 1) / total, f"Sync {kode} — {nama[:40]}")
-        r = sync_jadwal_pl(kode, nama)
+        r = sync_jadwal_pl(kode, nama, skip_unchanged=skip_unchanged)
         results.append({
             "kode_paket": kode,
             "nama_paket": nama[:50],
             "ok": r["ok"],
+            "skipped": r.get("skipped", False),
             "gcal_inserted": r["gcal"].get("inserted", 0),
             "gcal_deleted": r["gcal"].get("deleted", 0),
             "tgl_evaluasi": r["supabase"].get("updated", {}).get("tgl_evaluasi", ""),
