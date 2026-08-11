@@ -34,6 +34,9 @@ from ui_pl_pk import (
     render_download_actions,
 )
 from ui_pl_common import render_package_selection
+from sbu_history import load_sbu_history as _load_shared_sbu_history
+from sbu_history import save_sbu_history as _save_shared_sbu_history
+from sbu_history import compact_sbu_label as _compact_sbu_label
 
 APP_VERSION = "v2026.07.19.b"
 
@@ -91,6 +94,14 @@ def _save_pl_sbu_history(baru: str, lama: str = "") -> None:
         tmp_path.replace(_PL_SBU_HISTORY_PATH)
     except (OSError, TypeError, ValueError):
         pass
+
+
+def _load_pk_sbu_history() -> list[dict[str, str]]:
+    return _load_shared_sbu_history()
+
+
+def _save_pk_sbu_history(baru: str, lama: str = "") -> None:
+    _save_shared_sbu_history(baru, lama)
 
 
 def _load_last_pl_invitation_dates() -> dict[str, str]:
@@ -4135,14 +4146,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.caption("ℹ️ Mode custom — pilih SBU yang pernah dipakai atau input baru.")
                         _pl_sbu_hist = _load_pl_sbu_history()
                         _pl_sbu_new = "✏️ Input SBU baru"
-                        _pl_sbu_opts = [f"{x['baru'][:100]}" for x in _pl_sbu_hist] + [_pl_sbu_new]
-                        _pl_sbu_pick = st.selectbox("SBU Custom — histori", _pl_sbu_opts or [_pl_sbu_new], key="plsp_custom_sbu_pick")
+                        _pl_sbu_opts = [x["baru"] for x in _pl_sbu_hist] + [_pl_sbu_new]
+                        _pl_sbu_pick = st.selectbox(
+                            "SBU Custom — histori",
+                            _pl_sbu_opts or [_pl_sbu_new],
+                            key="plsp_custom_sbu_pick",
+                            format_func=_compact_sbu_label,
+                        )
                         _pl_sbu_idx = _pl_sbu_opts.index(_pl_sbu_pick) if _pl_sbu_pick in _pl_sbu_opts else len(_pl_sbu_hist)
                         if _pl_sbu_idx < len(_pl_sbu_hist):
                             _pl_sbu_selected = _pl_sbu_hist[_pl_sbu_idx]
                             _sbu_baru_global = _pl_sbu_selected["baru"]
                             _sbu_lama_global = _pl_sbu_selected["lama"] or None
-                            st.caption(f"🔹 Baru: `{_sbu_baru_global}`")
                             if _sbu_lama_global:
                                 st.caption(f"🔸 Lama: `{_sbu_lama_global}`")
                         else:
@@ -7326,16 +7341,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.success(f"✅ {_ok_sbu}/{len(_plsp_selected)} paket disimpan ke Supabase")
                     else:
                         st.caption("ℹ️ Mode custom — pilih SBU yang pernah dipakai atau input baru.")
-                        _pk_sbu_hist = _load_pl_sbu_history()
+                        _pk_sbu_hist = _load_pk_sbu_history()
                         _pk_sbu_new = "✏️ Input SBU baru"
-                        _pk_sbu_opts = [f"{x['baru'][:100]}" for x in _pk_sbu_hist] + [_pk_sbu_new]
-                        _pk_sbu_pick = st.selectbox("SBU Custom — histori", _pk_sbu_opts or [_pk_sbu_new], key="pk_custom_sbu_pick")
+                        _pk_sbu_opts = [x["baru"] for x in _pk_sbu_hist] + [_pk_sbu_new]
+                        _pk_sbu_pick = st.selectbox(
+                            "SBU Custom — histori",
+                            _pk_sbu_opts or [_pk_sbu_new],
+                            key="pk_custom_sbu_pick",
+                            format_func=_compact_sbu_label,
+                        )
                         _pk_sbu_idx = _pk_sbu_opts.index(_pk_sbu_pick) if _pk_sbu_pick in _pk_sbu_opts else len(_pk_sbu_hist)
                         if _pk_sbu_idx < len(_pk_sbu_hist):
                             _pk_sbu_selected = _pk_sbu_hist[_pk_sbu_idx]
                             _sbu_baru_global = _pk_sbu_selected["baru"]
                             _sbu_lama_global = _pk_sbu_selected["lama"] or None
-                            st.caption(f"🔹 Baru: `{_sbu_baru_global}`")
                             if _sbu_lama_global:
                                 st.caption(f"🔸 Lama: `{_sbu_lama_global}`")
                         else:
@@ -7382,7 +7401,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _ok_c += 1
                                 except Exception as _e:
                                     st.error(f"❌ {_pl_label(_p)}: {_e}")
-                            _save_pl_sbu_history(_sbu_baru_global, _sbu_lama_global or "")
+                            _save_pk_sbu_history(_sbu_baru_global, _sbu_lama_global or "")
                             # Bedakan status penyimpanan SBU dari status POST
                             # LDK. Sebelumnya pesan sukses tampil dulu, lalu
                             # semua POST bisa gagal sehingga log terlihat
@@ -10315,28 +10334,13 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _SBU_HISTORY_FILE = os.path.join(
-                os.path.dirname(__file__), "data", "tender_sbu_history.json"
-            )
-            _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha (SBU) dengan Kualifikasi Usaha Kecil, serta disyaratkan:"
-            _TENDER_SBU_HISTORY_DEFAULTS = [
-                "SBU BS002 Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass KBLI 42102",
-                "SBU BS001 Konstruksi Bangunan Sipil Jalan atau Konstruksi Jalan Pada Permukaan Tanah KBLI 42101",
-            ]
+            _SBU_PREFIX = "Memiliki Sertifikat Badan Usaha SBU dengan Kualifikasi Usaha Kecil, serta disyaratkan "
 
             def _load_sbu_history():
-                try:
-                    with open(_SBU_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        raw = _json.load(f)
-                except (OSError, ValueError, TypeError):
-                    raw = []
-                if not isinstance(raw, list):
-                    raw = []
-
                 history = []
                 seen = set()
-                for item in list(raw) + _TENDER_SBU_HISTORY_DEFAULTS:
-                    value = str(item or "").strip()
+                for item in _load_shared_sbu_history():
+                    value = str(item.get("baru") or "").strip()
                     if value and value not in seen:
                         seen.add(value)
                         history.append(value)
@@ -10347,18 +10351,9 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 if not value:
                     return
 
-                # Simpan histori lokal terbaru; ini hanya sumber pilihan UI.
-                history = [value] + [item for item in _load_sbu_history() if item != value]
-                try:
-                    os.makedirs(os.path.dirname(_SBU_HISTORY_FILE), exist_ok=True)
-                    _history_tmp = _SBU_HISTORY_FILE + ".tmp"
-                    with open(_history_tmp, "w", encoding="utf-8") as f:
-                        _json.dump(history[:20], f, ensure_ascii=False, indent=2)
-                        f.write("\n")
-                    os.replace(_history_tmp, _SBU_HISTORY_FILE)
-                    st.session_state["tender_sbu_history"] = history[:20]
-                except (OSError, TypeError, ValueError):
-                    pass
+                # Tender berbagi canonical history dengan PL PK.
+                _save_shared_sbu_history(value)
+                st.session_state["tender_sbu_history"] = _load_sbu_history()
 
                 # Simpan juga ke row paket yang sedang diproses. Histori lokal
                 # tidak otomatis mengubah paket lain atau mengirim ke SPSE.
@@ -10381,7 +10376,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 except Exception:
                     pass
 
-            _TENDER_SBU_HISTORY_VERSION = "local-history-v3"
+            _TENDER_SBU_HISTORY_VERSION = "local-history-v4-shared-pk"
             if st.session_state.get("tender_sbu_history_version") != _TENDER_SBU_HISTORY_VERSION:
                 st.session_state["tender_sbu_history"] = _load_sbu_history()
                 st.session_state["tender_sbu_history_version"] = _TENDER_SBU_HISTORY_VERSION
@@ -10431,6 +10426,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                         _sbu_options,
                         index=0,
                         key="tender_sbu_history_pick",
+                        format_func=_compact_sbu_label,
                     )
                     if _sbu_pick == _sbu_new_option:
                         _sbu_desc = st.text_input(
@@ -10441,7 +10437,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                         )
                     else:
                         _sbu_desc = _sbu_pick
-                    st.session_state["ijin_rows"][i]["klasifikasi"] = f"{_SBU_PREFIX}\n{_sbu_desc}" if _sbu_desc else _SBU_PREFIX
+                    st.session_state["ijin_rows"][i]["klasifikasi"] = f"{_SBU_PREFIX}{_sbu_desc}" if _sbu_desc else _SBU_PREFIX.rstrip()
                     continue
                 st.caption(f"Row {i+1}")
 

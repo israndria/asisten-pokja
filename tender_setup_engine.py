@@ -18,6 +18,24 @@ BASE = SPSE_BASE_URL.rstrip("/")
 HEADERS = {"Cookie": "", "User-Agent": "Mozilla/5.0"}
 
 
+def normalize_sbu_classification(value: str) -> str:
+    """Normalize Tender SBU prefix before sending it to SPSE."""
+    text = str(value or "")
+    prefix = re.compile(
+        r"^\s*Memiliki Sertifikat Badan Usaha\s*(?:\(\s*SBU\s*\)|SBU)\s+"
+        r"dengan Kualifikasi Usaha Kecil,\s*serta disyaratkan\s*:?\s*",
+        re.IGNORECASE,
+    )
+    if not prefix.match(text):
+        return text
+    suffix = prefix.sub("", text, count=1).strip()
+    return (
+        "Memiliki Sertifikat Badan Usaha SBU dengan Kualifikasi Usaha Kecil, "
+        "serta disyaratkan "
+        + suffix
+    )
+
+
 def _get_form(kode: str, suffix: str, action_part: str) -> tuple[BeautifulSoup, dict, str]:
     url = f"{BASE}/dokumen/{kode}/{suffix}"
     cookie = spse_browser.get_spse_cookies()
@@ -88,7 +106,7 @@ def submit_izin_usaha(kode: str, ijin_rows: list[dict]) -> dict:
         item = ctx["ijin"][i] if i < len(ctx["ijin"]) else {}
         payload[f"ijin[{i}].chk_id"] = item.get("chk_id", "")
         payload[f"ijin[{i}].chk_nama"] = row.get("jenis_izin", "")
-        payload[f"ijin[{i}].chk_klasifikasi"] = row.get("klasifikasi", "")
+        payload[f"ijin[{i}].chk_klasifikasi"] = normalize_sbu_classification(row.get("klasifikasi", ""))
     resp = requests.post(
         ctx["submit"], data=payload,
         headers={**HEADERS, "Cookie": ctx["cookie"], "Referer": ctx["url"]},
@@ -112,7 +130,7 @@ def submit_ldk(
         item = ctx["ijin"][i] if i < len(ctx["ijin"]) else {}
         payload[f"ijin[{i}].chk_id"] = item.get("chk_id", "")
         payload[f"ijin[{i}].chk_nama"] = row.get("jenis_izin", "")
-        payload[f"ijin[{i}].chk_klasifikasi"] = row.get("klasifikasi", "")
+        payload[f"ijin[{i}].chk_klasifikasi"] = normalize_sbu_classification(row.get("klasifikasi", ""))
     for prefix, items, selected in (("syaratAdmin", ctx["admin"], admin_ids), ("syaratTeknis", ctx["teknis"], teknis_ids)):
         for i, item in enumerate(items):
             payload[f"{prefix}[{i}].chk_id"] = item.get("chk_id", "")
