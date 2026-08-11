@@ -9731,21 +9731,17 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
         st.write("")
         for _r in _rows_sudah:
             _kt = _r.get("kode_tender", "")
-            _pk = str(_r.get("kode_pokja") or "").strip()
             _nm = str(_r.get("nama_tender") or "-")
-            _folder_prefix = re.match(r"^\s*(\d+)\s*\.\s*", str(_r.get("folder_dibuat") or ""))
-            _nm_display = (
-                f"{_folder_prefix.group(1)}. {_nm}"
-                if _folder_prefix and not _nm.startswith(f"{_folder_prefix.group(1)}.")
-                else _nm
-            )
-            _fd = _r.get("folder_dibuat", "")
+            _fd = str(_r.get("folder_dibuat") or "").strip()
+            # Metadata folder adalah source of truth; label otomatis ikut
+            # format fisik lama maupun baru tanpa formatter kedua.
+            _status_folder_label = _fd or _tender_display_label(_r)
             _tpath = _os.path.join(_TENDER_ROOT, _fd) if _fd else ""
             _ada = bool(_tpath and _os.path.exists(_tpath))
             _dok_key = str(_kt)
             _dok_item = _dok_cek_map.get(_dok_key)
             with st.expander(
-                f"✅ [Pokja {_pk}] {_nm_display}",
+                f"✅ {_status_folder_label}",
                 expanded=bool(
                     _dok_item
                     or st.session_state.get(f"_tender_dokumen_open_{_dok_key}")
