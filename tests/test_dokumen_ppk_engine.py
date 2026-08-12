@@ -49,6 +49,36 @@ def test_update_download_is_grouped_by_document_type(tmp_path):
     assert not (package_dir / "File Baru").exists()
 
 
+def test_long_new_filename_is_shortened_for_windows_path_limit(tmp_path):
+    package_dir = tmp_path / ("paket_" + "x" * 50)
+    long_name = (
+        "RANCANGAN KONSEPTUAL SMKK PEMBUATAN BOX CULVERT DAN DRAINASE "
+        "DESA BANUA HANYAR HULU RT 002003 RW 001 KEC TAPIN UTARA.docx"
+    )
+    new = {"jenis": "spek", "nama": long_name, "url_dl": "https://example.test/new"}
+
+    with (
+        patch.object(engine, "_get_cookies", return_value="cookie"),
+        patch.object(engine.requests, "get", return_value=_DownloadResponse()),
+    ):
+        result = engine.download_update_dokumen(
+            "041",
+            str(package_dir),
+            [],
+            [new],
+            {},
+            organize_by_type=True,
+        )
+
+    assert result["error"] == []
+    saved = list((package_dir / "1. KAK & Spesifikasi Teknis" / "2. File Baru").iterdir())
+    assert len(saved) == 1
+    assert saved[0].suffix == ".docx"
+    assert "__" in saved[0].stem
+    assert len(str(saved[0])) <= engine._MAX_SAFE_LOCAL_PATH
+    assert saved[0].read_bytes() == b"test-content"
+
+
 class _FakeQuery:
     def __init__(self, snapshot):
         self._snapshot = snapshot
@@ -198,3 +228,21 @@ def test_snapshot_merge_preserves_unresolved_old_file():
     assert "KAK lama.pdf" in names
     assert "Lampiran aman.pdf" in names
     assert "Gambar baru.pdf" not in names
+
+
+def test_verification_item_is_downloaded_as_new_file_candidate():
+    items = engine.items_perlu_verifikasi_untuk_download([
+        {
+            "jenis": "docsskk",
+            "nama_lama": "RANCANGAN KONTRAK 10.pdf",
+            "nama_baru": "RANCANGAN KONTRAK fix.pdf",
+            "url_dl": "https://example.test/fix",
+            "alasan": "nama mirip",
+        },
+    ])
+
+    assert items == [{
+        "jenis": "docsskk",
+        "nama": "RANCANGAN KONTRAK fix.pdf",
+        "url_dl": "https://example.test/fix",
+    }]

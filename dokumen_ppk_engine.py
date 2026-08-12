@@ -4,6 +4,7 @@ import os
 import re
 import json
 import shutil
+import hashlib
 import requests
 from difflib import SequenceMatcher
 from datetime import datetime
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 from config import sb, SPSE_BASE_URL
 
 BASE_URL = SPSE_BASE_URL.rstrip("/")
+_MAX_SAFE_LOCAL_PATH = 240
 
 # Endpoint jenis dokumen yang di-track
 ENDPOINTS = {
@@ -148,6 +150,26 @@ def _nama_file_format_key(nama: str) -> tuple[str, str]:
     """Samakan variasi nama yang hanya berbeda separator/spasi."""
     stem, ext = _nama_file_key(nama)
     return "".join(char for char in stem if char.isalnum()), ext
+
+
+def _fit_local_destination(path: str) -> tuple[str, bool]:
+    """Pendekkan basename arsip agar tetap aman pada Windows MAX_PATH."""
+    absolute = os.path.abspath(path)
+    if len(absolute) <= _MAX_SAFE_LOCAL_PATH:
+        return path, False
+
+    directory, filename = os.path.split(absolute)
+    stem, ext = os.path.splitext(filename)
+    digest = hashlib.sha1(filename.encode("utf-8")).hexdigest()[:8]
+    available = _MAX_SAFE_LOCAL_PATH - len(directory) - len(ext) - len(digest) - 3
+    if available < 1:
+        raise OSError(
+            f"folder lokal terlalu panjang ({len(directory)} karakter); "
+            "nama file tidak dapat dipendekkan dengan aman"
+        )
+    prefix = stem[:available].rstrip(" .") or "dokumen"
+    shortened = f"{prefix}__{digest}{ext}"
+    return os.path.join(directory, shortened), True
 
 
 def _nama_file_semantic_key(nama: str) -> set[str]:
@@ -442,6 +464,22 @@ def snapshot_setelah_download_aman(
     return hasil
 
 
+def items_perlu_verifikasi_untuk_download(items: list[dict]) -> list[dict]:
+    """Ubah kandidat ambigu menjadi item file baru tanpa mengklaim revisi aman."""
+    hasil = []
+    for item in items or []:
+        nama = item.get("nama_baru") or item.get("nama")
+        url_dl = item.get("url_dl")
+        if not nama or not url_dl:
+            continue
+        hasil.append({
+            "jenis": item.get("jenis") or "lainnya",
+            "nama": nama,
+            "url_dl": url_dl,
+        })
+    return hasil
+
+
 def download_update_dokumen(
     kode_tender: str,
     folder_paket: str,
@@ -488,6 +526,13 @@ def download_update_dokumen(
         if fname:
             clean = re.sub(r'[<>:"/\\|?*]', "_", fname).strip()
             dst_path = os.path.join(os.path.dirname(dst_path), clean)
+        original_dst_path = dst_path
+        dst_path, shortened = _fit_local_destination(dst_path)
+        if shortened:
+            log(
+                "  ℹ️ Nama lokal dipendekkan karena path Windows panjang: "
+                f"{os.path.basename(original_dst_path)} → {os.path.basename(dst_path)}"
+            )
         with open(dst_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=65536):
                 f.write(chunk)

@@ -9764,6 +9764,11 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
             st.session_state["_tender_dokumen_download_request"] = _kode
             st.session_state[f"_tender_dokumen_open_{_kode}"] = True
 
+        def _request_download_dokumen_verifikasi(_kode):
+            _kode = str(_kode)
+            st.session_state["_tender_dokumen_download_verifikasi_request"] = _kode
+            st.session_state[f"_tender_dokumen_open_{_kode}"] = True
+
         _dok_cek_map = st.session_state.setdefault("_tender_dokumen_cek", {})
         st.write("")
         for _r in _rows_sudah:
@@ -9904,6 +9909,28 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     "verifikasi manual diperlukan."
                                 )
 
+                            _verifikasi_belum_diunduh = [
+                                _b for _b in _dok_item.get("perlu_verifikasi", [])
+                                if not _b.get("_sudah_diunduh")
+                            ]
+                            if _verifikasi_belum_diunduh:
+                                st.button(
+                                    "⬇️ Download termasuk Perlu Verifikasi",
+                                    key=f"t_dl_dok_ppk_verifikasi_{_kt}",
+                                    use_container_width=True,
+                                    on_click=_request_download_dokumen_verifikasi,
+                                    args=(_kt,),
+                                    help=(
+                                        "Unduh file ambigu sebagai file baru untuk pemeriksaan manual. "
+                                        "Snapshot tidak dimajukan."
+                                    ),
+                                )
+                            elif _dok_item.get("perlu_verifikasi"):
+                                st.caption(
+                                    "✅ File perlu verifikasi sudah diunduh; "
+                                    "pemeriksaan manual tetap diperlukan."
+                                )
+
                     if st.session_state.get("_tender_dokumen_download_request") == _dok_key:
                         st.session_state.pop("_tender_dokumen_download_request", None)
                         if _dok_item and not _dok_item.get("error") and not _dok_item.get("cookie_invalid"):
@@ -9969,6 +9996,74 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     _dok_cek_map.pop(_dok_key, None)
                                     st.success("✅ Dokumen aman berhasil diunduh.")
                                 _dl_area_one.code("\n".join(_dl_log_one[-20:]))
+
+                    if st.session_state.get("_tender_dokumen_download_verifikasi_request") == _dok_key:
+                        st.session_state.pop("_tender_dokumen_download_verifikasi_request", None)
+                        if _dok_item and not _dok_item.get("error") and not _dok_item.get("cookie_invalid"):
+                            import dokumen_ppk_engine as _dpk_dl_ver
+                            _verify_items = _dpk_dl_ver.items_perlu_verifikasi_untuk_download(
+                                _dok_item.get("perlu_verifikasi", [])
+                            )
+                            if not _verify_items:
+                                st.warning("⚠️ Tidak ada URL download untuk item perlu verifikasi.")
+                            else:
+                                _verify_keys = {
+                                    (
+                                        _item_ver.get("jenis"),
+                                        _item_ver.get("nama"),
+                                        _item_ver.get("url_dl"),
+                                    )
+                                    for _item_ver in _verify_items
+                                }
+                                _ver_box = st.container(border=True)
+                                _ver_label = _ver_box.empty()
+                                _ver_area = _ver_box.empty()
+                                _ver_label.info(
+                                    f"⬇️ Mengunduh file perlu verifikasi {_nm[:40]}..."
+                                )
+                                _ver_log = []
+
+                                def _ver_cb(
+                                    msg,
+                                    _log=_ver_log,
+                                    _area=_ver_area,
+                                    _label=_ver_label,
+                                ):
+                                    _log.append(msg)
+                                    _area.code("\n".join(_log[-15:]))
+                                    _label.info(f"⬇️ {msg[:60]}...")
+
+                                _ver_res = _dpk_dl_ver.download_update_dokumen(
+                                    _kt,
+                                    _tpath,
+                                    [],
+                                    _verify_items,
+                                    _dok_item.get("snapshot_lama") or {},
+                                    progress_cb=_ver_cb,
+                                    organize_by_type=True,
+                                )
+                                if _ver_res["error"]:
+                                    _ver_label.error(
+                                        f"❌ {len(_ver_res['ok'])} file perlu verifikasi berhasil, "
+                                        f"{len(_ver_res['error'])} gagal; snapshot tetap ditahan"
+                                    )
+                                    for _ver_error in _ver_res["error"]:
+                                        st.error(_ver_error)
+                                else:
+                                    for _ver_item in _dok_item.get("perlu_verifikasi", []):
+                                        _ver_key = (
+                                            _ver_item.get("jenis"),
+                                            _ver_item.get("nama_baru") or _ver_item.get("nama"),
+                                            _ver_item.get("url_dl"),
+                                        )
+                                        if _ver_key in _verify_keys:
+                                            _ver_item["_sudah_diunduh"] = True
+                                    _dok_cek_map[_dok_key] = _dok_item
+                                    _ver_label.success(
+                                        f"✅ {len(_ver_res['ok'])} file perlu verifikasi berhasil diunduh; "
+                                        "snapshot tidak dimajukan"
+                                    )
+                                _ver_area.code("\n".join(_ver_log[-20:]))
 
                 _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
                 # 🔄 Serap satu paket
