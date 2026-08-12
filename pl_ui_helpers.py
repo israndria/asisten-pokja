@@ -431,17 +431,18 @@ def _baca_identitas_penyedia_pl(row: dict) -> dict:
         )
         if not xlsm or not os.path.isfile(xlsm):
             return {}
-        from openpyxl import load_workbook
-        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=True)
-        try:
-            ws = wb["@ Master Data"]
-            name_cell, npwp_cell = _provider_master_cells(row)
-            return {
-                "nama_penyedia": str(ws[name_cell].value or "").strip(),
-                "npwp_penyedia": str(ws[npwp_cell].value or "").strip(),
-            }
-        finally:
-            wb.close()
+        name_cell, npwp_cell = _provider_master_cells(row)
+        stat = os.stat(xlsm)
+        values = pl_engine.read_master_cells_cached(
+            xlsm,
+            stat.st_mtime_ns,
+            stat.st_size,
+            (name_cell, npwp_cell),
+        )
+        return {
+            "nama_penyedia": values.get(name_cell, ""),
+            "npwp_penyedia": values.get(npwp_cell, ""),
+        }
     except Exception:
         return {}
 

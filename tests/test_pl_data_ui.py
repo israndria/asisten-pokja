@@ -3,6 +3,7 @@
 import parse_kak_pl
 import pl_engine
 import pl_ui_helpers
+import zipfile
 from pl_data_ui import _hydrate_provider_from_excel, filter_local_pl_rows
 
 
@@ -117,6 +118,61 @@ def test_pljkk_provider_keeps_c51_c52_source(monkeypatch, tmp_path):
 
     assert result[0]["nama_penyedia"] == "CV. RAHMAT BANUA KONSULTAN"
     assert result[0]["npwp_penyedia"] == "911052223733000"
+
+
+def test_provider_uses_xml_fast_path_without_openpyxl(monkeypatch, tmp_path):
+    folder = tmp_path / "10. PLJKK - Paket Konsultan"
+    folder.mkdir()
+    workbook = folder / "0. BAPLJKK - Paket Konsultan.xlsm"
+    with zipfile.ZipFile(workbook, "w") as archive:
+        archive.writestr(
+            "xl/workbook.xml",
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="@ Master Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            "<sheetData>"
+            '<row r="51"><c r="C51" t="inlineStr"><is><t>CV. XML CEPAT</t></is></c></row>'
+            '<row r="52"><c r="C52" t="inlineStr"><is><t>1234567890123456</t></is></c></row>'
+            "</sheetData></worksheet>",
+        )
+
+    monkeypatch.setattr(
+        parse_kak_pl,
+        "_resolve_folder_pl",
+        lambda *_args, **_kwargs: (str(folder), "10"),
+    )
+    monkeypatch.setattr(
+        pl_ui_helpers,
+        "_cari_xlsm_pl",
+        lambda candidate: str(workbook) if candidate == str(folder) else None,
+    )
+    import openpyxl
+    monkeypatch.setattr(
+        openpyxl,
+        "load_workbook",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("OpenPyXL tidak boleh dipanggil pada fast path")
+        ),
+    )
+    pl_engine.read_master_cells_cached.cache_clear()
+
+    result = _hydrate_provider_from_excel([{
+        "kode_paket": "JKK-XML",
+        "nama_paket": "Paket XML",
+        "jenis_pl": "JKK",
+    }])
+
+    assert result[0]["nama_penyedia"] == "CV. XML CEPAT"
+    assert result[0]["npwp_penyedia"] == "1234567890123456"
 
 
 def test_row_without_local_folder_is_hidden(monkeypatch, tmp_path):

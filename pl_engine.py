@@ -95,8 +95,11 @@ def _normalisasi_tanggal_excel(value) -> str:
     return text
 
 
-def _read_master_data_xml(xlsm: str) -> tuple[str, str, str]:
-    """Baca tiga sel Master Data langsung dari XML XLSM (tanpa OpenPyXL)."""
+def _read_master_data_xml(
+    xlsm: str,
+    wanted: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """Baca sel Master Data langsung dari XML XLSM (tanpa OpenPyXL)."""
     import posixpath
     import zipfile
     import xml.etree.ElementTree as ET
@@ -154,9 +157,9 @@ def _read_master_data_xml(xlsm: str) -> tuple[str, str, str]:
 
         sheet_root = ET.fromstring(zf.read(target))
         cells = {}
-        wanted = {"F2", "C20", "C21"}
+        requested = tuple(wanted or ("F2", "C20", "C21"))
         for cell in sheet_root.iter():
-            if local(cell.tag) != "c" or cell.attrib.get("r") not in wanted:
+            if local(cell.tag) != "c" or cell.attrib.get("r") not in requested:
                 continue
             cell_type = cell.attrib.get("t", "")
             value_node = next((child for child in cell if local(child.tag) == "v"), None)
@@ -182,6 +185,8 @@ def _read_master_data_xml(xlsm: str) -> tuple[str, str, str]:
                     value = raw
             cells[cell.attrib["r"]] = value
 
+        if wanted is not None:
+            return tuple(str(cells.get(cell) or "").strip() for cell in requested)
         return (
             str(cells.get("F2") or "").strip(),
             str(cells.get("C20") or "").strip(),
@@ -244,6 +249,35 @@ def read_master_data_cached(xlsm: str, mtime_ns: int, size: int) -> tuple[str, s
             )
         finally:
             wb.close()
+
+
+@lru_cache(maxsize=512)
+def read_master_cells_cached(
+    xlsm: str,
+    mtime_ns: int,
+    size: int,
+    cells: tuple[str, ...],
+) -> dict[str, str]:
+    """Baca sel Master Data ringan; fallback OpenPyXL untuk workbook legacy."""
+    del mtime_ns, size
+    requested = tuple(dict.fromkeys(str(cell).strip() for cell in cells if cell))
+    if not requested:
+        return {}
+    try:
+        values = _read_master_data_xml(xlsm, requested)
+    except Exception:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(xlsm, read_only=True, data_only=True, keep_vba=False)
+        try:
+            ws = wb["@ Master Data"]
+            values = tuple(ws[cell].value for cell in requested)
+        finally:
+            wb.close()
+    return {
+        cell: str(value or "").strip()
+        for cell, value in zip(requested, values)
+    }
 
 
 def load_draft_pl() -> list[dict]:
