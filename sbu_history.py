@@ -19,6 +19,22 @@ DEFAULT_SBU_HISTORY = (
 )
 
 
+def _is_license_text(value: str) -> bool:
+    """Reject legacy generic izin rows from the SBU-only history."""
+    upper = str(value or "").upper()
+    return "PERIZINAN BERUSAHA" in upper or "IZIN USAHA DI BIDANG" in upper
+
+
+def is_consultancy_sbu(value: str) -> bool:
+    """True for JKK/consultancy history entries, not construction SBU."""
+    upper = str(value or "").upper()
+    return bool(
+        re.search(r"\b(?:RE|RK)\d{3}\b", upper)
+        or "KONSULT" in upper
+        or "REKAYASA" in upper
+    )
+
+
 def _read_entries(path: Path) -> list[dict[str, str]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -37,7 +53,7 @@ def _read_entries(path: Path) -> list[dict[str, str]]:
             continue
         baru = str(baru or "").strip()
         lama = str(lama or "").strip()
-        if baru:
+        if baru and not _is_license_text(baru):
             entries.append({"baru": baru, "lama": lama})
     return entries
 
@@ -66,6 +82,20 @@ def compact_sbu_label(value: str | dict[str, str]) -> str:
         rf"^\s*SBU\s+{re.escape(code.group(1))}\s*",
         "",
         text,
+        flags=re.IGNORECASE,
+    )
+    # Legacy JKK entries sometimes place code at end and start with
+    # "KBLI ... atau KBLI ... -"; remove wrapper before truncating.
+    title = re.sub(
+        rf"\s*\(?{re.escape(code.group(1))}\)?\s*",
+        " ",
+        title,
+        flags=re.IGNORECASE,
+    )
+    title = re.sub(
+        r"^\s*KBLI\s+\d{5}\s+atau\s+KBLI\s+\d{5}\s*-\s*",
+        "",
+        title,
         flags=re.IGNORECASE,
     )
     title = re.sub(r"^\s*KBLI\s+\d{5}\s*", "", title, flags=re.IGNORECASE)
@@ -97,12 +127,7 @@ def load_sbu_history(
         sources += (LEGACY_PK_SBU_HISTORY_PATH,)
     for source in sources:
         for entry in _read_entries(source):
-            upper = entry["baru"].upper()
-            if source == LEGACY_PK_SBU_HISTORY_PATH and (
-                re.search(r"\b(?:RE|RK)\d{3}\b", upper)
-                or "KONSULT" in upper
-                or "REKAYASA" in upper
-            ):
+            if source == LEGACY_PK_SBU_HISTORY_PATH and is_consultancy_sbu(entry["baru"]):
                 continue
             key = _history_key(entry)
             if key not in seen:
@@ -125,7 +150,7 @@ def save_sbu_history(
     """Put one SBU pair first and persist it to canonical history."""
     baru = str(baru or "").strip()
     lama = str(lama or "").strip()
-    if not baru:
+    if not baru or _is_license_text(baru):
         return load_sbu_history(path, legacy_paths)
 
     entry = {"baru": baru, "lama": lama}

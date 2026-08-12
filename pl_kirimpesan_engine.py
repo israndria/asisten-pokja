@@ -20,6 +20,14 @@ DEFAULT_TEMPAT = (
     "Jl. Datu Suban RT. 01, Kelurahan Rangda Malingkung, "
     "Kecamatan Tapin Utara, Rantau, Kabupaten Tapin. Kode Pos : 71111"
 )
+# Sumber alamat DPUPR: master_dinas.alamat_pp_bertugas (Supabase id=1).
+# Mapping ini dipakai UI PL agar nilai PDF dan payload SPSE konsisten.
+TEMPAT_OPTIONS = {
+    "Kantor UKPBJ Kabupaten Tapin": DEFAULT_TEMPAT,
+    "Kantor Dinas PUPR Kabupaten Tapin": (
+        "Jalan Brigjend H. Hasan Basry Km. 04 Bitahan Rantau Kode Pos 71154"
+    ),
+}
 DEFAULT_DIBAWA = (
     "Dokumen Persiapan Pengadaan yang tidak terbatas pada :\n"
     "1. Spesifikasi Teknis 2. Dokumen HPS. 3. Rancangan Kontrak. 4. Dokumen Anggaran Belanja"

@@ -37,6 +37,7 @@ from ui_pl_common import render_package_selection
 from sbu_history import load_sbu_history as _load_shared_sbu_history
 from sbu_history import save_sbu_history as _save_shared_sbu_history
 from sbu_history import compact_sbu_label as _compact_sbu_label
+from sbu_history import is_consultancy_sbu as _is_consultancy_sbu
 
 APP_VERSION = "v2026.07.19.b"
 
@@ -60,7 +61,7 @@ def _load_pl_sbu_history() -> list[dict[str, str]]:
             continue
         baru = str(item.get("baru") or "").strip()
         lama = str(item.get("lama") or "").strip()
-        if not baru or (baru, lama) in seen:
+        if not baru or not _is_consultancy_sbu(baru) or (baru, lama) in seen:
             continue
         seen.add((baru, lama))
         history.append({"baru": baru, "lama": lama})
@@ -75,7 +76,7 @@ def _save_pl_sbu_history(baru: str, lama: str = "") -> None:
     """
     baru = str(baru or "").strip()
     lama = str(lama or "").strip()
-    if not baru:
+    if not baru or not _is_consultancy_sbu(baru):
         return
 
     entry = {"baru": baru, "lama": lama}
@@ -595,6 +596,19 @@ import kualifikasi_parser_pl as _kp_pl
 import hasil_evaluasi_pl_engine as _he_pl_jkk
 import hasil_evaluasi_plpk_engine as _he_pl_pk
 import sbu_picker as _sp_global
+
+
+def _render_pl_tempat_selector(key: str) -> str:
+    """Pilih lokasi acara PL dan kembalikan alamat final untuk payload."""
+    _options = pl_kirimpesan_engine.TEMPAT_OPTIONS
+    _label = st.selectbox(
+        "Tempat / alamat acara",
+        list(_options),
+        key=key,
+    )
+    _value = _options[_label]
+    st.caption(f"📍 {_value}")
+    return _value
 
 
 
@@ -3416,8 +3430,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for _kd_d in sorted(d for d in _LIBUR_MAP if d >= _kd_hari_ini):
                     st.write(f"• {_HARI_NAMA[_kd_d.weekday()]}, {_kd_d.day} {_BULAN_NAMA[_kd_d.month-1]} {_kd_d.year} — {_LIBUR_MAP[_kd_d]}")
 
-            _kd_tempat = pl_kirimpesan_engine.DEFAULT_TEMPAT
-            st.caption(f"📍 Tempat: {_kd_tempat}")
+            _kd_tempat = _render_pl_tempat_selector("pl_tempat_reviu")
 
             st.divider()
             st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
@@ -4691,6 +4704,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
+        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi")
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
@@ -4807,6 +4821,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                                 kode_paket=_bp2["kode_paket"],
                                                 waktu_start=_batch_start,
                                                 waktu_end=_batch_end,
+                                                tempat=_verif_tempat,
                                             ))
                                         _res = {
                                             "ok": all(_r.get("ok") for _r in _hasil_peserta),
@@ -6616,8 +6631,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for _kd_d in sorted(d for d in _LIBUR_MAP if d >= _kd_hari_ini):
                     st.write(f"• {_HARI_NAMA[_kd_d.weekday()]}, {_kd_d.day} {_BULAN_NAMA[_kd_d.month-1]} {_kd_d.year} — {_LIBUR_MAP[_kd_d]}")
 
-            _kd_tempat = pl_kirimpesan_engine.DEFAULT_TEMPAT
-            st.caption(f"📍 Tempat: {_kd_tempat}")
+            _kd_tempat = _render_pl_tempat_selector("pl_tempat_reviu")
 
             st.divider()
             st.warning("⚠️ Pesan yang terkirim **tidak bisa dihapus** dari SPSE.")
@@ -7920,6 +7934,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
+        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi")
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
@@ -8036,6 +8051,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                                 kode_paket=_bp2["kode_paket"],
                                                 waktu_start=_batch_start,
                                                 waktu_end=_batch_end,
+                                                tempat=_verif_tempat,
                                             ))
                                         _res = {
                                             "ok": all(_r.get("ok") for _r in _hasil_peserta),
@@ -10292,11 +10308,15 @@ if _tender_active_tab == "3️⃣ Setup Paket":
 
         with _sp_col_kanan:
             st.markdown("### 3. Konfigurasi")
-            st.caption("Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push.")
+            st.caption(
+                "Upload DOKPIL per paket di sebelah kiri — akan di-extract saat Push. "
+                "Syarat izin dasar dikirim otomatis bersama setup."
+            )
 
         with _sp_col_kanan:
-            # ── Izin Usaha rows (fallback jika DOKPIL tidak diupload) ────────────
-            st.markdown("**Izin Usaha** *(default — ditimpa oleh DOKPIL jika diupload)*")
+            # Row izin dasar tetap disiapkan untuk payload SPSE, tetapi tidak
+            # ditampilkan sebagai konfigurasi terpisah di UI. SBU adalah satu-
+            # satunya pilihan histori yang perlu diubah user.
             _t_izin_default = (
                 "Memiliki perizinan berusaha di bidang Pekerjaan/Jasa Konstruksi. "
                 "a) Memiliki Nomor Induk Berusaha (NIB) dan Sertifikat Standar terverifikasi; "
@@ -10314,8 +10334,7 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                     "Memiliki perizinan berusaha di bidang Jasa Konstruksi."
                 ):
                     st.session_state["ijin_klas_0"] = _t_izin_default
-            _t_ijin_custom = st.toggle("Gunakan izin usaha custom", value=True, key="t_ijin_custom")
-            st.caption("Mode custom aktif sebagai default. Isi jenis izin dan klasifikasi langsung.")
+            _t_ijin_custom = True
 
             # ── Load/save SBU terakhir ke file ───────────────────────────────────
             import json as _json

@@ -1,5 +1,10 @@
 import sbu_history
-from sbu_history import compact_sbu_label, load_sbu_history, save_sbu_history
+from sbu_history import (
+    compact_sbu_label,
+    is_consultancy_sbu,
+    load_sbu_history,
+    save_sbu_history,
+)
 
 
 def test_load_merges_legacy_string_and_pair_history(tmp_path):
@@ -62,3 +67,28 @@ def test_load_deduplicates_legacy_wording_by_code_and_kbli(tmp_path):
 
     history = load_sbu_history(canonical, ())
     assert sum("BG009" in item["baru"] for item in history) == 1
+
+
+def test_load_excludes_generic_license_rows_from_sbu_history(tmp_path):
+    canonical = tmp_path / "sbu_history.json"
+    canonical.write_text(
+        '[{"baru": "Memiliki perizinan berusaha di bidang Pekerjaan/Jasa Konstruksi", "lama": ""}]',
+        encoding="utf-8",
+    )
+
+    values = {item["baru"] for item in load_sbu_history(canonical, ())}
+    assert not any("PERIZINAN BERUSAHA" in value.upper() for value in values)
+
+
+def test_jkk_history_accepts_consultancy_but_rejects_construction():
+    assert is_consultancy_sbu("KBLI 71102 Jasa Rekayasa (RK003)")
+    assert not is_consultancy_sbu("SBU BS002 Bangunan Sipil Jembatan KBLI 42102")
+
+
+def test_compact_label_handles_legacy_jkk_wording():
+    label = compact_sbu_label(
+        "KBLI 71102 atau KBLI 71109 - Jasa Rekayasa Pekerjaan Teknik Sipil "
+        "Transportasi (RK003) atau Aktivitas Enjiniring Dan Konsultansi Teknis Terkait Lainnya"
+    )
+    assert label.startswith("RK003 — Jasa Rekayasa")
+    assert "KBLI 71102" in label
