@@ -7,7 +7,12 @@ import requests
 
 import pl_engine
 import pl_engine_plpk
-from pl_ui_helpers import _engine_for_jenis_pl, _pl_download_success, _pl_io_success
+from pl_ui_helpers import (
+    _copy_pl_evaluator_files,
+    _engine_for_jenis_pl,
+    _pl_download_success,
+    _pl_io_success,
+)
 
 
 def test_bulk_worker_resolves_engine_by_family():
@@ -39,6 +44,30 @@ def test_io_does_not_require_download_when_phase_skipped():
 def test_io_false_when_hps_phase_failed():
     result = {"setup_ok": True, "output_ok": True, "download_ok": True, "hps_ok": False}
     assert _pl_io_success(result, download_requested=True) is False
+
+
+def test_pl_evaluator_copy_puts_canonical_review_sops_in_draft_folder(tmp_path):
+    sop_root = tmp_path / "_SOP Evaluator"
+    sop_root.mkdir()
+    for filename in (
+        "SOP_ISI_REVIU_DPP_CORE.md",
+        "SOP_ISI_REVIU_DPP_DOMAIN.md",
+        "PROTOKOL_EVALUASI_AI.md",
+        "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
+        "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
+    ):
+        (sop_root / filename).write_text(filename, encoding="utf-8")
+
+    target = tmp_path / "paket"
+    copied = _copy_pl_evaluator_files(str(target), str(tmp_path), "JKK")
+
+    draft = target / "0. Draft Dokumen PPK"
+    evaluator = target / "5. Evaluator Kualifikasi & Teknis"
+    assert (draft / "SOP_ISI_REVIU_DPP_CORE.md").read_text(encoding="utf-8")
+    assert (draft / "SOP_ISI_REVIU_DPP_DOMAIN.md").read_text(encoding="utf-8")
+    assert (evaluator / "PROTOKOL_EVALUASI_AI.md").exists()
+    assert "SOP_ISI_REVIU_DPP_CORE.md" in copied
+    assert "SOP_ISI_REVIU_DPP_DOMAIN.md" in copied
 
 
 def test_download_allows_optional_nota_dinas_failure_when_files_exist():

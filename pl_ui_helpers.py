@@ -90,6 +90,54 @@ def _pl_download_success(files_ok, errors):
         for error in (errors or [])
     )
 
+
+def _copy_pl_evaluator_files(target_dir: str, pokja_root: str, jenis_pl: str) -> list[str]:
+    """Copy SOP evaluator kanonik ke folder paket PL.
+
+    SOP Isi Reviu berada di ``0. Draft Dokumen PPK`` agar langsung tersedia
+    saat AI diminta membaca draft. Evaluator domain tetap berada di folder 5.
+    File legacy pra-reviu sengaja tidak dipakai karena sudah tidak ada di
+    master ``_SOP Evaluator``.
+    """
+    eval_root = os.path.join(pokja_root, "_SOP Evaluator")
+    draft_files = (
+        "SOP_ISI_REVIU_DPP_CORE.md",
+        "SOP_ISI_REVIU_DPP_DOMAIN.md",
+    )
+    jenis = str(jenis_pl or "").upper().strip()
+    if jenis == "JKK":
+        evaluator_files = (
+            "PROTOKOL_EVALUASI_AI.md",
+            "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
+            "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
+        )
+    elif jenis == "PK":
+        evaluator_files = (
+            "PROTOKOL_EVALUASI_AI.md",
+            "EVALUATOR_KUALIFIKASI_PL_PK.md",
+        )
+    else:
+        evaluator_files = (
+            "PROTOKOL_EVALUASI_AI.md",
+            "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md",
+        )
+
+    copied = []
+    destinations = (
+        ("0. Draft Dokumen PPK", draft_files),
+        ("5. Evaluator Kualifikasi & Teknis", evaluator_files),
+    )
+    for subfolder, filenames in destinations:
+        destination_dir = os.path.join(target_dir, subfolder)
+        os.makedirs(destination_dir, exist_ok=True)
+        for filename in filenames:
+            source = os.path.join(eval_root, filename)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(destination_dir, filename))
+                copied.append(filename)
+    return copied
+
+
 def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     """Fase I/O murni per paket PL (thread-safe, TANPA st.* dan TANPA COM).
 
@@ -102,7 +150,6 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
     """
     import os as _o
     import re as _re
-    import shutil as _sh
     import subprocess as _sp
     import parse_kak_pl as _pkpl
     import hps_engine as _hps_eng
@@ -175,27 +222,11 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         # 2. Copy file evaluator AI
         try:
             _t_step = _tm.perf_counter()
-            _eval_root = _o.path.join(cfg["pokja_root"], "_SOP Evaluator")
-            _prareviu = ["PROTOKOL_PRA_REVIU.md", "EVALUATOR_PRA_REVIU_DPP.md"]
-            if jenis_pl == "JKK":
-                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md", "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md"]
-            elif jenis_pl == "PK":
-                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_KUALIFIKASI_PL_PK.md"]
-            else:
-                _eval_base = ["PROTOKOL_EVALUASI_AI.md", "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md"]
-            _copied = []
-            _ppk_dir = _o.path.join(target, "0. Draft Dokumen PPK")
-            _o.makedirs(_ppk_dir, exist_ok=True)
-            for _ef in _prareviu:
-                _src = _o.path.join(_eval_root, _ef)
-                if _o.path.isfile(_src):
-                    _sh.copy2(_src, _o.path.join(_ppk_dir, _ef)); _copied.append(_ef)
-            _eval_dir = _o.path.join(target, "5. Evaluator Kualifikasi & Teknis")
-            _o.makedirs(_eval_dir, exist_ok=True)
-            for _ef in _eval_base:
-                _src = _o.path.join(_eval_root, _ef)
-                if _o.path.isfile(_src):
-                    _sh.copy2(_src, _o.path.join(_eval_dir, _ef)); _copied.append(_ef)
+            _copied = _copy_pl_evaluator_files(
+                target,
+                cfg["pokja_root"],
+                jenis_pl,
+            )
             log(f"📄 Evaluator: {len(_copied)} file disalin (0.+5.)" if _copied else "⚠ Evaluator: tidak ada file ditemukan di root POKJA")
             _step("evaluator", _t_step)
         except Exception as _ev_e:

@@ -2499,13 +2499,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _jp = (r.get("jenis_pl") or "").upper()
                 if _pl_filter == "JKK":    return _jp == "JKK"
                 if _pl_filter == "PK":     return _jp == "PK"
-                if _pl_filter == "Sudah Folder": return bool(r.get("_folder_lokal"))
+                if _pl_filter == "Sudah Folder":
+                    return str(r.get("kode_paket") or "") in _pl_local_by_kode
                 return True
 
-            # Daftar operasional hanya menampilkan paket yang sudah punya
-            # folder + workbook. Kandidat baru tetap tersedia di seksi
-            # Create Folder di bawah.
-            _pl_filtered = [r for r in _pl_rows_local if _pl_match(r)]
+            # Tampilkan semua hasil serapan, termasuk kandidat yang belum
+            # punya folder, agar metode dapat diubah sebelum Create Folder.
+            # Tombol operasi per paket tetap digate oleh ``_pr_folder``.
+            _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
 
             _pl_peserta_map = _fetch_status_semua_paket_cached(
                 tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
@@ -5864,13 +5865,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _jp = (r.get("jenis_pl") or "").upper()
                 if _pl_filter == "JKK":    return _jp == "JKK"
                 if _pl_filter == "PK":     return _jp == "PK"
-                if _pl_filter == "Sudah Folder": return bool(r.get("_folder_lokal"))
+                if _pl_filter == "Sudah Folder":
+                    return str(r.get("kode_paket") or "") in _pl_local_by_kode
                 return True
 
-            # Daftar operasional hanya menampilkan paket yang sudah punya
-            # folder + workbook. Kandidat baru tetap tersedia di seksi
-            # Create Folder di bawah.
-            _pl_filtered = [r for r in _pl_rows_local if _pl_match(r)]
+            # Tampilkan semua hasil serapan, termasuk kandidat yang belum
+            # punya folder, agar metode dapat diubah sebelum Create Folder.
+            # Tombol operasi per paket tetap digate oleh ``_pr_folder``.
+            _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
 
             _pl_peserta_map = _fetch_status_semua_paket_cached(
                 tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
