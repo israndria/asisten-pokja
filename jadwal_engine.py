@@ -101,7 +101,16 @@ def is_hari_kerja(dt: datetime) -> bool:
 
 
 def is_jam_kerja(dt: datetime) -> bool:
-    return JAM_KERJA_MULAI <= dt.hour < JAM_KERJA_SELESAI
+    """Cek jam kerja dengan batas akhir inklusif tepat pada ``17:00``."""
+    waktu = (
+        dt.hour * 3600
+        + dt.minute * 60
+        + dt.second
+        + dt.microsecond / 1_000_000
+    )
+    mulai = JAM_KERJA_MULAI * 3600
+    selesai = JAM_KERJA_SELESAI * 3600
+    return mulai <= waktu <= selesai
 
 
 def geser_ke_hari_kerja(dt: datetime, jam_mulai: int = None) -> datetime:
@@ -122,7 +131,7 @@ def geser_ke_hari_kerja(dt: datetime, jam_mulai: int = None) -> datetime:
 
 def geser_ke_jam_kerja(dt: datetime) -> datetime:
     """Jika di luar jam kerja, geser ke jam kerja berikutnya."""
-    if dt.hour < JAM_KERJA_MULAI or dt.hour >= JAM_KERJA_SELESAI:
+    if not is_jam_kerja(dt):
         dt = dt.replace(hour=JAM_KERJA_MULAI, minute=0, second=0, microsecond=0)
         return geser_ke_hari_kerja(dt)
     return dt
