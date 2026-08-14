@@ -3366,7 +3366,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
                     prog.empty()
                     _ok = sum(1 for h in hasil if h["sukses"])
-                    st.success(f"✅ {_ok} BA Reviu berhasil diupload!") if _ok == len(hasil) else st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
+                    if _ok == len(hasil):
+                        st.success(f"✅ {_ok} BA Reviu berhasil diupload!")
+                    else:
+                        st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
                     st.dataframe(hasil, use_container_width=True, hide_index=True)
 
                 for _rr in _pl_rows_kd:
@@ -6568,7 +6571,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
                     prog.empty()
                     _ok = sum(1 for h in hasil if h["sukses"])
-                    st.success(f"✅ {_ok} BA Reviu berhasil diupload!") if _ok == len(hasil) else st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
+                    if _ok == len(hasil):
+                        st.success(f"✅ {_ok} BA Reviu berhasil diupload!")
+                    else:
+                        st.warning(f"⚠️ {_ok} berhasil, {len(hasil)-_ok} gagal.")
                     st.dataframe(hasil, use_container_width=True, hide_index=True)
                 for _rr in _pl_rows_kd:
                     _kd_key     = f"kd_chk_{_rr['kode_paket']}_v19"
