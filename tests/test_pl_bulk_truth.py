@@ -7,12 +7,33 @@ import requests
 
 import pl_engine
 import pl_engine_plpk
+import ppk_upload_engine
+import spse_browser
 from pl_ui_helpers import (
     _copy_pl_evaluator_files,
     _engine_for_jenis_pl,
     _pl_download_success,
     _pl_io_success,
 )
+
+
+def test_ubah_metode_cdp_includes_submit_field_and_retries_transient_503(monkeypatch):
+    calls = []
+
+    def fake_cdp_eval(js, timeout=20):
+        calls.append((js, timeout))
+        return True, {"ok": False, "msg": "POST status 503 type basic"}, None
+
+    monkeypatch.setattr(ppk_upload_engine, "_cdp_eval", fake_cdp_eval)
+    monkeypatch.setattr(spse_browser.time, "sleep", lambda _seconds: None)
+
+    result = spse_browser.ubah_metode_via_playwright(
+        "X", 5, 17, "https://spse.test/tapinkab/"
+    )
+
+    assert result == "Gagal: POST status 503 type basic"
+    assert len(calls) == 3
+    assert all("new FormData()" in js and "simpan" in js for js, _timeout in calls)
 
 
 def test_bulk_worker_resolves_engine_by_family():

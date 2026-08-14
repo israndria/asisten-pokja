@@ -2400,7 +2400,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
-        _pl_rows = _load_draft_pl_cached(only_local=False)
+        _pl_rows = _load_draft_pl_cached("JKK", only_local=False)
+        _pl_rows = [
+            r for r in _pl_rows
+            if str(r.get("jenis_pl") or "").upper() == "JKK"
+        ]
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
         _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
@@ -2468,7 +2472,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
                         # Cache JKK dipisahkan dari cache PK.
-                        _pl_rows = _load_draft_pl_cached(only_local=False)
+                        _pl_rows = _load_draft_pl_cached("JKK", only_local=False)
+                        _pl_rows = [
+                            r for r in _pl_rows
+                            if str(r.get("jenis_pl") or "").upper() == "JKK"
+                        ]
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
@@ -2505,30 +2513,44 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             _pl_filter = st.selectbox(
                 "Filter:",
-                ["Semua", "JKK", "PK", "Sudah Folder"],
+                ["Semua", "Belum Folder", "Sudah Folder", "JKK", "PK"],
                 key="pl_filter_jenis",
             )
 
             def _pl_match(r):
                 _jp = (r.get("jenis_pl") or "").upper()
+                _kode = str(r.get("kode_paket") or "")
+                _punya_folder = _kode in _pl_local_by_kode
+                if _pl_filter == "Belum Folder":
+                    return not _punya_folder
                 if _pl_filter == "JKK":    return _jp == "JKK"
                 if _pl_filter == "PK":     return _jp == "PK"
                 if _pl_filter == "Sudah Folder":
-                    return str(r.get("kode_paket") or "") in _pl_local_by_kode
+                    return _punya_folder
                 return True
 
-            # Tampilkan semua hasil serapan, termasuk kandidat yang belum
-            # punya folder, agar metode dapat diubah sebelum Create Folder.
-            # Tombol operasi per paket tetap digate oleh ``_pr_folder``.
-            _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
+            # Pisahkan visual dan aksi: metode hanya boleh diubah sebelum
+            # folder/workbook lokal dibuat. Paket existing tetap operasional,
+            # tetapi tidak ikut aksi ubah metode.
+            _pl_filtered_raw = [r for r in _pl_rows if _pl_match(r)]
+            _pl_unfoldered = [
+                r for r in _pl_filtered_raw
+                if str(r.get("kode_paket") or "") not in _pl_local_by_kode
+            ]
+            _pl_foldered = [
+                r for r in _pl_filtered_raw
+                if str(r.get("kode_paket") or "") in _pl_local_by_kode
+            ]
+            _pl_filtered = _pl_unfoldered + _pl_foldered
 
             _pl_peserta_map = _fetch_status_semua_paket_cached(
                 tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
             )
 
             if not _pl_filtered:
-                st.info("Belum ada paket lokal siap operasi. Kandidat baru tersedia di bagian Create Folder.")
+                st.info("Belum ada paket hasil serapan. Jalankan Serap Data Paket PL atau pilih paket di bagian Create Folder.")
             else:
+                _pl_prev_folder_state = None
                 for _pr in _pl_filtered:
                     _pr_kode   = _pr.get("kode_paket", "")
                     _pr_nama   = _pr.get("nama_paket", "-")
@@ -2546,8 +2568,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _pr_metode_low = _pr_metode_raw.lower()
                     _pr_label  = f"{_pr_icon} {_pl_label(_pr)}"
 
+                    if _pr_folder != _pl_prev_folder_state:
+                        _pl_prev_folder_state = _pr_folder
+                        if _pr_folder:
+                            st.markdown("##### ✅ Paket Sudah Punya Folder")
+                            st.caption("Read-only untuk ubah metode; gunakan aksi paket di bawahnya.")
+                        else:
+                            st.markdown("##### 📋 Paket Belum Punya Folder")
+                            st.caption("Ubah metode tersedia sebelum folder dibuat.")
+
                     with st.expander(_pr_label):
-                        st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        st.caption(
+                            f"`{_pr_kode}` | Jenis PL: **{_pr_jenis or '-'}** "
+                            f"| HPS: {_pr_hps} | Status: **{_pr_status}**"
+                        )
                         if _pr_jenis == "JKK":
                             st.caption(f"Workflow target SPSE: **{_pl_workflow(_pr)}**")
                         # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
@@ -2594,26 +2628,27 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     })
                                 st.table(_pl_dpa_tbl)
 
-                        # Ubah Metode Pengadaan inline per paket
-                        with st.container(border=True):
-                            st.markdown("**🔧 Ubah Metode Pengadaan**")
-                            _pr_metode_pilihan = st.selectbox(
-                                "Target metode:",
-                                list(pl_engine.METODE_PL_MAP.keys()),
-                                 index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
-                                key=f"pl_ubah_metode_target_{_pr_kode}",
-                            )
-                            _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
-                            if st.button(
-                                "🔄 Ubah Metode via CDP",
-                                use_container_width=True,
-                                key=f"pl_btn_ubah_metode_{_pr_kode}",
-                            ):
-                                _pl_base_ubah = pl_engine.BASE_URL + "/"
-                                if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
-                                    st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
-                                else:
-                                    st.error("❌ Gagal ubah metode.")
+                        # Ubah metode hanya untuk paket yang belum punya folder.
+                        if not _pr_folder:
+                            with st.container(border=True):
+                                st.markdown("**🔧 Ubah Metode Pengadaan**")
+                                _pr_metode_pilihan = st.selectbox(
+                                    "Target metode:",
+                                    list(pl_engine.METODE_PL_MAP.keys()),
+                                    index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                                    key=f"pl_ubah_metode_target_{_pr_kode}",
+                                )
+                                _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
+                                if st.button(
+                                    "🔄 Ubah Metode via CDP",
+                                    use_container_width=True,
+                                    key=f"pl_btn_ubah_metode_{_pr_kode}",
+                                ):
+                                    _pl_base_ubah = pl_engine.BASE_URL + "/"
+                                    if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
+                                        st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
+                                    else:
+                                        st.error("❌ Gagal ubah metode. Cek sesi SPSE atau ulangi setelah beberapa detik.")
 
                         # Aksi paket: tiga operasi utama satu baris; aksi panjang di baris kedua.
                         _pr_c1, _pr_c2, _pr_c3 = st.columns([1.5, 1.1, 1.1])
@@ -2734,12 +2769,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # ══════════════════════════════════════════════════════
 
             # ── Ubah Metode Bulk (semua paket di daftar) ──────────────
-            if _pl_rows:
+            if _pl_unfoldered:
                 st.divider()
                 with st.container(border=True):
-                    st.markdown("**🔧 Ubah Metode Pengadaan — Semua Paket**")
-                    _pl_opsi_ubah_bulk = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_filtered}
-                    _pl_sel_ubah_bulk = list(_pl_opsi_ubah_bulk.keys())
+                    st.markdown("**🔧 Ubah Metode Pengadaan — Paket Belum Punya Folder**")
+                    st.caption("Aksi bulk hanya menyasar paket yang belum memiliki folder/workbook lokal.")
+                    _pl_sel_ubah_bulk = [
+                        (
+                            f"{r.get('nama_paket', r.get('kode_paket'))} [{r.get('kode_paket')}]",
+                            r.get("kode_paket"),
+                        )
+                        for r in _pl_unfoldered
+                    ]
                     _pl_metode_bulk = st.selectbox(
                         "Target metode:",
                         list(pl_engine.METODE_PL_MAP.keys()),
@@ -2755,8 +2796,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     ):
                         _pl_base_ubah_b = pl_engine.BASE_URL + "/"
                         _pl_ok_b = _pl_fail_b = 0
-                        for _nm_b in _pl_sel_ubah_bulk:
-                            _kd_b = _pl_opsi_ubah_bulk[_nm_b]
+                        for _nm_b, _kd_b in _pl_sel_ubah_bulk:
                             _hasil_b = spse_browser.ubah_metode_via_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b)
                             if _hasil_b == "OK":
                                 _pl_ok_b += 1
@@ -5771,6 +5811,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _PL_NO_WIN = 0x08000000
 
         _pl_rows = _load_draft_pl_cached("PK", only_local=False)
+        _pl_rows = [
+            r for r in _pl_rows
+            if str(r.get("jenis_pl") or "").upper() == "PK"
+        ]
 
         # ── Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut) ──
         _pl_rows, _pl_dup_n = pl_engine.buang_duplikat_paket_lama(_pl_rows)
@@ -5839,6 +5883,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _load_draft_pl_cached.clear()
                         # Reload setelah serap SPSE agar data paket terkini
                         _pl_rows = _load_draft_pl_cached("PK", only_local=False)
+                        _pl_rows = [
+                            r for r in _pl_rows
+                            if str(r.get("jenis_pl") or "").upper() == "PK"
+                        ]
                         if not _pl_show_done:
                             _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
@@ -5875,30 +5923,44 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             _pl_filter = st.selectbox(
                 "Filter:",
-                ["Semua", "JKK", "PK", "Sudah Folder"],
+                ["Semua", "Belum Folder", "Sudah Folder", "JKK", "PK"],
                 key="pl_filter_jenis",
             )
 
             def _pl_match(r):
                 _jp = (r.get("jenis_pl") or "").upper()
+                _kode = str(r.get("kode_paket") or "")
+                _punya_folder = _kode in _pl_local_by_kode
+                if _pl_filter == "Belum Folder":
+                    return not _punya_folder
                 if _pl_filter == "JKK":    return _jp == "JKK"
                 if _pl_filter == "PK":     return _jp == "PK"
                 if _pl_filter == "Sudah Folder":
-                    return str(r.get("kode_paket") or "") in _pl_local_by_kode
+                    return _punya_folder
                 return True
 
-            # Tampilkan semua hasil serapan, termasuk kandidat yang belum
-            # punya folder, agar metode dapat diubah sebelum Create Folder.
-            # Tombol operasi per paket tetap digate oleh ``_pr_folder``.
-            _pl_filtered = [r for r in _pl_rows if _pl_match(r)]
+            # Pisahkan visual dan aksi: metode hanya boleh diubah sebelum
+            # folder/workbook lokal dibuat. Paket existing tetap operasional,
+            # tetapi tidak ikut aksi ubah metode.
+            _pl_filtered_raw = [r for r in _pl_rows if _pl_match(r)]
+            _pl_unfoldered = [
+                r for r in _pl_filtered_raw
+                if str(r.get("kode_paket") or "") not in _pl_local_by_kode
+            ]
+            _pl_foldered = [
+                r for r in _pl_filtered_raw
+                if str(r.get("kode_paket") or "") in _pl_local_by_kode
+            ]
+            _pl_filtered = _pl_unfoldered + _pl_foldered
 
             _pl_peserta_map = _fetch_status_semua_paket_cached(
                 tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
             )
 
             if not _pl_filtered:
-                st.info("Belum ada paket lokal siap operasi. Kandidat baru tersedia di bagian Create Folder.")
+                st.info("Belum ada paket hasil serapan. Jalankan Serap Data Paket PL atau pilih paket di bagian Create Folder.")
             else:
+                _pl_prev_folder_state = None
                 for _pr in _pl_filtered:
                     _pr_kode   = _pr.get("kode_paket", "")
                     _pr_nama   = _pr.get("nama_paket", "-")
@@ -5916,8 +5978,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pr_metode_low = _pr_metode_raw.lower()
                     _pr_label  = f"{_pr_icon} {_pl_label(_pr)}"
 
+                    if _pr_folder != _pl_prev_folder_state:
+                        _pl_prev_folder_state = _pr_folder
+                        if _pr_folder:
+                            st.markdown("##### ✅ Paket Sudah Punya Folder")
+                            st.caption("Read-only untuk ubah metode; gunakan aksi paket di bawahnya.")
+                        else:
+                            st.markdown("##### 📋 Paket Belum Punya Folder")
+                            st.caption("Ubah metode tersedia sebelum folder dibuat.")
+
                     with st.expander(_pr_label):
-                        st.caption(f"`{_pr_kode}` | HPS: {_pr_hps} | Status: **{_pr_status}**")
+                        st.caption(
+                            f"`{_pr_kode}` | Jenis PL: **{_pr_jenis or '-'}** "
+                            f"| HPS: {_pr_hps} | Status: **{_pr_status}**"
+                        )
                         # Badge peserta pendaftaran — pakai kode_paket (bukan id_nontender)
                         _pr_id_nt = _pr.get("kode_paket", "") or _pr.get("id_nontender", "")
                         if _pr_id_nt:
@@ -5962,26 +6036,27 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     })
                                 st.table(_pl_dpa_tbl)
 
-                        # Ubah Metode Pengadaan inline per paket
-                        with st.container(border=True):
-                            st.markdown("**🔧 Ubah Metode Pengadaan**")
-                            _pr_metode_pilihan = st.selectbox(
-                                "Target metode:",
-                                list(pl_engine.METODE_PL_MAP.keys()),
-                                 index=list(pl_engine.METODE_PL_MAP.keys()).index("Pekerjaan Konstruksi — PL"),
-                                key=f"pl_ubah_metode_target_{_pr_kode}",
-                            )
-                            _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
-                            if st.button(
-                                "🔄 Ubah Metode via CDP",
-                                use_container_width=True,
-                                key=f"pl_btn_ubah_metode_{_pr_kode}",
-                            ):
-                                _pl_base_ubah = pl_engine.BASE_URL + "/"
-                                if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
-                                    st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
-                                else:
-                                    st.error("❌ Gagal ubah metode.")
+                        # Ubah metode hanya untuk paket yang belum punya folder.
+                        if not _pr_folder:
+                            with st.container(border=True):
+                                st.markdown("**🔧 Ubah Metode Pengadaan**")
+                                _pr_metode_pilihan = st.selectbox(
+                                    "Target metode:",
+                                    list(pl_engine.METODE_PL_MAP.keys()),
+                                    index=list(pl_engine.METODE_PL_MAP.keys()).index("Pekerjaan Konstruksi — PL"),
+                                    key=f"pl_ubah_metode_target_{_pr_kode}",
+                                )
+                                _pr_kat_id, _pr_pilih_val = pl_engine.METODE_PL_MAP[_pr_metode_pilihan]
+                                if st.button(
+                                    "🔄 Ubah Metode via CDP",
+                                    use_container_width=True,
+                                    key=f"pl_btn_ubah_metode_{_pr_kode}",
+                                ):
+                                    _pl_base_ubah = pl_engine.BASE_URL + "/"
+                                    if pl_engine.ubah_metode_pl_playwright(_pr_kode, _pr_kat_id, _pr_pilih_val, _pl_base_ubah):
+                                        st.success("✅ Berhasil ubah metode. Serap ulang untuk refresh.")
+                                    else:
+                                        st.error("❌ Gagal ubah metode. Cek sesi SPSE atau ulangi setelah beberapa detik.")
 
                         # Aksi paket: tiga operasi utama satu baris; aksi panjang di baris kedua.
                         _pr_c1, _pr_c2, _pr_c3 = st.columns([1.5, 1.1, 1.1])
@@ -6082,12 +6157,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         # ══════════════════════════════════════════════════════
 
             # ── Ubah Metode Bulk (semua paket di daftar) ──────────────
-            if _pl_rows:
+            if _pl_unfoldered:
                 st.divider()
                 with st.container(border=True):
-                    st.markdown("**🔧 Ubah Metode Pengadaan — Semua Paket**")
-                    _pl_opsi_ubah_bulk = {r.get("nama_paket", r.get("kode_paket")): r.get("kode_paket") for r in _pl_filtered}
-                    _pl_sel_ubah_bulk = list(_pl_opsi_ubah_bulk.keys())
+                    st.markdown("**🔧 Ubah Metode Pengadaan — Paket Belum Punya Folder**")
+                    st.caption("Aksi bulk hanya menyasar paket yang belum memiliki folder/workbook lokal.")
+                    _pl_sel_ubah_bulk = [
+                        (
+                            f"{r.get('nama_paket', r.get('kode_paket'))} [{r.get('kode_paket')}]",
+                            r.get("kode_paket"),
+                        )
+                        for r in _pl_unfoldered
+                    ]
                     _pl_metode_bulk = st.selectbox(
                         "Target metode:",
                         list(pl_engine.METODE_PL_MAP.keys()),
@@ -6103,8 +6184,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     ):
                         _pl_base_ubah_b = pl_engine.BASE_URL + "/"
                         _pl_ok_b = _pl_fail_b = 0
-                        for _nm_b in _pl_sel_ubah_bulk:
-                            _kd_b = _pl_opsi_ubah_bulk[_nm_b]
+                        for _nm_b, _kd_b in _pl_sel_ubah_bulk:
                             _hasil_b = spse_browser.ubah_metode_via_playwright(_kd_b, _pl_kat_id_bulk, _pl_pilih_val_bulk, _pl_base_ubah_b)
                             if _hasil_b == "OK":
                                 _pl_ok_b += 1

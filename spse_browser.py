@@ -1172,22 +1172,23 @@ def ubah_metode_via_playwright(kode_paket: str, kategori_id: int, pilih: int, ba
 
   // GET /metode untuk ambil authenticityToken
   const rGet = await fetch('/' + lpse + '/nontender/' + kode + '/metode', {{credentials: 'include'}});
+  if (!rGet.ok) return {{ok: false, msg: 'GET status ' + rGet.status + ' type ' + rGet.type}};
   const html = await rGet.text();
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const token = doc.querySelector('input[name=authenticityToken]')?.value || '';
   if (!token) return {{ok: false, msg: 'authenticityToken tidak ditemukan'}};
 
   // POST /metodesubmit — redirect: manual agar tidak throw
-  const body = new URLSearchParams();
+  const body = new FormData();
   body.append('authenticityToken', token);
   body.append('kategoriId', kategoriId);
   body.append('pilih', pilih);
+  body.append('simpan', 'simpan');
 
   const rPost = await fetch('/' + lpse + '/nontender/' + kode + '/metodesubmit', {{
     method: 'POST',
     credentials: 'include',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: body.toString(),
+    body,
     redirect: 'manual'
   }});
 
@@ -1195,16 +1196,28 @@ def ubah_metode_via_playwright(kode_paket: str, kategori_id: int, pilih: int, ba
   if (rPost.type === 'opaqueredirect' || rPost.status === 0 || rPost.status === 302 || rPost.status === 200) {{
     return {{ok: true, msg: 'OK'}};
   }}
-  return {{ok: false, msg: 'POST status ' + rPost.status + ' type ' + rPost.type}};
+  const responseText = await rPost.text().catch(() => '');
+  const detail = responseText.replace(/\\s+/g, ' ').slice(0, 160);
+  return {{ok: false, msg: 'POST status ' + rPost.status + ' type ' + rPost.type + (detail ? ' body ' + detail : '')}};
 }})()
 """
-    ok, val, err = _cdp_eval(js, timeout=20)
-    if not ok:
-        return f"CDP error: {err}"
-    if isinstance(val, dict) and val.get("ok"):
-        return "OK"
-    msg = val.get("msg", "unknown") if isinstance(val, dict) else str(val)
-    return f"Gagal: {msg}"
+    for _attempt in range(3):
+        ok, val, err = _cdp_eval(js, timeout=20)
+        if not ok:
+            return f"CDP error: {err}"
+        if isinstance(val, dict) and val.get("ok"):
+            return "OK"
+        msg = val.get("msg", "unknown") if isinstance(val, dict) else str(val)
+        transient = any(
+            f"{method} status {status}" in msg
+            for method in ("GET", "POST")
+            for status in (502, 503, 504)
+        )
+        if transient and _attempt < 2:
+            time.sleep(0.8 * (2 ** _attempt))
+            continue
+        return f"Gagal: {msg}"
+    return "Gagal: SPSE tidak merespons setelah 3 percobaan"
 
 
 async def _update_ijin_sbu_async(kode_paket: str, ijin_idx: int, klas_baru: str, base_url: str) -> str:
