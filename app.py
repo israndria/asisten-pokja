@@ -1131,11 +1131,16 @@ with _login_popover:
                 st.session_state.pop("login_failed_role", None)
                 st.rerun()
     else:
-        # CDP tidak aktif — browser tutup/belum dibuka; bersihkan semua state login sisa
-        st.session_state.pop("spse_role", None)
-        st.session_state.pop("login_failed", None)
-        st.session_state.pop("login_failed_role", None)
-        _sidebar_login_form()
+        # URL/tab kosong dapat terjadi saat CDP transient reconnect atau browser
+        # sedang restore tab. Jangan anggap itu logout dan jangan buang role PP;
+        # logout nyata hanya diproses dari halaman login/root yang terkonfirmasi
+        # atau tombol "Tutup & Ganti Akun".
+        if _spse_role:
+            st.warning("⚠️ Tab SPSE belum terbaca; sesi login dipertahankan sementara.")
+            if st.button("🔄 Deteksi Ulang SPSE", use_container_width=True, key="btn_deteksi_ulang_spse"):
+                st.rerun()
+        else:
+            _sidebar_login_form()
 
 _spse_role = st.session_state.get("spse_role", None)  # re-sync setelah sidebar logic
 # Recovery role dapat terjadi di dalam sidebar setelah preflight di atas.

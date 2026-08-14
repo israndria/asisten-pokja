@@ -113,7 +113,7 @@ def _refresh_worker(interval_menit: int):
             continue
         for _attempt in range(2):
             try:
-                if refresh_browser():
+                if refresh_browser() or keepalive_browser():
                     state["last_refresh"] = time.time()
                     state["last_error"] = None
                     state["stopped_reason"] = None
@@ -1077,6 +1077,15 @@ def _cdp_page_command(tab: dict, method: str, params: dict | None = None, timeou
     return result[0] or {}
 
 
+def _cdp_runtime_value(payload: dict):
+    """Ambil value Runtime.evaluate dari response CDP langsung maupun wrapper test."""
+    result = payload.get("result") or {}
+    if isinstance(result, dict) and "value" in result:
+        return result.get("value")
+    nested = result.get("result") if isinstance(result, dict) else None
+    return nested.get("value") if isinstance(nested, dict) else None
+
+
 def _reload_tab_via_cdp(tab: dict) -> bool:
     """Reload + validasi tab aman melalui CDP langsung.
 
@@ -1098,7 +1107,7 @@ def _reload_tab_via_cdp(tab: dict) -> bool:
                 {"expression": expression, "returnByValue": True},
                 timeout=3.0,
             )
-            value = ((payload.get("result") or {}).get("result") or {}).get("value")
+            value = _cdp_runtime_value(payload)
             data = json.loads(value) if isinstance(value, str) else {}
             title = str(data.get("title") or "")
             body = str(data.get("body") or "")
@@ -1112,6 +1121,86 @@ def _reload_tab_via_cdp(tab: dict) -> bool:
             pass
         time.sleep(0.5)
     return False
+
+
+def _keepalive_tab_via_cdp(tab: dict) -> bool:
+    """Pertahankan cookie sesi tanpa reload atau mengubah DOM tab user.
+
+    Dipakai saat user sedang berada di form/detail PL. GET dilakukan melalui
+    ``fetch`` di origin SPSE yang sama, sehingga cookie browser ikut, tetapi
+    halaman/form yang sedang diedit tidak dinavigasi ulang.
+    """
+    expression = """(async () => {
+        try {
+            const response = await fetch(window.location.href, {
+                method: "GET",
+                credentials: "include",
+                cache: "no-store",
+                headers: {
+                    "Accept": "text/html,application/xhtml+xml",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            });
+            const html = await response.text();
+            const parsed = new DOMParser().parseFromString(html, "text/html");
+            parsed.querySelectorAll("script,style,noscript").forEach((node) => node.remove());
+            const body = parsed.body ? parsed.body.innerText : html;
+            return JSON.stringify({
+                status: response.status,
+                url: response.url,
+                body: body.slice(0, 5000),
+            });
+        } catch (error) {
+            return JSON.stringify({error: String(error)});
+        }
+    })()"""
+    try:
+        payload = _cdp_page_command(
+            tab,
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            timeout=10.0,
+        )
+        value = _cdp_runtime_value(payload)
+        data = json.loads(value) if isinstance(value, str) else {}
+        status = int(data.get("status") or 0)
+        final_url = str(data.get("url") or "")
+        body = str(data.get("body") or "")
+        if status < 200 or status >= 400:
+            return False
+        if "loginpass" in final_url.casefold() or _is_spse_login_page_text(body):
+            return False
+        if _is_spse_access_error_text(body):
+            return False
+        return bool(body.strip())
+    except Exception:
+        return False
+
+
+def keepalive_browser() -> bool:
+    """Keep SPSE session alive when no safe page may be reloaded.
+
+    Manual ``refresh_browser()`` remains restricted to safe navigation routes;
+    this helper is background-only and uses non-navigating GET for authenticated
+    form/detail tabs.
+    """
+    try:
+        tabs = _cdp_tabs(force=True)
+        target_tabs = [
+            tab for tab in tabs
+            if tab.get("type") == "page"
+            and _url_spse_score(tab.get("url", ""), tab.get("title", "")) > 1
+        ]
+        if not target_tabs:
+            return False
+        tab = _pilih_tab_spse(target_tabs)
+        return bool(tab and _keepalive_tab_via_cdp(tab))
+    except Exception:
+        return False
 
 
 def diskonek():

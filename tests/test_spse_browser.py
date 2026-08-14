@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -189,6 +190,74 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
             self.assertTrue(spse_browser.refresh_browser())
 
         reload_tab.assert_called_once_with(tab)
+
+    def test_keepalive_uses_non_navigating_fetch_for_detail_form(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+        tab = {
+            "type": "page",
+            "url": base + "/nontender/10975369000/edit",
+            "title": "LPSE Kabupaten Tapin - Edit Paket",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+        }
+        payload = {
+            "result": {
+                "type": "string",
+                "value": json.dumps({
+                    "status": 200,
+                    "url": tab["url"],
+                    "body": "Form paket authenticated",
+                }),
+            }
+        }
+        with patch.object(
+            spse_browser,
+            "_cdp_page_command",
+            return_value=payload,
+        ) as command:
+            self.assertTrue(spse_browser._keepalive_tab_via_cdp(tab))
+
+        command.assert_called_once()
+        self.assertEqual(command.call_args.args[1], "Runtime.evaluate")
+        params = command.call_args.args[2]
+        self.assertTrue(params["awaitPromise"])
+        self.assertIn("fetch(window.location.href", params["expression"])
+
+    def test_keepalive_rejects_login_response(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+        tab = {
+            "type": "page",
+            "url": base + "/nontender/10975369000/edit",
+            "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+        }
+        payload = {
+            "result": {
+                "type": "string",
+                "value": json.dumps({
+                    "status": 200,
+                    "url": base + "/loginpass",
+                    "body": "BERANDA LOGIN Nama Pengguna Kata Sandi",
+                }),
+            }
+        }
+        with patch.object(spse_browser, "_cdp_page_command", return_value=payload):
+            self.assertFalse(spse_browser._keepalive_tab_via_cdp(tab))
+
+    def test_keepalive_falls_back_to_authenticated_detail_tab(self):
+        base = spse_browser.SPSE_BASE_URL.rstrip("/")
+        tab = {
+            "type": "page",
+            "url": base + "/nontender/10975369000/edit",
+            "title": "LPSE Kabupaten Tapin - Edit Paket",
+        }
+        with patch.object(spse_browser, "_cdp_tabs", return_value=[tab]), \
+                patch.object(
+                    spse_browser,
+                    "_keepalive_tab_via_cdp",
+                    return_value=True,
+                ) as keepalive:
+            self.assertTrue(spse_browser.keepalive_browser())
+
+        keepalive.assert_called_once_with(tab)
 
     def test_authenticated_duplicate_url_beats_stale_error_tab(self):
         base = spse_browser.SPSE_BASE_URL.rstrip("/")
