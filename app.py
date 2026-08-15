@@ -3909,10 +3909,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_jkk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
+            _target_errors = _gcalpl.register_pl_calendar_targets(_pljd_rows)
+            if _target_errors:
+                st.warning("⚠️ Allowlist GCal PL belum diperbarui: " + " | ".join(_target_errors))
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
-            _gcalpl_results = _gcalpl.sync_semua_paket_pl(
-                progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
-            )
+            try:
+                _gcalpl_results = _gcalpl.sync_semua_paket_pl(
+                    progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
+                )
+            except _gcalpl.TargetRegistryError as _e_registry:
+                _gcalpl_results = []
+                st.error(f"❌ Allowlist target GCal belum siap: {_e_registry}")
             _gcalpl_prog.empty()
             _gcalpl_ok = sum(1 for r in _gcalpl_results if r["ok"])
             _gcalpl_skip = sum(1 for r in _gcalpl_results if not r["ok"] and "kosong" in r.get("error", ""))
@@ -7166,10 +7173,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_pk", use_container_width=True, type="primary")
         if _sync_gcal_pl_btn:
             import gcal_pl_helper as _gcalpl
+            _target_errors = _gcalpl.register_pl_calendar_targets(_pljd_rows)
+            if _target_errors:
+                st.warning("⚠️ Allowlist GCal PL belum diperbarui: " + " | ".join(_target_errors))
             _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
-            _gcalpl_results = _gcalpl.sync_semua_paket_pl(
-                progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
-            )
+            try:
+                _gcalpl_results = _gcalpl.sync_semua_paket_pl(
+                    progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
+                )
+            except _gcalpl.TargetRegistryError as _e_registry:
+                _gcalpl_results = []
+                st.error(f"❌ Allowlist target GCal belum siap: {_e_registry}")
             _gcalpl_prog.empty()
             _gcalpl_ok = sum(1 for r in _gcalpl_results if r["ok"])
             _gcalpl_skip = sum(1 for r in _gcalpl_results if not r["ok"] and "kosong" in r.get("error", ""))

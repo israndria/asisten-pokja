@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import unittest
 
 import gcal_pl_helper
+import config
+from openpyxl import Workbook
 
 
 def _jadwal_lima_tahap():
@@ -62,6 +66,54 @@ class _FakeService:
 
 
 class GcalPlHelperTest(unittest.TestCase):
+    def test_pl_folder_identity_uses_master_data_code(self):
+        with TemporaryDirectory() as temp_dir:
+            folder_root = Path(temp_dir)
+            folder = folder_root / "Paket PL"
+            folder.mkdir(parents=True)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "@ Master Data"
+            sheet["C3"] = "123456"
+            workbook.save(folder / "Paket.xlsm")
+            workbook.close()
+
+            with patch.object(gcal_pl_helper, "OUTPUT_DIR_PL_JKK", str(folder_root)), patch.object(
+                gcal_pl_helper, "OUTPUT_DIR_PL_PK", str(folder_root / "PK")
+            ):
+                self.assertTrue(
+                    gcal_pl_helper._pl_folder_identity_valid("Paket PL", "123456")
+                )
+                self.assertFalse(
+                    gcal_pl_helper._pl_folder_identity_valid("Paket PL", "999999")
+                )
+
+    def test_pl_sync_uses_only_allowlisted_active_rows(self):
+        class _Query:
+            def select(self, *_columns):
+                return self
+
+            def in_(self, *_args):
+                return self
+
+            def execute(self):
+                return type("Response", (), {"data": [
+                    {"kode_paket": "1", "nama_paket": "Target", "tahap_spse": "Evaluasi"},
+                    {"kode_paket": "2", "nama_paket": "Selesai", "tahap_spse": "Paket Sudah Selesai"},
+                ]})()
+
+        class _Client:
+            def table(self, name):
+                assert name == "draft_paket_pl"
+                return _Query()
+
+        with patch.object(gcal_pl_helper, "load_targets", return_value=[
+            {"kode_paket": "1"}, {"kode_paket": "2"}, {"kode_paket": "3"}
+        ]), patch.object(config, "sb", return_value=_Client()):
+            rows = gcal_pl_helper._load_owned_pl_rows()
+
+        self.assertEqual(rows, [{"kode_paket": "1", "nama_paket": "Target"}])
+
     def test_tapin_uses_wita_timezone(self):
         self.assertEqual(gcal_pl_helper.TZ, "Asia/Makassar")
 

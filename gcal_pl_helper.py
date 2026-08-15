@@ -17,13 +17,38 @@ import os
 import json
 import hashlib
 import re
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import requests
 from bs4 import BeautifulSoup
 
-from config import RUNTIME_ROOT
+from config import (
+    OUTPUT_DIR_PL_JKK,
+    OUTPUT_DIR_PL_PK,
+    RUNTIME_ROOT,
+    V19_ROOT,
+)
+
+try:
+    from calendar_sync_targets import (
+        TargetRegistryError,
+        folder_identity_matches,
+        load_targets,
+        upsert_target,
+    )
+    from spse_public_http import get_public as _get_public_spse
+except ImportError:
+    if V19_ROOT not in sys.path:
+        sys.path.insert(0, V19_ROOT)
+    from calendar_sync_targets import (
+        TargetRegistryError,
+        folder_identity_matches,
+        load_targets,
+        upsert_target,
+    )
+    from spse_public_http import get_public as _get_public_spse
 
 # State OAuth per-PC; gunakan lokasi runtime yang sama dengan app utama.
 TOKEN_PATH = os.path.normpath(os.path.join(RUNTIME_ROOT, "state", "token.json"))
@@ -52,10 +77,13 @@ def _get_spse_session():
 
 
 def _get_spse(url: str, **kwargs):
-    response = _get_spse_session().get(url, **kwargs)
-    if response.status_code in (403, 429) and _get_spse_session() is not requests:
-        response = requests.get(url, **kwargs)
-    return response
+    session = _get_spse_session()
+    return _get_public_spse(
+        session,
+        url,
+        fallback=requests,
+        **kwargs,
+    )
 
 
 def _parse_token_expiry(value):
@@ -416,6 +444,99 @@ def _gcal_schedule_complete(kode_paket: str, jadwal_list: list[dict]) -> bool:
     except Exception:
         return False
 
+
+def _pl_folder_identity_valid(folder_name: str, kode_paket: str) -> bool:
+    return folder_identity_matches(
+        folder_name,
+        kode_paket,
+        (OUTPUT_DIR_PL_JKK, OUTPUT_DIR_PL_PK),
+        "@ Master Data",
+        ("C3", "F2"),
+    )
+
+
+def _auto_enroll_folder_pl() -> None:
+    """Enroll PL yang foldernya dibuat user, termasuk jadwal yang dibuat teman."""
+    from config import sb as _sb
+
+    all_targets = load_targets("pl", enabled_only=False)
+    known = {
+        str(target.get("kode_paket") or "").strip(): target
+        for target in all_targets
+    }
+    rows = _sb().table("draft_paket_pl").select(
+        "kode_paket,nama_paket,folder_dibuat,jenis_pl"
+    ).execute().data or []
+    for row in rows:
+        code = str(row.get("kode_paket") or "").strip()
+        folder_name = str(row.get("folder_dibuat") or "").strip()
+        if (
+            not code
+            or not folder_name
+            or code in known
+            or not _pl_folder_identity_valid(folder_name, code)
+        ):
+            continue
+        upsert_target(
+            "pl", code,
+            name=str(row.get("nama_paket") or code).strip(),
+            folder_name=folder_name,
+            source="folder-auto",
+            note="Auto-enrolled karena folder paket ada di root PL lokal.",
+        )
+
+
+def _load_owned_pl_rows() -> list[dict]:
+    """Ambil PL hanya bila kodenya ada di allowlist aktif."""
+    from config import sb as _sb
+
+    _auto_enroll_folder_pl()
+    targets = load_targets("pl")
+    if not targets:
+        return []
+    codes = [str(target.get("kode_paket") or "").strip() for target in targets]
+    rows = _sb().table("draft_paket_pl").select(
+        "kode_paket,nama_paket,tahap_spse"
+    ).in_("kode_paket", codes).execute().data or []
+    by_code = {str(row.get("kode_paket") or "").strip(): row for row in rows}
+    result = []
+    for target in targets:
+        code = str(target.get("kode_paket") or "").strip()
+        row = by_code.get(code)
+        if not row:
+            continue
+        if (
+            str(target.get("source") or "").strip() == "folder-auto"
+            and not _pl_folder_identity_valid(target.get("folder_name", ""), code)
+        ):
+            continue
+        if str(row.get("tahap_spse") or "").strip() == "Paket Sudah Selesai":
+            continue
+        result.append({
+            "kode_paket": code,
+            "nama_paket": target.get("nama_paket") or row.get("nama_paket") or code,
+        })
+    return result
+
+
+def register_pl_calendar_targets(rows: list[dict]) -> list[str]:
+    """Daftarkan paket PL yang sedang dipilih user ke allowlist aktif."""
+    errors = []
+    for row in rows or []:
+        code = str(row.get("kode_paket") or row.get("kode") or "").strip()
+        if not code:
+            continue
+        try:
+            upsert_target(
+                "pl",
+                code,
+                name=str(row.get("nama_paket") or row.get("nama") or code).strip(),
+                source="asisten-ui",
+            )
+        except (TargetRegistryError, ValueError) as exc:
+            errors.append(f"{code}: {exc}")
+    return errors
+
 def sync_jadwal_pl(
     kode_paket: str,
     nama_paket: str,
@@ -512,9 +633,7 @@ def sync_semua_paket_pl(
     """
     from config import sb as _sb
 
-    rows = _sb().table("draft_paket_pl").select("kode_paket,nama_paket") \
-        .or_("tahap_spse.neq.Paket Sudah Selesai,tahap_spse.is.null") \
-        .execute().data or []
+    rows = _load_owned_pl_rows()
     total = max(len(rows), 1)
     results = []
 
