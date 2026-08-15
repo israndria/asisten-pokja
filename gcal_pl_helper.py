@@ -34,6 +34,28 @@ _SCHEDULE_STATE_PATH = os.path.normpath(
 )
 
 _TOKEN_CHECK_CACHE = {"key": None, "until": 0.0, "ok": False}
+_SPSE_SESSION = None
+
+
+def _get_spse_session():
+    global _SPSE_SESSION
+    if _SPSE_SESSION is not None:
+        return _SPSE_SESSION
+    try:
+        import cloudscraper
+        _SPSE_SESSION = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+    except ImportError:
+        _SPSE_SESSION = requests
+    return _SPSE_SESSION
+
+
+def _get_spse(url: str, **kwargs):
+    response = _get_spse_session().get(url, **kwargs)
+    if response.status_code in (403, 429) and _get_spse_session() is not requests:
+        response = requests.get(url, **kwargs)
+    return response
 
 
 def _parse_token_expiry(value):
@@ -177,10 +199,10 @@ def check_gcal_token() -> bool:
 # Delete event lama milik paket ini
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _delete_events_by_kode(service, kode_paket: str):
-    """Hapus semua event GCal yang punya extendedProperties.private.source_pl = kode_paket."""
+def _list_events_by_kode(service, kode_paket: str) -> list[dict]:
+    """Ambil event baru dan event PL legacy yang hanya punya kode di deskripsi."""
+    found = {}
     page_token = None
-    ids_to_delete = []
     while True:
         resp = service.events().list(
             calendarId=CALENDAR_ID,
@@ -189,10 +211,32 @@ def _delete_events_by_kode(service, kode_paket: str):
             pageToken=page_token,
         ).execute()
         for ev in resp.get("items", []):
-            ids_to_delete.append(ev["id"])
+            found[ev.get("id")] = ev
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
+    page_token = None
+    needle = f"Paket PL: {kode_paket}"
+    while True:
+        resp = service.events().list(
+            calendarId=CALENDAR_ID,
+            q=needle,
+            singleEvents=True,
+            maxResults=50,
+            pageToken=page_token,
+        ).execute()
+        for ev in resp.get("items", []):
+            if needle in (ev.get("description", "") or ""):
+                found[ev.get("id")] = ev
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return [ev for ev in found.values() if ev.get("id")]
+
+
+def _delete_events_by_kode(service, kode_paket: str):
+    """Kompatibilitas helper lama; hapus event setelah caller memastikan sukses."""
+    ids_to_delete = [ev["id"] for ev in _list_events_by_kode(service, kode_paket)]
     for eid in ids_to_delete:
         try:
             service.events().delete(calendarId=CALENDAR_ID, eventId=eid).execute()
@@ -218,9 +262,18 @@ def push_jadwal_pl_ke_gcal(
     """
     try:
         service = _build_service()
-        deleted = _delete_events_by_kode(service, kode_paket)
+        existing = _list_events_by_kode(service, kode_paket)
+        by_index = {}
+        by_summary = {}
+        for ev in existing:
+            private = ev.get("extendedProperties", {}).get("private", {})
+            if private.get("source_stage_index") is not None:
+                by_index.setdefault(str(private["source_stage_index"]), []).append(ev)
+            if ev.get("summary"):
+                by_summary.setdefault(ev["summary"], []).append(ev)
 
-        inserted = 0
+        inserted = updated = deleted = 0
+        used_ids = set()
         errors = []
         for index, tahap in enumerate(jadwal_list, 1):
             mulai: datetime = tahap["mulai"]
@@ -231,7 +284,10 @@ def push_jadwal_pl_ke_gcal(
                 "start": {"dateTime": mulai.isoformat(), "timeZone": TZ},
                 "end":   {"dateTime": selesai.isoformat(), "timeZone": TZ},
                 "extendedProperties": {
-                    "private": {"source_pl": kode_paket}
+                    "private": {
+                        "source_pl": kode_paket,
+                        "source_stage_index": str(index),
+                    }
                 },
                 "reminders": {
                     "useDefault": False,
@@ -239,19 +295,41 @@ def push_jadwal_pl_ke_gcal(
                 },
             }
             try:
-                service.events().insert(calendarId=CALENDAR_ID, body=evt).execute()
-                inserted += 1
+                candidates = by_index.get(str(index), []) or by_summary.get(evt["summary"], [])
+                event = next((ev for ev in candidates if ev.get("id") not in used_ids), None)
+                if event:
+                    service.events().update(
+                        calendarId=CALENDAR_ID, eventId=event["id"], body=evt,
+                    ).execute()
+                    used_ids.add(event["id"])
+                    updated += 1
+                else:
+                    response = service.events().insert(calendarId=CALENDAR_ID, body=evt).execute()
+                    if isinstance(response, dict) and response.get("id"):
+                        used_ids.add(response["id"])
+                    inserted += 1
             except Exception as e:
                 errors.append(f"Tahap {index} ({tahap.get('nama', '-')}) gagal: {e}")
 
+        if not errors:
+            for ev in existing:
+                if ev.get("id") in used_ids:
+                    continue
+                try:
+                    service.events().delete(calendarId=CALENDAR_ID, eventId=ev["id"]).execute()
+                    deleted += 1
+                except Exception as e:
+                    errors.append(f"Hapus event stale gagal: {e}")
+
         return {
-            "ok": not errors and inserted == len(jadwal_list),
+            "ok": not errors and inserted + updated == len(jadwal_list),
             "inserted": inserted,
+            "updated": updated,
             "deleted": deleted,
             "error": " | ".join(errors)[:1000],
         }
     except Exception as e:
-        return {"ok": False, "inserted": 0, "deleted": 0, "error": str(e)}
+        return {"ok": False, "inserted": 0, "updated": 0, "deleted": 0, "error": str(e)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,10 +372,11 @@ def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
 
     base = SPSE_BASE_URL.rstrip("/")
     url = f"{base}/nontender/{kode_paket}/jadwal"
-    r = requests.get(
+    r = _get_spse(
         url,
         headers={
             "User-Agent": "Mozilla/5.0",
+            "Referer": f"{base}/nontender/{kode_paket}/pengumuman",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
         },
@@ -320,6 +399,22 @@ def parse_jadwal_pl_dari_spse(kode_paket: str) -> list[dict]:
             if mulai and selesai:
                 hasil.append({"nama": tds[1], "mulai": mulai, "selesai": selesai})
     return hasil
+
+
+def _gcal_schedule_complete(kode_paket: str, jadwal_list: list[dict]) -> bool:
+    """Hash lokal hanya boleh skip bila event remote masih lengkap."""
+    try:
+        service = _build_service()
+        events = _list_events_by_kode(service, kode_paket)
+        actual = {ev.get("summary") for ev in events}
+        # Nama paket tidak tersedia di sini; validasi minimal gunakan stage index.
+        indexes = {
+            str(ev.get("extendedProperties", {}).get("private", {}).get("source_stage_index"))
+            for ev in events
+        }
+        return all(str(i) in indexes for i in range(1, len(jadwal_list) + 1)) or len(actual) >= len(jadwal_list)
+    except Exception:
+        return False
 
 def sync_jadwal_pl(
     kode_paket: str,
@@ -344,14 +439,15 @@ def sync_jadwal_pl(
 
     schedule_hash = _schedule_hash(jadwal_list)
     if skip_unchanged and _load_schedule_state().get(str(kode_paket)) == schedule_hash:
-        return {
-            "ok": True,
-            "skipped": True,
-            "gcal": {"ok": True, "inserted": 0, "deleted": 0, "error": ""},
-            "supabase": {"ok": True, "updated": {}},
-            "jadwal": jadwal_list,
-            "error": "",
-        }
+        if _gcal_schedule_complete(kode_paket, jadwal_list):
+            return {
+                "ok": True,
+                "skipped": True,
+                "gcal": {"ok": True, "inserted": 0, "updated": 0, "deleted": 0, "error": ""},
+                "supabase": {"ok": True, "updated": {}},
+                "jadwal": jadwal_list,
+                "error": "",
+            }
 
     # Push GCal
     gcal_result = push_jadwal_pl_ke_gcal(kode_paket, nama_paket, jadwal_list)
