@@ -4181,6 +4181,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _sbu_baru_global = _first_p.get("sbu_baru") or ""
 
                         if _sbu_baru_global:
+                            st.caption("📋 SBU Baru lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_baru_global, language=None, wrap_lines=True)
+                        if _sbu_lama_global:
+                            st.caption("📋 SBU Lama lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_lama_global, language=None, wrap_lines=True)
+
+                        if _sbu_baru_global:
                             st.caption(f"🔹 Baru: `{_sbu_baru_global[:80]}`")
                         if _sbu_lama_global:
                             st.caption(f"🔸 Lama: `{_sbu_lama_global[:80]}`")
@@ -4231,6 +4238,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 "SBU Lama (teks bebas, opsional)", key="plsp_custom_sbu_lama",
                                 placeholder="Kosongkan jika tidak dipersyaratkan",
                             ) or None
+
+                        if _sbu_baru_global:
+                            st.caption("📋 SBU Baru lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_baru_global, language=None, wrap_lines=True)
+                        if _sbu_lama_global:
+                            st.caption("📋 SBU Lama lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_lama_global, language=None, wrap_lines=True)
+
                         if st.button(
                             f"💾 Simpan SBU Custom + POST LDK ke {len(_plsp_selected)} paket",
                             key="plsp_save_sbu_custom_btn", use_container_width=True,
