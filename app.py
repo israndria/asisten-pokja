@@ -2830,9 +2830,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _pl_dl_dokumen = st.checkbox("📦 Download dokumen SPSE (KAK, Personil, Kontrak) saat buat folder", value=True, key="pl_cb_dl")
             _pl_rt_refresh = False
             _pl_extract_teks = False
-            if not st.session_state.get("pl_cb_isi_excel_default_v2"):
+            if st.session_state.get("pl_cb_isi_excel_default_version") != "v3":
                 st.session_state["pl_cb_isi_excel"] = True
-                st.session_state["pl_cb_isi_excel_default_v2"] = True
+                st.session_state["pl_cb_isi_excel_default_version"] = "v3"
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
@@ -2875,6 +2875,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             # ── #2: Checklist pilih paket untuk buat folder ──────────────────
             if _pl_rows_belum:
                 st.markdown("**Pilih paket yang akan dibuat foldernya:**")
+                # Migrasi state lama sekali saja; setelah itu pilihan manual user dipertahankan.
+                if st.session_state.get("plf_chk_default_version") != "v2":
+                    for _br_default in _pl_rows_belum:
+                        st.session_state[f"plf_chk_{_br_default.get('kode_paket', '')}"] = True
+                    st.session_state["plf_chk_default_version"] = "v2"
                 _plf_col1, _plf_col2 = st.columns(2)
                 # Tombol pilih semua / batal semua (tiru pola Tab 5)
                 if _plf_col1.button("✅ Pilih Semua", key="plf_pilih_semua", use_container_width=True):
