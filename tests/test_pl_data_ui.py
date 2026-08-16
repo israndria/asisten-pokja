@@ -15,6 +15,16 @@ def test_pl_setup_draft_filter_excludes_active_or_published_status():
     assert pl_engine.is_paket_draft({"status": "", "tahap_spse": ""}) is False
 
 
+def test_pl_operational_filter_requires_active_status_or_stage():
+    assert pl_engine.is_paket_berjalan({"status": "draft"}) is False
+    assert pl_engine.is_paket_berjalan({"status": "", "tahap_spse": ""}) is False
+    assert pl_engine.is_paket_berjalan({"status": "berjalan"}) is True
+    assert pl_engine.is_paket_berjalan({"status": "evaluasi"}) is True
+    assert pl_engine.is_paket_berjalan({"status": "draft", "tahap_spse": "Upload Dokumen Penawaran"}) is True
+    assert pl_engine.is_paket_berjalan({"status": "selesai"}) is False
+    assert pl_engine.is_paket_berjalan({"status": "berjalan", "tahap_spse": "Penandatanganan Kontrak"}) is False
+
+
 def test_pl_family_loader_isolated_and_fail_closed():
     rows = [
         {"kode_paket": "PK-1", "jenis_pl": "PK"},

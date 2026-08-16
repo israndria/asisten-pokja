@@ -4778,6 +4778,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
+        _verif_rows = [r for r in _verif_rows if pl_engine.is_paket_berjalan(r)]
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -4927,12 +4928,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         st.markdown("## Berita Acara — Pengadaan Langsung")
 
-        # Load paket PL — filter paket selesai
+        # Tab 9 adalah fase operasional: hanya paket aktif/berjalan.
         _pl8_rows = []
         try:
             _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
-            _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+            _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_berjalan(r)]
             _pl8_kode_status = []
             for _r8 in _pl8_rows:
                 _s8 = _enrich_kode_unik_pl_excel(_r8)
@@ -5378,7 +5379,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _raw7 = _load_draft_pl_cached()
             _raw7, _pl7_dup_n = pl_engine.buang_duplikat_paket_lama(_raw7)
             _raw7 = _filter_local_pl_rows(_raw7)
-            _raw7 = [r for r in _raw7 if not pl_engine.is_paket_selesai(r)]
+            _raw7 = [r for r in _raw7 if pl_engine.is_paket_berjalan(r)]
             st.session_state[_pl7_state_key] = _raw7
             if _pl7_dup_n:
                 st.caption(f"♻️ {_pl7_dup_n} row lama duplikat disembunyikan otomatis.")
@@ -5533,7 +5534,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # tanpa lebih dulu merender Tab Download Kualifikasi.
         _raw8 = _load_draft_pl_cached()
         _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
-        _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+        _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_berjalan(r)]
         if _pl8_dup_n:
             st.caption(f"♻️ {_pl8_dup_n} row lama duplikat disembunyikan otomatis.")
 
@@ -5797,7 +5798,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     if _pl_active_tab == "🔟 Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached()
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
-        _rows10 = [r for r in _raw10 if not pl_engine.is_paket_selesai(r)]
+        _rows10 = [r for r in _raw10 if pl_engine.is_paket_berjalan(r)]
         _render_tab10_pl(_rows10, "pl10")
 
     st.stop()  # Jangan render tab Tender jika mode PL

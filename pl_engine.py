@@ -307,7 +307,7 @@ def load_draft_pl() -> list[dict]:
         return []
 
 
-_TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
+_TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai", "selesai")
 
 def is_paket_selesai(r: dict) -> bool:
     """
@@ -332,6 +332,19 @@ def is_paket_draft(r: dict) -> bool:
     if tahap:
         return False
     return status == "draft"
+
+
+def is_paket_berjalan(r: dict) -> bool:
+    """True hanya untuk paket aktif/berjalan pada tab operasional.
+
+    Status atau tahap SPSE wajib memberi bukti bahwa row bukan draft. Row
+    kosong/ambigu dan paket selesai ditolak agar Tab 6–10 fail-closed.
+    """
+    status = str(r.get("status") or "").strip()
+    tahap = str(r.get("tahap_spse") or "").strip()
+    if not status and not tahap:
+        return False
+    return not is_paket_draft(r) and not is_paket_selesai(r)
 
 
 def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
