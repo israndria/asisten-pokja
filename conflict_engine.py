@@ -20,6 +20,20 @@ _RE_GELAR = re.compile(
     re.IGNORECASE,
 )
 _RE_NONALPHA = re.compile(r"[^a-z\s]")
+
+
+_DEFAULT_PROVIDER_NAMES = {
+    "",
+    "-",
+    "belum ada pemenang",
+    "belum ada kontrak",
+    "belum ada penyedia",
+    "null",
+    "none",
+}
+_EXCEL_ERROR_VALUES = {"#n/a", "#value!", "#ref!", "#div/0!", "#name?", "#null!", "#num!"}
+
+
 def _normalize_nama(raw: str) -> str:
     """Lowercase + strip gelar Indonesia + hapus tanda baca + normalisasi spasi."""
     if not raw:
@@ -30,6 +44,86 @@ def _normalize_nama(raw: str) -> str:
     # Hapus spasi berlebih
     s = " ".join(s.split())
     return s
+
+
+def _normalize_provider(raw: str) -> str:
+    """Normalisasi nama penyedia untuk mencocokkan scraper, Excel, dan cache."""
+    value = str(raw or "").strip().lower()
+    if value in _DEFAULT_PROVIDER_NAMES:
+        return ""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
+
+
+def _excel_text(value) -> str:
+    """Ubah error formula Excel menjadi kosong, bukan nama/provider."""
+    text = str(value or "").strip()
+    return "" if text.lower() in _EXCEL_ERROR_VALUES else text
+
+
+def _is_true(value) -> bool:
+    """Normalisasi flag boolean dari Supabase/DataTables."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _get_winner_provider_map(kode_tenders: list[str]) -> dict[str, dict[str, str]]:
+    """Ambil pemenang authoritative dari hasil scraper V20 di Supabase.
+
+    ``tender_peserta.is_pemenang`` diprioritaskan. Kolom pemenang di ``tender``
+    hanya fallback untuk paket lama yang belum memiliki flag peserta.
+    """
+    codes = {str(k).strip() for k in kode_tenders if str(k).strip()}
+    result: dict[str, dict[str, str]] = {code: {} for code in codes}
+    if not codes:
+        return result
+
+    try:
+        peserta_rows = (
+            _sb().table("tender_peserta")
+            .select("kode_tender,nama_peserta,is_pemenang")
+            .in_("kode_tender", list(codes))
+            .execute().data or []
+        )
+    except Exception:
+        peserta_rows = []
+
+    for row in peserta_rows:
+        if not _is_true(row.get("is_pemenang")):
+            continue
+        code = str(row.get("kode_tender") or "").strip()
+        provider = str(row.get("nama_peserta") or "").strip()
+        key = _normalize_provider(provider)
+        if code in result and key:
+            result[code].setdefault(key, provider)
+
+    missing = [code for code, providers in result.items() if not providers]
+    if not missing:
+        return result
+
+    try:
+        tender_rows = (
+            _sb().table("tender")
+            .select("kode_tender,nama_pemenang,pemenang_berkontrak")
+            .in_("kode_tender", missing)
+            .execute().data or []
+        )
+    except Exception:
+        tender_rows = []
+
+    for row in tender_rows:
+        code = str(row.get("kode_tender") or "").strip()
+        if code not in result or result[code]:
+            continue
+        for field in ("nama_pemenang", "pemenang_berkontrak"):
+            provider = str(row.get(field) or "").strip()
+            key = _normalize_provider(provider)
+            if key:
+                result[code].setdefault(key, provider)
+
+    return result
 
 
 # ------------------------------------------------------------------
@@ -96,7 +190,12 @@ def _read_tender_duration_excel(kode_tender: str, row: dict) -> int | None:
     for path in _iter_tender_workbooks(kode_tender, row):
         wb = None
         try:
-            wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
+            wb = load_workbook(
+                path,
+                read_only=True,
+                data_only=True,
+                keep_vba=str(path).lower().endswith(".xlsm"),
+            )
             ws = wb["@ Master Data"]
             kode_excel = _re.sub(r"\D", "", str(ws["C4"].value or ""))
             if kode_digits and kode_excel and kode_digits != kode_excel:
@@ -116,6 +215,56 @@ def _read_tender_duration_excel(kode_tender: str, row: dict) -> int | None:
     if isinstance(snapshot, dict):
         return _parse_hari_jangka(snapshot.get("r12") or snapshot.get("jangka_waktu"))
     return None
+
+
+def _read_excel_personil(kode_tender: str, row: dict) -> dict:
+    """Baca personil pemenang final dari ``0. Input BA`` secara read-only.
+
+    Kolom G adalah kolom peserta terpilih pada template Tender. G7 berisi
+    penyedia pemenang, sedangkan G13:G14 berisi personil yang sudah dipilih/
+    dikoreksi manual. Workbook wajib lolos validasi ``@ Master Data!C4``.
+    """
+    try:
+        from openpyxl import load_workbook
+    except Exception:
+        return {"found": False, "provider": "", "personil": []}
+
+    kode_digits = re.sub(r"\D", "", str(kode_tender or ""))
+    if not kode_digits:
+        return {"found": False, "provider": "", "personil": []}
+
+    for path in _iter_tender_workbooks(kode_tender, row):
+        wb = None
+        try:
+            wb = load_workbook(
+                path,
+                read_only=True,
+                data_only=True,
+                keep_vba=str(path).lower().endswith(".xlsm"),
+            )
+            master = wb["@ Master Data"]
+            kode_excel = re.sub(r"\D", "", str(master["C4"].value or ""))
+            if kode_excel != kode_digits:
+                continue
+
+            ws = wb["0. Input BA"]
+            provider = _excel_text(ws["G7"].value)
+            personil = []
+            for row_number in (13, 14):
+                nama = _parse_nama(_excel_text(ws.cell(row_number, 7).value))
+                if nama and _normalize_nama(nama):
+                    personil.append(nama)
+            return {"found": True, "provider": provider, "personil": personil}
+        except Exception:
+            continue
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+    return {"found": False, "provider": "", "personil": []}
 
 
 def _get_tgl_sppbj_gcal(nama_tender: str, kode_tender: str = ""):
@@ -392,6 +541,26 @@ def _get_aktif_kode_tender() -> list[str]:
     ]
 
 
+def _get_kode_tender_tahun_berjalan(tahun: int | None = None) -> set[str]:
+    """Kode paket tahun berjalan berdasarkan tahun pada nomor surat dinas."""
+    target = int(tahun or date.today().year)
+    rows = _sb().table("draft_paket").select(
+        "kode_tender,nomor_surat_dinas"
+    ).execute().data or []
+    kode = set()
+    for row in rows:
+        kt = str(row.get("kode_tender") or "").strip()
+        if not kt or kt.startswith("_err_") or kt == "10096884000":
+            continue
+        tahun_surat = re.findall(
+            r"(?<!\d)(20\d{2})(?!\d)",
+            str(row.get("nomor_surat_dinas") or ""),
+        )
+        if tahun_surat and int(tahun_surat[-1]) == target:
+            kode.add(kt)
+    return kode
+
+
 def sync_new_paket(log=print) -> dict:
     """
     Hanya sync paket yang belum ada di paket_personil sama sekali.
@@ -420,14 +589,16 @@ def sync_new_paket(log=print) -> dict:
     return {"synced": len(belum), "personil": total}
 
 
-def get_sync_coverage() -> dict:
-    """Ringkasan coverage data konflik tanpa membaca PDF."""
-    aktif = set(_get_aktif_kode_tender())
+def get_sync_coverage(tahun: int | None = None) -> dict:
+    """Coverage personil paket tahun berjalan tanpa membaca PDF."""
+    target = int(tahun or date.today().year)
+    aktif = _get_kode_tender_tahun_berjalan(target)
     p = {
         r["kode_tender"]
         for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
     }
     return {
+        "tahun": target,
         "aktif": len(aktif),
         "personil": len(aktif & p),
         "lengkap": len(aktif & p),
@@ -444,8 +615,12 @@ def _overlap(mulai_a, selesai_a, mulai_b, selesai_b) -> bool:
 
 def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
     """
-    Return list personil yang muncul di >1 paket aktif dengan jadwal overlap.
+    Return personil pemenang yang muncul di >1 paket aktif dengan jadwal overlap.
     Jika kode_tender_target diisi, filter hanya konflik yang melibatkan paket itu.
+
+    Sumber personil utama = workbook ``0. Input BA`` kolom G (hasil koreksi
+    manual). ``paket_personil`` hanya fallback ketika workbook paket belum
+    ditemukan; baris fallback tetap dibatasi pada penyedia pemenang scraper.
 
     Return: [{
         "nama_personil": str (normalized),
@@ -458,9 +633,52 @@ def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
     if not aktif:
         return []
 
+    winner_map = _get_winner_provider_map(aktif)
+    if not any(winner_map.values()):
+        return []
+
     rows = _sb().table("paket_personil")\
         .select("kode_tender,peserta_id,nama_penyedia,nama_personil")\
         .in_("kode_tender", aktif).execute().data or []
+
+    # Satu kali lookup raw per paket. Workbook dibaca setiap render agar edit
+    # manual user langsung tercermin tanpa cache stale.
+    personil_by_package: dict[str, list[dict]] = {}
+    raw_by_package: dict[str, list[dict]] = {}
+    for row in rows:
+        code = str(row.get("kode_tender") or "").strip()
+        if code:
+            raw_by_package.setdefault(code, []).append(row)
+
+    for code in aktif:
+        winners = winner_map.get(str(code), {})
+        if not winners:
+            continue
+
+        workbook = _read_excel_personil(str(code), _get_tender_row(str(code)))
+        if workbook["found"]:
+            provider = str(workbook.get("provider") or "").strip()
+            provider_key = _normalize_provider(provider)
+            # Workbook valid tetapi provider kosong/tidak sama dengan hasil
+            # scraper = jangan membuat false positive dari workbook yang salah.
+            if provider_key not in winners:
+                continue
+            personil_by_package[str(code)] = [
+                {
+                    "kode_tender": str(code),
+                    "peserta_id": None,
+                    "nama_penyedia": provider or winners[provider_key],
+                    "nama_personil": nama,
+                }
+                for nama in workbook.get("personil", [])
+            ]
+            continue
+
+        # Fallback legacy: hanya cache personil milik provider pemenang.
+        personil_by_package[str(code)] = [
+            row for row in raw_by_package.get(str(code), [])
+            if _normalize_provider(row.get("nama_penyedia")) in winners
+        ]
 
     # Cache jadwal per kode_tender (lazy)
     _jadwal_cache: dict[str, tuple] = {}
@@ -474,7 +692,11 @@ def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
     from collections import defaultdict
     grouped: dict[str, list] = defaultdict(list)
     display_map: dict[str, str] = {}  # normalized → nama asli pertama
-    for r in rows:
+    for r in (
+        entry
+        for package_rows in personil_by_package.values()
+        for entry in package_rows
+    ):
         nama_raw = r["nama_personil"] or ""
         norm = _normalize_nama(nama_raw)
         if not norm:

@@ -13057,9 +13057,15 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 import conflict_engine as _ce_dash
                 _cov = _ce_dash.get_sync_coverage()
                 st.info(
-                    f"Coverage personil: {_cov['lengkap']}/{_cov['aktif']} paket lengkap "
-                    f"({_cov['personil']} paket terisi). "
-                    f"Belum lengkap: {_cov['belum_lengkap']} paket."
+                    f"Coverage cache personil {_cov['tahun']}: "
+                    f"{_cov['personil']}/{_cov['aktif']} paket terisi. "
+                    f"Belum tersinkron: {_cov['belum_lengkap']} paket."
+                )
+                st.caption(
+                    "Tabel konflik hanya memakai penyedia pemenang dari hasil scraper "
+                    "dan nama personil final dari 0. Input BA!G13:G14. "
+                    "Coverage cache memakai tahun pada nomor surat dinas; paket tanpa "
+                    "tahun tidak masuk perhitungan."
                 )
                 # Lookup nama paket
                 from config import sb as _sb_kf
