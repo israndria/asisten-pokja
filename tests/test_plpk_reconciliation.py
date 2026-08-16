@@ -60,6 +60,32 @@ def test_skp_counts_only_winner_running_not_participant():
     assert summary["skp_berjalan"] == 1
 
 
+def test_summary_merges_same_provider_name_across_npwp_variants():
+    rows = [
+        {
+            "nama_peserta": "CV. Harmoni Permai",
+            "npwp": "00.999.000.3-33.000",
+            "is_pemenang": True,
+            "is_berjalan": True,
+            "is_pemenang_berjalan": True,
+        },
+        {
+            "nama_peserta": "CV. Harmoni Permai",
+            "npwp": "-",
+            "is_pemenang": False,
+            "is_berjalan": True,
+            "is_pemenang_berjalan": False,
+        },
+    ]
+
+    summary = summarize_provider_rows(rows)
+
+    assert len(summary) == 1
+    assert summary[0]["total_keterlibatan"] == 2
+    assert summary[0]["paket_dimenangkan"] == 1
+    assert summary[0]["peserta_bukan_pemenang"] == 1
+
+
 class _FakeQuery:
     def __init__(self, rows):
         self.rows = rows
@@ -109,6 +135,8 @@ def test_selected_provider_gate_projects_new_package_against_limit():
             "instansi": "Tapin",
             "tahapan": "Evaluasi",
             "jenis_pengadaan": "Pekerjaan Konstruksi",
+            "nama_pemenang": "CV. A",
+            "pemenang_berkontrak": "CV. A",
         }
         for i in range(1, 6)
     ]
@@ -142,3 +170,72 @@ def test_non_tender_winner_fields_do_not_count_one_package_twice():
     result = search_provider("CV. A", sb_factory=lambda: fake)
     assert result["ok"] is True
     assert len(result["rows"]) == 1
+
+
+def test_winner_without_recorded_contract_is_not_skp_active():
+    fake = _FakeSupabase({
+        "non_tender": [{
+            "kode_tender": "N2",
+            "nama_paket": "Paket fisik",
+            "instansi": "Tapin",
+            "tahapan": "Penandatanganan Kontrak",
+            "jenis_pengadaan": "Pekerjaan Konstruksi",
+            "nama_pemenang": "CV. A",
+            "pemenang_berkontrak": "Belum Ada Kontrak",
+        }],
+    })
+
+    result = search_provider("CV. A", sb_factory=lambda: fake)
+
+    assert result["ok"] is True
+    assert result["rows"][0]["is_pemenang"] is True
+    assert result["rows"][0]["is_berkontrak"] is False
+    assert result["rows"][0]["is_pemenang_berjalan"] is False
+    assert result["rows"][0]["skp_perlu_verifikasi"] is False
+
+
+def test_signed_contract_with_terminal_stage_requires_completion_verification():
+    fake = _FakeSupabase({
+        "non_tender": [{
+            "kode_tender": "N3",
+            "nama_paket": "Paket selesai menurut SPSE",
+            "instansi": "Tapin",
+            "tahapan": "Paket Sudah Selesai",
+            "jenis_pengadaan": "Pekerjaan Konstruksi",
+            "nama_pemenang": "CV. A",
+            "pemenang_berkontrak": "CV. A",
+        }],
+    })
+
+    result = search_provider("CV. A", sb_factory=lambda: fake)
+
+    row = result["rows"][0]
+    assert row["is_berkontrak"] is True
+    assert row["is_pemenang_berjalan"] is False
+    assert row["skp_perlu_verifikasi"] is True
+    assert "Perlu verifikasi" in row["skp_status"]
+
+
+def test_selected_provider_gate_blocks_unverified_terminal_contract():
+    fake = _FakeSupabase({
+        "non_tender": [{
+            "kode_tender": "N4",
+            "nama_paket": "Paket fisik",
+            "instansi": "Tapin",
+            "tahapan": "Paket Sudah Selesai",
+            "jenis_pengadaan": "Pekerjaan Konstruksi",
+            "nama_pemenang": "CV. A",
+            "pemenang_berkontrak": "CV. A",
+        }],
+    })
+
+    result = check_selected_providers(
+        [{"kode_paket": "PK-BARU", "nama_penyedia": "CV. A", "npwp_penyedia": ""}],
+        sb_factory=lambda: fake,
+    )
+
+    provider = result["providers"][0]
+    assert provider["skp_berjalan"] == 0
+    assert provider["skp_perlu_verifikasi"] == 1
+    assert provider["skp_proyeksi_konservatif"] == 2
+    assert provider["boleh_submit"] is False

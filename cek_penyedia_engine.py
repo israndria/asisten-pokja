@@ -46,8 +46,22 @@ def _is_pemenang(value) -> bool:
     return bool(value)
 
 
+def _is_real_provider(value) -> bool:
+    return _text(value).lower() not in _DEFAULT_PROVIDER_NAMES
+
+
+def _is_contract_holder(provider_name: str, contract_name: str) -> bool:
+    """True bila SPSE sudah mencatat penyedia sebagai pemenang berkontrak."""
+    if not _is_real_provider(contract_name):
+        return False
+    return _provider_key(provider_name)[1] == _provider_key(contract_name)[1]
+
+
 def is_paket_berjalan(tahapan) -> bool:
-    """Ikuti definisi V20: tahap terminal tidak dihitung sebagai berjalan."""
+    """True bila tahap proses SPSE belum terminal.
+
+    Ini hanya proxy tahap pengadaan, bukan bukti PHO atau selesai fisik.
+    """
     tahap = _text(tahapan).lower()
     return bool(tahap) and not any(marker in tahap for marker in _TERMINAL_STAGE_MARKERS)
 
@@ -73,6 +87,16 @@ def status_skp(jumlah: int, limit: int = SKP_LIMIT) -> str:
     return f"Melebihi batas — {jumlah}/{limit} pekerjaan berjalan"
 
 
+def _skp_row_status(row: dict) -> str:
+    if not row.get("is_pemenang"):
+        return "Tidak — peserta bukan pemenang"
+    if not row.get("is_berkontrak"):
+        return "Tidak — pemenang belum berkontrak"
+    if row.get("is_berjalan"):
+        return "Ya — berkontrak, tahap SPSE aktif"
+    return "Perlu verifikasi — kontrak ada, status selesai fisik belum terbukti"
+
+
 def _provider_row_key(row: dict) -> tuple:
     return (
         _text(row.get("source")),
@@ -88,7 +112,7 @@ def _package_info(sb, source: str, codes: set[str]) -> dict[tuple[str, str], dic
     table = "tender" if source == "Tender" else "non_tender"
     select = (
         "kode_tender,nama_paket,instansi,tahapan,jenis_pengadaan,"
-        "kontrak_mulai,kontrak_selesai,link_detail"
+        "nama_pemenang,pemenang_berkontrak,kontrak_mulai,kontrak_selesai,link_detail"
     )
     rows = (
         sb.table(table)
@@ -198,7 +222,16 @@ def search_provider(query: str, sb_factory: Callable | None = None) -> dict:
         item = {**row, **package}
         item["is_pemenang"] = _is_pemenang(item.get("is_pemenang"))
         item["is_berjalan"] = is_paket_berjalan(item.get("tahapan"))
-        item["is_pemenang_berjalan"] = item["is_pemenang"] and item["is_berjalan"]
+        item["is_berkontrak"] = _is_contract_holder(
+            item.get("nama_peserta"), item.get("pemenang_berkontrak")
+        )
+        item["is_pemenang_berjalan"] = (
+            item["is_pemenang"] and item["is_berjalan"] and item["is_berkontrak"]
+        )
+        item["skp_perlu_verifikasi"] = (
+            item["is_pemenang"] and item["is_berkontrak"] and not item["is_berjalan"]
+        )
+        item["skp_status"] = _skp_row_status(item)
         item["status_peran"] = "Pemenang" if item["is_pemenang"] else "Peserta — bukan pemenang"
         result.append(item)
 
@@ -208,12 +241,26 @@ def search_provider(query: str, sb_factory: Callable | None = None) -> dict:
 def summarize_provider_rows(rows: list[dict]) -> list[dict]:
     grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in rows or []:
-        grouped[_provider_key(row.get("nama_peserta"), row.get("npwp"))].append(row)
+        # V20 menampilkan satu kartu per nama penyedia. Ini juga menyatukan
+        # row Tender ber-NPWP dengan row Non-Tender yang NPWP-nya kosong.
+        name = _text(row.get("nama_peserta"))
+        if name and name.lower() not in _DEFAULT_PROVIDER_NAMES:
+            key = _provider_key(name)
+        else:
+            key = _provider_key(name, row.get("npwp"))
+        grouped[key].append(row)
 
     summaries = []
     for key, items in grouped.items():
         winners = [row for row in items if row.get("is_pemenang")]
         winner_running = [row for row in winners if row.get("is_pemenang_berjalan")]
+        winner_review = [row for row in winners if row.get("skp_perlu_verifikasi")]
+        status = status_skp(len(winner_running))
+        if winner_review:
+            status = (
+                f"Perlu verifikasi — {len(winner_running)}/{SKP_LIMIT} aktif terverifikasi; "
+                f"{len(winner_review)} kontrak belum terbukti selesai"
+            )
         summaries.append({
             "provider_key": key,
             "nama_penyedia": _text(items[0].get("nama_peserta")) or "-",
@@ -223,7 +270,9 @@ def summarize_provider_rows(rows: list[dict]) -> list[dict]:
             "peserta_bukan_pemenang": len(items) - len(winners),
             "paket_berjalan": sum(bool(row.get("is_berjalan")) for row in items),
             "skp_berjalan": len(winner_running),
-            "status": status_skp(len(winner_running)),
+            "skp_perlu_verifikasi": len(winner_review),
+            "skp_konservatif": len(winner_running) + len(winner_review),
+            "status": status,
             "rows": items,
         })
     return sorted(summaries, key=lambda row: row["nama_penyedia"].lower())
@@ -298,10 +347,17 @@ def check_selected_providers(
                     "peserta_bukan_pemenang",
                     "paket_berjalan",
                     "skp_berjalan",
+                    "skp_perlu_verifikasi",
+                    "skp_konservatif",
                 ):
                     item[field] += extra[field]
                 item["rows"] = item.get("rows", []) + extra.get("rows", [])
             item["status"] = status_skp(item["skp_berjalan"])
+            if item["skp_perlu_verifikasi"]:
+                item["status"] = (
+                    f"Perlu verifikasi — {item['skp_berjalan']}/{SKP_LIMIT} aktif terverifikasi; "
+                    f"{item['skp_perlu_verifikasi']} kontrak belum terbukti selesai"
+                )
         else:
             item = {
                 "provider_key": _provider_key(candidate["nama_penyedia"], candidate["npwp"]),
@@ -319,8 +375,11 @@ def check_selected_providers(
         item = dict(item)
         item["paket_baru_dicek"] = candidate_count
         item["skp_proyeksi"] = item["skp_berjalan"] + candidate_count
+        item["skp_proyeksi_konservatif"] = item["skp_konservatif"] + candidate_count
         item["status_proyeksi"] = status_skp(item["skp_proyeksi"])
-        item["boleh_submit"] = item["skp_proyeksi"] <= SKP_LIMIT
+        item["boleh_submit"] = (
+            item["skp_proyeksi"] <= SKP_LIMIT and not item["skp_perlu_verifikasi"]
+        )
         providers.append(item)
 
     return {
