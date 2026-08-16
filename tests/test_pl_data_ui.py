@@ -5,6 +5,7 @@ import pl_engine
 import pl_ui_helpers
 import zipfile
 from pl_data_ui import _filter_pl_family, _hydrate_provider_from_excel, filter_local_pl_rows
+from ui_pl_pk import active_rows
 
 
 def test_pl_setup_draft_filter_excludes_active_or_published_status():
@@ -23,6 +24,20 @@ def test_pl_operational_filter_requires_active_status_or_stage():
     assert pl_engine.is_paket_berjalan({"status": "draft", "tahap_spse": "Upload Dokumen Penawaran"}) is True
     assert pl_engine.is_paket_berjalan({"status": "selesai"}) is False
     assert pl_engine.is_paket_berjalan({"status": "berjalan", "tahap_spse": "Penandatanganan Kontrak"}) is False
+
+
+def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
+    rows = [
+        {"kode_paket": "D", "status": "draft"},
+        {"kode_paket": "A", "status": "berjalan"},
+        {"kode_paket": "X", "status": ""},
+        {"kode_paket": "S", "status": "selesai"},
+    ]
+
+    filtered, duplicate_count = active_rows(lambda _kind: rows, pl_engine)
+
+    assert [row["kode_paket"] for row in filtered] == ["A"]
+    assert duplicate_count == 0
 
 
 def test_pl_family_loader_isolated_and_fail_closed():

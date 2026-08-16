@@ -22,10 +22,138 @@ def get_engine():
 
 
 def active_rows(load_fn, engine) -> tuple[list[dict], int]:
-    """Ambil row PK aktif dan jumlah duplikat yang disembunyikan UI."""
+    """Ambil row PK aktif/berjalan dan jumlah duplikat yang disembunyikan UI."""
+    from pl_engine import is_paket_berjalan
+
     rows = load_fn("PK")
     rows, duplicate_count = engine.buang_duplikat_paket_lama(rows)
-    return [row for row in rows if not engine.is_paket_selesai(row)], duplicate_count
+    return [row for row in rows if is_paket_berjalan(row)], duplicate_count
+
+
+def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp") -> bool:
+    """Cek SKP provider terpilih sebelum tombol pilih penyedia diaktifkan."""
+    if not selected_rows:
+        return False
+
+    import cek_penyedia_engine as engine
+
+    signature = tuple(sorted(
+        (
+            str(row.get("kode_paket") or ""),
+            str(row.get("nama_penyedia") or ""),
+            str(row.get("npwp_penyedia") or ""),
+        )
+        for row in selected_rows
+    ))
+    result_key = f"{key_prefix}_result"
+    signature_key = f"{key_prefix}_signature"
+
+    with st.container(border=True):
+        st.markdown("#### 🔍 Cek Penyedia — Gate SKP Pekerjaan Berjalan")
+        st.caption(
+            "Cek sumber Tender + Non-Tender Pekerjaan Konstruksi. "
+            "Peserta bukan pemenang tidak dihitung; hanya pemenang yang masih berjalan. "
+            "Batas maksimal = 5 paket."
+        )
+        if st.button(
+            "🔍 Cek SKP Penyedia dari Excel",
+            key=f"{key_prefix}_run",
+            type="secondary",
+            use_container_width=True,
+        ):
+            with st.spinner("Memeriksa riwayat penyedia di database SPSE Scraper..."):
+                st.session_state[result_key] = engine.check_selected_providers(selected_rows)
+                st.session_state[signature_key] = signature
+
+        result = st.session_state.get(result_key)
+        checked_signature = st.session_state.get(signature_key)
+        if checked_signature != signature:
+            st.info("Klik **Cek SKP Penyedia dari Excel** sebelum memilih penyedia ke SPSE.")
+            return False
+        if not result:
+            st.info("Cek SKP belum dijalankan.")
+            return False
+        if result.get("errors"):
+            for error in result["errors"]:
+                st.error(error)
+        if not result.get("ok"):
+            return False
+
+        allowed = True
+        for provider in result.get("providers", []):
+            projected = int(provider.get("skp_proyeksi", 0))
+            current = int(provider.get("skp_berjalan", 0))
+            candidate_count = int(provider.get("paket_baru_dicek", 0))
+            label = provider.get("nama_penyedia") or "Penyedia"
+            if not provider.get("boleh_submit"):
+                allowed = False
+                st.error(
+                    f"❌ **{label}**: saat ini {current}/{engine.SKP_LIMIT} paket berjalan; "
+                    f"batch ini menambah {candidate_count}, proyeksi {projected}/{engine.SKP_LIMIT}. "
+                    "Pilih penyedia lain atau jangan kirim paket ini."
+                )
+            elif projected == engine.SKP_LIMIT:
+                st.warning(f"⚠️ **{label}** tepat di batas: proyeksi {projected}/{engine.SKP_LIMIT}.")
+            else:
+                st.success(f"✅ **{label}** masih tersedia: proyeksi {projected}/{engine.SKP_LIMIT}.")
+
+        detail_rows = result.get("rows") or []
+        if detail_rows:
+            st.dataframe(
+                [
+                    {
+                        "Sumber": row.get("source"),
+                        "Penyedia": row.get("nama_peserta"),
+                        "NPWP": row.get("npwp"),
+                        "Paket": row.get("nama_paket"),
+                        "Tahap": row.get("tahapan"),
+                        "Peran": row.get("status_peran"),
+                        "SKP dihitung": "Ya" if row.get("is_pemenang_berjalan") else "Tidak",
+                        "Link": row.get("link_detail"),
+                    }
+                    for row in detail_rows
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("Belum ada riwayat paket konstruksi yang cocok di database scraper; proyeksi dimulai dari 0.")
+        return allowed
+
+
+def render_provider_search(st, key_prefix: str = "plpk_provider_search") -> None:
+    """Pencarian manual ala V20 untuk audit provider di luar paket terpilih."""
+    import cek_penyedia_engine as engine
+
+    with st.expander("🔎 Cari penyedia lain (nama / NPWP)", expanded=False):
+        query = st.text_input(
+            "Nama penyedia atau NPWP",
+            key=f"{key_prefix}_query",
+            placeholder="contoh: CV. Harapan Group atau 1234567890123456",
+        )
+        if st.button("🔍 Cari", key=f"{key_prefix}_run", use_container_width=True):
+            if len((query or "").strip()) < 3:
+                st.warning("Masukkan minimal 3 karakter.")
+            else:
+                with st.spinner("Mencari riwayat penyedia..."):
+                    st.session_state[f"{key_prefix}_result"] = engine.search_provider(query)
+
+        result = st.session_state.get(f"{key_prefix}_result")
+        if not result:
+            return
+        if not result.get("ok"):
+            st.error(result.get("error", "Pencarian gagal."))
+            return
+        summaries = engine.summarize_provider_rows(result.get("rows") or [])
+        if not summaries:
+            st.info("Tidak ada data Pekerjaan Konstruksi yang cocok.")
+            return
+        for summary in summaries:
+            st.write(
+                f"**{summary['nama_penyedia']}** — {summary['status']} | "
+                f"Menang: {summary['paket_dimenangkan']} | "
+                f"Peserta bukan pemenang: {summary['peserta_bukan_pemenang']}"
+            )
 
 
 def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, hasil_engine, label_fn) -> None:

@@ -308,6 +308,24 @@ def load_draft_pl() -> list[dict]:
 
 
 _TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai", "selesai")
+_STATUS_DITARIK_SPSE = "ditarik_spse"
+
+
+def is_paket_ditarik(r: dict) -> bool:
+    """True bila row tidak lagi ada di daftar paket PP SPSE.
+
+    State ini sengaja disimpan sebagai status, bukan menghapus row Supabase,
+    agar histori/folder lokal tetap aman dan paket dapat hidup lagi bila SPSE
+    mengembalikan kode yang sama.
+    """
+    status = str(r.get("status") or "").strip().lower()
+    return any(marker in status for marker in (
+        _STATUS_DITARIK_SPSE,
+        "withdrawn",
+        "retired",
+        "ditarik ppk",
+        "dihapus ppk",
+    ))
 
 def is_paket_selesai(r: dict) -> bool:
     """
@@ -342,7 +360,7 @@ def is_paket_berjalan(r: dict) -> bool:
     """
     status = str(r.get("status") or "").strip()
     tahap = str(r.get("tahap_spse") or "").strip()
-    if not status and not tahap:
+    if is_paket_ditarik(r) or (not status and not tahap):
         return False
     return not is_paket_draft(r) and not is_paket_selesai(r)
 

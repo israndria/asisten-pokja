@@ -8,6 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from config import sb as _sb
+from pl_engine import is_paket_ditarik
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 
@@ -26,7 +27,7 @@ STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
 def load_draft_pl() -> list[dict]:
     """Ambil semua paket pekerjaan konstruksi (jenis_pl=PK), urut terbaru dulu."""
     try:
-        return (
+        rows = (
             _sb()
             .table("draft_paket_pl")
             .select("*")
@@ -35,8 +36,77 @@ def load_draft_pl() -> list[dict]:
             .execute()
             .data or []
         )
+        return [row for row in rows if not is_paket_ditarik(row)]
     except Exception as e:
         return []
+
+
+def _kode_live_dan_stale(
+    existing_rows: list[dict],
+    live_codes: set[str],
+    *,
+    snapshot_valid: bool,
+) -> tuple[list[str], bool]:
+    """Hitung kode PK yang hilang dari snapshot SPSE.
+
+    Snapshot invalid tidak boleh mengubah state database. Ini mencegah outage,
+    halaman login, atau payload rusak membuat seluruh paket tampak ditarik.
+    """
+    if not snapshot_valid:
+        return [], False
+    live = {str(code).strip() for code in (live_codes or set()) if str(code).strip()}
+    stale = sorted({
+        str(row.get("kode_paket") or "").strip()
+        for row in (existing_rows or [])
+        if str(row.get("kode_paket") or "").strip()
+        and str(row.get("kode_paket")).strip() not in live
+    })
+    return stale, True
+
+
+def reconcile_paket_pl_dengan_spse(
+    live_codes: set[str],
+    *,
+    snapshot_valid: bool = False,
+    log_fn=None,
+) -> dict:
+    """Tandai row PK yang hilang dari `/dt/paketpp` tanpa menghapusnya."""
+    if not snapshot_valid:
+        return {"ok": False, "withdrawn": 0, "error": "Snapshot SPSE tidak tervalidasi."}
+
+    def log(message: str) -> None:
+        if log_fn:
+            log_fn(message)
+
+    try:
+        existing = (
+            _sb()
+            .table("draft_paket_pl")
+            .select("kode_paket,status")
+            .eq("jenis_pl", "PK")
+            .execute()
+            .data or []
+        )
+    except Exception as exc:
+        return {"ok": False, "withdrawn": 0, "error": f"Gagal baca snapshot DB: {exc}"}
+
+    stale_codes, _ = _kode_live_dan_stale(existing, live_codes, snapshot_valid=True)
+    withdrawn = 0
+    errors = []
+    for kode in stale_codes:
+        try:
+            (
+                _sb()
+                .table("draft_paket_pl")
+                .update({"status": "ditarik_spse"})
+                .eq("kode_paket", kode)
+                .execute()
+            )
+            withdrawn += 1
+            log(f"  Tandai ditarik SPSE: {kode}")
+        except Exception as exc:
+            errors.append(f"{kode}: {exc}")
+    return {"ok": not errors, "withdrawn": withdrawn, "errors": errors}
 
 
 _TAHAP_SELESAI_KEYWORDS = ("penandatanganan kontrak", "paket sudah selesai", "sudah selesai")
@@ -230,12 +300,31 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     # 1. Fetch daftar paket
     try:
         resp = requests.get(f"{base_url}dt/paketpp", headers=headers, timeout=15)
-        rows = resp.json().get("data", [])
+        payload = resp.json()
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("payload dt/paketpp tidak memiliki data list")
+        live_codes = {
+            str(row[5]).strip()
+            for row in rows
+            if isinstance(row, (list, tuple)) and len(row) > 5 and str(row[5]).strip()
+        }
+        if rows and not live_codes:
+            raise ValueError("payload dt/paketpp berisi row tanpa kode paket")
     except Exception as e:
-        return {"ok": False, "scraped": 0, "errors": [f"Gagal fetch dt/paketpp: {e}"]}
+        return {"ok": False, "scraped": 0, "withdrawn": 0, "errors": [f"Gagal fetch dt/paketpp: {e}"]}
+
+    reconciliation = reconcile_paket_pl_dengan_spse(
+        live_codes,
+        snapshot_valid=True,
+        log_fn=log_fn,
+    )
+    if not reconciliation.get("ok"):
+        errors = reconciliation.get("errors") or [reconciliation.get("error", "Rekonsiliasi gagal")]
+    else:
+        errors = []
 
     log(f"Ditemukan {len(rows)} paket di SPSE")
-    errors = []
     scraped = 0
 
     # Tahap real di SPSE dipakai untuk mencegah POST setup ke paket selesai.
@@ -379,7 +468,12 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
         log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
 
-    return {"ok": True, "scraped": scraped, "errors": errors}
+    return {
+        "ok": not errors,
+        "scraped": scraped,
+        "withdrawn": reconciliation.get("withdrawn", 0),
+        "errors": errors,
+    }
 
 
 def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str) -> bool:

@@ -32,6 +32,8 @@ from ui_pl_pk import (
     active_rows as active_plpk_rows,
     get_engine as get_plpk_engine,
     render_download_actions,
+    render_provider_search as render_plpk_provider_search,
+    render_skp_gate as render_plpk_skp_gate,
 )
 from ui_pl_common import render_package_selection
 from sbu_history import load_sbu_history as _load_shared_sbu_history
@@ -5850,16 +5852,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.caption(f"♻️ {_pl_dup_n} row lama duplikat (paket ulang) disembunyikan otomatis.")
 
         # ── #4: Filter paket selesai (penandatanganan kontrak) ──────────────────
-        _pl_show_done = st.checkbox(
-            "Tampilkan paket selesai (sudah teken kontrak)",
-            value=False,
-            key="pl_show_done",
-        )
-        _pl_done_n = sum(1 for r in _pl_rows if pl_engine.is_paket_selesai(r))
-        if not _pl_show_done:
-            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
-            if _pl_done_n:
-                st.caption(f"🔒 {_pl_done_n} paket selesai (Penandatanganan Kontrak) disembunyikan — centang di atas untuk tampilkan.")
+        # Tab 1–5 adalah fase setup awal: hanya paket yang masih Draft.
+        _pl_rows = [r for r in _pl_rows if _pl_engine_utils.is_paket_draft(r)]
 
         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
         _pl_local_by_kode = {
@@ -5898,9 +5892,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pl_cookie, _SPSE_BASE, log_fn=_pl_log
                         )
                         _pl_pb.progress(1.0)
-                        _pl_c1, _pl_c2 = st.columns(2)
+                        _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
                         _pl_c1.metric("✅ Tersimpan", _pl_hasil.get("scraped", 0))
                         _pl_c2.metric("❌ Error", len(_pl_hasil.get("errors", [])))
+                        _pl_c3.metric("↩️ Ditarik dari SPSE", _pl_hasil.get("withdrawn", 0))
                         if _pl_hasil.get("errors"):
                             with st.expander("Detail Error SPSE"):
                                 for _e in _pl_hasil["errors"]:
@@ -5915,8 +5910,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             r for r in _pl_rows
                             if str(r.get("jenis_pl") or "").upper() == "PK"
                         ]
-                        if not _pl_show_done:
-                            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
+                        _pl_rows = [r for r in _pl_rows if _pl_engine_utils.is_paket_draft(r)]
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
                         _pl_local_by_kode = {
                             str(r.get("kode_paket")): r
@@ -6650,7 +6644,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
             _pl_rows_kd = _load_draft_pl_cached("PK")
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
-            _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
+            _pl_rows_kd = [r for r in _pl_rows_kd if _pl_engine_utils.is_paket_draft(r)]
             _kd_selected = []
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
@@ -6885,7 +6879,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _pljd_rows = _load_draft_pl_cached("PK")
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
-        _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
+        _pljd_rows = [r for r in _pljd_rows if _pl_engine_utils.is_paket_draft(r)]
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -7218,7 +7212,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _plsp_rows = _load_draft_pl_cached("PK")
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
-        _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
+        _plsp_rows = [r for r in _plsp_rows if _pl_engine_utils.is_paket_draft(r)]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -7868,13 +7862,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             "Cari penyedia by NPWP → klik pilih ke SPSE (prioritas kabupaten Tapin, "
             "fallback semua kabupaten Kalsel propinsi 22)."
         )
+        render_plpk_provider_search(st, key_prefix="plpk_provider_search")
 
         if st.button("🔄 Baca Penyedia dari Excel", key="pp_refresh_penyedia_pk", help="Muat ulang identitas dari @ Master Data workbook: PLPK C77:C78"):
             _load_draft_pl_cached.clear()
             st.rerun()
         _pp_rows = _load_draft_pl_cached("PK")
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
-        _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
+        _pp_rows = [r for r in _pp_rows if _pl_engine_utils.is_paket_draft(r)]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -7931,11 +7926,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                     _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
                     if _valid_pp:
+                        _skp_gate_ok = render_plpk_skp_gate(st, _valid_pp, key_prefix="plpk_skp_gate")
                         if st.button(
                             f"🏢 Pilih Semua Penyedia ke SPSE ({len(_valid_pp)} paket)",
                             key="pp_submit_btn",
                             type="primary",
                             use_container_width=True,
+                            disabled=not _skp_gate_ok,
                         ):
                             import spse_browser as _spse_br
                             _ck_pp = _spse_br.get_spse_cookies()
@@ -8059,6 +8056,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
+        _verif_rows = [r for r in _verif_rows if _pl_engine_utils.is_paket_berjalan(r)]
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -8208,12 +8206,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         st.markdown("## Berita Acara — Pengadaan Langsung")
 
-        # Load paket PL — filter paket selesai
+        # Tab 9 adalah fase operasional: hanya paket aktif/berjalan.
         _pl8_rows = []
         try:
             _raw8 = _load_draft_pl_cached("PK")
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
-            _pl8_rows = [r for r in _raw8 if not pl_engine.is_paket_selesai(r)]
+            _pl8_rows = [r for r in _raw8 if _pl_engine_utils.is_paket_berjalan(r)]
             _pl8_kode_status = []
             for _r8 in _pl8_rows:
                 _s8 = _enrich_kode_unik_pl_excel(_r8)
@@ -8912,7 +8910,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     if _pl_active_tab == "🔟 Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached("PK")
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
-        _rows10 = [r for r in _raw10 if not pl_engine.is_paket_selesai(r)]
+        _rows10 = [r for r in _raw10 if _pl_engine_utils.is_paket_berjalan(r)]
         _render_tab10_pl(_rows10, "pl10pk")
 
     st.stop()  # Jangan render tab Tender jika mode PL
