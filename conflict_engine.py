@@ -1,11 +1,10 @@
 """
-Conflict detection engine — personil & alat lintas paket.
+Conflict detection engine — personil lintas paket.
 
 Flow:
-1. sync_from_supabase(kode_tender)  — ambil peserta_identitas, upsert ke paket_personil + paket_alat
-2. sync_from_pdf(kode_tender, peserta_id, personel_list, peralatan_list)  — dari kualifikasi_parser
+1. sync_from_supabase(kode_tender)  — ambil peserta_identitas, upsert ke paket_personil
+2. sync_from_pdf(kode_tender, peserta_id, personel_list)  — dari kualifikasi_parser
 3. get_konflik_personil()  — query: nama muncul di >1 kode_tender dari draft_paket
-4. get_konflik_alat()      — sama untuk alat
 """
 
 import re
@@ -21,13 +20,6 @@ _RE_GELAR = re.compile(
     re.IGNORECASE,
 )
 _RE_NONALPHA = re.compile(r"[^a-z\s]")
-_ALAT_HINT = re.compile(
-    r"\b(mesin|trimer|trimmer|las|cutting|whell|wheel|genset|ramset|"
-    r"scaf+old|excavator|roller|crane|jack\s*hammer|vibrator|pancang)\b",
-    re.IGNORECASE,
-)
-
-
 def _normalize_nama(raw: str) -> str:
     """Lowercase + strip gelar Indonesia + hapus tanda baca + normalisasi spasi."""
     if not raw:
@@ -38,27 +30,6 @@ def _normalize_nama(raw: str) -> str:
     # Hapus spasi berlebih
     s = " ".join(s.split())
     return s
-
-
-def _normalize_alat(raw: str) -> str:
-    """Normalisasi alat; jumlah/unit/prefix bukan identitas alat."""
-    if not raw:
-        return ""
-    s = (raw.lower()
-         .replace("scafolding", "scaffolding")
-         .replace("schafolding", "scaffolding")
-         .replace("whell", "wheel")
-         .replace("trimer", "trimmer"))
-    s = re.sub(r"\btp\s*[-:]?\s*", "", s)
-    s = re.sub(r"\([^)]*\)", " ", s)
-    s = re.sub(r"\b\d+(?:[.,]\d+)?\s*(unit|set|buah|kg|kva|watt|joule|ton)?\b", " ", s)
-    s = re.sub(r"[^a-z\s]", " ", s)
-    return " ".join(s.split())
-
-
-def _looks_like_alat(raw: str) -> bool:
-    """Guard parser: sinyal kuat nama alat jangan disimpan sebagai personil."""
-    return bool(_ALAT_HINT.search(raw or ""))
 
 
 # ------------------------------------------------------------------
@@ -122,29 +93,23 @@ def _upsert_personil_batch(rows: list[dict]) -> None:
     _sb().table("paket_personil").upsert(rows, on_conflict="kode_tender,peserta_id,nama_personil").execute()
 
 
-def _upsert_alat_batch(rows: list[dict]) -> None:
-    if not rows:
-        return
-    _sb().table("paket_alat").upsert(rows, on_conflict="kode_tender,peserta_id,nama_alat").execute()
-
-
 def sync_from_supabase(kode_tender: str, log=print) -> dict:
     """
     Ambil semua peserta_identitas untuk kode_tender,
-    upsert personil dan alat ke paket_personil + paket_alat.
+    upsert personil ke paket_personil.
     Sumber = 'supabase'.
     """
     rows_p = _sb().table("peserta_identitas")\
-        .select("peserta_id,nama_perusahaan,personel_1,personel_2,alat_1,alat_2,alat_3,alat_4,alat_5,alat_6")\
+        .select("peserta_id,nama_perusahaan,personel_1,personel_2")\
         .eq("kode_tender", kode_tender).execute().data or []
 
-    upsert_p, upsert_a = [], []
+    upsert_p = []
     for row in rows_p:
         pid   = row["peserta_id"]
         nama_penyedia = row.get("nama_perusahaan", "")
         for key in ("personel_1", "personel_2"):
             raw = row.get(key, "")
-            if not raw or _looks_like_alat(_parse_nama(raw)):
+            if not raw:
                 continue
             upsert_p.append({
                 "kode_tender":  kode_tender,
@@ -154,23 +119,9 @@ def sync_from_supabase(kode_tender: str, log=print) -> dict:
                 "posisi":        key.replace("_", " ").title(),
                 "sumber":        "supabase",
             })
-        for key in ("alat_1", "alat_2", "alat_3", "alat_4", "alat_5", "alat_6"):
-            raw = row.get(key, "")
-            if not raw:
-                continue
-            upsert_a.append({
-                "kode_tender":  kode_tender,
-                "peserta_id":   pid,
-                "nama_penyedia": nama_penyedia,
-                "nama_alat":    raw.strip(),
-                "posisi":       key.replace("_", " ").title(),
-                "sumber":       "supabase",
-            })
-
     _upsert_personil_batch(upsert_p)
-    _upsert_alat_batch(upsert_a)
-    log(f"sync_from_supabase {kode_tender}: {len(upsert_p)} personil, {len(upsert_a)} alat")
-    return {"personil": len(upsert_p), "alat": len(upsert_a)}
+    log(f"sync_from_supabase {kode_tender}: {len(upsert_p)} personil")
+    return {"personil": len(upsert_p)}
 
 
 def sync_from_pdf(
@@ -178,42 +129,48 @@ def sync_from_pdf(
     peserta_id: str,
     nama_penyedia: str,
     personel_list: list[str],
-    peralatan_list: list[str],
     log=print,
 ) -> dict:
     """
-    Upsert personil dan alat dari hasil kualifikasi_parser (PDF).
-    Sumber = 'pdf'. Menimpa entri 'supabase' lama jika ada.
+    Ganti data personil peserta dari hasil kualifikasi_parser (PDF).
+    Sumber = 'pdf'. Penggantian mencegah personil stale tetap dianggap aktif.
     """
-    upsert_p = [
-        {
+    if not str(peserta_id or "").strip():
+        log(f"sync_from_pdf {kode_tender}: peserta_id kosong, skip personil")
+        return {"personil": 0}
+    if not personel_list:
+        log(f"sync_from_pdf {kode_tender} {peserta_id}: personil kosong, data lama dipertahankan")
+        return {"personil": 0}
+
+    upsert_p = []
+    seen = set()
+    for i, raw in enumerate(personel_list):
+        nama = _parse_nama(raw)
+        norm = _normalize_nama(nama)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        upsert_p.append({
             "kode_tender":  kode_tender,
             "peserta_id":   peserta_id,
             "nama_penyedia": nama_penyedia,
-            "nama_personil": _parse_nama(raw),
+            "nama_personil": nama,
             "posisi":        _parse_posisi(raw) or f"Personel {i+1}",
             "sumber":        "pdf",
-        }
-        for i, raw in enumerate(personel_list)
-        if raw and _parse_nama(raw) and not _looks_like_alat(_parse_nama(raw))
-    ]
-    upsert_a = [
-        {
-            "kode_tender":  kode_tender,
-            "peserta_id":   peserta_id,
-            "nama_penyedia": nama_penyedia,
-            "nama_alat":    raw.strip(),
-            "posisi":       f"Alat {i+1}",
-            "sumber":       "pdf",
-        }
-        for i, raw in enumerate(peralatan_list)
-        if raw and raw.strip()
-    ]
+        })
 
+    if not upsert_p:
+        log(f"sync_from_pdf {kode_tender} {peserta_id}: personil tidak valid, data lama dipertahankan")
+        return {"personil": 0}
+
+    _sb().table("paket_personil")\
+        .delete()\
+        .eq("kode_tender", kode_tender)\
+        .eq("peserta_id", peserta_id)\
+        .execute()
     _upsert_personil_batch(upsert_p)
-    _upsert_alat_batch(upsert_a)
-    log(f"sync_from_pdf {kode_tender} {peserta_id}: {len(upsert_p)} personil, {len(upsert_a)} alat")
-    return {"personil": len(upsert_p), "alat": len(upsert_a)}
+    log(f"sync_from_pdf {kode_tender} {peserta_id}: {len(upsert_p)} personil")
+    return {"personil": len(upsert_p)}
 
 
 def _resolve_folder_paket(kode_pokja: str) -> str | None:
@@ -240,27 +197,34 @@ def _resolve_folder_paket(kode_pokja: str) -> str | None:
 
 def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
     """
-    Fallback: peserta yang personel_1 atau alat_1 masih kosong di peserta_identitas
-    → cari DoktekFull_*.pdf di folder paket lokal → parse personil+alat
-    → upsert ke paket_personil + paket_alat via sync_from_pdf().
+    Fallback: peserta yang personel_1 masih kosong di peserta_identitas
+    → cari DoktekFull_*.pdf di folder paket lokal → parse personil
+    → ganti data paket_personil via sync_from_pdf().
     """
     import os
     import glob
 
     # Ambil peserta yang personil atau alat belum lengkap
     rows = _sb().table("peserta_identitas")\
-        .select("peserta_id,nama_perusahaan,personel_1,alat_1")\
+        .select("peserta_id,nama_perusahaan")\
         .eq("kode_tender", kode_tender)\
         .execute().data or []
 
+    synced_peserta = {
+        r.get("peserta_id")
+        for r in (_sb().table("paket_personil")
+                  .select("peserta_id")
+                  .eq("kode_tender", kode_tender)
+                  .execute().data or [])
+        if r.get("peserta_id")
+    }
     kosong = [
         r for r in rows
-        if not (r.get("personel_1") or "").strip()
-        or not (r.get("alat_1") or "").strip()
+        if r.get("peserta_id") and r["peserta_id"] not in synced_peserta
     ]
     if not kosong:
-        log(f"sync_from_doktek_folder {kode_tender}: personil + alat sudah lengkap, skip")
-        return {"personil": 0, "alat": 0}
+        log(f"sync_from_doktek_folder {kode_tender}: personil sudah lengkap, skip")
+        return {"personil": 0}
 
     # Ambil kode_pokja dari draft_paket (satu paket, satu kode_pokja)
     dp_rows = _sb().table("draft_paket")\
@@ -272,9 +236,9 @@ def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
     folder_paket = _resolve_folder_paket(kode_pokja)
     if not folder_paket:
         log(f"sync_from_doktek_folder {kode_tender}: folder paket Pokja {kode_pokja} tidak ditemukan")
-        return {"personil": 0, "alat": 0}
+        return {"personil": 0}
 
-    total_p = total_a = 0
+    total_p = 0
     for row in kosong:
         pid = row["peserta_id"]
         nama_penyedia = row.get("nama_perusahaan", "")
@@ -312,19 +276,17 @@ def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
         log(f"  [{nama_penyedia}] parse dari {os.path.basename(pdf_path)}")
         try:
             # Lazy import hindari circular
-            from dokumen_teknis_engine import parse_personel, parse_peralatan
+            from dokumen_teknis_engine import parse_personel
             personel_list  = parse_personel(pdf_path)
-            peralatan_list = parse_peralatan(pdf_path)
         except Exception as e:
             log(f"  [{nama_penyedia}] parse error: {e}")
             continue
 
-        res = sync_from_pdf(kode_tender, pid, nama_penyedia, personel_list, peralatan_list, log=log)
+        res = sync_from_pdf(kode_tender, pid, nama_penyedia, personel_list, log=log)
         total_p += res["personil"]
-        total_a += res["alat"]
 
-    log(f"sync_from_doktek_folder {kode_tender}: {total_p} personil, {total_a} alat (dari {len(kosong)} peserta kosong)")
-    return {"personil": total_p, "alat": total_a}
+    log(f"sync_from_doktek_folder {kode_tender}: {total_p} personil (dari {len(kosong)} peserta kosong)")
+    return {"personil": total_p}
 
 
 def _get_aktif_kode_tender() -> list[str]:
@@ -345,17 +307,13 @@ def sync_new_paket(log=print) -> dict:
     if not aktif:
         return {"synced": 0}
 
-    # Paket dianggap lengkap hanya jika personil DAN alat sudah tersync.
+    # Paket dianggap tersync jika data personilnya sudah tersedia.
     tersync_p = set(
         r["kode_tender"]
         for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
     )
-    tersync_a = set(
-        r["kode_tender"]
-        for r in (_sb().table("paket_alat").select("kode_tender").execute().data or [])
-    )
 
-    belum = aktif - (tersync_p & tersync_a)
+    belum = aktif - tersync_p
     if not belum:
         log("sync_new_paket: semua paket sudah tersync, skip")
         return {"synced": 0}
@@ -375,16 +333,11 @@ def get_sync_coverage() -> dict:
         r["kode_tender"]
         for r in (_sb().table("paket_personil").select("kode_tender").execute().data or [])
     }
-    a = {
-        r["kode_tender"]
-        for r in (_sb().table("paket_alat").select("kode_tender").execute().data or [])
-    }
     return {
         "aktif": len(aktif),
         "personil": len(aktif & p),
-        "alat": len(aktif & a),
-        "lengkap": len(aktif & p & a),
-        "belum_lengkap": len(aktif - (p & a)),
+        "lengkap": len(aktif & p),
+        "belum_lengkap": len(aktif - p),
     }
 
 
@@ -472,84 +425,12 @@ def get_konflik_personil(kode_tender_target: str | None = None) -> list[dict]:
         if not ada_overlap:
             continue
 
-        # Kembalikan SEMUA entries (bisa >1 per paket jika beda posisi)
-        # Tapi attach jadwal ke tiap entry dari grouped (sudah ada)
+        # Satu baris per paket; variasi posisi/nama lama dalam paket yang sama
+        # tidak boleh membuat konflik tampil berulang.
         konflik.append({
             "nama_personil": norm,
             "nama_personil_display": display_map[norm],
-            "paket": entries,
-        })
-
-    return konflik
-
-
-def get_konflik_alat(kode_tender_target: str | None = None) -> list[dict]:
-    """
-    Return list alat yang muncul di >1 paket aktif dengan jadwal overlap.
-    """
-    aktif = _get_aktif_kode_tender()
-    if not aktif:
-        return []
-
-    rows = _sb().table("paket_alat")\
-        .select("kode_tender,peserta_id,nama_penyedia,nama_alat")\
-        .in_("kode_tender", aktif).execute().data or []
-
-    _jadwal_cache: dict[str, tuple] = {}
-
-    def _jadwal(kt: str) -> tuple:
-        if kt not in _jadwal_cache:
-            _jadwal_cache[kt] = _get_jadwal_paket(kt)
-        return _jadwal_cache[kt]
-
-    from collections import defaultdict
-    grouped: dict[str, list] = defaultdict(list)
-    display_map: dict[str, str] = {}
-    for r in rows:
-        mulai, selesai = _jadwal(r["kode_tender"])
-        norm = _normalize_alat(r["nama_alat"] or "")
-        if not norm:
-            continue
-        display_map.setdefault(norm, r["nama_alat"])
-        grouped[norm].append({
-            "kode_tender": r["kode_tender"],
-            "nama_penyedia": r["nama_penyedia"],
-            "peserta_id": r["peserta_id"],
-            "nama_alat": r["nama_alat"],
-            "tgl_mulai": mulai,
-            "tgl_selesai": selesai,
-        })
-
-    konflik = []
-    for norm, entries in grouped.items():
-        seen_kt: dict[str, dict] = {}
-        for e in entries:
-            if e["kode_tender"] not in seen_kt:
-                seen_kt[e["kode_tender"]] = e
-        unique_entries = list(seen_kt.values())
-        if len(unique_entries) <= 1:
-            continue
-        if kode_tender_target and kode_tender_target not in seen_kt:
-            continue
-
-        # Cek overlap jadwal
-        ada_overlap = False
-        for i in range(len(unique_entries)):
-            for j in range(i + 1, len(unique_entries)):
-                ea, eb = unique_entries[i], unique_entries[j]
-                if _overlap(ea["tgl_mulai"], ea["tgl_selesai"], eb["tgl_mulai"], eb["tgl_selesai"]):
-                    ada_overlap = True
-                    break
-            if ada_overlap:
-                break
-
-        if not ada_overlap:
-            continue
-
-        konflik.append({
-            "nama_alat": display_map[norm],
-            "nama_alat_normalized": norm,
-            "paket": entries,
+            "paket": unique_entries,
         })
 
     return konflik

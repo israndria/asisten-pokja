@@ -33,6 +33,25 @@ def _slug(nama: str) -> str:
     return nama.strip()[:80]
 
 
+_OFFER_LINK_MARKERS = (
+    "/cetaksuratpenawaran",
+    "/rincian_adminteknis",
+    "/rincian_penawaran",
+)
+
+
+def _row_has_submitted_offer(row) -> bool:
+    """True jika baris penyedia menunjukkan dokumen penawaran sudah dikirim."""
+    hrefs = [str(a.get("href") or "").lower() for a in row.find_all("a")]
+    if any(marker in href for href in hrefs for marker in _OFFER_LINK_MARKERS):
+        return True
+
+    # Fallback untuk variasi HTML SPSE yang tidak memberi link rincian, tetapi
+    # tetap menampilkan status pengiriman pada kolom dokumen penawaran.
+    text = row.get_text(" ", strip=True).lower()
+    return "belum dikirim" not in text and bool(re.search(r"\bdikirim\b", text))
+
+
 # ── Last-used directory ─────────────────────────────────────────────────────────
 
 def get_last_dir() -> str:
@@ -80,8 +99,10 @@ def fetch_peserta(url_penawaran: str) -> dict:
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Tabel peserta — cari kolom "Dokumen Kualifikasi" yang berisi link /kualifikasi/.../preview
+        # Tabel SPSE memuat pendaftar dan peserta penawar sekaligus. Untuk Tab
+        # 6, hanya peserta yang benar-benar mengirim penawaran yang relevan.
         peserta_list = []
+        seen_kualifikasi_ids = set()
         for a in soup.find_all("a", href=re.compile(r"/kualifikasi/\d+/preview")):
             # Ambil kualifikasi_id dari href
             km = re.search(r"/kualifikasi/(\d+)/preview", a["href"])
@@ -91,6 +112,11 @@ def fetch_peserta(url_penawaran: str) -> dict:
 
             # Nama peserta: cari di baris tabel yang sama
             tr = a.find_parent("tr")
+            if tr is None or not _row_has_submitted_offer(tr):
+                continue
+            if kualifikasi_id in seen_kualifikasi_ids:
+                continue
+            seen_kualifikasi_ids.add(kualifikasi_id)
             nama = ""
             if tr:
                 tds = tr.find_all("td")
@@ -109,7 +135,7 @@ def fetch_peserta(url_penawaran: str) -> dict:
         if not peserta_list:
             return {"ok": False, "peserta": [], "pesan": "Tidak ada peserta ditemukan di halaman ini"}
 
-        return {"ok": True, "peserta": peserta_list, "pesan": f"{len(peserta_list)} peserta ditemukan"}
+        return {"ok": True, "peserta": peserta_list, "pesan": f"{len(peserta_list)} peserta penawar ditemukan"}
 
     except Exception as e:
         return {"ok": False, "peserta": [], "pesan": str(e)}

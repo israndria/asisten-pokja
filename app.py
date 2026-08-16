@@ -629,9 +629,13 @@ def _get_jadwal_penjelasan_gcal_cached() -> dict:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_peserta_tender_cached(kode_lelang: str) -> list:
+def _fetch_peserta_tender_cached(kode_lelang: str) -> dict:
     """Cache GET peserta Tender agar rerun tidak mengulang request SPSE."""
-    return kualifikasi_engine.fetch_peserta_by_id_lelang(kode_lelang) or []
+    return kualifikasi_engine.fetch_peserta_by_id_lelang(kode_lelang) or {
+        "ok": False,
+        "peserta": [],
+        "pesan": "Tidak ada respons peserta dari SPSE",
+    }
 
 
 @st.cache_data(ttl=3600)
@@ -12484,6 +12488,19 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
         for _kl_auto_p in _kl_source_list:
             st.session_state.setdefault(f"kl_chk_v3_{_kl_auto_p['kode']}", True)
 
+    # Hapus hasil lama saat logika peserta berubah dari pendaftar menjadi
+    # peserta yang benar-benar mengirim penawaran.
+    _KL_PESERTA_STATE_VERSION = "penawaran-only-v1"
+    if st.session_state.get("_kl_peserta_state_version") != _KL_PESERTA_STATE_VERSION:
+        for _kl_state_key in list(st.session_state.keys()):
+            if _kl_state_key.startswith("kl_peserta_") or _kl_state_key.startswith("kl_cek_"):
+                st.session_state.pop(_kl_state_key, None)
+        try:
+            _fetch_peserta_tender_cached.clear()
+        except Exception:
+            pass
+        st.session_state["_kl_peserta_state_version"] = _KL_PESERTA_STATE_VERSION
+
     # ── Pre-render: fetch hanya paket yang dipilih user ────────────────────────
     if _kl_has_source:
         _kl_perlu_fetch = [
@@ -12564,6 +12581,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                     if st.button("🔄 Retry", key=f"kl_retry_{p['kode']}"):
                         _kl_id = p.get("id_lelang") or p["kode"]
                         with st.spinner("..."):
+                            _fetch_peserta_tender_cached.clear()
                             st.session_state[f"kl_peserta_{p['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
                         st.rerun()
                 else:
@@ -12577,6 +12595,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                          help="Ambil ulang daftar peserta paket ini dari SPSE."):
                                 _kl_id = p.get("id_lelang") or p["kode"]
                                 with st.spinner("Mengambil peserta dari SPSE..."):
+                                    _fetch_peserta_tender_cached.clear()
                                     st.session_state[f"kl_peserta_{p['kode']}"] = kualifikasi_engine.fetch_peserta_by_id_lelang(_kl_id)
                                 st.rerun()
                         with c2:
@@ -12606,7 +12625,16 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 st.caption("← Centang paket di atas untuk memuat peserta.")
 
     with _kl_col2:
-        st.markdown("#### 3. Folder & Aksi")
+        st.markdown("#### 3. Cek SKP Penyedia")
+        st.caption(
+            "Cari keterlibatan penyedia pada Tender dan Non-Tender Pekerjaan Konstruksi. "
+            "Hanya pemenang berkontrak pada tahap SPSE aktif yang dihitung sebagai SKP."
+        )
+        render_plpk_provider_search(st, key_prefix="tender_kl_provider_search")
+
+        st.divider()
+        st.markdown("#### 4. Aksi Paket")
+        st.caption("Pilih aksi untuk paket yang sudah dipilih pada Seksi 2.")
 
         # ── Ringkasan paket terpilih + status folder ───────────────────────────
         _kl_paket_dipilih = []
@@ -12641,7 +12669,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
             # ── Publish Paket: finalisasi metadata setelah data tersimpan ────
             # Tidak scrape ulang. Hanya validasi tabel Supabase + tulis manifest.
             import publish_workflow as _pub_wf
-            with st.expander("📤 Publish Paket", expanded=True):
+            if False and st.expander("📤 Publish Paket", expanded=True):
                 st.caption(
                     "Klik setelah proses Download/Parse selesai. Publish hanya menandai "
                     "snapshot terbaru untuk dibaca Excel."
@@ -12877,7 +12905,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                             except Exception as e_id:
                                 _log_cb(f"⚠️ [{kode_tender}] Identitas error: {e_id}")
 
-                            # ── Conflict detection: sync personil & alat dari PDF
+                            # ── Conflict detection: sync personil dari PDF
                             try:
                                 import conflict_engine
                                 for i, d in enumerate(semua_data):
@@ -12886,10 +12914,9 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                     conflict_engine.sync_from_pdf(
                                         kode_tender, pid, nama,
                                         d.get("personel_list", []),
-                                        d.get("peralatan_list", []),
                                         log=_log_cb,
                                     )
-                                _log_cb(f"✅ [{kode_tender}] Conflict sync selesai.")
+                                _log_cb(f"✅ [{kode_tender}] Personil conflict sync selesai.")
                             except Exception as e_cf:
                                 _log_cb(f"⚠️ [{kode_tender}] Conflict sync error: {e_cf}")
 
@@ -12904,51 +12931,59 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 if do_kk: _parts.append("KK Evaluasi tersimpan")
                 st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Harga penawaran sudah ditulis langsung ke Sheet 6 Excel; lanjutkan **Muat Input BA** jika perlu.")
 
-            # Tampilkan status folder tiap paket
-            _kl_semua_folder_ok = True
+            # Folder tetap di-resolve internal untuk download/parse/Excel, tetapi
+            # detail folder tidak ditampilkan pada seksi aksi.
+            _kl_semua_folder_ok = all(
+                bool(item.get("folder_ok")) for item in _kl_paket_dipilih
+            )
+            _kl_total_semua = sum(len(item["peserta"]) for item in _kl_paket_dipilih)
+            _kl_total_paket = len(_kl_paket_dipilih)
+            st.caption(
+                f"{_kl_total_paket} paket terpilih · "
+                f"{_kl_total_semua} peserta siap diproses.",
+            )
+
+            st.caption("Aksi manual per paket (opsional):")
             for item in _kl_paket_dipilih:
                 p = item["paket"]
-                fc1, fc2 = st.columns([4, 1])
-                with fc1:
-                    if item["folder_ok"]:
-                        st.success(f"📁 **{p['kode']}** → `...\\{item['folder_info']}\\1. Dokumen Kualifikasi`")
-                    else:
-                        st.error(f"❌ **{p['kode']}** — {item['folder_info']}")
-                        _kl_semua_folder_ok = False
-                with fc2:
-                    if item["folder_ok"] and st.button("📂", key=f"kl_open_{p['kode']}", help="Buka folder", use_container_width=True):
-                        os.startfile(item["folder"])
-
                 n_ps = len(item["peserta"])
-                st.caption(f"  → {n_ps} peserta dipilih" if n_ps else "  → ⚠️ Tidak ada peserta dipilih")
-
-                if st.button(
-                    f"▶ Jalankan paket ini",
-                    key=f"kl_run_{p['kode']}",
-                    use_container_width=True,
-                    disabled=(n_ps == 0) or (item.get("folder_ok") is False),
-                ):
-                    _proses_paket_kk(
-                        [item],
-                        st.session_state.get("kl_opt_download", True),
-                        st.session_state.get("kl_opt_kk", True),
-                        st.session_state.get("kl_opt_kk", True),  # excel ikut parse
+                with st.container(border=True):
+                    st.markdown(f"**{_pokja_label(p)}**")
+                    st.caption(
+                        f"{n_ps} peserta siap diproses."
+                        if n_ps else "⚠️ Tidak ada peserta yang siap diproses."
                     )
+                    if st.button(
+                        "▶ Jalankan paket ini",
+                        key=f"kl_run_{p['kode']}",
+                        use_container_width=True,
+                        disabled=(n_ps == 0) or (item.get("folder_ok") is False),
+                    ):
+                        _proses_paket_kk(
+                            [item],
+                            st.session_state.get("kl_opt_download", True),
+                            st.session_state.get("kl_opt_kk", True),
+                            st.session_state.get("kl_opt_kk", True),
+                        )
 
             st.divider()
 
-            # Hitung total peserta
-            _kl_total_semua = sum(len(item["peserta"]) for item in _kl_paket_dipilih)
-            _kl_total_paket = len(_kl_paket_dipilih)
-
             # ── Opsi aksi ──────────────────────────────────────────────────────
-            _kl_do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="kl_opt_download")
-            _kl_do_kk = st.checkbox(
-                "📝 Parse KK + Penawaran Harga → tulis langsung ke Excel paket",
-                value=True,
-                key="kl_opt_kk",
-                help="Ambil data KK dan rincian harga dari SPSE lalu tulis langsung ke workbook paket; tidak memakai Supabase sebagai perantara harga.",
-            )
+            st.caption("Pilih aksi sekali, lalu jalankan seluruh paket terpilih dengan satu tombol.")
+            _kl_opt_download_col, _kl_opt_kk_col = st.columns(2)
+            with _kl_opt_download_col:
+                _kl_do_download = st.checkbox(
+                    "⬇️ Download dokumen kualifikasi",
+                    value=True,
+                    key="kl_opt_download",
+                )
+            with _kl_opt_kk_col:
+                _kl_do_kk = st.checkbox(
+                    "📝 Parse KK + Penawaran Harga → tulis ke Excel paket",
+                    value=True,
+                    key="kl_opt_kk",
+                    help="Ambil data KK dan rincian harga dari SPSE lalu tulis langsung ke workbook paket.",
+                )
             _kl_do_excel = _kl_do_kk  # Excel selalu ikut parse; harga ditulis langsung ke Sheet 6
 
             _kl_btn_label = []
@@ -12968,9 +13003,13 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
 
             st.divider()
+            st.caption(
+                f"📌 Aksi: {_kl_btn_text} · "
+                f"{_kl_total_paket} paket · {_kl_n_aktif} peserta"
+            )
 
             if st.button(
-                f"▶ Jalankan: {_kl_btn_text} — {_kl_total_paket} paket, {_kl_n_aktif} peserta",
+                "▶ Jalankan proses" if _kl_btn_label else "▶ Pilih minimal satu aksi",
                 key="kl_jalankan",
                 type="primary",
                 use_container_width=True,
@@ -12978,52 +13017,42 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
             ):
                 _proses_paket_kk(_kl_items_run, _kl_do_download, _kl_do_kk, _kl_do_excel)
 
-                # ── Tampilkan konflik personil & alat lintas paket
+                # Tampilkan konflik personil lintas paket
                 if _kl_do_kk:
                     try:
                         import conflict_engine as _ce
                         for _kt in [item["paket"]["kode"] for item in _kl_paket_dipilih]:
                             _kf_p = _ce.get_konflik_personil(_kt)
-                            _kf_a = _ce.get_konflik_alat(_kt)
-                            if _kf_p or _kf_a:
+                            if _kf_p:
                                 with st.expander(f"⚠️ Konflik Lintas Paket — {_kt}", expanded=True):
-                                    if _kf_p:
-                                        st.markdown("**Personil digunakan di >1 paket:**")
-                                        for k in _kf_p:
-                                            paket_str = ", ".join(
-                                                f"{e['kode_tender']} ({e['nama_penyedia']})"
-                                                for e in k["paket"]
-                                            )
-                                            st.error(f"🔴 {k['nama_personil']} → {paket_str}")
-                                    if _kf_a:
-                                        st.markdown("**Alat digunakan di >1 paket:**")
-                                        for k in _kf_a:
-                                            paket_str = ", ".join(
-                                                f"{e['kode_tender']} ({e['nama_penyedia']})"
-                                                for e in k["paket"]
-                                            )
-                                            st.warning(f"🟡 {k['nama_alat']} → {paket_str}")
+                                    st.markdown("**Personil digunakan di >1 paket:**")
+                                    for k in _kf_p:
+                                        paket_str = ", ".join(
+                                            f"{e['kode_tender']} ({e['nama_penyedia']})"
+                                            for e in k["paket"]
+                                        )
+                                        st.error(f"🔴 {k['nama_personil']} → {paket_str}")
                     except Exception as _e_kf:
                         st.caption(f"Conflict check error: {_e_kf}")
 
-        # ── Dashboard Konflik Personil & Alat (semua paket) ──────────────────
+        # ── Dashboard Konflik Personil (semua paket) ─────────────────────────
         st.divider()
-        st.markdown("### ⚠️ Konflik Personil & Alat Lintas Paket")
-        st.caption("Personil atau alat yang diajukan penyedia di >1 paket aktif. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
+        st.markdown("### ⚠️ Konflik Personil Lintas Paket")
+        st.caption("Personil yang diajukan penyedia di >1 paket aktif. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
 
         def _render_konflik_dashboard(trigger_sync_doktek: bool = False):
             """Query + tampilkan dashboard konflik. Ringan — hanya baca Supabase."""
             try:
                 import conflict_engine as _ce_dash
+                if trigger_sync_doktek:
+                    # Sinkronkan paket yang personilnya belum lengkap.
+                    _ce_dash.sync_new_paket()
                 _cov = _ce_dash.get_sync_coverage()
                 st.info(
-                    f"Coverage data: {_cov['lengkap']}/{_cov['aktif']} paket lengkap "
-                    f"(personil {_cov['personil']}, alat {_cov['alat']}). "
+                    f"Coverage personil: {_cov['lengkap']}/{_cov['aktif']} paket lengkap "
+                    f"({_cov['personil']} paket terisi). "
                     f"Belum lengkap: {_cov['belum_lengkap']} paket."
                 )
-                if trigger_sync_doktek:
-                    # Sinkronkan paket yang personil atau alatnya belum lengkap.
-                    _ce_dash.sync_new_paket()
                 # Lookup nama paket
                 from config import sb as _sb_kf
                 _nama_map = {
@@ -13033,8 +13062,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
 
                 # Query konflik (selalu dari data yang sudah tersimpan di Supabase)
                 _kf_p_all = _ce_dash.get_konflik_personil()
-                _kf_a_all = _ce_dash.get_konflik_alat()
-                if not _kf_p_all and not _kf_a_all:
+                if not _kf_p_all:
                     st.success("✅ Tidak ada konflik ditemukan.")
                 else:
                     if _kf_p_all:
@@ -13062,18 +13090,6 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                     "Periode": periode,
                                 })
                         st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
-                    if _kf_a_all:
-                        st.markdown(f"**Alat konflik: {len(_kf_a_all)} nama**")
-                        _rows_ka = []
-                        for k in _kf_a_all:
-                            for e in k["paket"]:
-                                kt = e["kode_tender"]
-                                _rows_ka.append({
-                                    "Nama Alat": k["nama_alat"],
-                                    "Paket": _nama_map.get(kt, kt),
-                                    "Penyedia": e["nama_penyedia"] or "-",
-                                })
-                        st.dataframe(_rows_ka, use_container_width=True, hide_index=True)
             except Exception as _e_dash:
                 st.error(f"Error: {_e_dash}")
 
