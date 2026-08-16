@@ -4,7 +4,27 @@ import parse_kak_pl
 import pl_engine
 import pl_ui_helpers
 import zipfile
-from pl_data_ui import _hydrate_provider_from_excel, filter_local_pl_rows
+from pl_data_ui import _filter_pl_family, _hydrate_provider_from_excel, filter_local_pl_rows
+
+
+def test_pl_setup_draft_filter_excludes_active_or_published_status():
+    assert pl_engine.is_paket_draft({"status": "draft"}) is True
+    assert pl_engine.is_paket_draft({"status": "paket sedang berjalan"}) is False
+    assert pl_engine.is_paket_draft({"status": "draft", "tahap_spse": "Upload Dokumen Penawaran"}) is False
+    assert pl_engine.is_paket_draft({"status": "", "tahap_spse": "Upload Dokumen Penawaran"}) is False
+    assert pl_engine.is_paket_draft({"status": "", "tahap_spse": ""}) is False
+
+
+def test_pl_family_loader_isolated_and_fail_closed():
+    rows = [
+        {"kode_paket": "PK-1", "jenis_pl": "PK"},
+        {"kode_paket": "JKK-1", "jenis_pl": "JKK"},
+        {"kode_paket": "UNKNOWN-1", "jenis_pl": ""},
+    ]
+
+    assert [row["kode_paket"] for row in _filter_pl_family(rows, "PK")] == ["PK-1"]
+    assert [row["kode_paket"] for row in _filter_pl_family(rows, "JKK")] == ["JKK-1"]
+    assert _filter_pl_family(rows, "unexpected-family") == []
 
 
 def test_provider_sync_private_alias_matches_canonical_helper():

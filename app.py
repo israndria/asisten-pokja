@@ -2416,17 +2416,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if _pl_dup_n:
             st.caption(f"♻️ {_pl_dup_n} row lama duplikat (paket ulang) disembunyikan otomatis.")
 
-        # ── #4: Filter paket selesai (penandatanganan kontrak) ──────────────────
-        _pl_show_done = st.checkbox(
-            "Tampilkan paket selesai (sudah teken kontrak)",
-            value=False,
-            key="pl_show_done",
-        )
-        _pl_done_n = sum(1 for r in _pl_rows if pl_engine.is_paket_selesai(r))
-        if not _pl_show_done:
-            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
-            if _pl_done_n:
-                st.caption(f"🔒 {_pl_done_n} paket selesai (Penandatanganan Kontrak) disembunyikan — centang di atas untuk tampilkan.")
+        # Tab 1–3 adalah fase setup awal: hanya paket yang masih Draft.
+        _pl_non_draft_n = sum(1 for r in _pl_rows if not pl_engine.is_paket_draft(r))
+        _pl_rows = [r for r in _pl_rows if pl_engine.is_paket_draft(r)]
+        if _pl_non_draft_n:
+            st.caption(f"🔒 {_pl_non_draft_n} paket aktif/berjalan disembunyikan dari fase setup awal.")
         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
         _pl_local_by_kode = {
             str(r.get("kode_paket")): r
@@ -2482,8 +2476,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             r for r in _pl_rows
                             if str(r.get("jenis_pl") or "").upper() == "JKK"
                         ]
-                        if not _pl_show_done:
-                            _pl_rows = [r for r in _pl_rows if not pl_engine.is_paket_selesai(r)]
+                        _pl_rows = [r for r in _pl_rows if pl_engine.is_paket_draft(r)]
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
                         _pl_local_by_kode = {
                             str(r.get("kode_paket")): r
@@ -3384,7 +3377,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             _pl_rows_kd = _load_draft_pl_cached()
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
-            _pl_rows_kd = [r for r in _pl_rows_kd if not pl_engine.is_paket_selesai(r)]
+            _pl_rows_kd = [r for r in _pl_rows_kd if pl_engine.is_paket_draft(r)]
             _kd_selected = []
             if not _pl_rows_kd:
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
@@ -3958,7 +3951,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         _plsp_rows = _load_draft_pl_cached()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
-        _plsp_rows = [r for r in _plsp_rows if not pl_engine.is_paket_selesai(r)]
+        _plsp_rows = [r for r in _plsp_rows if pl_engine.is_paket_draft(r)]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:

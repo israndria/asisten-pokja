@@ -10,7 +10,29 @@ import os
 
 import streamlit as st
 
-_LOCAL_DRAFT_CACHE_VERSION = "folder-identity-v2"
+_LOCAL_DRAFT_CACHE_VERSION = "folder-identity-v3-family-gate"
+
+
+def _filter_pl_family(rows: list[dict], engine_kind: str) -> list[dict]:
+    """Batasi row ke family yang diminta; family tidak dikenal ditolak.
+
+    Query Supabase tetap menjadi filter pertama di masing-masing engine, tetapi
+    boundary ini wajib ada di loader UI juga. Dengan begitu row JKK yang
+    terselip akibat cache/query lama tidak pernah masuk ke mode PK, dan row
+    tanpa klasifikasi tidak diasumsikan sebagai salah satu family.
+    """
+    kind = str(engine_kind or "JKK").strip().upper()
+    if kind in {"PK", "PLPK", "KONSTRUKSI", "PL - KONSTRUKSI"}:
+        expected = "PK"
+    elif kind in {"JKK", "PLJKK", "KONSULTANSI", "PL - KONSULTANSI"}:
+        expected = "JKK"
+    else:
+        return []
+
+    return [
+        row for row in (rows or [])
+        if str(row.get("jenis_pl") or "").strip().upper() == expected
+    ]
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -122,6 +144,9 @@ def load_draft_pl_cached(
     else:
         import pl_engine as engine
     rows = engine.load_draft_pl()
+    # Defense-in-depth: jangan percaya query engine/cache sebagai satu-satunya
+    # boundary family. Ini mencegah paket konsultan bocor ke mode konstruksi.
+    rows = _filter_pl_family(rows, engine_kind)
     # PK engine tidak mendefinisikan helper display ini; gunakan helper shared
     # agar label/nomor folder tetap identik dengan workflow JKK.
     from pl_engine import _hydrate_nomor_urut_folder
@@ -168,6 +193,7 @@ def load_verifikasi_pl_rows_cached(engine_kind: str = "JKK") -> tuple[list[dict]
             "status_undangan_verifikasi, is_ulang, jenis_pl, tahap_spse, "
             "folder_dibuat, nomor_urut"
         ).order("kode_paket").execute().data or []
+        rows = _filter_pl_family(rows, engine_kind)
         rows = filter_local_pl_rows(rows)
         return _hydrate_provider_from_excel(rows), ""
     except Exception as exc:

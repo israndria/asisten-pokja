@@ -320,6 +320,20 @@ def is_paket_selesai(r: dict) -> bool:
     return any(k in (r.get("status") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS)
 
 
+def is_paket_draft(r: dict) -> bool:
+    """True hanya untuk paket yang masih berstatus Draft di SPSE.
+
+    Tab setup awal tidak boleh mengubah atau mengunggah paket yang sudah
+    masuk status berjalan atau tahap SPSE lain. Row tanpa status juga ditolak
+    agar fase setup tidak mengambil keputusan dari data yang ambigu.
+    """
+    status = str(r.get("status") or "").strip().lower()
+    tahap = str(r.get("tahap_spse") or "").strip()
+    if tahap:
+        return False
+    return status == "draft"
+
+
 def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
     """
     Jika ada >1 row dgn nama_paket sama (paket di-ulang → kode baru, row lama nyangkut),
