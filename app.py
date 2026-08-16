@@ -13028,94 +13028,6 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
             ):
                 _proses_paket_kk(_kl_items_run, _kl_do_download, _kl_do_kk, _kl_do_excel)
 
-                # Tampilkan konflik personil lintas paket
-                if _kl_do_kk:
-                    try:
-                        import conflict_engine as _ce
-                        for _kt in [item["paket"]["kode"] for item in _kl_paket_dipilih]:
-                            _kf_p = _ce.get_konflik_personil(_kt)
-                            if _kf_p:
-                                with st.expander(f"⚠️ Konflik Lintas Paket — {_kt}", expanded=True):
-                                    st.markdown("**Personil digunakan di >1 paket:**")
-                                    for k in _kf_p:
-                                        paket_str = ", ".join(
-                                            f"{e['kode_tender']} ({e['nama_penyedia']})"
-                                            for e in k["paket"]
-                                        )
-                                        st.error(f"🔴 {k['nama_personil']} → {paket_str}")
-                    except Exception as _e_kf:
-                        st.caption(f"Conflict check error: {_e_kf}")
-
-        # ── Dashboard Konflik Personil (semua paket) ─────────────────────────
-        st.divider()
-        st.markdown("### ⚠️ Konflik Personil Lintas Paket")
-        st.caption("Perkiraan penugasan = mulai event SPPBJ di GCal + masa pelaksanaan dari Excel Tender @ Master Data!C12. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
-
-        def _render_konflik_dashboard():
-            """Query + tampilkan dashboard konflik. Ringan — hanya baca Supabase."""
-            try:
-                import conflict_engine as _ce_dash
-                _cov = _ce_dash.get_sync_coverage()
-                st.info(
-                    f"Coverage cache personil {_cov['tahun']}: "
-                    f"{_cov['personil']}/{_cov['aktif']} paket terisi. "
-                    f"Belum tersinkron: {_cov['belum_lengkap']} paket."
-                )
-                st.caption(
-                    "Tabel konflik hanya memakai penyedia pemenang dari hasil scraper "
-                    "dan nama personil final dari 0. Input BA!G13:G14. "
-                    "Coverage cache memakai tahun pada nomor surat dinas; paket tanpa "
-                    "tahun tidak masuk perhitungan."
-                )
-                # Lookup nama paket
-                from config import sb as _sb_kf
-                _nama_map = {
-                    r["kode_tender"]: r.get("nama_tender") or r["kode_tender"]
-                    for r in (_sb_kf().table("draft_paket").select("kode_tender,nama_tender").execute().data or [])
-                }
-
-                # Query konflik (selalu dari data yang sudah tersimpan di Supabase)
-                _kf_p_all = _ce_dash.get_konflik_personil()
-                if not _kf_p_all:
-                    st.success("✅ Tidak ada konflik ditemukan.")
-                else:
-                    if _kf_p_all:
-                        st.markdown(f"**Personil konflik: {len(_kf_p_all)} nama**")
-                        _rows_kf = []
-                        _BULAN_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
-                        def _fmt_tgl(d):
-                            if d is None:
-                                return "-"
-                            return f"{d.day:02d} {_BULAN_ID[d.month-1]} {d.year}"
-                        for k in _kf_p_all:
-                            _seen = set()
-                            for e in k["paket"]:
-                                kt = e["kode_tender"]
-                                if kt in _seen:
-                                    continue
-                                _seen.add(kt)
-                                mulai = e.get("tgl_mulai")
-                                selesai = e.get("tgl_selesai")
-                                if mulai and selesai:
-                                    penugasan = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}"
-                                elif mulai:
-                                    penugasan = f"Mulai {_fmt_tgl(mulai)} · durasi Excel belum terbaca"
-                                else:
-                                    penugasan = "SPPBJ GCal/masa pelaksanaan Excel belum lengkap"
-                                _rows_kf.append({
-                                    "Nama Personil": k.get("nama_personil_display") or k["nama_personil"],
-                                    "Paket": _nama_map.get(kt, kt),
-                                    "Penyedia": e["nama_penyedia"] or "-",
-                                    "Perkiraan Penugasan": penugasan,
-                                })
-                        st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
-            except Exception as _e_dash:
-                st.error(f"Error: {_e_dash}")
-
-        # Data personil sudah disinkronkan oleh Jalankan proses; dashboard
-        # hanya membaca hasil terbaru dari Supabase.
-        _render_konflik_dashboard()
-
     # Evaluasi AI dipusatkan di Tab 6 agar DokFull menjadi sumber tunggal.
     if False:
         st.divider()
@@ -13245,13 +13157,15 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         "Alur kerja: scan hasil decrypt Apendo → pindahkan/gabung dokumen → evaluasi dan input BA."
     )
 
-    st.markdown("#### 1. Scan Dokumen Apendo")
+    st.markdown("#### 📥 1. Scan Dokumen Apendo")
     st.caption("Sumber: `D:\\data\\biddings`. Data dicocokkan dengan paket dan peserta di Supabase.")
-    _dp_col_scan, _dp_col_info = st.columns([1, 3])
-    with _dp_col_scan:
-        if st.button("🔍 Scan Ulang Apendo", key="dp_scan", type="primary", use_container_width=True):
-            st.session_state.pop("dp_scan_result", None)
-            st.rerun()
+    with st.container(border=True):
+        _dp_col_scan, _dp_col_info = st.columns([1, 3])
+        with _dp_col_scan:
+            if st.button("🔍 Scan Ulang Apendo", key="dp_scan", type="primary", use_container_width=True):
+                st.session_state["dp_reset_selection_on_scan"] = True
+                st.session_state.pop("dp_scan_result", None)
+                st.rerun()
 
     if "dp_scan_result" not in st.session_state:
         with st.spinner("Scanning D:\\data\\biddings ..."):
@@ -13302,30 +13216,41 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     _reset_tender_stale_widget_keys("gab2_chk_", _dp_paket_rows)
     _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
 
-    st.divider()
-    st.markdown("#### 2. Pilih Paket")
+    _dp_scanned_kodes = {
+        x.get("kode_tender") for x in _dp_items if x.get("kode_tender")
+    }
+    if st.session_state.pop("dp_reset_selection_on_scan", False):
+        for _r in _dp_paket_rows:
+            _dp_code = _r["kode_tender"]
+            st.session_state[f"dp_chk_{_dp_code}"] = _dp_code in _dp_scanned_kodes
+
+    st.caption(
+        "Paket hasil scan Apendo — otomatis tercentang. Pilih Semua/Batal Semua "
+        "tetap tersedia untuk penyesuaian sebelum aksi bulk."
+    )
     if _dp_paket_pra_pembukaan:
         st.info(
             f"⏭️ {len(_dp_paket_pra_pembukaan)} paket disembunyikan karena belum sampai "
             "Pembukaan Dokumen Penawaran."
         )
     if _dp_paket_rows:
-        _dp_sel_c1, _dp_sel_c2, _dp_sel_c3 = st.columns([1, 1, 3])
-        if _dp_sel_c1.button("✅ Pilih Semua", key="dp_pilih_semua", use_container_width=True):
-            for _r in _dp_paket_rows:
-                st.session_state[f"dp_chk_{_r['kode_tender']}"] = True
-            st.rerun()
-        if _dp_sel_c2.button("❌ Batal Semua", key="dp_batal_semua", use_container_width=True):
-            for _r in _dp_paket_rows:
-                st.session_state[f"dp_chk_{_r['kode_tender']}"] = False
-            st.rerun()
+        with st.container(border=True):
+            _dp_sel_c1, _dp_sel_c2, _dp_sel_c3 = st.columns([1, 1, 3])
+            if _dp_sel_c1.button("✅ Pilih Semua", key="dp_pilih_semua", use_container_width=True):
+                for _r in _dp_paket_rows:
+                    st.session_state[f"dp_chk_{_r['kode_tender']}"] = True
+                st.rerun()
+            if _dp_sel_c2.button("❌ Batal Semua", key="dp_batal_semua", use_container_width=True):
+                for _r in _dp_paket_rows:
+                    st.session_state[f"dp_chk_{_r['kode_tender']}"] = False
+                st.rerun()
         _dp_sel_n = 0
         _dp_check_cols = st.columns(2)
         for _dp_i, _r in enumerate(_dp_paket_rows):
             _dp_kt = _r["kode_tender"]
             _dp_ck = f"dp_chk_{_dp_kt}"
             if _dp_ck not in st.session_state:
-                st.session_state[_dp_ck] = True
+                st.session_state[_dp_ck] = _dp_kt in _dp_scanned_kodes
             if _dp_check_cols[_dp_i % 2].checkbox(
                 f"{_r.get('folder_dibuat', _r.get('nama_tender', _dp_kt))}",
                 key=_dp_ck,
@@ -13468,7 +13393,7 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
 
     # ── Seksi 3: Gabung Dok Lengkap (independen dari Scan Apendo) ─────────────
     st.divider()
-    st.markdown("#### 3. Gabung Dokumen Lengkap")
+    st.markdown("#### 📎 2. Gabung Dokumen Lengkap")
     st.caption("Gabung `DoktekFull` + `DokkualifFull` → `1. Dokumen Gabungan/1. DokFull_*.pdf`. Evaluasi AI membaca DokFull ini sebagai sumber gabungan kualifikasi + penawaran.")
 
     # Gabung/evaluasi dokumen penawaran hanya untuk paket yang sudah masuk
@@ -13524,8 +13449,6 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                 _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
                 _gab_all_ok += _r["ok"]
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
-        st.divider()
-
         def _harga_sheet6_tender(folder_paket):
             """Baca total final Sheet 6 via Excel COM; read-only, tanpa mengubah XLSM."""
             import glob as _glob_harga
@@ -13659,51 +13582,56 @@ Mulai sekarang."""
         for _gp in _gab_valid:
             _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
             _gp_label = _gp.get("folder_dibuat", _gp["kode_tender"])
-            _gp_c1, _gp_c2, _gp_c3 = st.columns([3, 1, 1])
-            with _gp_c1:
-                st.checkbox(_gp_label, key=f"gab2_chk_{_gp['kode_tender']}")
-            with _gp_c2:
-                if st.button("📎 Gabung", key=f"gab2_{_gp['kode_tender']}", use_container_width=True):
-                    _gab2_log = []
-                    _gab2_hasil = _pe.gabung_dokumen_lengkap(_gp_folder, log=_gab2_log.append)
-                    if _gab2_hasil["ok"] > 0:
-                        st.success(f"✅ {_gab2_hasil['ok']} peserta digabung → `1. Dokumen Gabungan/`")
-                    elif not _gab2_hasil["gagal"]:
-                        st.info("ℹ️ Tidak ada DoktekFull ditemukan di folder Dokumen Penawaran.")
-                    if _gab2_hasil["gagal"]:
-                        st.error(f"❌ {len(_gab2_hasil['gagal'])} gagal:")
-                        for _ge in _gab2_hasil["gagal"]:
-                            st.caption(f"• {_ge}")
-                    for _gm in _gab2_log:
-                        st.caption(_gm)
-            with _gp_c3:
-                if st.button("🤖 Eval AI", key=f"gab2_ai_{_gp['kode_tender']}", use_container_width=True):
-                    import ai_evaluator as _heval_ap
-                    with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
-                        try:
-                            _dokfull_ap = _pe.cari_dokumen_lengkap(_gp_folder)
-                            _checklist_ap = _pe.cari_checklist_kualifikasi(_gp_folder)
-                            if not _dokfull_ap:
-                                raise RuntimeError("DokFull belum tersedia di 1. Dokumen Gabungan; jalankan Gabung Dokumen Lengkap terlebih dahulu.")
-                            _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label, _dokfull_ap, _checklist_ap)
-                            _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=None, add_dirs=[_gp_folder], engine="codex")
-                            _hasil_ap = os.path.join(_gp_folder, "_HASIL_EVALUASI_PK.md")
-                            _missing_ap = _validasi_hasil_evaluasi_tender(_hasil_ap)
-                            if _missing_ap:
-                                raise RuntimeError(
-                                    "Output evaluasi belum lengkap; bagian hilang: " + ", ".join(_missing_ap)
-                                )
-                            st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
-                            with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
-                                st.markdown(_out_ap[:3000])
-                        except Exception as _e_ap:
-                            st.error(f"❌ Evaluasi AI gagal: {_e_ap}")
+            with st.container(border=True):
+                st.markdown(f"**{_gp_label}**")
+                _gp_c1, _gp_c2, _gp_c3 = st.columns([4, 1, 1])
+                with _gp_c1:
+                    st.checkbox(
+                        "Pilih paket ini",
+                        key=f"gab2_chk_{_gp['kode_tender']}",
+                    )
+                with _gp_c2:
+                    if st.button("📎 Gabung", key=f"gab2_{_gp['kode_tender']}", use_container_width=True):
+                        _gab2_log = []
+                        _gab2_hasil = _pe.gabung_dokumen_lengkap(_gp_folder, log=_gab2_log.append)
+                        if _gab2_hasil["ok"] > 0:
+                            st.success(f"✅ {_gab2_hasil['ok']} peserta digabung → `1. Dokumen Gabungan/`")
+                        elif not _gab2_hasil["gagal"]:
+                            st.info("ℹ️ Tidak ada DoktekFull ditemukan di folder Dokumen Penawaran.")
+                        if _gab2_hasil["gagal"]:
+                            st.error(f"❌ {len(_gab2_hasil['gagal'])} gagal:")
+                            for _ge in _gab2_hasil["gagal"]:
+                                st.caption(f"• {_ge}")
+                        for _gm in _gab2_log:
+                            st.caption(_gm)
+                with _gp_c3:
+                    if st.button("🤖 Eval AI", key=f"gab2_ai_{_gp['kode_tender']}", use_container_width=True):
+                        import ai_evaluator as _heval_ap
+                        with st.spinner(f"Evaluasi AI {_gp_label[:40]}..."):
+                            try:
+                                _dokfull_ap = _pe.cari_dokumen_lengkap(_gp_folder)
+                                _checklist_ap = _pe.cari_checklist_kualifikasi(_gp_folder)
+                                if not _dokfull_ap:
+                                    raise RuntimeError("DokFull belum tersedia di 1. Dokumen Gabungan; jalankan Gabung Dokumen Lengkap terlebih dahulu.")
+                                _prompt_ap = _prompt_evaluasi_tender_apendo(_gp_folder, _gp_label, _dokfull_ap, _checklist_ap)
+                                _out_ap = _heval_ap._run_evaluator(_prompt_ap, model=None, add_dirs=[_gp_folder], engine="codex")
+                                _hasil_ap = os.path.join(_gp_folder, "_HASIL_EVALUASI_PK.md")
+                                _missing_ap = _validasi_hasil_evaluasi_tender(_hasil_ap)
+                                if _missing_ap:
+                                    raise RuntimeError(
+                                        "Output evaluasi belum lengkap; bagian hilang: " + ", ".join(_missing_ap)
+                                    )
+                                st.success(f"✅ Evaluasi AI selesai — {_gp_label[:40]}")
+                                with st.expander(f"Output evaluasi: {_gp_label[:35]}"):
+                                    st.markdown(_out_ap[:3000])
+                            except Exception as _e_ap:
+                                st.error(f"❌ Evaluasi AI gagal: {_e_ap}")
     else:
         st.info("Tidak ada paket ditemukan di Supabase.")
 
     # ── Seksi 4: Input BA → tulis Excel langsung via COM ─────────────────────
     st.divider()
-    st.markdown("#### 4. Input BA ke Excel")
+    st.markdown("#### 🧾 3. Input BA ke Excel")
     st.caption(
         "Isi sheet '0. Input BA' (identitas peserta, dokumen penawaran, SKP) "
         "langsung ke file .xlsm via COM. Urutan peserta dari KK Evaluasi."
@@ -13717,32 +13645,33 @@ Mulai sekarang."""
         import input_ba_engine as _iba_eng
 
         # Opsi global
-        _iba_col_opt1, _iba_col_opt2 = st.columns(2)
-        with _iba_col_opt1:
-            _iba_do_teknis = st.checkbox(
-                "Parse Dok Teknis (override alat/personel)",
-                value=True,
-                key="iba_do_teknis",
-            )
-        with _iba_col_opt2:
-            _iba_do_gcal = st.checkbox(
-                "Sync tanggal dari Google Calendar",
-                value=True,
-                key="iba_do_gcal",
-            )
-            if _iba_do_gcal:
-                try:
-                    import gcal_pl_helper as _iba_gcal_check
-                    if not _iba_gcal_check.check_gcal_token():
-                        st.warning("🔐 Token Google Calendar perlu login ulang.")
-                        if st.button("🔑 Login Ulang Google Calendar", key="iba_gcal_reauth", use_container_width=True):
-                            import gcal_helper as _iba_gcal_helper
-                            with st.spinner("Menunggu login Google..."):
-                                _iba_gcal_helper.generate_token()
-                            st.success("✅ Token Google Calendar diperbarui.")
-                            st.rerun()
-                except Exception as _iba_gcal_check_err:
-                    st.caption(f"⚠️ Cek token GCal gagal: {_iba_gcal_check_err}")
+        with st.container(border=True):
+            _iba_col_opt1, _iba_col_opt2 = st.columns(2)
+            with _iba_col_opt1:
+                _iba_do_teknis = st.checkbox(
+                    "Parse Dok Teknis (override alat/personel)",
+                    value=True,
+                    key="iba_do_teknis",
+                )
+            with _iba_col_opt2:
+                _iba_do_gcal = st.checkbox(
+                    "Sync tanggal dari Google Calendar",
+                    value=True,
+                    key="iba_do_gcal",
+                )
+                if _iba_do_gcal:
+                    try:
+                        import gcal_pl_helper as _iba_gcal_check
+                        if not _iba_gcal_check.check_gcal_token():
+                            st.warning("🔐 Token Google Calendar perlu login ulang.")
+                            if st.button("🔑 Login Ulang Google Calendar", key="iba_gcal_reauth", use_container_width=True):
+                                import gcal_helper as _iba_gcal_helper
+                                with st.spinner("Menunggu login Google..."):
+                                    _iba_gcal_helper.generate_token()
+                                st.success("✅ Token Google Calendar diperbarui.")
+                                st.rerun()
+                    except Exception as _iba_gcal_check_err:
+                        st.caption(f"⚠️ Cek token GCal gagal: {_iba_gcal_check_err}")
 
         # Fungsi proses (dipakai per-paket maupun global)
         def _proses_input_ba(
@@ -14043,35 +13972,126 @@ Mulai sekarang."""
         # Tombol per-paket
         st.divider()
         for _iba_p in _iba_paket_list:
-            _iba_kode  = _iba_p["kode_tender"]
-            _iba_nama  = _iba_p.get("nama_tender", _iba_kode)
-            _iba_label = _iba_p.get("folder_dibuat", _iba_kode)
+            with st.container(border=True):
+                _iba_kode  = _iba_p["kode_tender"]
+                _iba_nama  = _iba_p.get("nama_tender", _iba_kode)
+                _iba_label = _iba_p.get("folder_dibuat", _iba_kode)
 
-            # Resolve folder & xlsm
-            _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_p)
+                # Resolve folder & xlsm
+                _iba_folder_kual, _iba_xlsm = _resolve_input_ba_target(_iba_p)
 
-            _iba_c1, _iba_c2 = st.columns([4, 1])
-            with _iba_c1:
-                _iba_info = f"**{_iba_label}**"
-                if _iba_xlsm:
-                    _iba_info += f"  \n`{os.path.basename(_iba_xlsm)}`"
-                else:
-                    _iba_info += "  \n⚠️ xlsm tidak ditemukan"
-                st.markdown(_iba_info)
-            with _iba_c2:
-                if st.button(
-                    "▶ Input BA",
-                    key=f"iba_{_iba_kode}",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not bool(_iba_xlsm),
-                ):
+                _iba_c1, _iba_c2 = st.columns([4, 1])
+                with _iba_c1:
+                    _iba_info = f"**{_iba_label}**"
                     if _iba_xlsm:
-                        _proses_input_ba(
-                            _iba_kode,
-                            _iba_nama,
-                            _iba_folder_kual,
-                            _iba_xlsm,
-                            st.session_state.get("iba_do_teknis", True),
-                            st.session_state.get("iba_do_gcal", True),
+                        _iba_info += f"  \n`{os.path.basename(_iba_xlsm)}`"
+                    else:
+                        _iba_info += "  \n⚠️ xlsm tidak ditemukan"
+                    st.markdown(_iba_info)
+                with _iba_c2:
+                    if st.button(
+                        "▶ Input BA",
+                        key=f"iba_{_iba_kode}",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=not bool(_iba_xlsm),
+                    ):
+                        if _iba_xlsm:
+                            _proses_input_ba(
+                                _iba_kode,
+                                _iba_nama,
+                                _iba_folder_kual,
+                                _iba_xlsm,
+                                st.session_state.get("iba_do_teknis", True),
+                                st.session_state.get("iba_do_gcal", True),
+                            )
+
+    # ── Seksi 5: Konflik Personil Lintas Paket ───────────────────────────────
+    st.divider()
+    st.markdown("#### ⚠️ 4. Konflik Personil Lintas Paket")
+    st.caption(
+        "Perkiraan penugasan = mulai event SPPBJ di GCal + masa pelaksanaan "
+        "dari Excel Tender @ Master Data!C12. Data yang belum tersinkron "
+        "ditampilkan sebagai coverage, bukan dianggap tidak ada konflik."
+    )
+
+    def _render_konflik_dashboard_tab7():
+        """Query + tampilkan dashboard konflik; hanya membaca data terbaru."""
+        try:
+            import conflict_engine as _ce_dash
+
+            _cov = _ce_dash.get_sync_coverage()
+            st.info(
+                f"Coverage cache personil {_cov['tahun']}: "
+                f"{_cov['personil']}/{_cov['aktif']} paket terisi. "
+                f"Belum tersinkron: {_cov['belum_lengkap']} paket."
+            )
+            st.caption(
+                "Tabel konflik hanya memakai penyedia pemenang dari hasil scraper "
+                "dan nama personil final dari 0. Input BA!G13:G14. "
+                "Coverage cache memakai tahun pada nomor surat dinas; paket tanpa "
+                "tahun tidak masuk perhitungan."
+            )
+
+            from config import sb as _sb_kf
+
+            _nama_map = {
+                r["kode_tender"]: r.get("nama_tender") or r["kode_tender"]
+                for r in (
+                    _sb_kf()
+                    .table("draft_paket")
+                    .select("kode_tender,nama_tender")
+                    .execute()
+                    .data
+                    or []
+                )
+            }
+
+            _kf_p_all = _ce_dash.get_konflik_personil()
+            if not _kf_p_all:
+                st.success("✅ Tidak ada konflik ditemukan.")
+                return
+
+            st.markdown(f"**Personil konflik: {len(_kf_p_all)} nama**")
+            _rows_kf = []
+            _bulan_id = [
+                "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+                "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+            ]
+
+            def _fmt_tgl(d):
+                if d is None:
+                    return "-"
+                return f"{d.day:02d} {_bulan_id[d.month - 1]} {d.year}"
+
+            for k in _kf_p_all:
+                _seen = set()
+                for e in k["paket"]:
+                    kt = e["kode_tender"]
+                    if kt in _seen:
+                        continue
+                    _seen.add(kt)
+                    mulai = e.get("tgl_mulai")
+                    selesai = e.get("tgl_selesai")
+                    if mulai and selesai:
+                        penugasan = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}"
+                    elif mulai:
+                        penugasan = (
+                            f"Mulai {_fmt_tgl(mulai)} · durasi Excel belum terbaca"
                         )
+                    else:
+                        penugasan = "SPPBJ GCal/masa pelaksanaan Excel belum lengkap"
+                    _rows_kf.append(
+                        {
+                            "Nama Personil": k.get("nama_personil_display")
+                            or k["nama_personil"],
+                            "Paket": _nama_map.get(kt, kt),
+                            "Penyedia": e["nama_penyedia"] or "-",
+                            "Perkiraan Penugasan": penugasan,
+                        }
+                    )
+            st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
+        except Exception as _e_dash:
+            st.error(f"Error: {_e_dash}")
+
+    _render_konflik_dashboard_tab7()
