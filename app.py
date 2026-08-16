@@ -3618,7 +3618,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         _pljd_rows = _load_draft_pl_cached()
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
-        _pljd_rows = [r for r in _pljd_rows if not pl_engine.is_paket_selesai(r)]
+        # Tab 5 tetap fase setup: hanya paket yang masih Draft.
+        _pljd_rows = [r for r in _pljd_rows if pl_engine.is_paket_draft(r)]
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -4591,7 +4592,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.rerun()
         _pp_rows = _load_draft_pl_cached()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
-        _pp_rows = [r for r in _pp_rows if not pl_engine.is_paket_selesai(r)]
+        # Tab 4 tetap fase setup: hanya paket yang masih Draft.
+        _pp_rows = [r for r in _pp_rows if pl_engine.is_paket_draft(r)]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
