@@ -12923,7 +12923,18 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         except Exception as e_sb:
                             _log_cb(f"ERROR [{kode_tender}] Supabase: {e_sb}")
 
-                        _step += 1
+                    # Sinkronisasi personil menjadi bagian dari setiap proses.
+                    # Jalur parse di atas sudah mengisi dari hasil PDF; jika
+                    # parse KK tidak dipilih, fallback membaca DoktekFull lokal
+                    # untuk peserta yang belum memiliki data personil.
+                    if not do_kk:
+                        try:
+                            import conflict_engine as _ce_fallback
+                            _ce_fallback.sync_from_doktek_folder(kode_tender, log=_log_cb)
+                        except Exception as e_cf_fallback:
+                            _log_cb(f"⚠️ [{kode_tender}] Fallback personil error: {e_cf_fallback}")
+
+                    _step += 1
 
                 progress.progress(1.0, text="Selesai!")
                 _parts = []
@@ -13038,15 +13049,12 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
         # ── Dashboard Konflik Personil (semua paket) ─────────────────────────
         st.divider()
         st.markdown("### ⚠️ Konflik Personil Lintas Paket")
-        st.caption("Personil yang diajukan penyedia di >1 paket aktif. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
+        st.caption("Perkiraan penugasan = mulai event SPPBJ di GCal + masa pelaksanaan dari Excel Tender @ Master Data!C12. Data yang belum tersinkron ditampilkan sebagai coverage, bukan dianggap tidak ada konflik.")
 
-        def _render_konflik_dashboard(trigger_sync_doktek: bool = False):
+        def _render_konflik_dashboard():
             """Query + tampilkan dashboard konflik. Ringan — hanya baca Supabase."""
             try:
                 import conflict_engine as _ce_dash
-                if trigger_sync_doktek:
-                    # Sinkronkan paket yang personilnya belum lengkap.
-                    _ce_dash.sync_new_paket()
                 _cov = _ce_dash.get_sync_coverage()
                 st.info(
                     f"Coverage personil: {_cov['lengkap']}/{_cov['aktif']} paket lengkap "
@@ -13082,23 +13090,25 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                 _seen.add(kt)
                                 mulai = e.get("tgl_mulai")
                                 selesai = e.get("tgl_selesai")
-                                periode = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}" if mulai else "-"
+                                if mulai and selesai:
+                                    penugasan = f"{_fmt_tgl(mulai)} – {_fmt_tgl(selesai)}"
+                                elif mulai:
+                                    penugasan = f"Mulai {_fmt_tgl(mulai)} · durasi Excel belum terbaca"
+                                else:
+                                    penugasan = "SPPBJ GCal/masa pelaksanaan Excel belum lengkap"
                                 _rows_kf.append({
                                     "Nama Personil": k.get("nama_personil_display") or k["nama_personil"],
                                     "Paket": _nama_map.get(kt, kt),
                                     "Penyedia": e["nama_penyedia"] or "-",
-                                    "Periode": periode,
+                                    "Perkiraan Penugasan": penugasan,
                                 })
                         st.dataframe(_rows_kf, use_container_width=True, hide_index=True)
             except Exception as _e_dash:
                 st.error(f"Error: {_e_dash}")
 
-        # Tombol refresh manual — juga trigger sync dari folder doktek
-        if st.button("🔄 Cek Konflik + Sinkronkan Data Belum Lengkap", key="kual_cek_konflik"):
-            _render_konflik_dashboard(trigger_sync_doktek=True)
-        else:
-            # Auto-tampil dari data Supabase yang sudah ada (tanpa sync folder)
-            _render_konflik_dashboard(trigger_sync_doktek=False)
+        # Data personil sudah disinkronkan oleh Jalankan proses; dashboard
+        # hanya membaca hasil terbaru dari Supabase.
+        _render_konflik_dashboard()
 
     # Evaluasi AI dipusatkan di Tab 6 agar DokFull menjadi sumber tunggal.
     if False:

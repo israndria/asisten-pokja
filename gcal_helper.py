@@ -2,6 +2,7 @@
 
 import os
 import json
+import time
 from datetime import datetime, date
 
 from config import RUNTIME_ROOT, find_secret
@@ -28,6 +29,7 @@ def generate_token():
 
 # Mapping jenis_key → keyword yang dicari di judul event GCal
 _TAHAP_KEYWORD = {
+    "sppbj":           "Surat Penunjukan Penyedia Barang/Jasa",
     "penjelasan":      "Pemberian Penjelasan",
     "evaluasi":        "Evaluasi Administrasi, Kualifikasi, Teknis, dan Harga",
     "hasil_pemilihan": "Penetapan Pemenang",
@@ -39,6 +41,8 @@ _TAHAP_KEYWORD = {
 
 # Untuk evaluasi, ambil tanggal END (hari terakhir); sisanya ambil START
 _PAKAI_END = {"evaluasi"}
+_EVENTS_CACHE_TTL = 60.0
+_EVENTS_CACHE = {"expires": 0.0, "items": []}
 
 
 def _build_service():
@@ -70,18 +74,13 @@ def _build_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
-    """
-    Cari event GCal yang judulnya mengandung nama_paket, lalu petakan
-    ke tanggal per jenis BA.
+def _list_calendar_events_cached() -> list[dict]:
+    """Ambil event primary sekali per 60 detik untuk dashboard multi-paket."""
+    now = time.monotonic()
+    if now < _EVENTS_CACHE["expires"]:
+        return list(_EVENTS_CACHE["items"])
 
-    Returns dict: {jenis_key: date_obj or None}
-    """
     service = _build_service()
-
-    hasil = {k: None for k in _TAHAP_KEYWORD}
-
-    # Ambil events 1 tahun ke belakang dan 1 tahun ke depan
     time_min = datetime(date.today().year - 1, 1, 1).isoformat() + "Z"
     time_max = datetime(date.today().year + 1, 12, 31).isoformat() + "Z"
 
@@ -102,10 +101,33 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
         if not page_token:
             break
 
+    _EVENTS_CACHE["items"] = events_found
+    _EVENTS_CACHE["expires"] = now + _EVENTS_CACHE_TTL
+    return list(events_found)
+
+
+def get_tanggal_ba_dari_gcal(nama_paket: str, kode_paket: str | None = None) -> dict:
+    """
+    Cari event GCal yang judulnya mengandung nama_paket, lalu petakan
+    ke tanggal per jenis BA.
+
+    Returns dict: {jenis_key: date_obj or None}
+    """
+    hasil = {k: None for k in _TAHAP_KEYWORD}
+    events_found = _list_calendar_events_cached()
+
     # Filter event yang judulnya mengandung nama_paket (case-insensitive)
     nama_lower = nama_paket.lower()
+    kode_lower = str(kode_paket or "").strip()
+    paket_events = []
+    for event in events_found:
+        private = event.get("extendedProperties", {}).get("private", {})
+        source_code = str(private.get("source_tender") or private.get("source_pl") or "").strip()
+        if (kode_lower and source_code == kode_lower) or (
+            nama_lower and nama_lower in event.get("summary", "").lower()
+        ):
+            paket_events.append(event)
     is_ulang = "ulang" in nama_lower
-    paket_events = [e for e in events_found if nama_lower in e.get("summary", "").lower()]
 
     # Kalau paket ulang: prioritaskan event yang judulnya juga mengandung "ulang"
     # Kalau paket biasa: singkirkan event yang judulnya mengandung "ulang"
@@ -126,6 +148,13 @@ def get_tanggal_ba_dari_gcal(nama_paket: str) -> dict:
     for jenis_key, keyword in _TAHAP_KEYWORD.items():
         kw_lower = keyword.lower()
         matched = [e for e in paket_events if kw_lower in e.get("summary", "").lower()]
+        if jenis_key == "sppbj" and not matched:
+            # Toleransi variasi judul: "penunjukkan"/"SPPBJ".
+            matched = [
+                e for e in paket_events
+                if "surat penunjuk" in e.get("summary", "").lower()
+                or "sppbj" in e.get("summary", "").lower()
+            ]
         if jenis_key == "pembukaan" and not matched:
             matched = [
                 e for e in paket_events

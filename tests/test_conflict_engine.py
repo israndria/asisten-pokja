@@ -1,4 +1,5 @@
 import conflict_engine
+from datetime import date
 
 
 class _Result:
@@ -22,6 +23,9 @@ class _Table:
 
     def eq(self, key, value):
         self.filters.append((key, value))
+        return self
+
+    def limit(self, *_args):
         return self
 
     def upsert(self, rows, on_conflict):
@@ -96,3 +100,34 @@ def test_sync_from_pdf_replaces_stale_personnel_and_ignores_equipment(monkeypatc
         "Personel Peserta Lain",
     }
     assert "paket_alat" not in db
+
+
+def test_tender_assignment_window_uses_gcal_sppbj_plus_excel_duration(monkeypatch):
+    db = _DB(
+        draft_paket=[{
+            "kode_tender": "T-1",
+            "nama_tender": "Paket Contoh",
+            "folder_dibuat": "01. Paket Contoh",
+            "kode_pokja": "001",
+        }]
+    )
+    monkeypatch.setattr(conflict_engine, "_sb", lambda: db)
+    monkeypatch.setattr(
+        conflict_engine,
+        "_get_tgl_sppbj_gcal",
+        lambda _nama, kode_tender="": date(2026, 8, 16),
+    )
+    monkeypatch.setattr(
+        conflict_engine,
+        "_read_tender_duration_excel",
+        lambda _kode, _row: 30,
+    )
+
+    assert conflict_engine._get_jadwal_paket("T-1") == (
+        date(2026, 8, 16),
+        date(2026, 9, 15),
+    )
+
+
+def test_parse_hari_jangka_accepts_numeric_excel_value():
+    assert conflict_engine._parse_hari_jangka(45) == 45

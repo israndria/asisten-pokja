@@ -40,14 +40,102 @@ def _parse_hari_jangka(jangka_waktu: str) -> int | None:
     """Ambil angka pertama dari string jangka_waktu, asumsikan hari."""
     if not jangka_waktu:
         return None
-    m = re.search(r"(\d+)", jangka_waktu)
+    m = re.search(r"(\d+)", str(jangka_waktu))
     return int(m.group(1)) if m else None
+
+
+def _get_tender_row(kode_tender: str) -> dict:
+    """Ambil metadata paket Tender untuk resolver workbook/GCal."""
+    try:
+        rows = _sb().table("draft_paket") \
+            .select("nama_tender,folder_dibuat,kode_pokja,data_snapshot") \
+            .eq("kode_tender", kode_tender).limit(1).execute().data or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _iter_tender_workbooks(kode_tender: str, row: dict):
+    """Yield workbook Tender kandidat tanpa pernah membuka/simpan Excel."""
+    import os
+    from config import TENDER_ROOT
+
+    folders = []
+    folder_raw = str(row.get("folder_dibuat") or "").strip()
+    if folder_raw:
+        folders.append(folder_raw if os.path.isabs(folder_raw)
+                       else os.path.join(TENDER_ROOT, folder_raw))
+    if not folders:
+        fallback = _resolve_folder_paket(str(row.get("kode_pokja") or ""))
+        if fallback:
+            folders.append(fallback)
+
+    seen = set()
+    for folder in folders:
+        try:
+            for name in sorted(os.listdir(folder)):
+                if not name.lower().endswith((".xlsm", ".xlsx")):
+                    continue
+                path = os.path.join(folder, name)
+                if os.path.isfile(path) and path not in seen:
+                    seen.add(path)
+                    yield path
+        except OSError:
+            continue
+
+
+def _read_tender_duration_excel(kode_tender: str, row: dict) -> int | None:
+    """Baca masa pelaksanaan dari ``@ Master Data!C12`` secara read-only."""
+    import re as _re
+    try:
+        from openpyxl import load_workbook
+    except Exception:
+        return None
+
+    kode_digits = _re.sub(r"\D", "", str(kode_tender or ""))
+    for path in _iter_tender_workbooks(kode_tender, row):
+        wb = None
+        try:
+            wb = load_workbook(path, read_only=True, data_only=True, keep_vba=True)
+            ws = wb["@ Master Data"]
+            kode_excel = _re.sub(r"\D", "", str(ws["C4"].value or ""))
+            if kode_digits and kode_excel and kode_digits != kode_excel:
+                continue
+            return _parse_hari_jangka(ws["C12"].value)
+        except Exception:
+            continue
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+    # Fallback hanya untuk workbook lama yang belum bisa ditemukan di disk.
+    snapshot = row.get("data_snapshot") or {}
+    if isinstance(snapshot, dict):
+        return _parse_hari_jangka(snapshot.get("r12") or snapshot.get("jangka_waktu"))
+    return None
+
+
+def _get_tgl_sppbj_gcal(nama_tender: str, kode_tender: str = ""):
+    """Ambil tanggal mulai event SPPBJ dari Google Calendar."""
+    if not nama_tender:
+        return None
+    try:
+        from gcal_helper import get_tanggal_ba_dari_gcal
+        return (get_tanggal_ba_dari_gcal(nama_tender, kode_paket=kode_tender) or {}).get("sppbj")
+    except Exception:
+        # GCal offline/token expired tidak boleh mematikan dashboard konflik.
+        return None
 
 
 def _get_jadwal_paket(kode_tender: str) -> tuple:
     """
-    Return (tgl_mulai, tgl_selesai) sebagai date, atau (None, None).
-    Cek draft_paket_pl dulu (kode_paket = kode_tender), lalu draft_paket.
+    Return perkiraan (tgl_mulai, tgl_selesai) sebagai date.
+
+    Tender: mulai = event SPPBJ di GCal, selesai = mulai + masa pelaksanaan
+    dari workbook ``@ Master Data!C12``. PL tetap memakai metadata Supabase.
     """
     # Coba PL dulu
     rows_pl = _sb().table("draft_paket_pl")\
@@ -67,8 +155,14 @@ def _get_jadwal_paket(kode_tender: str) -> tuple:
                 pass
         return (None, None)
 
-    # Tender reguler — tidak ada kolom pelaksanaan, return None
-    return (None, None)
+    row = _get_tender_row(kode_tender)
+    tgl_mulai = _get_tgl_sppbj_gcal(
+        str(row.get("nama_tender") or ""), kode_tender=kode_tender
+    )
+    hari = _read_tender_duration_excel(kode_tender, row)
+    if tgl_mulai and hari:
+        return (tgl_mulai, tgl_mulai + timedelta(days=hari))
+    return (tgl_mulai, None)
 
 
 def _parse_nama(raw: str) -> str:
