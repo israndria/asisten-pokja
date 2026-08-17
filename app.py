@@ -563,7 +563,12 @@ def _is_tender_sudah_pembukaan(p: dict) -> bool:
     status = str(p.get("status") or "").strip().lower()
     return bool(status) and "draft" not in status
 
-from config import SPSE_BASE_URL, ASISTEN_FIXED_ROLE
+from config import (
+    SPSE_BASE_URL,
+    ASISTEN_FIXED_ROLE,
+    ASISTEN_ALLOWED_ROLES,
+    ASISTEN_DEFAULT_ROLE,
+)
 import spse_browser
 import ldk_engine
 import ldk_config
@@ -956,15 +961,15 @@ if _is_dark:
 if "header_login_role" not in st.session_state:
     st.session_state["header_login_role"] = (
         ASISTEN_FIXED_ROLE
-        or st.session_state.get("sidebar_login_role", "PP")
+        or st.session_state.get("sidebar_login_role", ASISTEN_DEFAULT_ROLE)
     )
 _login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container_width=True)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
-if ASISTEN_FIXED_ROLE and _spse_role not in (None, ASISTEN_FIXED_ROLE):
-    # Jangan bawa role dari session lama ke instance PP/Tender yang terisolasi.
+if _spse_role is not None and _spse_role not in ASISTEN_ALLOWED_ROLES:
+    # Jangan bawa role dari session lama ke instance lain/role yang tidak diizinkan.
     st.session_state.pop("spse_role", None)
     _spse_role = None
 
@@ -977,7 +982,7 @@ if ASISTEN_FIXED_ROLE and _spse_role not in (None, ASISTEN_FIXED_ROLE):
 # Dua probe kosong berturut-turut baru dianggap session putus.
 _cdp_role_last_check = st.session_state.get("_cdp_role_last_check", 0.0)
 _role_probe_needed = (
-    _spse_role not in ("PP", "POKJA", "PPK")
+    _spse_role not in ASISTEN_ALLOWED_ROLES
     or bool(st.session_state.get("login_failed"))
 )
 if time.time() - _cdp_role_last_check >= 30 or _role_probe_needed:
@@ -987,7 +992,7 @@ if time.time() - _cdp_role_last_check >= 30 or _role_probe_needed:
         import spse_login as _sl_detect
         if _sb_detect._cek_cdp_aktif():
             _detected = _sl_detect.detect_login_role()
-            if ASISTEN_FIXED_ROLE and _detected != ASISTEN_FIXED_ROLE:
+            if _detected not in ASISTEN_ALLOWED_ROLES:
                 _detected = None
             if _spse_role in ("PP", "POKJA", "PPK"):
                 if _detected == _spse_role:

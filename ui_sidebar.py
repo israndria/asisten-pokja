@@ -6,13 +6,17 @@ import time
 
 import streamlit as st
 
-from config import SPSE_BASE_URL, ASISTEN_FIXED_ROLE, ASISTEN_INSTANCE, SPSE_CDP_PORT
+from config import (
+    SPSE_BASE_URL,
+    ASISTEN_FIXED_ROLE,
+    ASISTEN_ALLOWED_ROLES,
+    ASISTEN_INSTANCE,
+    SPSE_CDP_PORT,
+)
 import spse_browser
 
 
-_LOGIN_ROLE_OPTIONS = [ASISTEN_FIXED_ROLE] if ASISTEN_FIXED_ROLE else [
-    "PP", "POKJA", "PPK", "E-Katalog"
-]
+_LOGIN_ROLE_OPTIONS = list(ASISTEN_ALLOWED_ROLES)
 
 
 def _friendly_login_error(exc: Exception) -> str:
@@ -217,6 +221,11 @@ def _sidebar_login_form():
             f"Instance {ASISTEN_INSTANCE}: login dikunci sebagai "
             f"{ASISTEN_FIXED_ROLE}; CDP port {SPSE_CDP_PORT}."
         )
+    else:
+        st.caption(
+            f"Instance {ASISTEN_INSTANCE}: role tersedia "
+            f"{', '.join(ASISTEN_ALLOWED_ROLES)}; CDP port {SPSE_CDP_PORT}."
+        )
     st.info("Brave SPSE belum terhubung")
     _relogin_reason = st.session_state.pop("_spse_relogin_reason", None)
     if _relogin_reason:
@@ -400,8 +409,8 @@ def _sidebar_login_form():
     # Tombol retry — muncul kalau login gagal & browser masih di loginpass
     if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
         _retry_role = st.session_state.get("login_failed_role") or _LOGIN_ROLE_OPTIONS[0]
-        if ASISTEN_FIXED_ROLE and _retry_role != ASISTEN_FIXED_ROLE:
-            _retry_role = ASISTEN_FIXED_ROLE
+        if _retry_role not in _LOGIN_ROLE_OPTIONS:
+            _retry_role = _LOGIN_ROLE_OPTIONS[0]
         if st.button("🔄 Coba Lagi (pipeline otomatis)", type="primary", use_container_width=True):
             try:
                 import spse_login as _spse_login

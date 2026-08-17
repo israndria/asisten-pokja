@@ -14,7 +14,6 @@ if not exist "%~dp0ui_dpa.py" (
 :module_ready
 set PYTHONPATH=%~dp0
 set ASISTEN_INSTANCE=PP
-set ASISTEN_FIXED_ROLE=PP
 set SPSE_CDP_PORT=9222
 C:\WinPython313\python\python.exe -m streamlit run "%~dp0app.py" --server.port 8502
 pause

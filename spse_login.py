@@ -29,7 +29,7 @@ from config import (
     find_secret,
     SPSE_ROLE_FILE,
     SPSE_LOGIN_METRICS_PATH,
-    ASISTEN_FIXED_ROLE,
+    ASISTEN_ALLOWED_ROLES,
 )
 
 # ============================================================
@@ -97,10 +97,7 @@ def _record_login_event(
 
 def remember_login_role(role: str) -> None:
     """Simpan role + fingerprint sesi agar cache role stale ditolak saat F5."""
-    if ASISTEN_FIXED_ROLE and role != ASISTEN_FIXED_ROLE:
-        raise ValueError(
-            f"Instance ini dikunci untuk role {ASISTEN_FIXED_ROLE}, bukan {role}."
-        )
+    _assert_role_allowed(role)
     import spse_browser as _sb
     cookie = _sb.get_spse_cookies(force=True)
     if not cookie:
@@ -145,10 +142,11 @@ def _get_creds(role: Literal["PP", "POKJA", "PPK"]) -> tuple[str, str]:
 
 
 def _assert_role_allowed(role: str) -> None:
-    """Tolak login silang ketika app dijalankan sebagai instance tetap."""
-    if ASISTEN_FIXED_ROLE and role != ASISTEN_FIXED_ROLE:
+    """Tolak role di luar allowlist instance aktif."""
+    if role not in ASISTEN_ALLOWED_ROLES:
+        allowed = ", ".join(ASISTEN_ALLOWED_ROLES)
         raise ValueError(
-            f"Instance ini dikunci untuk role {ASISTEN_FIXED_ROLE}, bukan {role}."
+            f"Role {role} tidak diizinkan pada instance ini. Role yang tersedia: {allowed}."
         )
 
 
@@ -331,14 +329,14 @@ def detect_login_role() -> str | None:
         # Playwright di sini; Brave dengan banyak tab restore bisa blocking.
         if (
             cached_role
-            and (not ASISTEN_FIXED_ROLE or cached_role == ASISTEN_FIXED_ROLE)
+            and cached_role in ASISTEN_ALLOWED_ROLES
             and cache_matches_session
             and _has_authenticated_cdp_tab()
         ):
             return cached_role
         detected, authenticated = _detect_role_from_session(cookie)
         if detected:
-            if ASISTEN_FIXED_ROLE and detected != ASISTEN_FIXED_ROLE:
+            if detected not in ASISTEN_ALLOWED_ROLES:
                 return None
             if not cache_matches_session or detected != cached_role:
                 _ROLE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -352,7 +350,7 @@ def detect_login_role() -> str | None:
         # tab menunjukkan route authenticated; root publik/login tidak lolos.
         if (
             cached_role
-            and (not ASISTEN_FIXED_ROLE or cached_role == ASISTEN_FIXED_ROLE)
+            and cached_role in ASISTEN_ALLOWED_ROLES
             and cache_matches_session
             and authenticated
         ):

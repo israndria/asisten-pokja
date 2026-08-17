@@ -59,6 +59,8 @@ Tender localhost:8506 ── Brave Tender profile ── CDP 9223 ─┘
 
 Instance resmi memakai runtime/cache lokal terpisah (`pp` dan `tender`),
 sehingga cookie, lock, download, dan tombol **Tutup Browser** tidak silang.
+Instance PP menyediakan pilihan login `PP` dan `PPK`; instance Tender tetap
+terkunci pada role `POKJA`.
 Launcher Tender: `run_asisten_tender_silent.vbs` atau `run_asisten_tender.bat`.
 
 ## Requirements
@@ -79,7 +81,7 @@ playwright install chromium
 ```bash
 streamlit run app.py
 # Untuk mode kompatibilitas lama (SHARED), default-nya http://localhost:8502.
-# Pemakaian harian: buka http://localhost:8502 (PP) dan
+# Pemakaian harian: buka http://localhost:8502 (PP/PPK) dan
 # http://localhost:8506 (Tender/POKJA) lewat launcher instance masing-masing.
 ```
 

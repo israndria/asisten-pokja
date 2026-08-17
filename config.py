@@ -27,19 +27,32 @@ if ASISTEN_INSTANCE not in {"SHARED", "PP", "TENDER"}:
     )
 
 _INSTANCE_ROLE_DEFAULTS = {"SHARED": None, "PP": "PP", "TENDER": "POKJA"}
+_INSTANCE_ROLE_OPTIONS = {
+    "SHARED": ("PP", "POKJA", "PPK", "E-Katalog"),
+    "PP": ("PP", "PPK"),
+    "TENDER": ("POKJA",),
+}
 _role_override = os.environ.get("ASISTEN_FIXED_ROLE", "").strip().upper()
 if _role_override and _role_override not in {"PP", "POKJA", "PPK"}:
     raise RuntimeError(
         f"ASISTEN_FIXED_ROLE tidak valid: {_role_override!r}. "
         "Gunakan PP, POKJA, atau PPK."
     )
-_role_default = _INSTANCE_ROLE_DEFAULTS[ASISTEN_INSTANCE]
-if _role_default and _role_override and _role_override != _role_default:
+_role_options = _INSTANCE_ROLE_OPTIONS[ASISTEN_INSTANCE]
+if _role_override and _role_override not in _role_options:
     raise RuntimeError(
-        f"Instance {ASISTEN_INSTANCE} wajib memakai role {_role_default}; "
-        f"bukan {_role_override}."
+        f"Role {_role_override} tidak diizinkan pada instance {ASISTEN_INSTANCE}. "
+        f"Gunakan: {', '.join(_role_options)}."
     )
-ASISTEN_FIXED_ROLE = _role_override or _role_default
+_role_default = _INSTANCE_ROLE_DEFAULTS[ASISTEN_INSTANCE]
+ASISTEN_DEFAULT_ROLE = _role_default or _role_options[0]
+# PP instance memakai allowlist PP+PPK; Tender tetap benar-benar fixed POKJA.
+ASISTEN_FIXED_ROLE = _role_override or (
+    _role_default if ASISTEN_INSTANCE == "TENDER" else None
+)
+ASISTEN_ALLOWED_ROLES = (
+    (_role_override,) if _role_override else _role_options
+)
 
 _cdp_default = {"SHARED": 9222, "PP": 9222, "TENDER": 9223}[ASISTEN_INSTANCE]
 try:
