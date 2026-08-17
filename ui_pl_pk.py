@@ -266,18 +266,19 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
     progress = st.progress(0.0, text="Memulai...")
     logs: list[str] = []
     summary: list[dict] = []
+    detail_logs: list[tuple[str, list[str]]] = []
 
     for index, row in enumerate(selected_rows):
         kode = row["kode_paket"]
         nama = label_fn(row)
-        status = st.status(f"Paket {index + 1}/{jumlah} — {nama}", expanded=True)
+        status = st.status(f"Paket {index + 1}/{jumlah} — {nama}", expanded=False)
         with status:
             logs.clear()
             log_box = st.empty()
 
             def log_cb(message, box=log_box, lines=logs):
                 lines.append(str(message))
-                box.code("\n".join(lines[-40:]))
+                box.caption(str(message).replace("\n", " ")[:120])
 
             log_cb(f"[{index + 1}/{jumlah}] Fetch peserta SPSE...")
             progress.progress(index / jumlah, text=f"{nama} — fetch peserta")
@@ -287,6 +288,7 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
                 log_cb(f"[SKIP] Peserta: {detail}")
                 status.update(label=f"SKIP {nama} — {detail}", state="error", expanded=False)
                 summary.append({"nama": nama, "status": "skip", "detail": detail})
+                detail_logs.append((nama, list(logs)))
                 continue
 
             peserta = fetched["peserta"]
@@ -297,6 +299,7 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
                 log_cb(f"[SKIP] Folder: {detail}")
                 status.update(label=f"SKIP {nama} — folder tidak ditemukan", state="error", expanded=False)
                 summary.append({"nama": nama, "status": "skip", "detail": detail})
+                detail_logs.append((nama, list(logs)))
                 continue
 
             folder_kualifikasi = folder["path"]
@@ -347,8 +350,14 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
                 summary.append({"nama": nama, "status": "ok", "detail": "download saja"})
 
             status.update(label=f"Selesai — {nama}", state="complete", expanded=False)
+            detail_logs.append((nama, list(logs)))
         progress.progress((index + 1) / jumlah, text=f"Selesai {index + 1}/{jumlah} paket")
 
     progress.progress(1.0, text="Semua paket selesai.")
+    if detail_logs:
+        with st.expander("📋 Log detail proses", expanded=False):
+            for nama_log, lines_log in detail_logs:
+                st.caption(nama_log)
+                st.code("\n".join(lines_log))
     from batch_summary import render_ringkasan_batch
     render_ringkasan_batch(st, summary)

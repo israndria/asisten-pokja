@@ -2676,12 +2676,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             # Status container tidak boleh berada di dalam expander paket.
                             _pr_excel_status = st.empty()
                             _pr_excel_status.info("📊 Menyiapkan isi ulang Excel...")
-                            _pr_excel_log = st.empty()
                             _pr_excel_logs = []
                             def _pr_excel_cb(_msg):
                                 _pr_excel_logs.append(str(_msg))
-                                _pr_excel_log.code("\n".join(_pr_excel_logs[-20:]))
-                                _pr_excel_status.info(f"📊 {str(_msg)[:90]}")
                             _pr_excel_cb("Mencari folder paket...")
                             _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
                             _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
@@ -2706,10 +2703,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             else:
                                 _pr_dl_logs = []
                                 _pr_dl_label = st.empty()
-                                _pr_dl_area = st.empty()
                                 _pr_dl_label.markdown("🔽 **Mengunduh...**")
-                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_label):
-                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.markdown(f"🔽 **{msg[:50]}**")
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs):
+                                    _l.append(msg)
                                 pl_engine.buat_subfolder_dokumen(_pr_dl_root)
                                 _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb, force_clean=True)
                                 _pr_dl_label.markdown(f"✅ **{len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error**")
@@ -2934,7 +2930,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
                     import queue as _pl_queue
                     _pl_event_q = _pl_queue.Queue()
-                    _pl_live_events = ["⏱ Timer mulai"]
+                    _pl_live_event = "⏱ Timer mulai"
                     _pl_cfg_io = {
                         "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
                         "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
@@ -2957,20 +2953,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         while _pl_pending:
                             _pl_done, _pl_pending = _pl_wait(_pl_pending, timeout=0.5, return_when=_PL_FIRST_COMPLETED)
                             while not _pl_event_q.empty():
-                                _pl_live_events.append(_pl_event_q.get())
-                                _pl_live_events = _pl_live_events[-12:]
-                            if _pl_live_events:
-                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                                _pl_live_event = _pl_event_q.get()
+                            if _pl_live_event:
+                                _pl_bulk_status_line.caption(_pl_live_event)
                             for _pl_fut in _pl_done:
                                 _pl_res = _pl_fut.result()
                                 _pl_io_hasil.append(_pl_res)
                                 _pl_done_ct += 1
                                 _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
-                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events.append(f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events = _pl_live_events[-12:]
-                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                                _pl_live_event = f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}"
+                                _pl_bulk_status_line.caption(_pl_live_event)
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
                     for _pl_res in _pl_io_hasil:
                         _pl_nf = _pl_res["nama_folder"]
@@ -2983,7 +2976,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             continue
                         _pl_final_ok = True
                         _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
-                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
+                        _pl_bulk_status_line.caption(f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
                             _t_step = _pl_time.perf_counter()
@@ -3079,8 +3072,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pl_fail += 1
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
-                    _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
-                    _pl_bulk_status_line.code('\n'.join(_pl_live_events[-12:]))
+                    _pl_bulk_status_line.caption(f"⏱ Total waktu: {_pl_total_elapsed}")
                     _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal · ⏱ {_pl_total_elapsed}"
                     _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
                     with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
@@ -3168,7 +3160,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _rt_kp = _rt_row.get("kode_paket", "")
                             _rt_nama = _pl_label(_rt_row)
                             _rt_bp.progress((_rt_i + 1) / len(_pl_rows_rt_bulk))
-                            _rt_status.update(label=f"[{_rt_i+1}/{len(_pl_rows_rt_bulk)}] {_rt_nama}")
                             try:
                                 _rt_fr = _keng_pl_rt.resolve_folder_paket_pl(_rt_kp)
                                 _rt_root = _rt_fr.get("pesan", "") if _rt_fr.get("ok") else ""
@@ -3210,7 +3201,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
                             _db_kp   = _db_row.get("kode_paket", "")
                             _db_nama = _pl_label(_db_row)
-                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
                             _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
                             _db_root = ""
                             try:
@@ -3268,7 +3258,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
                             _hu_kp   = _hu_row.get("kode_paket", "")
                             _hu_nama = _pl_label(_hu_row)
-                            _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
                             _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
                             try:
                                 _hu_fr = _keng_hps_upd.resolve_folder_paket_pl(_hu_kp)
@@ -3313,9 +3302,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     for _xe_i, _xe_row in enumerate(_pl_excel_existing_rows):
                         _xe_kp = _xe_row.get("kode_paket", "")
                         _xe_nama = _pl_label(_xe_row)
-                        _excel_existing_status.update(
-                            label=f"[{_xe_i+1}/{len(_pl_excel_existing_rows)}] {_xe_nama}"
-                        )
                         _excel_existing_bp.progress((_xe_i + 1) / len(_pl_excel_existing_rows))
                         try:
                             _xe_fr = _keng_excel_existing.resolve_folder_paket_pl(_xe_kp)
@@ -5444,22 +5430,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _log7_lines = []  # akumulasi log — update sekali per paket, bukan per baris
                         _ringkasan7: list = []  # kumpul status tiap paket untuk ringkasan akhir
 
-                        def _flush7(container):
-                            """Render log terakumulasi ke container — 1 update per paket."""
-                            container.code("\n".join(_log7_lines[-60:]))  # max 60 baris terakhir
-
                         for _i7, _rpl7 in enumerate(_pl7_selected_rows):
                             _kpl7    = _rpl7["kode_paket"]
                             _nama7   = _pl_label(_rpl7)
-                            _status7 = st.status(f"Paket {_i7+1}/{_n_paket7} — {_nama7}", expanded=True)
+                            _status7 = st.status(f"Paket {_i7+1}/{_n_paket7} — {_nama7}", expanded=False)
 
                             with _status7:
                                 _log7_lines.clear()
-                                _log7_box = st.empty()
-
-                                def _lcb7(msg, _box=_log7_box, _lines=_log7_lines):
+                                def _lcb7(msg, _lines=_log7_lines):
                                     _lines.append(msg)
-                                    _box.code("\n".join(_lines[-40:]))
 
                                 # Fetch peserta
                                 _lcb7(f"[{_i7+1}/{_n_paket7}] Fetch peserta SPSE...")
@@ -5534,6 +5513,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _ringkasan7.append({"nama": _nama7, "status": "ok", "detail": "download saja"})
 
                                 _status7.update(label=f"Selesai — {_nama7}", state="complete", expanded=False)
+
+                            if _log7_lines:
+                                with st.expander(f"📋 Log {_nama7[:50]}", expanded=False):
+                                    st.code("\n".join(_log7_lines))
 
                             _pb7.progress((_i7 + 1) / _n_paket7, text=f"Selesai {_i7+1}/{_n_paket7} paket")
 
@@ -5732,15 +5715,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         for _i8, _rpl8 in enumerate(_pl8_selected_rows):
                             _kpl8  = _rpl8["kode_paket"]
                             _nama8 = _pl_label(_rpl8)
-                            _status8 = st.status(f"Paket {_i8+1}/{_n_paket8} — {_nama8}", expanded=True)
+                            _status8 = st.status(f"Paket {_i8+1}/{_n_paket8} — {_nama8}", expanded=False)
 
                             with _status8:
                                 _log8_lines = []
-                                _log8_box   = st.empty()
-
-                                def _lcb8(msg, _box=_log8_box, _lines=_log8_lines):
+                                def _lcb8(msg, _lines=_log8_lines):
                                     _lines.append(msg)
-                                    _box.code("\n".join(_lines[-40:]))
 
                                 # Scrape id_nontender per peserta
                                 _lcb8("Scrape peserta evaluasi dari SPSE...")
@@ -5808,6 +5788,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                                 _ringkasan8.append({"nama": _nama8, "status": "ok", "detail": ""})
                                 _status8.update(label=f"Selesai — {_nama8}", state="complete", expanded=False)
+
+                            if _log8_lines:
+                                with st.expander(f"📋 Log {_nama8[:50]}", expanded=False):
+                                    st.code("\n".join(_log8_lines))
 
                             _pb8.progress((_i8 + 1) / _n_paket8, text=f"Selesai {_i8+1}/{_n_paket8} paket")
 
@@ -6107,12 +6091,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             # Status container tidak boleh berada di dalam expander paket.
                             _pr_excel_status = st.empty()
                             _pr_excel_status.info("📊 Menyiapkan isi ulang Excel...")
-                            _pr_excel_log = st.empty()
                             _pr_excel_logs = []
                             def _pr_excel_cb(_msg):
                                 _pr_excel_logs.append(str(_msg))
-                                _pr_excel_log.code("\n".join(_pr_excel_logs[-20:]))
-                                _pr_excel_status.info(f"📊 {str(_msg)[:90]}")
                             _pr_excel_cb("Mencari folder paket...")
                             _pr_excel_fr = _keng_pr_excel.resolve_folder_paket_pl(_pr_kode)
                             _pr_excel_root = _pr_excel_fr.get("pesan", "") if _pr_excel_fr.get("ok") else ""
@@ -6137,10 +6118,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             else:
                                 _pr_dl_logs = []
                                 _pr_dl_label = st.empty()
-                                _pr_dl_area = st.empty()
                                 _pr_dl_label.markdown("🔽 **Mengunduh...**")
-                                def _pr_dl_cb(msg, _l=_pr_dl_logs, _a=_pr_dl_area, _b=_pr_dl_label):
-                                    _l.append(msg); _a.code("\n".join(_l[-15:])); _b.markdown(f"🔽 **{msg[:50]}**")
+                                def _pr_dl_cb(msg, _l=_pr_dl_logs):
+                                    _l.append(msg)
                                 pl_engine.buat_subfolder_dokumen(_pr_dl_root)
                                 _pr_dl_res = pl_engine.download_dokumen_paket_pl(_pr_kode, _pr_dl_root, _pr_dl_cb, force_clean=True)
                                 _pr_dl_label.markdown(f"✅ **{len(_pr_dl_res['ok'])} file, ❌ {len(_pr_dl_res['error'])} error**")
@@ -6337,7 +6317,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     # ── FASE 1: I/O paralel antar-paket (download+parse+serap+HPS.md) ──
                     import queue as _pl_queue
                     _pl_event_q = _pl_queue.Queue()
-                    _pl_live_events = ["⏱ Timer mulai"]
+                    _pl_live_event = "⏱ Timer mulai"
                     _pl_cfg_io = {
                         "py": _PL_PY, "script": _PL_SCRIPT, "no_win": _PL_NO_WIN,
                         "pokja_root": _PL_POKJA_ROOT, "dl_dokumen": bool(_pl_dl_dokumen),
@@ -6360,20 +6340,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         while _pl_pending:
                             _pl_done, _pl_pending = _pl_wait(_pl_pending, timeout=0.5, return_when=_PL_FIRST_COMPLETED)
                             while not _pl_event_q.empty():
-                                _pl_live_events.append(_pl_event_q.get())
-                                _pl_live_events = _pl_live_events[-12:]
-                            if _pl_live_events:
-                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                                _pl_live_event = _pl_event_q.get()
+                            if _pl_live_event:
+                                _pl_bulk_status_line.caption(_pl_live_event)
                             for _pl_fut in _pl_done:
                                 _pl_res = _pl_fut.result()
                                 _pl_io_hasil.append(_pl_res)
                                 _pl_done_ct += 1
                                 _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
                                 _pl_bp.progress(_pl_done_ct / max(_pl_n_total, 1))
-                                _pl_bulk_status.update(label=f"[{_pl_done_ct}/{_pl_n_total}] selesai: {_pl_res['nama_folder'][:50]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events.append(f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}")
-                                _pl_live_events = _pl_live_events[-12:]
-                                _pl_bulk_status_line.code("\n".join(_pl_live_events))
+                                _pl_live_event = f"✅ I/O selesai — menunggu finalisasi: {_pl_res['nama_folder'][:55]} · ⏱ {_pl_elapsed}"
+                                _pl_bulk_status_line.caption(_pl_live_event)
                     # ── FASE 2: serial (COM/merge/OCR) di main thread ──
                     for _pl_res in _pl_io_hasil:
                         _pl_nf = _pl_res["nama_folder"]
@@ -6386,7 +6363,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             continue
                         _pl_final_ok = True
                         _pl_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
-                        _pl_bulk_status.update(label=f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
+                        _pl_bulk_status_line.caption(f"Finalisasi: {_pl_nf[:55]} · ⏱ {_pl_elapsed}")
                         # Merge PDF draft (COM tidak thread-safe → serial)
                         if _pl_res.get("files_ok"):
                             _t_step = _pl_time.perf_counter()
@@ -6482,8 +6459,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pl_fail += 1
                         _pl_bulk_semua_log[_pl_nf] = _pl_paket_log
                     _pl_total_elapsed = _fmt_elapsed(_pl_time.perf_counter() - _pl_t0)
-                    _pl_live_events.append(f"⏱ Total waktu: {_pl_total_elapsed}")
-                    _pl_bulk_status_line.code('\n'.join(_pl_live_events[-12:]))
+                    _pl_bulk_status_line.caption(f"⏱ Total waktu: {_pl_total_elapsed}")
                     _pl_ringkasan = f"✅ {_pl_ok} folder berhasil, ❌ {_pl_fail} gagal · ⏱ {_pl_total_elapsed}"
                     _pl_bulk_status.update(label=_pl_ringkasan, state="complete", expanded=False)
                     with st.expander("📋 Log detail per paket", expanded=_pl_fail > 0):
@@ -6528,7 +6504,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         for _db_i, _db_row in enumerate(_pl_rows_dl_bulk):
                             _db_kp   = _db_row.get("kode_paket", "")
                             _db_nama = _pl_label(_db_row)
-                            _dl_bulk_status.update(label=f"[{_db_i+1}/{len(_pl_rows_dl_bulk)}] {_db_nama}")
                             _dl_bulk_bp.progress((_db_i + 1) / len(_pl_rows_dl_bulk))
                             _db_root = ""
                             try:
@@ -6586,7 +6561,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         for _hu_i, _hu_row in enumerate(_pl_rows_hps_upd):
                             _hu_kp   = _hu_row.get("kode_paket", "")
                             _hu_nama = _pl_label(_hu_row)
-                            _hps_upd_status.update(label=f"[{_hu_i+1}/{len(_pl_rows_hps_upd)}] {_hu_nama}")
                             _hps_upd_bp.progress((_hu_i + 1) / len(_pl_rows_hps_upd))
                             try:
                                 _hu_fr = _keng_hps_upd.resolve_folder_paket_pl(_hu_kp)
@@ -8598,22 +8572,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _log7_lines = []  # akumulasi log — update sekali per paket, bukan per baris
                         _ringkasan7: list = []  # kumpul status tiap paket untuk ringkasan akhir
 
-                        def _flush7(container):
-                            """Render log terakumulasi ke container — 1 update per paket."""
-                            container.code("\n".join(_log7_lines[-60:]))  # max 60 baris terakhir
-
                         for _i7, _rpl7 in enumerate(_pl7_selected_rows):
                             _kpl7    = _rpl7["kode_paket"]
                             _nama7   = _pl_label(_rpl7)
-                            _status7 = st.status(f"Paket {_i7+1}/{_n_paket7} — {_nama7}", expanded=True)
+                            _status7 = st.status(f"Paket {_i7+1}/{_n_paket7} — {_nama7}", expanded=False)
 
                             with _status7:
                                 _log7_lines.clear()
-                                _log7_box = st.empty()
-
-                                def _lcb7(msg, _box=_log7_box, _lines=_log7_lines):
+                                def _lcb7(msg, _lines=_log7_lines):
                                     _lines.append(msg)
-                                    _box.code("\n".join(_lines[-40:]))
 
                                 # Fetch peserta
                                 _lcb7(f"[{_i7+1}/{_n_paket7}] Fetch peserta SPSE...")
@@ -8688,6 +8655,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _ringkasan7.append({"nama": _nama7, "status": "ok", "detail": "download saja"})
 
                                 _status7.update(label=f"Selesai — {_nama7}", state="complete", expanded=False)
+
+                            if _log7_lines:
+                                with st.expander(f"📋 Log {_nama7[:50]}", expanded=False):
+                                    st.code("\n".join(_log7_lines))
 
                             _pb7.progress((_i7 + 1) / _n_paket7, text=f"Selesai {_i7+1}/{_n_paket7} paket")
 
@@ -8842,15 +8813,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         for _i8, _rpl8 in enumerate(_pl8_selected_rows):
                             _kpl8  = _rpl8["kode_paket"]
                             _nama8 = _pl_label(_rpl8)
-                            _status8 = st.status(f"Paket {_i8+1}/{_n_paket8} — {_nama8}", expanded=True)
+                            _status8 = st.status(f"Paket {_i8+1}/{_n_paket8} — {_nama8}", expanded=False)
 
                             with _status8:
                                 _log8_lines = []
-                                _log8_box   = st.empty()
-
-                                def _lcb8(msg, _box=_log8_box, _lines=_log8_lines):
+                                def _lcb8(msg, _lines=_log8_lines):
                                     _lines.append(msg)
-                                    _box.code("\n".join(_lines[-40:]))
 
                                 # Scrape id_nontender per peserta
                                 _lcb8("Scrape peserta evaluasi dari SPSE...")
@@ -8918,6 +8886,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
                                 _ringkasan8.append({"nama": _nama8, "status": "ok", "detail": ""})
                                 _status8.update(label=f"Selesai — {_nama8}", state="complete", expanded=False)
+
+                            if _log8_lines:
+                                with st.expander(f"📋 Log {_nama8[:50]}", expanded=False):
+                                    st.code("\n".join(_log8_lines))
 
                             _pb8.progress((_i8 + 1) / _n_paket8, text=f"Selesai {_i8+1}/{_n_paket8} paket")
 
@@ -9408,14 +9380,12 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     f"📁 Memproses {len(_t_terpilih)} paket terpilih...",
                     expanded=False,
                 )
-                _bulk_status_line = _bulk_status.empty()
                 _ok, _fail = 0, 0
                 _bulk_semua_log = {}
                 try:
                   for _i, _bp in enumerate(_t_terpilih):
                     _bp2.progress((_i + 1) / len(_t_terpilih))
                     _nf = _bp["nama_folder"]
-                    _bulk_status.update(label=f"[{_i+1}/{len(_t_terpilih)}] {_nf[:60]}")
                     _paket_log = []
                     try:
                         _r2 = _sp.run([_PY, _SCRIPT, "--output-dir", _TENDER_ROOT, _nf],
@@ -9472,14 +9442,14 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             # HPS sengaja dijalankan setelah Master Data supaya
                             # dua instance COM tidak berebut workbook.
                             def _line_cb(_log=_paket_log):
-                                _bulk_status_line.code("\n".join(_log[-10:]))
+                                # Log detail ditampilkan setelah batch selesai.
+                                return None
                             _jalankan_aksi_tender(
                                 _bp["kode_tender"], _bp.get("id_pesan"), _bp.get("kode_pokja"),
                                 _bp_target, _t_cb_dl, False, False,
                                 st_ctx=_ctx_bulk, log=_paket_log,
                                 line_cb=_line_cb,
                             )
-                            _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Dedicated COM per paket lebih lambat sedikit, tetapi
                             # menghindari cache/lock workbook pada batch panjang.
                             _excel_row = {
@@ -9505,12 +9475,10 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                     st_ctx=_ctx_bulk, log=_paket_log,
                                     line_cb=_line_cb,
                                 )
-                            _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             _lamp_ok, _lamp_msg = _generate_lampiran_undangan_dpp_preview(_bp["kode_tender"])
                             _paket_log.append(
                                 f"📎 Lampiran DPP: {_lamp_msg}" if _lamp_ok else f"⚠ Lampiran DPP: {_lamp_msg}"
                             )
-                            _bulk_status_line.code("\n".join(_paket_log[-10:]))
                             # Snapshot dokumen PPK + download awal (folder baru = semua file dianggap "baru")
                             try:
                                 import dokumen_ppk_engine as _dpk
@@ -9787,11 +9755,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 _diff_dl = _dpk_dl.cek_update_dokumen(_kt_dl)
                             _dl_log4 = []
                             _dl_st4 = st.status(f"⬇️ Mengunduh update {_item['nama'][:40]}...", expanded=True)
-                            _dl_area4 = _dl_st4.empty()
-                            def _dl_cb4(msg, _log=_dl_log4, _area=_dl_area4, _st=_dl_st4):
+                            def _dl_cb4(msg, _log=_dl_log4):
                                 _log.append(msg)
-                                _area.code("\n".join(_log[-15:]))
-                                _st.update(label=f"⬇️ {msg[:60]}...")
                             _dl_res4 = _dpk_dl.download_update_dokumen(
                                 _kt_dl, _folder_dl,
                                 _diff_dl["berubah"], _diff_dl["baru"],
@@ -9832,7 +9797,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                         f"⚠️ {_item['nama'][:50]} — file sudah terunduh, "
                                         "tetapi @ Master Data belum tersinkron. Perbaiki Excel lalu ulangi."
                                     )
-                                    _dl_area4.code("\n".join(_dl_log4[-20:]))
                                 else:
                                     _snapshot_aman = _dpk_dl.snapshot_setelah_download_aman(
                                         _sn_lama2,
@@ -9868,7 +9832,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                             label=f"✅ {len(_dl_res4['ok'])} file diupdate + @ Master Data tersinkron",
                                             state="complete", expanded=True,
                                         )
-                                    _dl_area4.code("\n".join(_dl_log4[-20:]))
                                     st.success(
                                         f"✅ {_item['nama'][:50]} — dokumen aman dan @ Master Data sudah diperbarui."
                                     )
@@ -10082,14 +10045,11 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                             }
                             _dl_box_one = st.container(border=True)
                             _dl_label_one = _dl_box_one.empty()
-                            _dl_area_one = _dl_box_one.empty()
                             _dl_label_one.info(f"⬇️ Mengunduh file aman {_nm[:40]}...")
                             _dl_log_one = []
 
-                            def _dl_cb_one(msg, _log=_dl_log_one, _area=_dl_area_one, _label=_dl_label_one):
+                            def _dl_cb_one(msg, _log=_dl_log_one):
                                 _log.append(msg)
-                                _area.code("\n".join(_log[-15:]))
-                                _label.info(f"⬇️ {msg[:60]}...")
 
                             _dl_res_one = _dpk_dl_one.download_update_dokumen(
                                 _kt,
@@ -10132,7 +10092,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 else:
                                     _dok_cek_map.pop(_dok_key, None)
                                     st.success("✅ Dokumen aman berhasil diunduh.")
-                                _dl_area_one.code("\n".join(_dl_log_one[-20:]))
 
                     if st.session_state.get("_tender_dokumen_download_verifikasi_request") == _dok_key:
                         st.session_state.pop("_tender_dokumen_download_verifikasi_request", None)
@@ -10154,7 +10113,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 }
                                 _ver_box = st.container(border=True)
                                 _ver_label = _ver_box.empty()
-                                _ver_area = _ver_box.empty()
                                 _ver_label.info(
                                     f"⬇️ Mengunduh file perlu verifikasi {_nm[:40]}..."
                                 )
@@ -10163,12 +10121,8 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                 def _ver_cb(
                                     msg,
                                     _log=_ver_log,
-                                    _area=_ver_area,
-                                    _label=_ver_label,
                                 ):
                                     _log.append(msg)
-                                    _area.code("\n".join(_log[-15:]))
-                                    _label.info(f"⬇️ {msg[:60]}...")
 
                                 _ver_res = _dpk_dl_ver.download_update_dokumen(
                                     _kt,
@@ -10200,7 +10154,6 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                                         f"✅ {len(_ver_res['ok'])} file perlu verifikasi berhasil diunduh; "
                                         "snapshot tidak dimajukan"
                                     )
-                                _ver_area.code("\n".join(_ver_log[-20:]))
 
                 _ac1, _ac2, _ac3, _ac4, _ac5, _ac6 = st.columns(6)
                 # 🔄 Serap satu paket
@@ -12425,11 +12378,9 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
         with _py:
             if st.button("✅ Ya, evaluasi peserta ini", key="upt_eval_one_yes", type="primary", use_container_width=True):
                 _logs_one = [f"=== {_pp.get('kode')} | {_pps.get('nama')} ==="]
-                _log_one_area = st.empty()
-                _log_one_area.code("\n".join(_logs_one))
                 _ev_one = _upt.evaluasi_lulus_otomatis(
                     str(_pp["kode"]), str(_pps["peserta_id"]),
-                    progress_cb=lambda msg: (_logs_one.append(msg), _log_one_area.code("\n".join(_logs_one))),
+                    progress_cb=_logs_one.append,
                 )
                 _logs_one.append(("✅ " if _ev_one.get("ok") else "❌ ") + _ev_one.get("pesan", ""))
                 st.session_state[f"upt_status_{_pp['kode']}"] = _upt.fetch_evaluasi_paket(str(_pp["kode"]))
@@ -12487,10 +12438,8 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
                 if st.button("✅ Ya, proses & kirim", key="upt_confirm_yes", type="primary", use_container_width=True):
                     st.session_state["upt_confirm_send"] = False
                     _logs = []
-                    _log_area = st.empty()
                     def _upt_log(msg):
                         _logs.append(msg)
-                        _log_area.code("\n".join(_logs))
                     for _ti in _upt_targets:
                         _tp = _ti["paket"]
                         _ps = _ti["peserta"]
@@ -12511,6 +12460,9 @@ if _tender_active_tab == "5️⃣ Undangan Pembuktian Kualifikasi":
                         _sampai = f"{_upt_tgl_selesai:%d-%m-%Y} {_upt_jam_selesai:%H:%M}"
                         _iv = _upt.kirim_undangan_pembuktian(_pid, _waktu, _sampai, _upt_tempat, _upt_dibawa, _upt_hadir)
                         _upt_log(("✅ " if _iv.get("ok") else "❌ ") + _iv.get("pesan", ""))
+                    if _logs:
+                        with st.expander("📋 Log detail proses undangan", expanded=False):
+                            st.code("\n".join(_logs))
                     st.success("Proses undangan selesai. Muat ulang status SPSE untuk memverifikasi hasil.")
             with _nc:
                 if st.button("Batal", key="upt_confirm_no", use_container_width=True):
@@ -12795,12 +12747,10 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
 
             # ── Fungsi proses (dipakai tombol global + per-paket) ──────────────
             def _proses_paket_kk(items_to_run, do_download, do_kk, do_excel):
-                log_area = st.empty()
                 log_lines = []
 
                 def _log_cb(msg):
                     log_lines.append(msg)
-                    log_area.code("\n".join(log_lines))
 
                 progress = st.progress(0, text="Memulai...")
                 _total_paket = len(items_to_run)
@@ -13019,6 +12969,9 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 _parts = []
                 if do_download: _parts.append("dokumen didownload")
                 if do_kk: _parts.append("KK Evaluasi tersimpan")
+                if log_lines:
+                    with st.expander("📋 Log detail proses", expanded=False):
+                        st.code("\n".join(log_lines))
                 st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Harga penawaran sudah ditulis langsung ke Sheet 6 Excel; lanjutkan **Muat Input BA** jika perlu.")
 
             # Folder tetap di-resolve internal untuk download/parse/Excel, tetapi
@@ -13515,18 +13468,17 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         with _gab_c2:
             st.caption(f"{len(_gab_valid)} paket valid · {len(_gab_bulk)} terpilih untuk aksi bulk.")
         if _gab_run_bulk:
-            _gab_all_log = st.empty()
             _gab_all_lines = []
             _gab_all_ok = 0
             for _gp in _gab_bulk:
                 _gp_folder = os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"])
                 _gab_all_lines.append(f"📦 Paket: {_gp.get('folder_dibuat', _gp['kode_tender'])}")
-                _gab_all_log.code("\n".join(_gab_all_lines[-40:]))
-                def _log_gab(m, _lines=_gab_all_lines, _area=_gab_all_log):
+                def _log_gab(m, _lines=_gab_all_lines):
                     _lines.append(f"  {m}")
-                    _area.code("\n".join(_lines[-40:]))
                 _r = _pe.gabung_dokumen_lengkap(_gp_folder, log=_log_gab)
                 _gab_all_ok += _r["ok"]
+            with st.expander("📋 Log detail penggabungan", expanded=False):
+                st.code("\n".join(_gab_all_lines))
             st.success(f"✅ Selesai — {_gab_all_ok} peserta digabung dari {len(_gab_bulk)} paket.")
         def _harga_sheet6_tender(folder_paket):
             """Baca total final Sheet 6 via Excel COM; read-only, tanpa mengubah XLSM."""
@@ -13758,15 +13710,11 @@ Mulai sekarang."""
             do_teknis, do_gcal, log_area=None, shared_log_lines=None,
         ):
             """Isi sheet '0. Input BA' untuk satu paket."""
-            log_area = log_area if log_area is not None else st.empty()
+            _own_log = log_area is None and shared_log_lines is None
             log_lines = shared_log_lines if shared_log_lines is not None else []
 
             def _log_cb(msg):
                 log_lines.append(msg)
-                try:
-                    log_area.code("\n".join(log_lines))
-                except Exception:
-                    pass
 
             _log_cb(f"=== Input BA: {kode_tender} ===")
 
@@ -13996,6 +13944,9 @@ Mulai sekarang."""
                 st.success(f"Input BA {kode_tender}: {_res['pesan']}")
             else:
                 st.warning(f"Input BA {kode_tender} gagal: {_res['pesan']}")
+            if _own_log and log_lines:
+                with st.expander("📋 Log detail Input BA", expanded=False):
+                    st.code("\n".join(log_lines))
 
         def _resolve_input_ba_target(_iba_p):
             """Resolve folder kualifikasi + workbook BA untuk satu paket."""
@@ -14026,7 +13977,6 @@ Mulai sekarang."""
         with _iba_bulk_c2:
             st.caption(f"{len(_iba_bulk)} paket terpilih untuk input BA.")
         if _iba_run_bulk:
-            _iba_bulk_log_area = st.empty()
             _iba_bulk_log_lines = []
             _iba_bulk_ok, _iba_bulk_skip = 0, 0
             for _iba_selected in _iba_bulk:
@@ -14042,10 +13992,13 @@ Mulai sekarang."""
                     _iba_xlsm,
                     st.session_state.get("iba_do_teknis", True),
                     st.session_state.get("iba_do_gcal", True),
-                    log_area=_iba_bulk_log_area,
+                    log_area=None,
                     shared_log_lines=_iba_bulk_log_lines,
                 )
                 _iba_bulk_ok += 1
+            if _iba_bulk_log_lines:
+                with st.expander("📋 Log detail Input BA paket terpilih", expanded=False):
+                    st.code("\n".join(_iba_bulk_log_lines))
             st.info(f"Input BA selesai: {_iba_bulk_ok} diproses, {_iba_bulk_skip} dilewati.")
 
         # Tombol per-paket
