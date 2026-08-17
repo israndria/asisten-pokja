@@ -1646,9 +1646,8 @@ def filter_paket_ppk_by_workflow(
 PPK_PL_BASE = PPK_PL_LEGACY_BASE
 
 
-# Struktur output generator PPK PL V2. Resolver di bawah hanya dipakai oleh
-# alur upload Streamlit; folder legacy tetap didukung jika subfolder tahap
-# belum dibuat.
+# Struktur output generator PPK PL V2. Format baru menaruh folder tahap
+# langsung di root paket; wrapper lama tetap dibaca untuk paket existing.
 PPK_DOCUMENT_DRAFT_ROOT = "0. Draft Dokumen PPK"
 PPK_DOCUMENT_STAGE_MARKER = "._ppk_stage.txt"
 PPK_DOCUMENT_STAGE_DIRS = {
@@ -1682,6 +1681,8 @@ def _ppk_package_root(candidate: str) -> str:
         parent = os.path.dirname(path)
         if os.path.basename(parent).casefold() == draft_leaf:
             return os.path.dirname(parent)
+        # Format baru: package/01. Upload Awal atau package/02. Berkontrak.
+        return parent
     if leaf == draft_leaf:
         return os.path.dirname(path)
     return path
@@ -1767,12 +1768,20 @@ def resolve_ppk_upload_folder(package_folder: str, stage: object = None) -> dict
     package_root = _ppk_package_root(package_folder)
     workbook_stage, workbook_path, stage_source = read_ppk_document_stage(package_root)
     resolved_stage = normalize_ppk_document_stage(stage) if stage is not None else workbook_stage
-    stage_folder = os.path.join(
+    direct_stage_folder = os.path.join(
+        package_root, PPK_DOCUMENT_STAGE_DIRS[resolved_stage]
+    )
+    legacy_stage_folder = os.path.join(
         package_root,
         PPK_DOCUMENT_DRAFT_ROOT,
         PPK_DOCUMENT_STAGE_DIRS[resolved_stage],
     )
-    if os.path.isdir(stage_folder):
+    stage_folder = next(
+        (candidate for candidate in (direct_stage_folder, legacy_stage_folder)
+         if os.path.isdir(candidate)),
+        None,
+    )
+    if stage_folder:
         return {
             "folder": os.path.normpath(stage_folder),
             "package_folder": os.path.normpath(package_root),

@@ -657,6 +657,39 @@ def test_ppk_modes_are_bound_to_distinct_families():
     assert engine.ppk_mode_config("PPK - Pekerjaan Konstruksi")["workflow"] == "PK"
 
 
+def test_resolve_ppk_upload_folder_prefers_direct_stage_folder(tmp_path):
+    package = tmp_path / "13. Paket Contoh"
+    direct_stage = package / "01. Upload Awal"
+    direct_stage.mkdir(parents=True)
+
+    resolved = engine.resolve_ppk_upload_folder(str(package))
+
+    assert resolved["folder"] == os.path.normpath(str(direct_stage))
+    assert resolved["source"] == "stage"
+
+
+def test_resolve_ppk_upload_folder_accepts_direct_stage_input(tmp_path):
+    package = tmp_path / "13. Paket Contoh"
+    direct_stage = package / "02. Berkontrak"
+    direct_stage.mkdir(parents=True)
+
+    resolved = engine.resolve_ppk_upload_folder(str(direct_stage), "BERKONTRAK")
+
+    assert resolved["package_folder"] == os.path.normpath(str(package))
+    assert resolved["folder"] == os.path.normpath(str(direct_stage))
+
+
+def test_resolve_ppk_upload_folder_keeps_nested_legacy_stage_folder(tmp_path):
+    package = tmp_path / "13. Paket Contoh"
+    legacy_stage = package / "0. Draft Dokumen PPK" / "01. Upload Awal"
+    legacy_stage.mkdir(parents=True)
+
+    resolved = engine.resolve_ppk_upload_folder(str(package))
+
+    assert resolved["folder"] == os.path.normpath(str(legacy_stage))
+    assert resolved["source"] == "stage"
+
+
 def test_filter_ppk_packages_uses_registry_then_metadata():
     rows = [
         {"kode_paket": "1", "nama_paket": "Jasa Konsultansi"},
