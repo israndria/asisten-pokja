@@ -11238,6 +11238,60 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
         st.divider()
         st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
+        if jd_selected:
+            st.markdown("**Preview Jadwal - cek dulu sebelum push**")
+            _jd_preview_p = st.selectbox(
+                "Pilih paket buat preview",
+                jd_selected,
+                format_func=lambda _p: (
+                    f"{_p.get('kode', '-')} - {_p.get('nama', '')[:70]}"
+                ),
+                key="jd_preview_pilih",
+            )
+            if jd_beda_jadwal:
+                _jd_tgl_pv = st.session_state.get(
+                    f"jd_tgl_{_jd_preview_p['id_lelang']}",
+                    datetime.now().date(),
+                )
+                _jd_jam_pv = st.session_state.get(
+                    f"jd_jam_{_jd_preview_p['id_lelang']}",
+                    datetime.strptime("08:00", "%H:%M").time(),
+                )
+            else:
+                _jd_tgl_pv = jd_tgl_global
+                _jd_jam_pv = jd_jam_global
+
+            _jd_t1_pv = datetime.combine(_jd_tgl_pv, _jd_jam_pv)
+            _jd_schedule_pv = jadwal_engine.hitung_jadwal(_jd_t1_pv)
+            _jd_rows_pv = []
+            for _jd_idx, _jd_stage in enumerate(_jd_schedule_pv, 1):
+                _jd_duration = _jd_stage["selesai"] - _jd_stage["mulai"]
+                _jd_minutes = max(0, int(_jd_duration.total_seconds() // 60))
+                _jd_days, _jd_rest = divmod(_jd_minutes, 24 * 60)
+                _jd_hours, _jd_mins = divmod(_jd_rest, 60)
+                if _jd_days:
+                    _jd_duration_text = f"{_jd_days} hari"
+                    if _jd_hours:
+                        _jd_duration_text += f" {_jd_hours} jam"
+                elif _jd_hours:
+                    _jd_duration_text = f"{_jd_hours} jam {_jd_mins} menit"
+                else:
+                    _jd_duration_text = f"{_jd_mins} menit"
+                _jd_rows_pv.append(
+                    {
+                        "No": _jd_idx,
+                        "Tahap": _jd_stage["nama"],
+                        "Mulai": _jd_stage["mulai"].strftime("%d-%m-%Y %H:%M"),
+                        "Selesai": _jd_stage["selesai"].strftime("%d-%m-%Y %H:%M"),
+                        "Durasi": _jd_duration_text,
+                    }
+                )
+            st.caption(
+                f"Mulai: {_jd_t1_pv.strftime('%d-%m-%Y %H:%M')} | "
+                "Perhitungan lokal; belum dikirim ke SPSE."
+            )
+            st.dataframe(_jd_rows_pv, use_container_width=True, hide_index=True)
+
         jd_submit = st.button(
             f"🚀 Set Jadwal ke SPSE ({len(jd_selected)} paket)",
             type="primary",
