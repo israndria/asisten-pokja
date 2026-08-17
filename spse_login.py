@@ -25,15 +25,20 @@ import base64
 import threading
 from pathlib import Path
 from typing import Literal
-from config import find_secret
+from config import (
+    find_secret,
+    SPSE_ROLE_FILE,
+    SPSE_LOGIN_METRICS_PATH,
+    ASISTEN_FIXED_ROLE,
+)
 
 # ============================================================
 # Load credentials — SEKALI saat import, tidak di-cache di state
 # ============================================================
 
 _ENV_PATH = find_secret("secret_spse.env")
-_ROLE_FILE = Path(__file__).parent / ".browser_session" / "last_role.txt"
-_METRICS_PATH = Path(__file__).parent / "data" / "spse_login_metrics.jsonl"
+_ROLE_FILE = Path(SPSE_ROLE_FILE)
+_METRICS_PATH = Path(SPSE_LOGIN_METRICS_PATH)
 _TELEMETRY_LOCK = threading.Lock()
 _CODEX_MODEL = "gpt-5.6-luna"
 _CODEX_REASONING = "medium"
@@ -92,6 +97,10 @@ def _record_login_event(
 
 def remember_login_role(role: str) -> None:
     """Simpan role + fingerprint sesi agar cache role stale ditolak saat F5."""
+    if ASISTEN_FIXED_ROLE and role != ASISTEN_FIXED_ROLE:
+        raise ValueError(
+            f"Instance ini dikunci untuk role {ASISTEN_FIXED_ROLE}, bukan {role}."
+        )
     import spse_browser as _sb
     cookie = _sb.get_spse_cookies(force=True)
     if not cookie:
@@ -133,6 +142,14 @@ def _get_creds(role: Literal["PP", "POKJA", "PPK"]) -> tuple[str, str]:
     if not username or not password:
         raise ValueError(f"Credentials untuk role '{role}' tidak lengkap di secret_spse.env")
     return username, password
+
+
+def _assert_role_allowed(role: str) -> None:
+    """Tolak login silang ketika app dijalankan sebagai instance tetap."""
+    if ASISTEN_FIXED_ROLE and role != ASISTEN_FIXED_ROLE:
+        raise ValueError(
+            f"Instance ini dikunci untuk role {ASISTEN_FIXED_ROLE}, bukan {role}."
+        )
 
 
 def detect_login_role() -> str | None:
@@ -312,10 +329,17 @@ def detect_login_role() -> str | None:
         # Fast path startup: URL authenticated dari endpoint CDP + fingerprint
         # cookie yang sama cukup untuk memakai role cache. Jangan memanggil
         # Playwright di sini; Brave dengan banyak tab restore bisa blocking.
-        if cached_role and cache_matches_session and _has_authenticated_cdp_tab():
+        if (
+            cached_role
+            and (not ASISTEN_FIXED_ROLE or cached_role == ASISTEN_FIXED_ROLE)
+            and cache_matches_session
+            and _has_authenticated_cdp_tab()
+        ):
             return cached_role
         detected, authenticated = _detect_role_from_session(cookie)
         if detected:
+            if ASISTEN_FIXED_ROLE and detected != ASISTEN_FIXED_ROLE:
+                return None
             if not cache_matches_session or detected != cached_role:
                 _ROLE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 _ROLE_FILE.write_text(
@@ -326,7 +350,12 @@ def detect_login_role() -> str | None:
         # Jangan menganggap sesi putus hanya karena label role tidak ada di
         # halaman detail. Gunakan cache hanya jika fingerprint cocok DAN body
         # tab menunjukkan route authenticated; root publik/login tidak lolos.
-        if cached_role and cache_matches_session and authenticated:
+        if (
+            cached_role
+            and (not ASISTEN_FIXED_ROLE or cached_role == ASISTEN_FIXED_ROLE)
+            and cache_matches_session
+            and authenticated
+        ):
             return cached_role
     except Exception:
         pass
@@ -1064,6 +1093,7 @@ async def _retry_captcha_async(
 def retry_captcha(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     """Entry point sinkronus — retry hanya step password+captcha tanpa navigate ulang."""
     import spse_browser as _sb
+    _assert_role_allowed(role)
     username, password = _get_creds(role)
     return _sb._run(
         _retry_captcha_async(username, password, role, log_fn=log_fn),
@@ -1116,6 +1146,7 @@ def submit_manual_captcha(
 ) -> bool:
     """Entry point sinkronus untuk CAPTCHA yang dibaca user."""
     import spse_browser as _sb
+    _assert_role_allowed(role)
     return _sb._run(
         _submit_manual_captcha_async(role, captcha_text, log_fn=log_fn),
         timeout=60,
@@ -1166,6 +1197,7 @@ def login_spse(role: Literal["PP", "POKJA", "PPK"] = "PP", log_fn=None) -> bool:
     log_fn: callable(str) untuk progress logging (opsional)
     """
     import spse_browser as _sb
+    _assert_role_allowed(role)
     # Cover Tesseract + Luna verifier + Gemini fallback pada beberapa attempt.
     _sb._ensure_loop()
     return _sb._run(

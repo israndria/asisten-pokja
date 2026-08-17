@@ -6,8 +6,13 @@ import time
 
 import streamlit as st
 
-from config import SPSE_BASE_URL
+from config import SPSE_BASE_URL, ASISTEN_FIXED_ROLE, ASISTEN_INSTANCE, SPSE_CDP_PORT
 import spse_browser
+
+
+_LOGIN_ROLE_OPTIONS = [ASISTEN_FIXED_ROLE] if ASISTEN_FIXED_ROLE else [
+    "PP", "POKJA", "PPK", "E-Katalog"
+]
 
 
 def _friendly_login_error(exc: Exception) -> str:
@@ -207,6 +212,11 @@ input, textarea, [data-baseweb="input"] input { background-color: #ffffff !impor
 
 @st.fragment
 def _sidebar_login_form():
+    if ASISTEN_FIXED_ROLE:
+        st.caption(
+            f"Instance {ASISTEN_INSTANCE}: login dikunci sebagai "
+            f"{ASISTEN_FIXED_ROLE}; CDP port {SPSE_CDP_PORT}."
+        )
     st.info("Brave SPSE belum terhubung")
     _relogin_reason = st.session_state.pop("_spse_relogin_reason", None)
     if _relogin_reason:
@@ -249,9 +259,11 @@ def _sidebar_login_form():
             else:
                 st.info("Belum ada clone sebelumnya.")
 
+    if st.session_state.get("header_login_role") not in _LOGIN_ROLE_OPTIONS:
+        st.session_state["header_login_role"] = _LOGIN_ROLE_OPTIONS[0]
     _login_role = st.selectbox(
         "Login sebagai",
-        ["PP", "POKJA", "PPK", "E-Katalog"],
+        _LOGIN_ROLE_OPTIONS,
         key="header_login_role",
         on_change=_clear_login_failure_state,
     )
@@ -351,7 +363,9 @@ def _sidebar_login_form():
                         _log("CDP belum aktif; meluncurkan Brave...")
                         spse_browser.launch_chrome_dengan_cdp()
                     if not spse_browser.tunggu_cdp_ready(timeout_seconds=20):
-                        raise RuntimeError("CDP port 9222 belum siap setelah Brave diluncurkan.")
+                        raise RuntimeError(
+                            f"CDP port {SPSE_CDP_PORT} belum siap setelah Brave diluncurkan."
+                        )
                     _log("CDP siap; menghubungkan Playwright...")
                     # Init Playwright + connect CDP di loop spse_browser
                     spse_browser.buka_browser(navigate=False)
@@ -385,7 +399,9 @@ def _sidebar_login_form():
 
     # Tombol retry — muncul kalau login gagal & browser masih di loginpass
     if st.session_state.get("login_failed") and spse_browser._cek_cdp_aktif():
-        _retry_role = st.session_state.get("login_failed_role", "PP")
+        _retry_role = st.session_state.get("login_failed_role") or _LOGIN_ROLE_OPTIONS[0]
+        if ASISTEN_FIXED_ROLE and _retry_role != ASISTEN_FIXED_ROLE:
+            _retry_role = ASISTEN_FIXED_ROLE
         if st.button("🔄 Coba Lagi (pipeline otomatis)", type="primary", use_container_width=True):
             try:
                 import spse_login as _spse_login

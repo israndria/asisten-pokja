@@ -14,6 +14,41 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CODE_ROOT = os.path.dirname(BASE_DIR)
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local"))
 
+# Instance isolation -------------------------------------------------------
+#
+# The app can run twice in parallel.  Keep this contract in one place so all
+# browser consumers (Playwright, raw CDP, downloads, and login recovery) use
+# the same instance instead of silently falling back to a shared 9222/profile.
+ASISTEN_INSTANCE = os.environ.get("ASISTEN_INSTANCE", "SHARED").strip().upper() or "SHARED"
+if ASISTEN_INSTANCE not in {"SHARED", "PP", "TENDER"}:
+    raise RuntimeError(
+        f"ASISTEN_INSTANCE tidak valid: {ASISTEN_INSTANCE!r}. "
+        "Gunakan SHARED, PP, atau TENDER."
+    )
+
+_INSTANCE_ROLE_DEFAULTS = {"SHARED": None, "PP": "PP", "TENDER": "POKJA"}
+_role_override = os.environ.get("ASISTEN_FIXED_ROLE", "").strip().upper()
+if _role_override and _role_override not in {"PP", "POKJA", "PPK"}:
+    raise RuntimeError(
+        f"ASISTEN_FIXED_ROLE tidak valid: {_role_override!r}. "
+        "Gunakan PP, POKJA, atau PPK."
+    )
+_role_default = _INSTANCE_ROLE_DEFAULTS[ASISTEN_INSTANCE]
+if _role_default and _role_override and _role_override != _role_default:
+    raise RuntimeError(
+        f"Instance {ASISTEN_INSTANCE} wajib memakai role {_role_default}; "
+        f"bukan {_role_override}."
+    )
+ASISTEN_FIXED_ROLE = _role_override or _role_default
+
+_cdp_default = {"SHARED": 9222, "PP": 9222, "TENDER": 9223}[ASISTEN_INSTANCE]
+try:
+    SPSE_CDP_PORT = int(os.environ.get("SPSE_CDP_PORT", str(_cdp_default)))
+except (TypeError, ValueError) as exc:
+    raise RuntimeError("SPSE_CDP_PORT harus berupa angka port TCP.") from exc
+if not 1024 <= SPSE_CDP_PORT <= 65535:
+    raise RuntimeError(f"SPSE_CDP_PORT di luar rentang: {SPSE_CDP_PORT}")
+
 # Source code and Python runtime are per-computer; only documents use Drive.
 V19_ROOT = os.path.normpath(
     os.environ.get("POKJA_V19_ROOT", os.path.join(CODE_ROOT, "procurement_core"))
@@ -74,16 +109,26 @@ def _discover_pokja_root() -> str:
 POKJA_ROOT = _discover_pokja_root()
 
 # Runtime lokal per komputer: tidak pernah diletakkan di repo/Google Drive.
-RUNTIME_ROOT = os.path.normpath(
+_runtime_root_base = os.path.normpath(
     os.environ.get(
         "POKJA_RUNTIME_ROOT",
         os.path.join(LOCALAPPDATA, "POKJA2026", "Asisten_Pokja"),
     )
 )
+# SHARED mempertahankan kompatibilitas launcher lama.  Instance resmi selalu
+# mendapat subtree sendiri agar cookie, lock, download, dan cache tidak silang.
+RUNTIME_ROOT = os.path.normpath(
+    os.path.join(_runtime_root_base, ASISTEN_INSTANCE.casefold())
+    if ASISTEN_INSTANCE != "SHARED"
+    else _runtime_root_base
+)
 DOWNLOAD_DIR = os.path.join(RUNTIME_ROOT, "downloads")
 BROWSER_SESSION_DIR = os.path.join(RUNTIME_ROOT, "browser_session")
 STATE_DIR = os.path.join(RUNTIME_ROOT, "state")
 LOG_DIR = os.path.join(RUNTIME_ROOT, "logs")
+SPSE_ROLE_FILE = os.path.join(STATE_DIR, "last_role.json")
+SPSE_LOGIN_METRICS_PATH = os.path.join(LOG_DIR, "spse_login_metrics.jsonl")
+EKATALOG_SESSION_FILE = os.path.join(STATE_DIR, "inaproc_session.json")
 
 # Secret canonical per-PC berada di LOCALAPPDATA. Folder repo hanya fallback
 # migrasi; secret tidak pernah diletakkan di working tree Git.

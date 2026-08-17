@@ -7,6 +7,7 @@ Butuh akun login — fetch via JS dari tab browser yang sudah login (CDP).
 
 from bs4 import BeautifulSoup
 from typing import List, Dict
+from config import SPSE_CDP_PORT
 
 _SPSE_BASE = "https://spse.inaproc.id"
 _KODE_LPSE = "tapinkab"
@@ -39,7 +40,10 @@ def _get_active_spse_page():
     """Ambil tab SPSE yang sudah login dari CDP context."""
     import spse_browser as _sb
     if not _sb._cek_cdp_aktif():
-        return None, "Brave CDP tidak aktif — buka Brave dengan remote debugging port 9222 dulu"
+        return None, (
+            "Brave CDP tidak aktif — buka Brave dengan remote debugging port "
+            f"{SPSE_CDP_PORT} dulu"
+        )
     if _sb._get_ctx() is None:
         try:
             _sb.buka_browser(navigate=False)

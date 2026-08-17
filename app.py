@@ -563,7 +563,7 @@ def _is_tender_sudah_pembukaan(p: dict) -> bool:
     status = str(p.get("status") or "").strip().lower()
     return bool(status) and "draft" not in status
 
-from config import SPSE_BASE_URL
+from config import SPSE_BASE_URL, ASISTEN_FIXED_ROLE
 import spse_browser
 import ldk_engine
 import ldk_config
@@ -954,12 +954,19 @@ if _is_dark:
 
 # Kontrol login diringkas dalam popover agar header tidak menjadi kolom vertikal.
 if "header_login_role" not in st.session_state:
-    st.session_state["header_login_role"] = st.session_state.get("sidebar_login_role", "PP")
+    st.session_state["header_login_role"] = (
+        ASISTEN_FIXED_ROLE
+        or st.session_state.get("sidebar_login_role", "PP")
+    )
 _login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container_width=True)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login
 _spse_role = st.session_state.get("spse_role", None)  # "PP", "POKJA", atau None
+if ASISTEN_FIXED_ROLE and _spse_role not in (None, ASISTEN_FIXED_ROLE):
+    # Jangan bawa role dari session lama ke instance PP/Tender yang terisolasi.
+    st.session_state.pop("spse_role", None)
+    _spse_role = None
 
 # Jangan reconnect Playwright/cleanup DOM secara blocking saat startup.
 # Deteksi role memakai CDP HTTP dan cleanup tab stale dijalankan lazy oleh flow
@@ -980,6 +987,8 @@ if time.time() - _cdp_role_last_check >= 30 or _role_probe_needed:
         import spse_login as _sl_detect
         if _sb_detect._cek_cdp_aktif():
             _detected = _sl_detect.detect_login_role()
+            if ASISTEN_FIXED_ROLE and _detected != ASISTEN_FIXED_ROLE:
+                _detected = None
             if _spse_role in ("PP", "POKJA", "PPK"):
                 if _detected == _spse_role:
                     st.session_state["_cdp_role_miss_count"] = 0

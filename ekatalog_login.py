@@ -4,13 +4,13 @@ import asyncio
 import json
 import time
 from playwright.async_api import async_playwright
-from config import find_secret
+from config import find_secret, SPSE_CDP_PORT, EKATALOG_SESSION_FILE
 
 _LOGIN_URL = (
     "https://daftar-akun.inaproc.id/id/login"
     "?callbackUrl=https%3A%2F%2Fkatalog.inaproc.id%2Fauth%2Fsignin%2F"
 )
-_SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_inaproc_session.json")
+_SESSION_FILE = EKATALOG_SESSION_FILE
 _SESSION_TTL = 3600 * 8  # 8 jam
 
 
@@ -54,7 +54,9 @@ def ambil_cookies_cdp() -> dict:
     """Ambil cookies inaproc dari semua domain terkait via CDP."""
     async def _run():
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            browser = await pw.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{SPSE_CDP_PORT}"
+            )
             ctx = browser.contexts[0] if browser.contexts else None
             if ctx is None:
                 return {}
@@ -78,7 +80,9 @@ def buka_dan_isi_login() -> str:
 
     async def _run():
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            browser = await pw.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{SPSE_CDP_PORT}"
+            )
             ctx = browser.contexts[0]
 
             # Tutup tab inaproc lama yang mungkin stuck

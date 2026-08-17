@@ -10,7 +10,7 @@ import urllib.request
 import requests
 from bs4 import BeautifulSoup
 import spse_browser
-from config import SPSE_BASE_URL, POKJA_ROOT
+from config import SPSE_BASE_URL, POKJA_ROOT, SPSE_CDP_PORT
 
 BASE_URL = SPSE_BASE_URL.rstrip("/")
 _LPSE = BASE_URL.rstrip("/").rsplit("/", 1)[-1]  # "tapinkab"
@@ -122,7 +122,7 @@ def _match_upload_response(
 
 
 _cdp_eval_lock = __import__("threading").Lock()
-_CDP_PORT = 9222
+_CDP_PORT = SPSE_CDP_PORT
 _PPK_FETCH_STATE = {"ok": False, "status": None, "reason": "not_fetched"}
 
 

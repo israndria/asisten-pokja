@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from playwright.async_api import Page, BrowserContext
 
-from config import SPSE_BASE_URL, BROWSER_SESSION_DIR, DOWNLOAD_DIR
+from config import SPSE_BASE_URL, BROWSER_SESSION_DIR, DOWNLOAD_DIR, SPSE_CDP_PORT, SPSE_ROLE_FILE
 
 # Patch subprocess.Popen agar Playwright tidak spawn console hitam di Windows
 import subprocess as _subprocess
@@ -148,7 +148,9 @@ def stop_auto_refresh():
 CHROME_EXE = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 CHROME_PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\MSI\AppData\Local"), "BraveSoftware", "Brave-Browser", "User Data")
 CHROME_PROFILE_DIR = "Profile 1"  # direktori profil israndria di dalam CHROME_PROFILE
-CDP_PORT = 9222
+# Alias publik lama dipertahankan karena banyak engine mengimpor CDP_PORT.
+# Nilainya sekarang mengikuti instance (PP=9222, Tender=9223).
+CDP_PORT = SPSE_CDP_PORT
 
 # Auto-refresh hanya halaman navigasi aman. Jangan reload halaman form/detail
 # karena dapat menghilangkan input manual yang sedang dikerjakan user.
@@ -779,8 +781,9 @@ def _cek_cdp_aktif() -> bool:
     """Cek apakah endpoint DevTools Brave benar-benar sehat.
 
     Cek TCP saja bisa false-positive: port masih LISTENING walau endpoint
-    CDP sudah stale/tidak merespons. Validasi `/json/version` agar UI tidak
-    menganggap sesi browser masih aktif hanya karena ada proses di port 9222.
+    CDP sudah stale/tidak merespons. Validasi /json/version agar UI tidak
+    menganggap sesi browser masih aktif hanya karena ada proses di port CDP
+    instance ini.
     """
     import socket
     try:
@@ -820,7 +823,7 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
     if not _cek_cdp_aktif():
         raise RuntimeError(
             "Brave SPSE belum terbuka. "
-            "Buka Brave dengan remote debugging port 9222 terlebih dahulu."
+            "Buka Brave dengan remote debugging port %s terlebih dahulu." % CDP_PORT
         )
     last_error = None
     # Setelah boot/restart, port CDP dapat sudah listen sementara websocket
@@ -830,7 +833,7 @@ def buka_browser(url: str = SPSE_BASE_URL, navigate: bool = True):
         if not _cek_cdp_aktif():
             raise RuntimeError(
                 "Brave SPSE belum terbuka. "
-                "Buka Brave dengan remote debugging port 9222 terlebih dahulu."
+                "Buka Brave dengan remote debugging port %s terlebih dahulu." % CDP_PORT
             )
         try:
             return _run(_connect_cdp_async(url, navigate=navigate), timeout=45)
@@ -946,9 +949,9 @@ async def _tutup_async():
 
 
 def tutup_browser():
-    """Tutup browser SPSE secara deterministik: kill proses Brave CDP (port 9222) + reset state.
+    """Tutup browser SPSE instance ini: kill proses Brave pada port CDP sendiri.
 
-    Sebelumnya fallback hanya menutup TAB via /json/close (proses Brave tetap listen 9222),
+    Sebelumnya fallback hanya menutup TAB via /json/close (proses Brave tetap listen),
     sehingga tombol Tutup terlihat no-op saat Playwright ctx belum connect. Sekarang selalu
     kill proses agar port benar-benar bebas dan sidebar kembali ke form login.
     """
@@ -967,7 +970,7 @@ def tutup_browser():
     # Hapus last_role saat browser ditutup
     try:
         from pathlib import Path as _Path
-        _rf = _Path(__file__).parent / ".browser_session" / "last_role.txt"
+        _rf = _Path(SPSE_ROLE_FILE)
         if _rf.exists():
             _rf.unlink()
     except Exception:
@@ -1214,30 +1217,17 @@ def diskonek():
 
 
 def _kill_browser():
-    """Kill hanya proses Brave CDP (listen port 9222) + reset state."""
+    """Kill hanya proses Brave yang listen pada port CDP instance ini."""
     stop_auto_refresh()
     import subprocess
     diskonek()
     try:
-        # Cari PID yang listen di port 9222
-        result = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True, text=True, shell=True, timeout=5
-        )
-        pids = set()
-        for line in result.stdout.splitlines():
-            if ":9222" in line and "LISTENING" in line:
-                parts = line.strip().split()
-                if parts:
-                    pids.add(parts[-1])
-
-        # Kill hanya PID tersebut (bukan semua brave.exe)
-        for pid in pids:
-            if pid.isdigit():
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", pid],
-                    capture_output=True, shell=True
-                )
+        # Helper memakai CDP_PORT aktif; jangan pernah menyapu semua brave.exe.
+        for pid in _cdp_listener_pids():
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, shell=True,
+            )
     except Exception:
         pass
 

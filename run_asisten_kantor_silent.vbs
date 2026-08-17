@@ -14,6 +14,9 @@ port    = "8502"
 
 shell.Environment("Process")("POKJA_CODE_ROOT") = appDir
 shell.Environment("Process")("POKJA_PYTHON") = python
+shell.Environment("Process")("ASISTEN_INSTANCE") = "PP"
+shell.Environment("Process")("ASISTEN_FIXED_ROLE") = "PP"
+shell.Environment("Process")("SPSE_CDP_PORT") = "9222"
 If Len(shell.Environment("Process")("POKJA_V19_ROOT")) = 0 Then _
     shell.Environment("Process")("POKJA_V19_ROOT") = fso.GetAbsolutePathName(appDir & "\..\procurement_core")
 driveRoot = shell.Environment("Process")("POKJA_DRIVE_ROOT")

@@ -19,6 +19,7 @@ import subprocess
 import ctypes
 import requests
 import urllib3
+from config import SPSE_CDP_PORT
 
 urllib3.disable_warnings()
 
@@ -103,14 +104,15 @@ def _cdp_via_playwright(progress_cb=None):
     """
     from playwright.sync_api import sync_playwright
     pw = sync_playwright().start()
-    browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+    browser = pw.chromium.connect_over_cdp(f"http://localhost:{SPSE_CDP_PORT}")
     pages = browser.contexts[0].pages if browser.contexts else []
     return pw, browser, pages
 
 
 def ambil_token_dari_browser(progress_cb=None) -> str:
     """
-    Ambil token URL lt17 dari tab Chrome yang sedang aktif via Playwright CDP (port 9222).
+    Ambil token URL lt17 dari tab Brave yang sedang aktif via Playwright CDP
+    pada port instance.
     Return URL lengkap mis. 'https://spse.inaproc.id/tapinkab/lt17/<TOKEN>...' atau ''.
     """
     def _log(msg):

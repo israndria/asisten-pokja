@@ -31,7 +31,7 @@ BG_SCRIPT   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apendo_b
 def get_token_dari_spse(kode_tender: str, progress_cb=None) -> dict:
     """
     Ambil token Apendo dari halaman /lelang/{kode_tender} via CDP (Playwright).
-    Browser harus sudah terbuka dan login di CDP port 9222.
+    Browser harus sudah terbuka dan login di CDP port instance Asisten.
 
     Returns:
         {"ok": True, "token_url": "...", "access_token": "...", "nama_tender": "..."}

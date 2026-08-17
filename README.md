@@ -48,17 +48,18 @@ Two complete procurement workflows, each fully automated end-to-end:
 ## Architecture
 
 ```
-Brave (logged-in SPSE session)
-  ↕ CDP port 9222
-Playwright / requests + cookies
-  ↕
-app.py (Streamlit UI)
-  ├── *_engine.py       # business logic per feature
-  ├── *_parser.py       # PDF/HTML data extraction
-  ├── input_ba_engine.py # COM writer → Excel "0. Input BA"
-  ├── merge_engine.py   # COM driver → Word mail merge → PDF
-  └── Supabase          # persistent storage
+PP localhost:8502 ── Brave PP profile ── CDP 9222 ──┐
+                                                    ├─ app.py
+Tender localhost:8506 ── Brave Tender profile ── CDP 9223 ─┘
+                                                     │
+                         Playwright / requests + cookies
+                                                     │
+             *_engine.py, *_parser.py, Excel/Word COM, Supabase
 ```
+
+Instance resmi memakai runtime/cache lokal terpisah (`pp` dan `tender`),
+sehingga cookie, lock, download, dan tombol **Tutup Browser** tidak silang.
+Launcher Tender: `run_asisten_tender_silent.vbs` atau `run_asisten_tender.bat`.
 
 ## Requirements
 
@@ -77,7 +78,9 @@ playwright install chromium
 
 ```bash
 streamlit run app.py
-# Runs on http://localhost:8502
+# Untuk mode kompatibilitas lama (SHARED), default-nya http://localhost:8502.
+# Pemakaian harian: buka http://localhost:8502 (PP) dan
+# http://localhost:8506 (Tender/POKJA) lewat launcher instance masing-masing.
 ```
 
 Requires Brave open and logged in to your SPSE instance before launching.

@@ -9,6 +9,9 @@ port    = "8502"
 Set shell = CreateObject("WScript.Shell")
 shell.Environment("Process")("POKJA_CODE_ROOT") = appDir
 shell.Environment("Process")("POKJA_PYTHON") = python
+shell.Environment("Process")("ASISTEN_INSTANCE") = "PP"
+shell.Environment("Process")("ASISTEN_FIXED_ROLE") = "PP"
+shell.Environment("Process")("SPSE_CDP_PORT") = "9222"
 
 ' Cek apakah port sudah aktif
 checkResult = shell.Run("cmd /c netstat -ano | findstr :" & port & " | findstr LISTENING", 0, True)
