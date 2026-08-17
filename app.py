@@ -11129,7 +11129,7 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
 
     _libur_map = _LIBUR_MAP
 
-    _jd_col_list, _jd_col_detail = st.columns([3, 2])
+    _jd_col_list, _jd_col_detail = st.columns([2, 3])
 
     with _jd_col_list:
         st.markdown("### 1. Pilih Paket")
@@ -11281,8 +11281,14 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
                     {
                         "No": _jd_idx,
                         "Tahap": _jd_stage["nama"],
-                        "Mulai": _jd_stage["mulai"].strftime("%d-%m-%Y %H:%M"),
-                        "Selesai": _jd_stage["selesai"].strftime("%d-%m-%Y %H:%M"),
+                        "Mulai": (
+                            f"{_HARI_NAMA[_jd_stage['mulai'].weekday()]}, "
+                            f"{_jd_stage['mulai'].strftime('%d-%m-%Y %H:%M')}"
+                        ),
+                        "Selesai": (
+                            f"{_HARI_NAMA[_jd_stage['selesai'].weekday()]}, "
+                            f"{_jd_stage['selesai'].strftime('%d-%m-%Y %H:%M')}"
+                        ),
                         "Durasi": _jd_duration_text,
                     }
                 )
@@ -11290,7 +11296,12 @@ if _tender_active_tab == "2️⃣ Buat Jadwal":
                 f"Mulai: {_jd_t1_pv.strftime('%d-%m-%Y %H:%M')} | "
                 "Perhitungan lokal; belum dikirim ke SPSE."
             )
-            st.dataframe(_jd_rows_pv, use_container_width=True, hide_index=True)
+            st.dataframe(
+                _jd_rows_pv,
+                height=520,
+                use_container_width=True,
+                hide_index=True,
+            )
 
         jd_submit = st.button(
             f"🚀 Set Jadwal ke SPSE ({len(jd_selected)} paket)",

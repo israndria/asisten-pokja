@@ -340,14 +340,29 @@ def hitung_jadwal(tgl_mulai: datetime) -> list[dict]:
         )
     t10_selesai_kandidat = t10_mulai + timedelta(days=5)
     t10_selesai = geser_ke_hari_kerja(t10_selesai_kandidat)
-    # Jam selesai T10: selalu 08:00 dari data real (terlepas jam mulai berapa)
-    t10_selesai = t10_selesai.replace(hour=8, minute=0, second=0, microsecond=0)
+    # Default jam selesai 08:00 mengikuti data real, tetapi tidak boleh
+    # memundurkan waktu dari batas minimum 5 x 24 jam.
+    t10_selesai_jam_kerja = t10_selesai.replace(
+        hour=8, minute=0, second=0, microsecond=0
+    )
+    t10_selesai = max(t10_selesai_jam_kerja, t10_selesai_kandidat)
+    # Jika batas minimum jatuh malam hari, lanjutkan ke pagi hari kerja
+    # berikutnya agar tahap berikutnya tidak dimulai larut malam.
+    if t10_selesai.hour > 18:
+        t10_selesai = geser_ke_hari_kerja(
+            (t10_selesai + timedelta(days=1)).replace(
+                hour=8, minute=0, second=0, microsecond=0
+            ),
+            jam_mulai=8,
+        )
     hasil.append({"nama": TAHAPAN[9]["nama"], "mulai": t10_mulai, "selesai": t10_selesai})
 
     # ── Tahap 11: SPPBJ ───────────────────────────────────────────────────────
-    # Mulai: T10 selesai + 1 menit → geser ke jam kerja.
+    # Mulai tepat saat T10 selesai. Jangan gunakan geser_ke_jam_kerja di sini:
+    # jika T10 selesai setelah jam kerja, helper itu dapat memundurkan T11 ke
+    # pukul 08:00 pada tanggal yang sama.
     # Selesai: fleksibel — set 5 hari kalender, hari kerja jam 16:00.
-    t11_mulai = geser_ke_jam_kerja(t10_selesai + timedelta(minutes=1))
+    t11_mulai = t10_selesai
     t11_selesai_kandidat = t11_mulai + timedelta(days=5)
     t11_selesai = geser_ke_hari_kerja(t11_selesai_kandidat)
     t11_selesai = t11_selesai.replace(hour=16, minute=0, second=0, microsecond=0)
