@@ -36,6 +36,22 @@ def test_teknis_prompt_is_contract_driven_and_not_verification_driven(tmp_path):
     assert "Jangan menggugurkan hanya karena RKK/RK3K" in prompt
 
 
+def test_plpk_prompts_use_staged_scope(tmp_path):
+    kualifikasi = ai_evaluator._prompt_evaluasi_kualifikasi(
+        tmp_path, "Paket Uji", jenis_pl="PK"
+    )
+    teknis = ai_evaluator._prompt_evaluasi_teknis(
+        tmp_path, "Paket Uji", jenis_pl="PK"
+    )
+
+    assert "EVALUATOR_KUALIFIKASI_PL_PK.md" in kualifikasi
+    assert "TERBATAS pada administrasi dan kualifikasi" in kualifikasi
+    assert "Jangan menulis verdict Evaluasi Teknis" in kualifikasi
+    assert "Sesi 2 adalah prasyarat" in teknis or "Sesi 1 adalah prasyarat" in teknis
+    assert "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md" in teknis
+    assert "Teknis/Biaya" in teknis
+
+
 def test_biaya_prompt_stops_after_technical_failure(tmp_path):
     prompt = ai_evaluator._prompt_evaluasi_biaya(tmp_path, "Paket Uji")
 
@@ -44,6 +60,11 @@ def test_biaya_prompt_stops_after_technical_failure(tmp_path):
 
 
 def test_teknis_refuses_incomplete_download(tmp_path, monkeypatch):
+    (tmp_path / "8. Dokumen Kualifikasi" / "Kualifikasi.pdf").parent.mkdir()
+    (tmp_path / "8. Dokumen Kualifikasi" / "Kualifikasi.pdf").write_bytes(b"pdf")
+    (tmp_path / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md").write_text(
+        "Kesimpulan Kualifikasi: LULUS", encoding="utf-8"
+    )
     marker = (
         tmp_path
         / "9. Dokumen Teknis Biaya"
@@ -63,6 +84,60 @@ def test_teknis_refuses_incomplete_download(tmp_path, monkeypatch):
     assert result["status"] == "error"
     assert "belum lengkap" in result["error"]
     assert "_DOWNLOAD_TIDAK_LENGKAP.txt" in result["error"]
+
+
+def test_kualifikasi_refuses_missing_documents(tmp_path, monkeypatch):
+    monkeypatch.setattr(ai_evaluator, "_folder_paket", lambda *args, **kwargs: tmp_path)
+
+    result = ai_evaluator.evaluasi_kualifikasi_single(1, "Paket Uji", jenis_pl="PK")
+
+    assert result["status"] == "error"
+    assert "Dokumen kualifikasi belum tersedia" in result["error"]
+
+
+def test_teknis_refuses_empty_documents_even_with_sesi_one(tmp_path, monkeypatch):
+    (tmp_path / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md").write_text(
+        "Kesimpulan Kualifikasi: LULUS", encoding="utf-8"
+    )
+    (tmp_path / "9. Dokumen Teknis Biaya").mkdir()
+    monkeypatch.setattr(ai_evaluator, "_folder_paket", lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(
+        ai_evaluator, "_run_evaluator",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("AI tidak boleh dipanggil")),
+    )
+
+    result = ai_evaluator.evaluasi_teknis_single(1, "Paket Uji", jenis_pl="PK")
+
+    assert result["status"] == "error"
+    assert "Dokumen teknis/biaya belum tersedia" in result["error"]
+
+
+def test_teknis_composes_pk_final_report(tmp_path, monkeypatch):
+    (tmp_path / "8. Dokumen Kualifikasi" / "Kualifikasi.pdf").parent.mkdir()
+    (tmp_path / "8. Dokumen Kualifikasi" / "Kualifikasi.pdf").write_bytes(b"pdf")
+    (tmp_path / "9. Dokumen Teknis Biaya").mkdir()
+    (tmp_path / "9. Dokumen Teknis Biaya" / "Penawaran.pdf").write_bytes(b"pdf")
+    (tmp_path / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md").write_text(
+        "Kesimpulan Kualifikasi: LULUS", encoding="utf-8"
+    )
+    monkeypatch.setattr(ai_evaluator, "_folder_paket", lambda *args, **kwargs: tmp_path)
+
+    def fake_run(prompt, **kwargs):
+        assert "EVALUATOR_KUALIFIKASI_PL_PK.md" in prompt
+        (tmp_path / "_HASIL_EVALUASI_TEKNIS.md").write_text(
+            "Kesimpulan Teknis/Biaya: LULUS", encoding="utf-8"
+        )
+        return "Evaluasi teknis selesai"
+
+    monkeypatch.setattr(ai_evaluator, "_run_evaluator", fake_run)
+    result = ai_evaluator.evaluasi_teknis_single(1, "Paket Uji", jenis_pl="PK")
+
+    final = tmp_path / "_HASIL_EVALUASI_FINAL_PL_PK.md"
+    assert result["status"] == "ok"
+    assert result["final_file"] == str(final)
+    text = final.read_text(encoding="utf-8")
+    assert "Kesimpulan Kualifikasi: LULUS" in text
+    assert "Kesimpulan Teknis/Biaya: LULUS" in text
 
 
 def test_teknis_handles_missing_package_folder(monkeypatch):

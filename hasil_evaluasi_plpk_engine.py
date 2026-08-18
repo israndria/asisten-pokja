@@ -1,5 +1,5 @@
 """
-Engine populate sheet "Hasil Evaluasi" di BAPLJKK .xlsm via COM.
+Engine populate sheet "Hasil Evaluasi" di BAPLPK .xlsm via COM.
 
 ATURAN:
 - WAJIB COM (win32com.client) untuk write .xlsm — openpyxl.save() corrupt VBA
@@ -82,7 +82,7 @@ def _hapus_lock_orphan(xlsm_path: str, log=None) -> bool:
 
 
 def _find_xlsm(kode_paket: str) -> str:
-    """Cari file 0. BAPLJKK - *.xlsm di folder paket PL."""
+    """Cari workbook PL sesuai keluarga paket: BAPLPK atau BAPLJKK."""
     try:
         from config import sb
         r = sb().table("draft_paket_pl").select(
@@ -100,8 +100,10 @@ def _find_xlsm(kode_paket: str) -> str:
         if not folder_paket or not os.path.isdir(folder_paket):
             return ""
 
+        _jenis_pl = str(row.get("jenis_pl") or "PK").upper()
+        _workbook_prefix = "0. BAPLJKK" if _jenis_pl == "JKK" else "0. BAPLPK"
         for f in os.listdir(folder_paket):
-            if (f.startswith("0. BAPLJKK") and f.endswith(".xlsm")
+            if (f.startswith(_workbook_prefix) and f.endswith(".xlsm")
                     and ".backup" not in f and not f.startswith("~$")):
                 return os.path.join(folder_paket, f)
         return ""
@@ -296,13 +298,14 @@ def populate_hasil_evaluasi_pl(
 
     # 1. Temukan path .xlsm
     xlsm_path = _find_xlsm(kode_paket)
+    _workbook_label = "BAPLPK"
     if not xlsm_path:
-        return {"ok": False, "pesan": "File BAPLJKK .xlsm tidak ditemukan di folder paket.", "rows_written": 0}
+        return {"ok": False, "pesan": f"File {_workbook_label} .xlsm tidak ditemukan di folder paket.", "rows_written": 0}
 
     # 2. Cek Excel running / file locked
     # Lock ada DAN Excel jalan = beneran dibuka user → tolak
     if _excel_running() and _xlsm_locked(xlsm_path):
-        return {"ok": False, "pesan": "Excel sedang berjalan + file BAPLJKK terkunci. Tutup Excel dulu.", "rows_written": 0}
+        return {"ok": False, "pesan": f"Excel sedang berjalan + file {_workbook_label} terkunci. Tutup Excel dulu.", "rows_written": 0}
     # Lock orphan (Excel mati tapi lock nyangkut dari crash sebelumnya) → hapus otomatis
     if _xlsm_locked(xlsm_path):
         _hapus_lock_orphan(xlsm_path, _log)

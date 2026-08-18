@@ -24,10 +24,16 @@ def test_evaluasi_biaya_requires_completed_technical_session(
 
 
 def test_evaluasi_biaya_verifies_markdown_output(tmp_path, monkeypatch):
+    (tmp_path / "8. Dokumen Kualifikasi").mkdir()
+    (tmp_path / "8. Dokumen Kualifikasi" / "Kualifikasi.pdf").write_bytes(b"pdf")
+    (tmp_path / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md").write_text(
+        "Kesimpulan Kualifikasi: LULUS", encoding="utf-8"
+    )
     (tmp_path / "_HASIL_EVALUASI_TEKNIS.md").write_text(
         "Kesimpulan teknis: LULUS", encoding="utf-8"
     )
     (tmp_path / "9. Dokumen Teknis Biaya").mkdir()
+    (tmp_path / "9. Dokumen Teknis Biaya" / "Penawaran.pdf").write_bytes(b"pdf")
     sop = tmp_path / "EVALUATOR_BIAYA_PL_JKK.md"
     sop.write_text("SOP uji", encoding="utf-8")
 
@@ -47,6 +53,7 @@ def test_evaluasi_biaya_verifies_markdown_output(tmp_path, monkeypatch):
 
     assert result["status"] == "ok"
     assert Path(result["file"]).name == "_HASIL_EVALUASI_BIAYA.md"
+    assert Path(result["final_file"]).name == "_HASIL_EVALUASI_FINAL_PL_JKK.md"
 
 
 def test_evaluasi_biaya_rejects_invalid_technical_output(tmp_path, monkeypatch):

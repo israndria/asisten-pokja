@@ -41,6 +41,105 @@ DOMAIN_SOP = SOP_ROOT / "SOP_ISI_REVIU_DPP_DOMAIN.md"
 PATCH_MANUAL_SOP = CORE_SOP
 EVALUASI_BIAYA_PLJKK_SOP = SOP_ROOT / "EVALUATOR_BIAYA_PL_JKK.md"
 
+_EVIDENCE_EXTENSIONS = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv",
+    ".xlsm", ".docm", ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png",
+    ".bmp", ".tiff",
+}
+
+
+def _stage_evidence_files(root: Path) -> list[Path]:
+    """Return dokumen nyata pada satu stage; marker/hasil AI tidak dihitung."""
+    if not root.is_dir():
+        return []
+    files = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name.startswith("~$"):
+            continue
+        if path.suffix.lower() not in _EVIDENCE_EXTENSIONS:
+            continue
+        if path.name.startswith("_") or "_teks_ekstrak" in path.parts:
+            continue
+        files.append(path)
+    return sorted(files)
+
+
+def _stage_document_status(folder: Path, stage_names: tuple[str, ...]) -> dict:
+    """Validasi dokumen stage, termasuk marker download yang belum lengkap."""
+    roots = [folder / name for name in stage_names if (folder / name).is_dir()]
+    markers = sorted(
+        marker
+        for root in roots
+        for marker in root.rglob("_DOWNLOAD_TIDAK_LENGKAP.txt")
+        if marker.is_file()
+    )
+    files = sorted({path for root in roots for path in _stage_evidence_files(root)})
+    return {
+        "available": bool(files),
+        "ok": bool(files) and not markers,
+        "roots": roots,
+        "files": files,
+        "markers": markers,
+    }
+
+
+def _valid_stage_output(path: Path) -> bool:
+    """Output AI wajib non-empty dan tidak berhenti dengan ERROR."""
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return False
+    return not any(line.lstrip().upper().startswith("ERROR") for line in text.splitlines())
+
+
+def teknis_biaya_document_status(folder: Path) -> dict:
+    """Gate dokumen Sesi 2; dukung nama folder aktif dan struktur legacy."""
+    return _stage_document_status(
+        folder,
+        ("9. Dokumen Teknis Biaya", "2. Dokumen Teknis Biaya"),
+    )
+
+
+def _compose_final_evaluasi(folder: Path, jenis_pl: str) -> Path:
+    """Gabungkan hasil stage menjadi laporan final yang dapat diaudit."""
+    kualifikasi = folder / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md"
+    teknis = folder / "_HASIL_EVALUASI_TEKNIS.md"
+    if not _valid_stage_output(kualifikasi):
+        raise RuntimeError("Hasil Sesi 1 tidak valid; laporan final tidak dibuat.")
+    if not _valid_stage_output(teknis):
+        raise RuntimeError("Hasil Sesi 2 tidak valid; laporan final tidak dibuat.")
+
+    biaya = folder / "_HASIL_EVALUASI_BIAYA.md"
+    parts = [
+        f"# HASIL EVALUASI FINAL {'PL PK' if jenis_pl == 'PK' else 'PL JKK'}",
+        "",
+        "> Laporan ini disusun engine dari hasil evaluasi bertahap. "
+        "Jangan menganggap status tahap yang belum tersedia sebagai hasil evaluasi.",
+        "",
+        "## Sesi 1 — Administrasi dan Kualifikasi",
+        "",
+        kualifikasi.read_text(encoding="utf-8", errors="replace").strip(),
+        "",
+        "## Sesi 2 — Teknis/Biaya" if jenis_pl == "PK" else "## Sesi 2 — Teknis",
+        "",
+        teknis.read_text(encoding="utf-8", errors="replace").strip(),
+    ]
+    if jenis_pl == "JKK" and _valid_stage_output(biaya):
+        parts.extend([
+            "",
+            "## Sesi 3 — Biaya",
+            "",
+            biaya.read_text(encoding="utf-8", errors="replace").strip(),
+        ])
+    output = folder / (
+        "_HASIL_EVALUASI_FINAL_PL_PK.md"
+        if jenis_pl == "PK"
+        else "_HASIL_EVALUASI_FINAL_PL_JKK.md"
+    )
+    output.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+    return output
+
 
 def _folder_paket(nomor_urut, nama_paket: str, jenis_pl="JKK", kode_paket: str = None, is_ulang: bool = False) -> Path:
     """Cari folder paket. Prioritas: parse_kak_pl._resolve_folder_pl (akurat, handle is_ulang)."""
@@ -398,7 +497,15 @@ ERROR spesifik dan jangan mengarang fakta.
 Mulai sekarang."""
 
 
-def _prompt_evaluasi_kualifikasi(folder_paket: Path, nama_paket: str) -> str:
+def _prompt_evaluasi_kualifikasi(
+    folder_paket: Path, nama_paket: str, jenis_pl: str = "JKK"
+) -> str:
+    evaluator_sop = (
+        "EVALUATOR_KUALIFIKASI_PL_PK.md"
+        if jenis_pl == "PK"
+        else "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md"
+    )
+    workbook_label = "BAPLPK" if jenis_pl == "PK" else "BAPLJKK"
     return f"""Lakukan evaluasi administrasi dan kualifikasi (Sesi 1) untuk paket berikut.
 
 Nama paket: {nama_paket}
@@ -407,10 +514,15 @@ Folder paket: {folder_paket}
 ATURAN AKURASI — WAJIB:
 - Dokpil/LDP paket adalah sumber aturan utama. Baca jenis kontrak dan syarat
   paket; jangan menganggap kontrak Lumsum dari nama file SOP.
-- Baca PROTOKOL_EVALUASI_AI.md DAN
-  EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md. Nama file lama dipertahankan hanya
-  untuk kompatibilitas.
-- Gunakan checklist SPSE, dokumen pendukung, dan workbook 0. BAPLJKK*.xlsm
+- Baca PROTOKOL_EVALUASI_AI.md DAN {evaluator_sop}. Nama file lama dipertahankan
+  hanya untuk kompatibilitas.
+- Sesi ini TERBATAS pada administrasi dan kualifikasi berdasarkan dokumen di
+  "8. Dokumen Kualifikasi". Jangan menulis verdict Evaluasi Teknis, Harga,
+  atau status akhir paket pada Sesi 1. Peralatan/personel yang tercantum di
+  dokumen kualifikasi boleh dicatat sebagai data kualifikasi, tetapi evaluasi
+  teknis penawaran baru dilakukan pada Sesi 2 setelah dokumen teknis/biaya
+  tersedia nyata.
+- Gunakan checklist SPSE, dokumen pendukung, dan workbook 0. {workbook_label}*.xlsm
   sheet Hasil Evaluasi/@ Master Data sebagai satu rangkaian bukti.
 - Jangan meminta user memverifikasi ulang bukti yang sudah ada. KSWP VALID,
   perusahaan baru, dan ketiadaan akta perubahan yang sudah tercatat harus
@@ -428,11 +540,11 @@ ATURAN EFISIENSI:
 
 Langkah:
 1. Baca _INDEX.txt di "8. Dokumen Kualifikasi/_teks_ekstrak" → list penyedia + file .txt mereka.
-2. Baca PROTOKOL_EVALUASI_AI.md dan
-   EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md di subfolder
+2. Baca PROTOKOL_EVALUASI_AI.md dan {evaluator_sop} di subfolder
    "5. Evaluator Kualifikasi & Teknis".
 3. Untuk tiap penyedia: Read file .txt-nya. Evaluasi dari bagian SUMBER UTAMA (checklist). Cek silang ke DOKUMEN PENDUKUNG hanya jika ada poin yang perlu konfirmasi.
-4. Tulis output ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
+4. Tulis output Sesi 1 ke _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT folder paket.
+   Kesimpulan hanya boleh menyatakan status Administrasi dan Kualifikasi.
 5. Output WAJIB dalam Bahasa Indonesia.
 
 Catatan: jika subfolder "_teks_ekstrak" TIDAK ADA, baru fallback baca PDF di "8. Dokumen Kualifikasi" secara selektif (Glob dulu, baca checklist_kualifikasi*.pdf yang kecil dulu).
@@ -440,8 +552,17 @@ Catatan: jika subfolder "_teks_ekstrak" TIDAK ADA, baru fallback baca PDF di "8.
 Mulai sekarang."""
 
 
-def _prompt_evaluasi_teknis(folder_paket: Path, nama_paket: str) -> str:
-    return f"""Lakukan evaluasi teknis (Sesi 2) untuk paket berikut.
+def _prompt_evaluasi_teknis(
+    folder_paket: Path, nama_paket: str, jenis_pl: str = "JKK"
+) -> str:
+    evaluator_sop = (
+        "EVALUATOR_KUALIFIKASI_PL_PK.md"
+        if jenis_pl == "PK"
+        else "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md"
+    )
+    sesi_label = "Teknis/Biaya" if jenis_pl == "PK" else "Teknis"
+    scope_label = "teknis dan biaya" if jenis_pl == "PK" else "teknis"
+    return f"""Lakukan evaluasi {scope_label} (Sesi 2) untuk paket berikut.
 
 Nama paket: {nama_paket}
 Folder paket: {folder_paket}
@@ -450,8 +571,10 @@ PENTING:
 - Jangan mengarang atau membuat file yang tidak ada. Jika _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md tidak ditemukan → output "ERROR: Sesi 1 belum selesai." dan berhenti.
 - Gunakan Dokpil/LDP sebagai sumber aturan utama dan deteksi jenis kontrak.
   Jangan hardcode Lumsum.
-- Baca PROTOKOL_EVALUASI_AI.md DAN
-  EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md.
+- Baca PROTOKOL_EVALUASI_AI.md DAN {evaluator_sop}.
+- Sesi 1 adalah prasyarat. Jangan menggantikan atau mengulang verdict
+  kualifikasi dari sumber lain; baca _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md dan
+  cantumkan ringkasannya pada laporan gabungan.
 - Pisahkan gate SPSE dari verdict dokumen. Jika dokumen teknis tersedia, lakukan
   evaluasi penuh dan tetapkan LULUS/GUGUR walaupun gate SPSE dicatat terpisah.
 - Bukti SKK asli atau overlap personel yang menurut Dokpil baru diperiksa saat
@@ -465,20 +588,30 @@ membulatkan kekurangan durasi.
 - Bedakan dokumen wajib penawaran, substansi/rencana proposal, dan produk
 kontrak final. Jangan menggugurkan hanya karena RKK/RK3K, RAB, TKDN,
 spesifikasi, gambar, atau laporan final belum tersedia saat penawaran.
-- Jika dokumen teknis memang belum tersedia, tulis laporan teknis dengan status PENDING
-  dan alasan spesifik; jangan berhenti tanpa membuat _HASIL_EVALUASI_TEKNIS.md.
+- Engine hanya memanggil Sesi 2 setelah dokumen teknis/biaya nyata tersedia.
+  Jika setelah gate ini dokumen tetap tidak dapat dibaca, tulis ERROR spesifik;
+  jangan membuat verdict teknis atau biaya dari asumsi.
+- Dokumen yang berada di folder yang keliru bukan otomatis gugur. Cari seluruh
+  file pada folder paket, terutama "8. Dokumen Kualifikasi" dan
+  "9. Dokumen Teknis Biaya" (atau legacy "2. Dokumen Teknis Biaya"); bila substansinya valid, evaluasi pada tahap yang
+  relevan, tandai salah penempatan sebagai catatan audit/nonconformity.
+- Untuk PL PK, evaluasi juga unsur biaya yang benar-benar tersedia di folder
+  "9. Dokumen Teknis Biaya" dan HPS/Dokpil; jangan membuat kesimpulan harga
+  bila dokumen biaya belum tersedia.
 - Glob dulu untuk list file dan gunakan anchor untuk navigasi, tetapi kualitas
   keputusan mengalahkan hemat token. Jangan berhenti di halaman awal jika bukti
   wajib berada di halaman lain.
 - Output WAJIB dalam Bahasa Indonesia.
 
 Langkah:
-1. Baca PROTOKOL_EVALUASI_AI.md dan
-   EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md di subfolder
+1. Baca PROTOKOL_EVALUASI_AI.md dan {evaluator_sop} di subfolder
    "5. Evaluator Kualifikasi & Teknis".
 2. Cek _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md di ROOT. Jika tidak ada → stop.
-3. Glob subfolder "9. Dokumen Teknis Biaya" untuk list file penyedia.
-4. Output: _HASIL_EVALUASI_TEKNIS.md di ROOT folder paket.
+3. Glob subfolder "9. Dokumen Teknis Biaya" atau legacy "2. Dokumen Teknis Biaya"
+   untuk list file penyedia.
+4. Output: _HASIL_EVALUASI_TEKNIS.md (Sesi 2 {sesi_label}) di ROOT folder paket.
+   Setelah AI selesai, engine akan menggabungkan hasil Sesi 1 dan Sesi 2 menjadi
+   _HASIL_EVALUASI_FINAL_PL_PK.md atau _HASIL_EVALUASI_FINAL_PL_JKK.md.
 
 Mulai sekarang."""
 
@@ -723,24 +856,53 @@ def evaluasi_kualifikasi_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
+    dokumen = _stage_document_status(folder, ("8. Dokumen Kualifikasi",))
+    if dokumen["markers"]:
+        detail = "; ".join(str(path.relative_to(folder)) for path in dokumen["markers"])
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": f"Dokumen kualifikasi belum lengkap. Marker: {detail}",
+        }
+    if not dokumen["available"]:
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": "Dokumen kualifikasi belum tersedia; download dan parse dulu.",
+        }
+    hasil_kualifikasi = folder / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md"
+    sebelum = hasil_kualifikasi.stat().st_mtime_ns if hasil_kualifikasi.exists() else 0
     try:
-        prompt = _prompt_evaluasi_kualifikasi(folder, nama_paket)
+        prompt = _prompt_evaluasi_kualifikasi(folder, nama_paket, jenis_pl=jenis_pl)
         # Hanya grant subfolder relevan + root (untuk tulis output .md)
         sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
         sub_dokkual = folder / "8. Dokumen Kualifikasi"
         sub_teks = sub_dokkual / "_teks_ekstrak"  # teks hasil pre-extract (hemat token)
         dirs = [d for d in [folder, sub_protokol, sub_dokkual, sub_teks] if d.exists()]
         output = _run_evaluator(prompt, model=model, add_dirs=dirs, engine=engine)
-        return {"nama": nama_paket, "status": "ok", "output": output, "error": ""}
+        sesudah = hasil_kualifikasi.stat().st_mtime_ns if hasil_kualifikasi.exists() else 0
+        if sesudah <= sebelum or not _valid_stage_output(hasil_kualifikasi):
+            return {
+                "nama": nama_paket,
+                "status": "error",
+                "output": output,
+                "error": "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md belum dibuat/diperbarui atau berstatus ERROR.",
+            }
+        return {
+            "nama": nama_paket,
+            "status": "ok",
+            "output": output,
+            "error": "",
+            "file": str(hasil_kualifikasi),
+        }
     except Exception as e:
-        return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
+        return {"nama": nama_paket, "status": "error", "output": locals().get("output", ""), "error": str(e)}
 
 
 def _download_teknis_tidak_lengkap(folder: Path) -> list[Path]:
-    root = folder / "9. Dokumen Teknis Biaya"
-    if not root.is_dir():
-        return []
-    return sorted(root.rglob("_DOWNLOAD_TIDAK_LENGKAP.txt"))
+    return teknis_biaya_document_status(folder)["markers"]
 
 
 def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jenis_pl="JKK", is_ulang=False, engine=DEFAULT_ENGINE) -> dict:
@@ -748,7 +910,16 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
     folder = _folder_paket(nomor_urut, nama_paket, jenis_pl=jenis_pl, is_ulang=is_ulang)
     if not folder:
         return {"nama": nama_paket, "status": "error", "output": "", "error": f"Folder paket tidak ditemukan (nomor {nomor_urut})"}
-    incomplete = _download_teknis_tidak_lengkap(folder)
+    hasil_kualifikasi = folder / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md"
+    if not _valid_stage_output(hasil_kualifikasi):
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": "Sesi 1 belum selesai: _HASIL_EVALUASI_ADMIN_KUALIFIKASI.md belum valid.",
+        }
+    dokumen = teknis_biaya_document_status(folder)
+    incomplete = dokumen["markers"]
     if incomplete:
         detail = "; ".join(str(path.relative_to(folder)) for path in incomplete)
         return {
@@ -760,14 +931,24 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
                 f"sebelum evaluasi AI. Marker: {detail}"
             ),
         }
+    if not dokumen["available"]:
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": (
+                "Dokumen teknis/biaya belum tersedia. Download dari SPSE setelah "
+                "evaluasi kualifikasi, lalu jalankan Sesi 2."
+            ),
+        }
     hasil_teknis = folder / "_HASIL_EVALUASI_TEKNIS.md"
     sebelum = hasil_teknis.stat().st_mtime_ns if hasil_teknis.exists() else 0
     try:
-        prompt = _prompt_evaluasi_teknis(folder, nama_paket)
+        prompt = _prompt_evaluasi_teknis(folder, nama_paket, jenis_pl=jenis_pl)
         # Hanya grant subfolder relevan + root (untuk baca hasil sesi 1 + tulis output .md)
         sub_protokol = folder / "5. Evaluator Kualifikasi & Teknis"
         sub_dokteknis = folder / "9. Dokumen Teknis Biaya"
-        dirs = [d for d in [folder, sub_protokol, sub_dokteknis] if d.exists()]
+        dirs = [d for d in [folder, sub_protokol, sub_dokteknis, *dokumen["roots"]] if d.exists()]
         output = _run_evaluator(prompt, model=model, add_dirs=dirs, engine=engine)
         sesudah = hasil_teknis.stat().st_mtime_ns if hasil_teknis.exists() else 0
         if sesudah <= sebelum:
@@ -778,17 +959,22 @@ def evaluasi_teknis_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jen
                 "error": "_HASIL_EVALUASI_TEKNIS.md belum dibuat/diperbarui.",
             }
         isi_teknis = hasil_teknis.read_text(encoding="utf-8", errors="replace").strip()
-        if not isi_teknis or any(
-            line.lstrip().upper().startswith("ERROR")
-            for line in isi_teknis.splitlines()
-        ):
+        if not isi_teknis or not _valid_stage_output(hasil_teknis):
             return {
                 "nama": nama_paket,
                 "status": "error",
                 "output": output,
                 "error": "Output evaluasi teknis kosong atau berstatus ERROR.",
             }
-        return {"nama": nama_paket, "status": "ok", "output": output, "error": "", "file": str(hasil_teknis)}
+        final_path = _compose_final_evaluasi(folder, jenis_pl)
+        return {
+            "nama": nama_paket,
+            "status": "ok",
+            "output": output,
+            "error": "",
+            "file": str(hasil_teknis),
+            "final_file": str(final_path),
+        }
     except Exception as e:
         return {"nama": nama_paket, "status": "error", "output": "", "error": str(e)}
 
@@ -832,6 +1018,22 @@ def evaluasi_biaya_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jeni
             "output": "",
             "error": "Sesi 2 belum valid: hasil evaluasi teknis kosong atau ERROR.",
         }
+    dokumen = teknis_biaya_document_status(folder)
+    if dokumen["markers"]:
+        detail = "; ".join(str(path.relative_to(folder)) for path in dokumen["markers"])
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": f"Dokumen teknis/biaya belum lengkap. Marker: {detail}",
+        }
+    if not dokumen["available"]:
+        return {
+            "nama": nama_paket,
+            "status": "error",
+            "output": "",
+            "error": "Dokumen teknis/biaya belum tersedia; download dulu sebelum evaluasi biaya.",
+        }
     if not EVALUASI_BIAYA_PLJKK_SOP.is_file():
         return {
             "nama": nama_paket,
@@ -847,7 +1049,7 @@ def evaluasi_biaya_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jeni
         sub_dokteknis = folder / "9. Dokumen Teknis Biaya"
         dirs = [
             d
-            for d in [folder, sub_dokteknis, EVALUASI_BIAYA_PLJKK_SOP.parent]
+            for d in [folder, sub_dokteknis, *dokumen["roots"], EVALUASI_BIAYA_PLJKK_SOP.parent]
             if d.exists()
         ]
         output = _run_evaluator(
@@ -880,6 +1082,7 @@ def evaluasi_biaya_single(nomor_urut, nama_paket: str, model=DEFAULT_MODEL, jeni
             "output": output,
             "error": "",
             "file": str(hasil_biaya),
+            "final_file": str(_compose_final_evaluasi(folder, jenis_pl)),
         }
     except Exception as e:
         return {

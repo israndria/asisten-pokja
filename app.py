@@ -8572,7 +8572,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _he_pl = _he_pl_pk
 
         st.markdown("## Download Dokumen Kualifikasi — Pengadaan Langsung")
-        st.caption("Download dok kualifikasi peserta dari SPSE + populate sheet Hasil Evaluasi di BAPLJKK.")
+        st.caption("Download dok kualifikasi peserta dari SPSE + populate sheet Hasil Evaluasi di BAPLPK.")
 
         # Loader sudah cache 60 detik; tetap revalidasi gate fisik setiap render.
         # Key dipisah dari JKK agar pergantian mode tidak membawa row lama.
@@ -8786,7 +8786,41 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.info("Centang minimal 1 paket di kiri.")
                 else:
                     st.markdown(f"**{_n_paket8} paket** dipilih")
-                    st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
+                    # Staged gate PLPK: dokumen nyata + hasil Sesi 1 wajib ada.
+                    import ai_evaluator as _heval8pk
+                    _spse_tek_ready = True
+                    _ai_teknis_ready_pk = True
+                    for _r_ready8 in _pl8_selected_rows:
+                        _folder_ready8 = _heval8pk._folder_paket(
+                            _r_ready8.get("nomor_urut"), _r_ready8.get("nama_paket", ""),
+                            jenis_pl="PK", is_ulang=bool(_r_ready8.get("is_ulang")),
+                        )
+                        _dok_tek_ready8 = bool(
+                            _folder_ready8
+                            and _heval8pk.teknis_biaya_document_status(_folder_ready8)["ok"]
+                        )
+                        _kual_ready8 = bool(
+                            _folder_ready8
+                            and _heval8pk._valid_stage_output(
+                                _folder_ready8 / "_HASIL_EVALUASI_ADMIN_KUALIFIKASI.md"
+                            )
+                        )
+                        _spse_tek_ready = _spse_tek_ready and _dok_tek_ready8
+                        _ai_teknis_ready_pk = _ai_teknis_ready_pk and _dok_tek_ready8 and _kual_ready8
+                    for _staged_key8 in (
+                        "pl8_do_eval_admin", "pl8_do_eval_teknis", "pl8_do_eval_harga",
+                    ):
+                        st.session_state.setdefault(_staged_key8, False)
+                    st.session_state.setdefault("pl8pk_do_ai_kual", True)
+                    st.session_state.setdefault("pl8pk_do_ai_teknis", False)
+                    if not _spse_tek_ready:
+                        st.session_state["pl8_do_eval_teknis"] = False
+                        st.session_state["pl8_do_eval_harga"] = False
+                    if not _ai_teknis_ready_pk:
+                        st.session_state["pl8pk_do_ai_teknis"] = False
+                    st.caption("Urutan staged: Admin/Kualifikasi → download teknis/biaya → evaluasi Teknis/Biaya.")
+                    if not _spse_tek_ready:
+                        st.info("Submit Teknis/Harga dan Sesi 2 AI dikunci sampai dokumen teknis/biaya nyata tersedia.")
                     _do_eval_admin = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval_admin")
                     _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=True, key="pl8_do_eval_teknis")
                     _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=True, key="pl8_do_eval_harga")
@@ -8814,6 +8848,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _do_extract_teks8pk = st.checkbox("📝 Extract teks kualifikasi (.txt) dari folder '8. Dokumen Kualifikasi' — hemat token sebelum evaluasi AI", value=False, key="pl8pk_do_extract_teks")
                     _ai_eval_engine_pk = "codex"
                     _ai_eval_model_pk = None
+                    st.caption("Sesi 1 hanya Administrasi + Kualifikasi. Sesi 2 mencakup Teknis/Biaya setelah dokumen tersedia.")
+                    if not _ai_teknis_ready_pk:
+                        st.info("Selesaikan Sesi 1 dan download dokumen teknis/biaya sebelum menjalankan evaluasi Sesi 2.")
                     st.caption("Engine: Codex CLI · Model terkunci: gpt-5.6-luna · Reasoning: medium")
                     _do_ai_kualifikasi_pk = st.checkbox("⚖️ Evaluasi Admin+Kualifikasi (Sesi 1) via AI", value=True, key="pl8pk_do_ai_kual")
                     _do_ai_teknis_pk = st.checkbox("🔬 Evaluasi Teknis (Sesi 2) via AI", value=True, key="pl8pk_do_ai_teknis")
@@ -8838,10 +8875,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 except Exception as _etk8pk_e:
                                     st.warning(f"⚠ Extract teks {_pl_label(_r8pk)}: {_etk8pk_e}")
                         _ai_jobs_pk = [{"nomor_urut": r.get("nomor_urut"), "nama_paket": r.get("nama_paket",""), "is_ulang": bool(r.get("is_ulang"))} for r in _pl8_selected_rows]
+                        _ai_label_map_pk = {r.get("nama_paket", ""): _pl_label(r) for r in _pl8_selected_rows}
                         if _do_ai_kualifikasi_pk:
                             st.info("⚖️ Menjalankan evaluasi Admin+Kualifikasi...")
                             _res_kual_pk = _heval8pk.evaluasi_bulk(_ai_jobs_pk, jenis="kualifikasi", model=_ai_eval_model_pk, max_workers=3, jenis_pl="PK", engine=_ai_eval_engine_pk)
-                            _ai_label_map_pk = {r.get("nama_paket", ""): _pl_label(r) for r in _pl8_selected_rows}
                             for _rk_pk in _res_kual_pk:
                                 _rk_pk_name = _ai_label_map_pk.get(_rk_pk.get("nama"), _rk_pk.get("nama", "-"))
                                 if _rk_pk["status"] == "ok":
@@ -8892,16 +8929,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _folder8      = _ke_pl.resolve_folder_paket_pl(_kpl8)
                                 _folder_paket8 = _folder8.get("pesan", "") if _folder8.get("ok") else ""
 
-                                # Evaluasi LULUS
-                                if _do_eval_admin or _do_eval_teknis or _do_eval_harga:
+                                # Evaluasi LULUS — Sesi Admin/Kualifikasi dahulu.
+                                if _do_eval_admin:
                                     _pb8.progress((_i8 + 0.3) / _n_paket8, text=f"{_nama8} — submit evaluasi")
                                     _lcb8(f"--- Submit evaluasi LULUS (Admin:{_do_eval_admin}, Teknis:{_do_eval_teknis}, Harga:{_do_eval_harga}) ---")
                                     _eval8 = _eval_pl.evaluasi_batch_lulus(
                                         _kpl8,
                                         admin=_do_eval_admin,
                                         kualifikasi=_do_eval_admin,
-                                        teknis=_do_eval_teknis,
-                                        harga=_do_eval_harga,
+                                        teknis=False,
+                                        harga=False,
                                         progress_cb=_lcb8
                                     )
                                     _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
@@ -8923,6 +8960,27 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             )
                                             _lcb8(f"{'[OK]' if _res_tb8['ok'] else '[GAGAL]'} {_res_tb8['pesan']}")
 
+                                # Sesi Teknis/Harga dijalankan setelah download selesai.
+                                if _do_eval_teknis or _do_eval_harga:
+                                    _dok_tek_after8 = _heval8pk.teknis_biaya_document_status(
+                                        pathlib.Path(_folder_paket8)
+                                    ) if _folder_paket8 else {"available": False}
+                                    if not _dok_tek_after8.get("ok"):
+                                        _lcb8("[SKIP] Dokumen teknis/biaya belum lengkap; submit Teknis/Harga dibatalkan.")
+                                    else:
+                                        _lcb8("--- Submit evaluasi Teknis/Harga setelah download ---")
+                                        _eval8_post = _eval_pl.evaluasi_batch_lulus(
+                                            _kpl8,
+                                            admin=False,
+                                            kualifikasi=False,
+                                            teknis=_do_eval_teknis,
+                                            harga=_do_eval_harga,
+                                            progress_cb=_lcb8,
+                                        )
+                                        _lcb8(
+                                            f"{'[OK]' if _eval8_post.get('ok') else '[SEBAGIAN GAGAL]'} "
+                                            f"{_eval8_post['ringkasan']}"
+                                        )
                                 # Tulis penawaran ke sheet 6. Penawaran
                                 if _do_penawaran8:
                                     if not _folder_paket8:
