@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from config import sb as _sb
-from pl_engine import is_paket_ditarik
+from pl_engine import is_paket_ditarik, _safe_download_name_for_folder
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 
@@ -768,13 +768,15 @@ def download_dokumen_paket_pl(
     }
 
     def _unique_dst(folder, fname):
+        fname = _safe_download_name_for_folder(folder, fname)
         dst = os.path.join(folder, fname)
         if not os.path.exists(dst):
             return dst
         base, ext = os.path.splitext(fname)
         n = 2
         while True:
-            candidate = os.path.join(folder, f"{base}_{n}{ext}")
+            candidate_name = _safe_download_name_for_folder(folder, f"{base}_{n}{ext}")
+            candidate = os.path.join(folder, candidate_name)
             if not os.path.exists(candidate):
                 return candidate
             n += 1
@@ -868,6 +870,10 @@ def download_dokumen_paket_pl(
                         clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
                         if clean:
                             fname = clean
+                    original_fname = fname
+                    fname = _safe_download_name_for_folder(folder_dl, fname)
+                    if fname != original_fname:
+                        log(f"    ⚠️ nama file dipendekkan ({len(original_fname)}→{len(fname)} karakter): {fname}")
                     dst = _unique_dst(folder_dl, fname)
                     with open(dst, "wb") as f:
                         for chunk in r_dl.iter_content(65536):

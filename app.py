@@ -2928,7 +2928,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     import time as _pl_time
                     _pl_t0 = _pl_time.perf_counter()
                     _pl_bp = st.progress(0.0)
-                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0d", expanded=True)
+                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0s", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}
@@ -6315,7 +6315,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     import time as _pl_time
                     _pl_t0 = _pl_time.perf_counter()
                     _pl_bp = st.progress(0.0)
-                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0d", expanded=True)
+                    _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0s", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
                     _pl_ok, _pl_fail = 0, 0
                     _pl_bulk_semua_log = {}

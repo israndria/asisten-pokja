@@ -12,9 +12,11 @@ import spse_browser
 from pl_ui_helpers import (
     _copy_pl_evaluator_files,
     _engine_for_jenis_pl,
+    _fmt_elapsed,
     _pl_download_success,
     _pl_io_success,
 )
+from pl_engine import _safe_download_name_for_folder
 
 
 def test_ubah_metode_cdp_includes_submit_field_and_retries_transient_503(monkeypatch):
@@ -40,6 +42,31 @@ def test_bulk_worker_resolves_engine_by_family():
     assert _engine_for_jenis_pl("PK").__name__ == "pl_engine_plpk"
     assert _engine_for_jenis_pl("JKK").__name__ == "pl_engine"
     assert _engine_for_jenis_pl("").__name__ == "pl_engine"
+
+
+def test_download_filename_is_bounded_for_windows_path_limit(tmp_path):
+    folder = tmp_path / ("paket-" + "x" * 80)
+    folder.mkdir()
+    original = "gambar " + "Pengaspalan Jalan Samping Gedung Ruhuy Rahayu " * 4 + ".pdf"
+
+    safe = _safe_download_name_for_folder(str(folder), original)
+
+    assert safe.endswith(".pdf")
+    assert safe != original
+    assert len(str(folder / safe)) <= 240
+    assert len(safe) < len(original)
+
+
+def test_download_filename_reports_folder_path_without_budget(tmp_path):
+    folder = tmp_path / ("paket-" + "x" * 80)
+    folder.mkdir()
+
+    with pytest.raises(OSError, match="Folder path terlalu panjang"):
+        _safe_download_name_for_folder(str(folder), "dokumen.pdf", limit=len(str(folder)) + 1)
+
+
+def test_elapsed_uses_seconds_suffix_not_ambiguous_day_suffix():
+    assert _fmt_elapsed(8 * 60 + 21) == "8m 21s"
 
 
 def test_io_false_when_setup_created_but_output_missing():
@@ -201,6 +228,59 @@ def test_download_edit_page_login_link_does_not_hide_nota_dinas(monkeypatch, tmp
 
     assert any(path.endswith("8. ND PPK.pdf") for path in result["ok"])
     assert not any("server mengembalikan halaman login" in error for error in result["error"])
+
+
+@pytest.mark.parametrize("engine", [pl_engine, pl_engine_plpk])
+def test_download_shortens_long_content_disposition_filename(monkeypatch, tmp_path, engine):
+    long_name = "gambar " + "Perbaikan Jalan Perumahan Desa Tapin Tengah " * 5 + ".pdf"
+    folder_name = "p" * max(1, 180 - len(str(tmp_path)) - 1)
+    target = tmp_path / folder_name
+    target.mkdir()
+
+    class _Response:
+        def __init__(self, url, text="", headers=None):
+            self.url = url
+            self.status_code = 200
+            self.text = text
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _chunk_size):
+            return iter((b"%PDF-1.4",))
+
+        def close(self):
+            pass
+
+    def fake_get(url, **_kwargs):
+        if "/dl/" in url:
+            return _Response(
+                url,
+                headers={
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": f'attachment; filename="{long_name}"',
+                },
+            )
+        if url.endswith("/dokumennontender/X/spek"):
+            return _Response(
+                url,
+                text=(
+                    f'<a href="/tapinkab/dl/long-1">{long_name}</a>'
+                    f'<a href="/tapinkab/dl/long-2">{long_name}</a>'
+                ),
+            )
+        return _Response(url, text="<html></html>")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    result = engine.download_dokumen_paket_pl(
+        "X", str(target), cookie_str="SPSE_SESSION=test", skip_merge=True
+    )
+
+    assert result["error"] == []
+    assert len(result["ok"]) == 2
+    assert len({path for path in result["ok"]}) == 2
+    assert all(len(path) <= 240 for path in result["ok"])
 
 
 def test_pk_download_force_clean_is_scoped_to_document_subfolders(monkeypatch, tmp_path):

@@ -44,7 +44,7 @@ def _fmt_elapsed(seconds):
     seconds = int(seconds)
     m, sec = divmod(seconds, 60)
     h, m = divmod(m, 60)
-    return f"{h}j {m}m {sec}d" if h else f"{m}m {sec}d"
+    return f"{h}j {m}m {sec}s" if h else f"{m}m {sec}s"
 
 def _fmt_step_seconds(seconds):
     return f"{seconds:.1f}s"
@@ -227,7 +227,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 cfg["pokja_root"],
                 jenis_pl,
             )
-            log(f"📄 Evaluator: {len(_copied)} file disalin (0.+5.)" if _copied else "⚠ Evaluator: tidak ada file ditemukan di root POKJA")
+            log(f"📄 Evaluator: {len(_copied)} file disalin" if _copied else "⚠ Evaluator: tidak ada file ditemukan di root POKJA")
             _step("evaluator", _t_step)
         except Exception as _ev_e:
             log(f"⚠ Evaluator copy: {_ev_e}")

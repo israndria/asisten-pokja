@@ -6,6 +6,7 @@ Juga berisi fungsi scrape otomatis dari SPSE /dt/paketpp.
 
 import os
 import re
+import hashlib
 from functools import lru_cache
 from datetime import date, datetime, timezone, timedelta
 from config import sb as _sb
@@ -1221,6 +1222,35 @@ SUBFOLDER_DOK_PPK = {
     "Nota Dinas PPK":            "4. Informasi Lainnya",
 }
 
+_DOWNLOAD_PATH_LIMIT = 240
+
+
+def _safe_download_name_for_folder(folder: str, filename: str, limit: int = _DOWNLOAD_PATH_LIMIT) -> str:
+    """Bound downloaded filenames before Windows rejects an overlong path."""
+    name = os.path.basename(str(filename or "").strip()).rstrip(" .") or "dokumen"
+    folder_len = len(os.path.abspath(folder))
+    available = int(limit) - folder_len - 1
+    if available < 1:
+        raise OSError(
+            f"Folder path terlalu panjang untuk download ({folder_len} karakter; "
+            f"batas {int(limit) - 1})"
+        )
+    if len(name) <= available:
+        return name
+
+    base, ext = os.path.splitext(name)
+    digest = hashlib.sha1(name.encode("utf-8", "replace")).hexdigest()[:8]
+    suffix = f"_{digest}{ext}"
+    if available < len(digest) + len(ext):
+        raise OSError(
+            f"Folder path menyisakan ruang nama file terlalu pendek ({available} karakter)"
+        )
+    if available <= len(suffix):
+        return f"{digest}{ext}"
+    keep = available - len(suffix)
+    prefix = base[:keep].rstrip(" ._") or "dokumen"
+    return f"{prefix}{suffix}"
+
 
 def buat_subfolder_dokumen(folder_paket: str) -> list:
     """Buat semua subfolder dokumen di folder_paket (0-9, selaras setup_paket_baru.py).
@@ -1309,13 +1339,15 @@ def download_dokumen_paket_pl(
     }
 
     def _unique_dst(folder, fname):
+        fname = _safe_download_name_for_folder(folder, fname)
         dst = os.path.join(folder, fname)
         if not os.path.exists(dst):
             return dst
         base, ext = os.path.splitext(fname)
         n = 2
         while True:
-            candidate = os.path.join(folder, f"{base}_{n}{ext}")
+            candidate_name = _safe_download_name_for_folder(folder, f"{base}_{n}{ext}")
+            candidate = os.path.join(folder, candidate_name)
             if not os.path.exists(candidate):
                 return candidate
             n += 1
@@ -1415,6 +1447,10 @@ def download_dokumen_paket_pl(
                         clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
                         if clean:
                             fname = clean
+                    original_fname = fname
+                    fname = _safe_download_name_for_folder(folder_dl, fname)
+                    if fname != original_fname:
+                        log(f"    ⚠️ nama file dipendekkan ({len(original_fname)}→{len(fname)} karakter): {fname}")
                     with _write_lock:
                         dst = _unique_dst(folder_dl, fname)
                         with open(dst, "wb") as f:
