@@ -2825,6 +2825,57 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 st.write(f"❌ {_nm_b[:45]} — `{_hasil_b}`")
                         st.success(f"Selesai: {_pl_ok_b} OK, {_pl_fail_b} GAGAL.")
 
+            # Seksi 5: paket existing tetap bisa dikoreksi metodenya secara
+            # bulk. Folder/workbook lokal dipertahankan; hanya metode SPSE
+            # yang diubah melalui alur CDP yang sama.
+            if _pl_foldered:
+                st.divider()
+                with st.container(border=True):
+                    st.markdown("**🔧 Seksi 5 — Ubah Metode Pengadaan**")
+                    st.caption(
+                        "Khusus paket yang sudah punya folder. Folder/workbook "
+                        "tidak dihapus; hanya metode pada SPSE yang diubah."
+                    )
+                    _pl_sel_ubah_foldered = [
+                        (
+                            f"{r.get('nama_paket', r.get('kode_paket'))} [{r.get('kode_paket')}]",
+                            r.get('kode_paket'),
+                        )
+                        for r in _pl_foldered
+                    ]
+                    _pl_metode_foldered = st.selectbox(
+                        "Target metode:",
+                        list(pl_engine.METODE_PL_MAP.keys()),
+                        index=list(pl_engine.METODE_PL_MAP.keys()).index("JKK Konstruksi — PL"),
+                        key="pl_ubah_metode_foldered_target",
+                    )
+                    _pl_kat_id_foldered, _pl_pilih_val_foldered = pl_engine.METODE_PL_MAP[_pl_metode_foldered]
+                    if st.button(
+                        f"🔄 Ubah Metode ({len(_pl_sel_ubah_foldered)} paket) via CDP",
+                        disabled=not _pl_sel_ubah_foldered,
+                        use_container_width=True,
+                        key="pl_btn_ubah_metode_foldered",
+                    ):
+                        _pl_base_ubah_foldered = pl_engine.BASE_URL + "/"
+                        _pl_ok_foldered = _pl_fail_foldered = 0
+                        for _nm_f, _kd_f in _pl_sel_ubah_foldered:
+                            _hasil_f = spse_browser.ubah_metode_via_playwright(
+                                _kd_f,
+                                _pl_kat_id_foldered,
+                                _pl_pilih_val_foldered,
+                                _pl_base_ubah_foldered,
+                            )
+                            if _hasil_f == "OK":
+                                _pl_ok_foldered += 1
+                                st.write(f"✅ {_nm_f[:45]}")
+                            else:
+                                _pl_fail_foldered += 1
+                                st.write(f"❌ {_nm_f[:45]} — `{_hasil_f}`")
+                        st.success(
+                            f"Selesai: {_pl_ok_foldered} OK, "
+                            f"{_pl_fail_foldered} GAGAL."
+                        )
+
         with _pl_col_kanan:
             st.markdown("#### 3. Buat Folder Paket")
 
