@@ -565,6 +565,7 @@ def _is_tender_sudah_pembukaan(p: dict) -> bool:
 
 from config import (
     SPSE_BASE_URL,
+    ASISTEN_INSTANCE,
     ASISTEN_FIXED_ROLE,
     ASISTEN_ALLOWED_ROLES,
     ASISTEN_DEFAULT_ROLE,
@@ -625,12 +626,12 @@ def _render_pl_tempat_selector(key: str) -> str:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def _get_jadwal_penjelasan_gcal_cached() -> dict:
-    """Cache daftar jadwal penjelasan agar rerun checkbox tidak hit API GCal."""
+def _get_jadwal_penjelasan_cached(paket_id: str) -> dict:
+    """Cache jadwal resmi SPSE per paket; GCal ditangani sebagai fallback engine."""
     try:
-        return penjelasan_engine.get_jadwal_dari_gcalendar() or {}
-    except Exception:
-        return {}
+        return penjelasan_engine.get_jadwal_pemberian_penjelasan(paket_id) or {}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1533,11 +1534,6 @@ _LIBUR_2026 = {
 _LIBUR_MAP = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in _LIBUR_2026.items()}
 
 
-
-# Auto-start scheduler saat app dibuka (daemon thread, jalan terus)
-if not st.session_state.get("_scheduler_started"):
-    penjelasan_engine.start_scheduler()
-    st.session_state["_scheduler_started"] = True
 
 def _fmt_rp(angka_str: str) -> str:
     try:
@@ -10869,226 +10865,101 @@ if _tender_active_tab == "3️⃣ Setup Paket":
                 )
 
 # ============================================================
-# Tab 4: Pemberian Penjelasan (v2 — auto-post sapaan via GCal)
+# Tab 4: Pemberian Penjelasan (monitor otomatis dari Google Calendar)
 # ============================================================
 
 if _tender_active_tab == "4️⃣ Pemberian Penjelasan":
-    # ── Layout 2 kolom: kiri = pilih paket, kanan = isi pembukaan ───────
-    _pj_col_kiri, _pj_col_kanan = st.columns([2, 3])
-
-    with _pj_col_kiri:
-        st.markdown("### 1. Pilih Paket")
-        col_pjfetch, col_pjall, col_pjnone = st.columns([3, 1, 1])
-        with col_pjfetch:
-            if "global_paket_draft" not in st.session_state:
-                st.info("⚠️ Klik **🔄 Sinkronkan Paket** di **Tab 0** dulu.")
-            else:
-                st.caption(f"📋 {len(_get_tender_tab_candidates(4))} paket aktif pada/belum Pemberian Penjelasan")
-
-        pj_selected = []
-        if "global_paket_draft" in st.session_state or "global_paket_aktif" in st.session_state:
-            paket_list_pj = _get_tender_tab_candidates(4)
-            _reset_tender_stale_widget_keys("pj_chk_", paket_list_pj)
-            if not paket_list_pj:
-                st.warning("⚠️ Tidak ada paket ditemukan.")
-            else:
-                with col_pjall:
-                    if st.button("✅ Semua", key="pj_sel_all", use_container_width=True):
-                        for p in paket_list_pj:
-                            st.session_state[f"pj_chk_{p['id_lelang']}"] = True
-                        st.rerun()
-                with col_pjnone:
-                    if st.button("⬜ Kosong", key="pj_sel_none", use_container_width=True):
-                        for p in paket_list_pj:
-                            st.session_state[f"pj_chk_{p['id_lelang']}"] = False
-                        st.rerun()
-
-                for p in paket_list_pj:
-                    key_chk = f"pj_chk_{p['id_lelang']}"
-                    checked = st.checkbox(
-                        _pokja_label(p),
-                        value=st.session_state.get(key_chk, True),
-                        key=key_chk,
-                    )
-                    if checked:
-                        pj_selected.append(p)
-
-                st.caption(f"**{len(pj_selected)}** dari **{len(paket_list_pj)}** paket dipilih")
-
-        # ── Status Antrian ─────────────────────────────────────────────────
-        st.divider()
-        st.markdown("### 2. Status Antrian")
-        col_refresh_pj, col_hapus_fired = st.columns(2)
-        with col_refresh_pj:
-            if st.button("🔄 Refresh", key="pj_refresh_queue", use_container_width=True):
-                st.rerun()
-        with col_hapus_fired:
-            if st.button("🗑️ Hapus yang Selesai", key="pj_hapus_fired", use_container_width=True):
-                jobs = penjelasan_engine.get_jobs()
-                for j in jobs:
-                    if j["status"] in ("fired", "gagal"):
-                        penjelasan_engine.hapus_job(j["paket_id"], j["jenis"])
-                st.rerun()
-
-        jobs_all = penjelasan_engine.get_jobs()
-        if not jobs_all:
-            st.info("Antrian kosong. Pilih paket dan klik Jadwalkan.")
-        else:
-            from penjelasan_engine import TZ_WIB as _TZ_WIB
-            now_q = datetime.now(_TZ_WIB)
-            rows_q = []
-            _tender_labels_q = {
-                str(p.get("id_lelang") or p.get("kode") or ""): _pokja_label(p)
-                for p in _get_paket_gabungan(filter_selesai=False)
-            }
-            for j in jobs_all:
-                try:
-                    wf = datetime.fromisoformat(j["waktu_fire"])
-                    secs = int((wf - now_q).total_seconds())
-                    if j["status"] == "fired":
-                        countdown_q = "✅ Selesai"
-                    elif j["status"] == "gagal":
-                        countdown_q = "❌ Gagal"
-                    elif secs > 0:
-                        h, rem = divmod(secs, 3600)
-                        m = rem // 60
-                        countdown_q = f"⏳ {h//24}h {h%24}j {m}m"
-                    else:
-                        countdown_q = "🔴 Menunggu scheduler..."
-                    waktu_str = wf.strftime("%d/%m %H:%M")
-                except Exception:
-                    waktu_str = j.get("waktu_fire", "-")
-                    countdown_q = "-"
-                rows_q.append({
-                    "Paket": _tender_labels_q.get(
-                        str(j.get("paket_id") or ""),
-                        j.get("nama_paket", j["paket_id"]),
-                    )[:70],
-                    "Jenis": j.get("jenis", "-"),
-                    "Waktu": waktu_str,
-                    "Countdown": countdown_q,
-                })
-            st.dataframe(rows_q, use_container_width=True, hide_index=True)
-
-    with _pj_col_kanan:
-        from penjelasan_engine import TZ_WIB
-
-        st.markdown("### 3. Jadwalkan Auto-Post")
-        st.caption("Engine cari jadwal penjelasan dari Google Calendar lalu auto-post saat waktunya tiba.")
-
-        pj_jenis = st.selectbox(
-            "Jenis Penjelasan",
-            options=list(penjelasan_config.JENIS_PAKET.keys()),
-            format_func=lambda k: penjelasan_config.JENIS_PAKET[k],
-            key="pj_jenis",
+    @st.fragment(run_every="30s")
+    def _render_pemberian_penjelasan_monitor():
+        st.markdown("### Monitor Pemberian Penjelasan")
+        st.caption(
+            "Event dari Google Calendar otomatis masuk queue. "
+            "Scheduler akan mengirim kata pembukaan saat waktu mulai tiba."
         )
 
-        with st.expander("✏️ Override teks pembukaan (opsional)"):
-            pj_teks_override = st.text_area(
-                "Teks custom", value="", height=120,
-                placeholder="Kosongkan untuk pakai template bawaan",
-                key="pj_teks_override",
+        _pj_now = datetime.now(penjelasan_engine.TZ_WITA)
+        _pj_col_status, _pj_col_refresh, _pj_col_info = st.columns([2, 1, 2])
+
+        with _pj_col_status:
+            _pj_running = (
+                penjelasan_engine.is_scheduler_running()
+                or penjelasan_engine.is_worker_alive()
             )
+            st.metric("Scheduler", "✅ Aktif" if _pj_running else "❌ Berhenti")
 
-        # ── Preview jadwal GCal per paket terpilih ─────────────────────────
-        if pj_selected:
-            with st.spinner("Baca jadwal dari Google Calendar..."):
-                jadwal_gcal = _get_jadwal_penjelasan_gcal_cached()
-            now_pj = datetime.now(TZ_WIB)
-
-            for p in pj_selected:
-                tgl_mulai = jadwal_gcal.get(p["id_lelang"])
-                if tgl_mulai:
-                    secs = int((tgl_mulai - now_pj).total_seconds())
-                    if secs > 0:
-                        h, rem = divmod(secs, 3600)
-                        m = rem // 60
-                        countdown = f"⏳ {h//24}h {h%24}j {m}m lagi"
-                    elif secs > -10800:
-                        countdown = "🔴 AKTIF SEKARANG"
-                    else:
-                        countdown = "✅ Sudah lewat"
-                    st.caption(f"**{p['kode']}** — {tgl_mulai.strftime('%d/%m/%Y %H:%M')} WIB | {countdown}")
-                else:
-                    st.caption(f"**{p['kode']}** — ⚠️ Tidak ditemukan di GCal")
-
-        st.divider()
-
-        # ── Tombol Jadwalkan ───────────────────────────────────────────────
-        pj_n = len(pj_selected)
-        if st.button(
-            f"📅 Jadwalkan {pj_n} Paket ke Antrian",
-            key="pj_jadwalkan",
-            type="primary",
-            disabled=pj_n == 0,
-            use_container_width=True,
-        ):
-            teks_ov = st.session_state.get("pj_teks_override", "").strip() or None
-            hasil_jadwal = []
-            for p in pj_selected:
-                r = penjelasan_engine.jadwalkan_dari_gcal(
-                    paket_id=p["id_lelang"],
-                    nama_paket=p["nama"],
-                    jenis=pj_jenis,
-                    teks_override=teks_ov,
-                )
-                hasil_jadwal.append({
-                    "kode": p["kode"],
-                    "nama": p["nama"][:50],
-                    "status": "✅ Dijadwalkan" if r["ok"] else "❌ Gagal",
-                    "waktu": r["waktu_fire"].strftime("%d/%m/%Y %H:%M") if r["waktu_fire"] else "-",
-                    "pesan": r["pesan"],
-                })
-            ok_n = sum(1 for h in hasil_jadwal if h["status"].startswith("✅"))
-            if ok_n == pj_n:
-                st.success(f"✅ {ok_n} paket berhasil dijadwalkan.")
-            else:
-                st.warning(f"⚠️ {ok_n}/{pj_n} paket dijadwalkan. Cek paket yang gagal.")
-            st.dataframe(hasil_jadwal, use_container_width=True, hide_index=True)
-
-        # ── Log Scheduler ──────────────────────────────────────────────────
-        with st.expander("📋 Log Scheduler"):
-            log_lines = penjelasan_engine.get_log()
-            if log_lines:
-                st.code("\n".join(reversed(log_lines[-30:])), language=None)
-            else:
-                st.caption("Belum ada log.")
-
-        # ── Post Manual (darurat) ──────────────────────────────────────────
-        with st.expander("⚡ Post Manual Sekarang (darurat)"):
-            st.caption("Post langsung tanpa menunggu scheduler. Gunakan jika scheduler tidak jalan.")
-            if st.button(
-                f"🚀 Post ke {pj_n} Paket Sekarang",
-                key="pj_post_manual",
-                disabled=pj_n == 0,
-                use_container_width=True,
-            ):
-                teks_ov = st.session_state.get("pj_teks_override", "").strip() or None
-                progress = st.progress(0, text="Memulai...")
-                hasil_pj = []
-                for i, p in enumerate(pj_selected):
-                    progress.progress((i + 1) / len(pj_selected), text=f"Post ke {p['kode']}...")
+        with _pj_col_refresh:
+            if st.button("🔄 Refresh", key="pj_monitor_refresh", use_container_width=True):
+                with st.spinner("Sinkronkan event GCal..."):
                     try:
-                        result = penjelasan_engine.auto_post_sapaan(p["id_lelang"], pj_jenis, teks_ov)
-                        hasil_pj.append({
-                            "kode": p["kode"], "nama": p["nama"][:45],
-                            "total": result["total"], "sukses": result["sukses"],
-                            "gagal": result["gagal"], "pesan": result.get("pesan", ""),
-                        })
-                    except Exception as e:
-                        hasil_pj.append({
-                            "kode": p["kode"], "nama": p["nama"][:45],
-                            "total": 0, "sukses": 0, "gagal": 1, "pesan": str(e),
-                        })
-                progress.empty()
-                ok_m = sum(1 for h in hasil_pj if h["gagal"] == 0 and h["total"] > 0)
-                if ok_m == len(hasil_pj):
-                    st.success(f"✅ {ok_m}/{len(hasil_pj)} paket berhasil.")
-                else:
-                    st.warning(f"⚠️ {ok_m}/{len(hasil_pj)} paket berhasil.")
-                st.dataframe(hasil_pj, use_container_width=True, hide_index=True)
+                        penjelasan_engine.sync_jobs_from_gcal(now=_pj_now)
+                    except Exception as _pj_exc:
+                        st.warning(f"Sinkronisasi GCal gagal: {_pj_exc}")
 
-# ============================================================
+        with _pj_col_info:
+            st.caption("Syarat: laptop menyala, internet aktif, Brave Tender login.")
+
+        _pj_jobs = penjelasan_engine.get_jobs()
+        _pj_rows = []
+        for _pj_job in _pj_jobs:
+            _pj_status = _pj_job.get("status")
+            if _pj_status not in ("pending", "gagal", "pending_manual", "fired"):
+                continue
+            try:
+                _pj_start = datetime.fromisoformat(_pj_job["waktu_fire"])
+                _pj_end_raw = _pj_job.get("waktu_selesai")
+                _pj_end = datetime.fromisoformat(_pj_end_raw) if _pj_end_raw else _pj_start + timedelta(hours=3)
+                if _pj_status == "fired" and _pj_now > _pj_end:
+                    continue
+                _pj_seconds = int((_pj_start - _pj_now).total_seconds())
+                if _pj_status == "fired":
+                    _pj_countdown = "✅ Sudah terposting"
+                    _pj_phase = "Pembukaan terkirim"
+                elif _pj_seconds > 0:
+                    _pj_days, _pj_rem = divmod(_pj_seconds, 86400)
+                    _pj_hours, _pj_rem = divmod(_pj_rem, 3600)
+                    _pj_minutes = _pj_rem // 60
+                    _pj_countdown = f"⏳ {_pj_days}h {_pj_hours}j {_pj_minutes}m lagi"
+                    _pj_phase = "Akan datang"
+                elif _pj_now <= _pj_end:
+                    _pj_countdown = "🔴 AKTIF — menunggu/menjalankan pembukaan"
+                    _pj_phase = "Aktif"
+                else:
+                    _pj_countdown = "⚠️ Retry / perlu perhatian"
+                    _pj_phase = "Lewat window"
+                _pj_rows.append({
+                    "Paket": _pj_job.get("nama_paket") or _pj_job.get("paket_id"),
+                    "Kode": _pj_job.get("paket_id"),
+                    "Mulai": _pj_start.strftime("%d/%m/%Y %H:%M WITA"),
+                    "Selesai": _pj_end.strftime("%d/%m/%Y %H:%M WITA"),
+                    "Tahap": _pj_phase,
+                    "Countdown": _pj_countdown,
+                    "Status": _pj_status or "-",
+                    "Sumber": _pj_job.get("sumber_jadwal", "Google Calendar"),
+                })
+            except Exception:
+                continue
+
+        if _pj_rows:
+            st.dataframe(_pj_rows, use_container_width=True, hide_index=True)
+        else:
+            st.success("Tidak ada Pemberian Penjelasan yang sedang menunggu atau aktif.")
+
+        _pj_pending = sum(1 for _j in _pj_jobs if _j.get("status") == "pending")
+        _pj_failed = sum(1 for _j in _pj_jobs if _j.get("status") == "gagal")
+        _pj_m1, _pj_m2, _pj_m3 = st.columns(3)
+        _pj_m1.metric("Menunggu", _pj_pending)
+        _pj_m2.metric("Gagal / perlu cek", _pj_failed)
+        _pj_m3.metric("Interval cek", "60 detik GCal / 30 detik queue")
+
+        with st.expander("📄 Template kata pembukaan"):
+            st.code(penjelasan_config.TEMPLATE["tender"], language=None)
+
+        with st.expander("📋 Log Scheduler"):
+            _pj_logs = penjelasan_engine.get_log()
+            st.code("\n".join(reversed(_pj_logs[-30:])) if _pj_logs else "Belum ada log.", language=None)
+
+    _render_pemberian_penjelasan_monitor()
+
 # Tab 8: Auto-Fill Jadwal
 # ============================================================
 

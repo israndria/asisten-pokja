@@ -114,6 +114,49 @@ class GcalPlHelperTest(unittest.TestCase):
 
         self.assertEqual(rows, [{"kode_paket": "1", "nama_paket": "Target"}])
 
+    def test_auto_enroll_pl_resolves_boolean_folder_status(self):
+        expected_folder = r"D:\PL\30. PLPK - Paket Aktif"
+
+        class _Query:
+            def select(self, *_columns):
+                return self
+
+            def execute(self):
+                return type("Response", (), {"data": [{
+                    "kode_paket": "10986970000",
+                    "nama_paket": "Paket Aktif",
+                    "folder_dibuat": True,
+                    "jenis_pl": "PK",
+                    "nomor_urut": 30,
+                    "is_ulang": False,
+                }]})()
+
+        class _Client:
+            def table(self, name):
+                assert name == "draft_paket_pl"
+                return _Query()
+
+        with patch.object(config, "sb", return_value=_Client()), patch.object(
+            gcal_pl_helper, "load_targets", return_value=[]
+        ), patch.object(
+            gcal_pl_helper,
+            "folder_identity_matches",
+            side_effect=lambda folder, *_args: folder == expected_folder,
+        ), patch.object(gcal_pl_helper, "upsert_target") as upsert, patch(
+            "parse_kak_pl._resolve_folder_pl",
+            return_value=(expected_folder, "30"),
+        ) as resolve:
+            gcal_pl_helper._auto_enroll_folder_pl()
+
+        resolve.assert_called_once_with(
+            30,
+            "Paket Aktif",
+            "PK",
+            is_ulang=False,
+            strict_name=True,
+        )
+        self.assertEqual(upsert.call_args.kwargs["folder_name"], expected_folder)
+
     def test_tapin_uses_wita_timezone(self):
         self.assertEqual(gcal_pl_helper.TZ, "Asia/Makassar")
 

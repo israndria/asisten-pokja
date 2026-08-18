@@ -10,6 +10,7 @@ If Not fso.FileExists(python) Then python = "C:\WinPython313\python\python.exe"
 If Not fso.FileExists(python) Then WScript.Quit
 
 appPy = appDir & "\app.py"
+schedulerPy = appDir & "\penjelasan_scheduler.py"
 port = "8506"
 shell.Environment("Process")("POKJA_CODE_ROOT") = appDir
 shell.Environment("Process")("POKJA_PYTHON") = python
@@ -27,4 +28,13 @@ If checkResult <> 0 Then
     cmd = cmd & " --server.fileWatcherType none"
     cmd = cmd & " --browser.gatherUsageStats false"
     shell.Run cmd, 0, False
+End If
+
+' Worker auto-post harus hidup walaupun tidak ada tab localhost yang terbuka.
+If fso.FileExists(python) And fso.FileExists(schedulerPy) Then
+    shell.CurrentDirectory = appDir
+    shell.Environment("Process")("ASISTEN_INSTANCE") = "TENDER"
+    shell.Environment("Process")("ASISTEN_FIXED_ROLE") = "POKJA"
+    shell.Environment("Process")("SPSE_CDP_PORT") = "9223"
+    shell.Run """" & python & """ """ & schedulerPy & """", 0, False
 End If

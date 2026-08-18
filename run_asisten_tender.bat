@@ -9,5 +9,6 @@ if exist "C:\WinPython313\python\python.exe" (
 ) else (
     set PYTHON_EXE=%~dp0..\Runtime\WPy64-313110\python\python.exe
 )
+start "" /B "%PYTHON_EXE%" "%~dp0penjelasan_scheduler.py"
 "%PYTHON_EXE%" -m streamlit run "%~dp0app.py" --server.port 8506
 pause

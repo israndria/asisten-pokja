@@ -14,17 +14,34 @@ JENIS_PAKET = {
 TEMPLATE = {
     "tender": """\
 Selamat pagi, mohon untuk memperhatikan bagian penting dari dokumen pemilihan yang anda download, yaitu:
-1.Instruksi Kepada Peserta, yang berisi segala aturan yang digunakan untuk tender ini.
-2.Lembar Data Kualifikasi berisi persyaratan kualifikasi peserta, antara lain:
+
+1. Instruksi Kepada Peserta, yang berisi segala aturan yang digunakan untuk tender ini.
+
+2. Lembar Data Kualifikasi berisi persyaratan kualifikasi peserta, antara lain:
+
 2.1 Peserta yang berbadan usaha harus memiliki perizinan berusaha di bidang Jasa Konstruksi:
-a)Memiliki Nomor lnduk Berusaha (NlB) dan Sertifikat Standar terverifikasi (untuk Badan Usaha yang memiliki SBU KBLI 2020);
-b)Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum terverifikasi, peserta menyampaikan NlB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi; atau
-c)Memiliki Nomor lnduk Berusaha (NlB) dan SBU yang masih berlaku (untuk Badan Usaha yang memiliki SBU KBLI 2015);
-2.2Memiliki kinerja penyedia dengan nilai baik dan/atau sangat baik dalam kurun waktu 4 (empat) tahun terakhir untuk pekerjaan kontruksi yang penilaian kinerja Penyedia Barang/Jasa telah tercantum dalam Sistem Informasi Kinerja Penyedia (SIKaP) dan/atau dalam hal penilaian kinerja terhadap Penyedia Barang/Jasa yang bersangkutan pada SIKaP belum tersedia atau belum dilakukan penilaian kinerja oleh PPK maka penilaian kinerja dapat dilakukan secara manual sesuai dengan Peraturan LKPP Nomor 4 Tahun 2021 tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah;
-3.Lembar Data Pemilihan berisi persyaratan teknis penawaran.
-4.Untuk tender paket pekerjaan ini tidak diberlakukan preferensi harga
-5.Rancangan kontrak, SSUK dan SSKK sebagaimana diupload PPK pada SPSE.
-Demikian informasi kami sampaikan, diharapkan peserta dapat memanfaatkan jadwal penjelasan ini, untuk menanyakan atau menyampaikan hal-hal yang dirasa kurang jelas, terimakasih.""",
+
+          a) Memiliki Nomor lnduk Berusaha (NlB) dan Sertifikat Standar terverifikasi
+
+          b) Dalam hal Sertifikat Standar sebagaimana dimaksud pada huruf a) belum terverifikasi, peserta menyampaikan NlB, Sertifikat Standar belum terverifikasi dan tangkapan layar laman OSS yang mencantumkan bahwa Sertifikat Standar sedang menunggu verifikasi
+
+2.2 Memiliki kinerja penyedia dengan nilai baik dan/atau sangat baik untuk pekerjaan kontruksi, yang penilaian kinerja Penyedia Barang/Jasa telah tercantum dalam Sistem Informasi Kinerja Penyedia (SIKaP) dan/atau dalam hal penilaian kinerja terhadap Penyedia Barang/Jasa yang bersangkutan pada SIKaP belum tersedia atau belum dilakukan penilaian kinerja oleh PPK maka penilaian kinerja dapat dilakukan secara manual sesuai dengan Peraturan LKPP Nomor 4 Tahun 2021 tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah;
+
+            Penyampaian kinerja :
+
+          a) Dalam hal penilaian kinerja sudah tercantum dalam SIKAP, maka Peserta hanya menyampaikan tangkapan layar kedalam unggahan persyaratan kualifikasi lainnya
+
+          b) Dalam hal belum terdapat penilaian dalam SIKAP, maka Peserta sudah mengunggah hasil penilaian perhitungan kinerja yang dilakukan secara manual sesuai dengan Peraturan LKPP Nomor 4 Tahun 2021 tentang Pembinaan Pelaku Usaha Pengadaan Barang/Jasa Pemerintah kedalam unggahan persyaratan kualifikasi lainnya
+
+3. Lembar Data Pemilihan berisi persyaratan teknis penawaran.
+
+4. Untuk tender paket pekerjaan ini tidak diberlakukan preferensi harga
+
+5. Rancangan kontrak, SSUK dan SSKK sebagaimana diupload PPK pada SPSE.
+
+
+
+Demikian informasi kami sampaikan, diharapkan peserta dapat memanfaatkan jadwal penjelasan ini, untuk menanyakan atau menyampaikan hal-hal yang dirasa kurang jelas, terimakasih""",
 
     "seleksi_kualifikasi": """\
 Selamat pagi, mohon untuk memperhatikan bagian penting dari dokumen kualifikasi yang anda download, yaitu:

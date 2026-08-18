@@ -1,30 +1,28 @@
 """
-Penjelasan Engine v2 — Pure requests, berdasarkan CDP inspection.
+Engine Pemberian Penjelasan Tender.
 
-Arsitektur baru (confirmed dari script inline SPSE):
-- GET  /penjelasan/{ID}/list_pengadaan  → daftar pertanyaan (AJAX, refresh 30s)
-- GET  /penjelasan/{ID}/sisa_waktu      → countdown waktu (AJAX, refresh 5s)
-- POST /penjelasan/{ID}/simpan          → submit jawaban
-  Payload: authenticityToken + pertanyaan_id + penjelasan.dsl_uraian + (opsional: path, fileId)
+Flow utama:
+1. Baca jadwal resmi dari ``/lelang/{ID}/jadwal`` melalui fetch di browser
+   yang sudah login. Tab user tidak dinavigasi.
+2. Saat waktu mulai tiba, POST kata pembukaan ke
+   ``/penjelasan/{ID}/pembukaan_pengadaan``.
+3. Google Calendar hanya dipakai sebagai fallback bila jadwal SPSE belum bisa
+   dibaca.
 
-Flow auto-post sapaan:
-1. Fetch list_pengadaan → parse semua tombol .jawab → ambil pertanyaan_id
-2. Scrap authenticityToken dari script inline di halaman /penjelasan/{ID}/pengadaan
-3. POST template ke /simpan untuk setiap pertanyaan_id
-4. 302 = sukses (pola SPSE)
-
-Google Calendar integration:
-- Baca event GCal untuk cari jadwal penjelasan
-- Trigger auto-post saat waktu tiba
+Alur ``fetch_pertanyaan``/``submit_jawaban`` tetap dipertahankan sebagai API
+terpisah, tetapi bukan lagi mekanisme auto-post pembukaan.
 """
 
 import json
+from html import escape as html_escape
 import os
 import re
 import threading
+import time
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 
@@ -35,9 +33,19 @@ import spse_browser
 # Konstanta
 # ─────────────────────────────────────────────────────────────────────────────
 
-TZ_WIB = ZoneInfo("Asia/Jakarta")
+# SPSE Tapin menampilkan waktu WITA. Alias TZ_WIB dipertahankan agar import
+# lama dari app.py dan modul lain tidak rusak.
+TZ_WITA = ZoneInfo("Asia/Makassar")
+TZ_WIB = TZ_WITA
 BASE_DIR = Path(__file__).parent
-JOBS_FILE = BASE_DIR / "pending_penjelasan.json"
+try:
+    from config import RUNTIME_ROOT, STATE_DIR
+    JOBS_FILE = Path(RUNTIME_ROOT) / "state" / "pending_penjelasan.json"
+except Exception:
+    JOBS_FILE = BASE_DIR / "pending_penjelasan.json"
+    STATE_DIR = BASE_DIR
+LEGACY_JOBS_FILE = BASE_DIR / "pending_penjelasan.json"
+WORKER_HEARTBEAT_FILE = Path(STATE_DIR) / "penjelasan_scheduler.heartbeat"
 HEADERS_BASE = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
     "Origin": "https://spse.inaproc.id",
@@ -53,6 +61,8 @@ _PENJELASAN_KEYWORDS = [
 # Google Calendar config
 GCALENDAR_ID = "primary"
 GCALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
+GCAL_SYNC_INTERVAL = timedelta(seconds=60)
+GCAL_SYNC_HORIZON = timedelta(days=30)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,9 +83,11 @@ def _get_spse(url: str, timeout=15, headers_extra=None) -> requests.Response:
     return requests.get(url, headers=_get_headers(headers_extra), timeout=timeout)
 
 
-def _post_spse(url: str, payload: dict, timeout=15) -> requests.Response:
+def _post_spse(url: str, payload: dict, timeout=15, headers_extra=None) -> requests.Response:
     """POST ke SPSE dengan cookie browser + form-encoded."""
     headers = _get_headers({"Content-Type": "application/x-www-form-urlencoded"})
+    if headers_extra:
+        headers.update(headers_extra)
     return requests.post(url, data=payload, headers=headers, allow_redirects=False, timeout=timeout)
 
 
@@ -252,6 +264,76 @@ def auto_post_sapaan(paket_id: str, jenis: str = "tender", teks_override: str | 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Submit kata pembukaan Pokja
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pembukaan_to_html(teks: str) -> str:
+    """Ubah teks biasa menjadi HTML aman yang dipahami Trumbowyg SPSE."""
+    normalized = str(teks or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+    return "<br>".join(html_escape(line, quote=False) for line in normalized.split("\n"))
+
+
+def _encode_uri(value: str) -> str:
+    """Samakan encoding dengan JavaScript ``encodeURI`` di halaman SPSE."""
+    return quote(value, safe=";/?:@&=+$,-_.!~*'()#")
+
+
+def update_pembukaan(paket_id: str, teks: str) -> dict:
+    """POST kata pembukaan ke endpoint resmi ``pembukaan_pengadaan``."""
+    from config import SPSE_BASE_URL
+
+    html_text = _pembukaan_to_html(teks)
+    if not html_text:
+        return {"ok": False, "status": 0, "pesan": "Teks pembukaan kosong."}
+
+    url = f"{SPSE_BASE_URL}penjelasan/{paket_id}/pembukaan_pengadaan"
+    try:
+        response = _post_spse(
+            url,
+            {"uraian": _encode_uri(html_text)},
+            timeout=20,
+            headers_extra={
+                "Referer": f"{SPSE_BASE_URL}penjelasan/{paket_id}/pengadaan",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+    except Exception as exc:
+        return {"ok": False, "status": 0, "pesan": str(exc), "paket_id": paket_id}
+
+    location = response.headers.get("Location", "")
+    body_preview = (response.text or "")[:500]
+    login_response = "BERANDA LOGIN" in body_preview or "Nama Pengguna" in body_preview
+    ok = response.status_code in (200, 201, 202, 204, 302) and not login_response
+    return {
+        "ok": ok,
+        "status": response.status_code,
+        "location": location,
+        "pesan": "Berhasil" if ok else f"HTTP {response.status_code}",
+        "paket_id": paket_id,
+    }
+
+
+def auto_post_pembukaan(
+    paket_id: str,
+    jenis: str = "tender",
+    teks_override: str | None = None,
+) -> dict:
+    """Post satu kata pembukaan; tidak menunggu/menjawab pertanyaan peserta."""
+    teks = teks_override if teks_override else TEMPLATE.get(jenis, TEMPLATE["tender"])
+    result = update_pembukaan(paket_id, teks)
+    return {
+        "total": 1,
+        "sukses": 1 if result.get("ok") else 0,
+        "gagal": 0 if result.get("ok") else 1,
+        "details": [result],
+        "status": result.get("status", 0),
+        "pesan": result.get("pesan", ""),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Parse jadwal dari /lelang/[ID]/jadwal (existing, diperbaiki)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -338,31 +420,103 @@ def get_jadwal_dari_gcalendar(paket_id: str | None = None) -> dict[str, datetime
     return result
 
 
-def parse_jadwal(paket_id: str) -> list[dict]:
-    """Scrape jadwal penjelasan dari /lelang/[ID]/jadwal."""
-    from config import SPSE_BASE_URL
-    url = f"{SPSE_BASE_URL}lelang/{paket_id}/jadwal"
+_BROWSER_FETCH_JS = """
+async ([url]) => {
+    const response = await fetch(url, {
+        credentials: 'include',
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+    });
+    return {
+        status: response.status,
+        url: response.url,
+        body: await response.text()
+    };
+}
+"""
+
+
+def _fetch_html_via_browser(url: str) -> str:
+    """GET halaman SPSE dari session browser tanpa mengubah tab user."""
     page = spse_browser.halaman_aktif()
     if not page:
-        raise RuntimeError("Browser belum terhubung.")
-    spse_browser._run(page.goto(url, wait_until="domcontentloaded", timeout=30000))
-    data = spse_browser._run(page.evaluate(_JADWAL_JS))
+        raise RuntimeError("Browser Tender belum terhubung.")
 
+    result = spse_browser._run(page.evaluate(_BROWSER_FETCH_JS, [url]), timeout=30)
+    status = int(result.get("status", 0))
+    body = result.get("body", "") or ""
+    if status != 200:
+        raise RuntimeError(f"GET jadwal SPSE gagal: HTTP {status}")
+    if "BERANDA LOGIN" in body or "Nama Pengguna" in body:
+        raise RuntimeError("Session SPSE tidak valid atau sudah logout.")
+    return body
+
+
+def _parse_jadwal_html(html_text: str) -> list[dict]:
+    """Parse baris jadwal Tender dari HTML SPSE tanpa network/browser."""
+    soup = BeautifulSoup(html_text, "html.parser")
     hasil = []
-    for row in data["rows"]:
-        row_text = " ".join(row).lower()
-        if not any(kw in row_text for kw in _PENJELASAN_KEYWORDS):
+    for tr in soup.select("table tr"):
+        row = [cell.get_text(" ", strip=True) for cell in tr.find_all(["td", "th"])]
+        if len(row) < 3:
             continue
-        kegiatan, mulai_str, selesai_str = "", "", ""
+        row_text = " ".join(row).lower()
+        if not any(keyword in row_text for keyword in _PENJELASAN_KEYWORDS):
+            continue
+
         if len(row) >= 4:
             kegiatan, mulai_str, selesai_str = row[1], row[2], row[3]
-        elif len(row) == 3:
+        else:
             kegiatan, mulai_str, selesai_str = row[0], row[1], row[2]
         mulai_dt = _parse_datetime_str(mulai_str)
-        if mulai_dt:
-            hasil.append({"kegiatan": kegiatan, "mulai": mulai_str, "selesai": selesai_str,
-                          "mulai_dt": mulai_dt, "selesai_dt": _parse_datetime_str(selesai_str)})
+        if not mulai_dt:
+            continue
+        hasil.append({
+            "kegiatan": kegiatan,
+            "mulai": mulai_str,
+            "selesai": selesai_str,
+            "mulai_dt": mulai_dt,
+            "selesai_dt": _parse_datetime_str(selesai_str),
+        })
     return hasil
+
+
+def parse_jadwal(paket_id: str) -> list[dict]:
+    """Baca jadwal resmi dari ``/lelang/{ID}/jadwal`` via browser session."""
+    from config import SPSE_BASE_URL
+
+    url = f"{SPSE_BASE_URL}lelang/{paket_id}/jadwal"
+    return _parse_jadwal_html(_fetch_html_via_browser(url))
+
+
+def get_jadwal_pemberian_penjelasan(paket_id: str) -> dict | None:
+    """Ambil jadwal pembukaan penjelasan; SPSE utama, GCal fallback."""
+    spse_error = ""
+    try:
+        rows = parse_jadwal(paket_id)
+        if rows:
+            row = rows[0]
+            return {**row, "sumber": "SPSE"}
+        spse_error = "Baris Pemberian Penjelasan tidak ditemukan di SPSE."
+    except Exception as exc:
+        spse_error = str(exc)
+
+    try:
+        jadwal_gcal = get_jadwal_dari_gcalendar(paket_id=paket_id)
+        mulai_dt = jadwal_gcal.get(paket_id)
+        if mulai_dt:
+            return {
+                "kegiatan": "Pemberian Penjelasan",
+                "mulai_dt": mulai_dt,
+                "selesai_dt": None,
+                "mulai": mulai_dt.strftime("%d/%m/%Y %H:%M"),
+                "selesai": "",
+                "sumber": "Google Calendar (fallback)",
+                "spse_error": spse_error,
+            }
+    except Exception as exc:
+        spse_error = f"{spse_error}; GCal: {exc}" if spse_error else str(exc)
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,13 +535,27 @@ def _get_gcalendar_service():
     except ImportError:
         return None
 
-    # Cari token.json di beberapa lokasi
+    # Cari token.json di runtime instance aktif, lalu shared state. Scheduler
+    # Tender/PP memakai profile SPSE terpisah, tetapi kalender tetap satu akun.
+    try:
+        from config import RUNTIME_ROOT, find_secret
+        _runtime_root = Path(RUNTIME_ROOT)
+        _shared_runtime_root = _runtime_root.parent
+        _secret_credentials = Path(find_secret("credentials.json"))
+    except Exception:
+        _runtime_root = BASE_DIR
+        _shared_runtime_root = BASE_DIR
+        _secret_credentials = BASE_DIR / "credentials.json"
+
     token_candidates = [
+        _runtime_root / "state" / "token.json",
+        _shared_runtime_root / "state" / "token.json",
         BASE_DIR.parent / "V19_Scheduler" / "WPy64-313110" / "token.json",
         BASE_DIR / "token.json",
         Path.home() / ".credentials" / "token.json",
     ]
     cred_candidates = [
+        _secret_credentials,
         BASE_DIR.parent / "V19_Scheduler" / "WPy64-313110" / "credentials.json",
         BASE_DIR / "credentials.json",
     ]
@@ -477,14 +645,42 @@ def extract_paket_id_from_event(event: dict) -> str | None:
     return None
 
 
+def _as_wita(value: datetime | None) -> datetime | None:
+    """Normalisasi datetime GCal/SPSE ke timezone WITA."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=TZ_WITA)
+    return value.astimezone(TZ_WITA)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Persistent Jobs — simpan/load ke JSON (existing, tidak diubah)
+# Persistent Jobs — simpan/load ke state runtime per instance
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_jobs() -> list[dict]:
-    if JOBS_FILE.exists():
+    source = JOBS_FILE if JOBS_FILE.exists() else LEGACY_JOBS_FILE
+    if source.exists():
         try:
-            return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
+            jobs = json.loads(source.read_text(encoding="utf-8"))
+            changed = False
+            for job in jobs:
+                result = job.get("result") or {}
+                if (
+                    job.get("status") == "fired"
+                    and result.get("pesan") == "Tidak ada pertanyaan"
+                ):
+                    # Itu bukan keberhasilan pembukaan; reset agar engine baru
+                    # mengirim kata pembukaan lewat endpoint yang benar.
+                    job["status"] = "pending"
+                    job["result"] = None
+                    changed = True
+            if source == LEGACY_JOBS_FILE and JOBS_FILE != LEGACY_JOBS_FILE:
+                # Migrasi satu kali dari queue versi lama ke state instance.
+                changed = True
+            if changed:
+                _save_jobs(jobs)
+            return jobs
         except Exception:
             pass
     return []
@@ -497,15 +693,20 @@ def _save_jobs(jobs: list[dict]):
 def tambah_job(
     paket_id: str, nama_paket: str, jenis: str,
     waktu_fire: datetime, teks_override: str | None = None,
-    auto_post: bool = True,
+    auto_post: bool = True, waktu_selesai: datetime | None = None,
+    event_id: str | None = None, sumber_jadwal: str = "manual",
 ) -> dict:
-    """Daftarkan satu job penjelasan."""
+    """Daftarkan satu job penjelasan yang persisten di disk lokal."""
     jobs = _load_jobs()
     jobs = [j for j in jobs if not (j["paket_id"] == paket_id and j["jenis"] == jenis)]
     job = {
         "paket_id": paket_id, "nama_paket": nama_paket, "jenis": jenis,
-        "waktu_fire": waktu_fire.isoformat(), "teks_override": teks_override,
+        "waktu_fire": _as_wita(waktu_fire).isoformat(),
+        "waktu_selesai": _as_wita(waktu_selesai).isoformat() if waktu_selesai else None,
+        "teks_override": teks_override,
         "auto_post": auto_post,
+        "event_id": event_id,
+        "sumber_jadwal": sumber_jadwal,
         "status": "pending", "result": None,
     }
     jobs.append(job)
@@ -534,12 +735,102 @@ def update_job_status(paket_id: str, jenis: str, status: str, result: dict | Non
     _save_jobs(jobs)
 
 
+def sync_jobs_from_gcal(
+    now: datetime | None = None,
+    horizon: timedelta = GCAL_SYNC_HORIZON,
+) -> dict:
+    """Enqueue upcoming event Pemberian Penjelasan dari Google Calendar.
+
+    Sinkronisasi idempotent: event yang sudah ``fired`` tidak diulang, event
+    ``pending`` mengikuti perubahan waktu di GCal, dan event baru hanya masuk
+    sekali berdasarkan event_id/kode paket.
+    """
+    now = _as_wita(now or datetime.now(TZ_WITA))
+    events = get_penjelasan_events(
+        waktu_mulai=now - timedelta(hours=1),
+        waktu_selesai=now + horizon,
+    )
+    jobs = _load_jobs()
+    changed = False
+    added = 0
+    updated = 0
+    skipped = 0
+
+    for event in events:
+        mulai = _as_wita(event.get("start"))
+        if not mulai:
+            continue
+        paket_id = extract_paket_id_from_event(event)
+        if not paket_id:
+            skipped += 1
+            continue
+
+        event_id = str(event.get("event_id") or "").strip()
+        existing = next(
+            (
+                job for job in jobs
+                if (
+                    event_id and job.get("event_id") == event_id
+                ) or (
+                    job.get("paket_id") == paket_id and job.get("jenis") == "tender"
+                )
+            ),
+            None,
+        )
+        selesai = _as_wita(event.get("end")) or (mulai + timedelta(hours=3))
+
+        if existing:
+            if existing.get("status") == "pending":
+                waktu_lama = existing.get("waktu_fire")
+                waktu_baru = mulai.isoformat()
+                selesai_lama = existing.get("waktu_selesai")
+                updates = {
+                    "waktu_fire": waktu_baru,
+                    "waktu_selesai": selesai.isoformat(),
+                    "nama_paket": event.get("summary") or existing.get("nama_paket", paket_id),
+                    "event_id": event_id or existing.get("event_id"),
+                    "sumber_jadwal": "Google Calendar",
+                }
+                if (
+                    waktu_lama != waktu_baru
+                    or selesai_lama != selesai.isoformat()
+                    or any(existing.get(key) != value for key, value in updates.items())
+                ):
+                    existing.update(updates)
+                    updated += 1
+                    changed = True
+            else:
+                skipped += 1
+            continue
+
+        jobs.append({
+            "paket_id": paket_id,
+            "nama_paket": event.get("summary") or paket_id,
+            "jenis": "tender",
+            "waktu_fire": mulai.isoformat(),
+            "waktu_selesai": selesai.isoformat(),
+            "teks_override": None,
+            "auto_post": True,
+            "event_id": event_id or None,
+            "sumber_jadwal": "Google Calendar",
+            "status": "pending",
+            "result": None,
+        })
+        added += 1
+        changed = True
+
+    if changed:
+        _save_jobs(jobs)
+    return {"ok": True, "added": added, "updated": updated, "skipped": skipped}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Background Scheduler (diperbaiki untuk auto-post)
+# Background Scheduler untuk auto-post pembukaan
 # ─────────────────────────────────────────────────────────────────────────────
 
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
+_last_gcal_sync: datetime | None = None
 _log: list[str] = []
 _log_lock = threading.Lock()
 
@@ -558,11 +849,24 @@ def get_log() -> list[str]:
 
 
 def _scheduler_loop():
+    global _last_gcal_sync
     _log_append("Scheduler dimulai.")
     while not _scheduler_stop.is_set():
         now = datetime.now(TZ_WIB)
+
+        if _last_gcal_sync is None or now - _last_gcal_sync >= GCAL_SYNC_INTERVAL:
+            try:
+                sync_result = sync_jobs_from_gcal(now=now)
+                if sync_result["added"] or sync_result["updated"]:
+                    _log_append(
+                        "📅 GCal sync: "
+                        f"{sync_result['added']} baru, {sync_result['updated']} berubah"
+                    )
+                _last_gcal_sync = now
+            except Exception as exc:
+                _log_append(f"⚠️ GCal sync error: {exc}")
+
         jobs = _load_jobs()
-        changed = False
 
         for job in jobs:
             if job["status"] != "pending":
@@ -578,9 +882,9 @@ def _scheduler_loop():
                 auto_post = job.get("auto_post", True)
 
                 if auto_post:
-                    _log_append(f"🚀 Auto-post sapaan: paket {paket_id} ({jenis}) ...")
+                    _log_append(f"🚀 Auto-post pembukaan: paket {paket_id} ({jenis}) ...")
                     try:
-                        result = auto_post_sapaan(
+                        result = auto_post_pembukaan(
                             paket_id=paket_id,
                             jenis=jenis,
                             teks_override=job.get("teks_override"),
@@ -588,8 +892,21 @@ def _scheduler_loop():
                         total = result.get("total", 0)
                         sukses = result.get("sukses", 0)
                         gagal = result.get("gagal", 0)
-                        status = "fired" if gagal == 0 else "gagal"
-                        _log_append(f"{'✅' if gagal == 0 else '⚠️'} Paket {paket_id}: {sukses}/{total} berhasil, {gagal} gagal")
+                        if gagal == 0:
+                            status = "fired"
+                        else:
+                            batas_str = job.get("waktu_selesai")
+                            try:
+                                batas = datetime.fromisoformat(batas_str) if batas_str else waktu + timedelta(hours=3)
+                                batas += timedelta(hours=3)
+                            except Exception:
+                                batas = waktu + timedelta(hours=6)
+                            status = "pending" if now <= batas else "gagal"
+                        _log_append(
+                            f"{'✅' if gagal == 0 else '⚠️'} Paket {paket_id}: "
+                            f"pembukaan {sukses}/{total}, {gagal} gagal"
+                            + ("; akan retry" if status == "pending" else "")
+                        )
                         update_job_status(paket_id, jenis, status, result)
                     except Exception as e:
                         _log_append(f"❌ Error paket {paket_id}: {e}")
@@ -598,38 +915,49 @@ def _scheduler_loop():
                     _log_append(f"⏰ Jadwal tiba (manual mode): paket {paket_id}")
                     update_job_status(paket_id, jenis, "pending_manual")
 
-                changed = True
-
-        # Juga cek GCalendar events untuk auto-discover jadwal penjelasan
-        try:
-            events = get_penjelasan_events(
-                waktu_mulai=now - timedelta(hours=1),
-                waktu_selesai=now + timedelta(hours=3),
-            )
-            for ev in events:
-                if ev["start"] and now >= ev["start"] and now <= (ev["end"] or ev["start"] + timedelta(hours=3)):
-                    paket_id = extract_paket_id_from_event(ev)
-                    if paket_id:
-                        # Cek apakah sudah ada job untuk paket ini
-                        existing = _load_jobs()
-                        sudah_ada = any(
-                            j["paket_id"] == paket_id and j["status"] in ("fired", "pending")
-                            for j in existing
-                        )
-                        if not sudah_ada:
-                            _log_append(f"📅 GCalendar auto-discover: {ev['summary']} → paket {paket_id}")
-                            # Auto-post langsung
-                            try:
-                                result = auto_post_sapaan(paket_id, "tender")
-                                _log_append(f"{'✅' if result['gagal'] == 0 else '⚠️'} Auto-post {paket_id}: {result['sukses']}/{result['total']}")
-                            except Exception as e:
-                                _log_append(f"❌ GCalendar auto-post {paket_id}: {e}")
-        except Exception as e:
-            _log_append(f"⚠️ GCalendar check error: {e}")
 
         _scheduler_stop.wait(timeout=30)  # cek tiap 30 detik
 
     _log_append("Scheduler berhenti.")
+
+
+def jadwalkan_pemberian_penjelasan(
+    paket_id: str,
+    nama_paket: str,
+    jenis: str = "tender",
+    teks_override: str | None = None,
+    auto_post: bool = True,
+) -> dict:
+    """
+    Cari jadwal resmi SPSE paket_id, GCal hanya fallback, lalu daftarkan job.
+    Return: {ok: bool, waktu_fire: datetime|None, pesan: str}
+    """
+    jadwal = get_jadwal_pemberian_penjelasan(paket_id)
+    if not jadwal or not jadwal.get("mulai_dt"):
+        return {
+            "ok": False,
+            "waktu_fire": None,
+            "pesan": "Jadwal Pemberian Penjelasan tidak ditemukan di SPSE/GCal.",
+        }
+
+    waktu_fire = jadwal["mulai_dt"]
+    job = tambah_job(
+        paket_id=paket_id,
+        nama_paket=nama_paket,
+        jenis=jenis,
+        waktu_fire=waktu_fire,
+        teks_override=teks_override if teks_override else None,
+        auto_post=auto_post,
+        waktu_selesai=jadwal.get("selesai_dt"),
+        sumber_jadwal=jadwal.get("sumber", "SPSE"),
+    )
+    return {
+        "ok": True,
+        "waktu_fire": waktu_fire,
+        "sumber": jadwal.get("sumber", "SPSE"),
+        "pesan": f"Dijadwalkan dari {jadwal.get('sumber', 'SPSE')}: {waktu_fire.strftime('%d/%m/%Y %H:%M')} WITA",
+        "job": job,
+    }
 
 
 def jadwalkan_dari_gcal(
@@ -639,30 +967,21 @@ def jadwalkan_dari_gcal(
     teks_override: str | None = None,
     auto_post: bool = True,
 ) -> dict:
-    """
-    Cari jadwal penjelasan paket_id di GCal, lalu daftarkan ke job queue.
-    Return: {ok: bool, waktu_fire: datetime|None, pesan: str}
-    """
-    jadwal = get_jadwal_dari_gcalendar(paket_id=paket_id)
-    if not jadwal:
-        return {"ok": False, "waktu_fire": None, "pesan": "Jadwal penjelasan tidak ditemukan di Google Calendar"}
-
-    waktu_fire = jadwal[paket_id]
-    job = tambah_job(
+    """Alias kompatibilitas; kini SPSE primary dan GCal fallback."""
+    return jadwalkan_pemberian_penjelasan(
         paket_id=paket_id,
         nama_paket=nama_paket,
         jenis=jenis,
-        waktu_fire=waktu_fire,
-        teks_override=teks_override if teks_override else None,
+        teks_override=teks_override,
         auto_post=auto_post,
     )
-    return {"ok": True, "waktu_fire": waktu_fire, "pesan": f"Dijadwalkan: {waktu_fire.strftime('%d/%m/%Y %H:%M')} WIB", "job": job}
 
 
 def start_scheduler():
-    global _scheduler_thread, _scheduler_stop
+    global _scheduler_thread, _scheduler_stop, _last_gcal_sync
     if _scheduler_thread and _scheduler_thread.is_alive():
         return
+    _last_gcal_sync = None
     _scheduler_stop.clear()
     _scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True, name="PenjelasanScheduler")
     _scheduler_thread.start()
@@ -674,3 +993,12 @@ def stop_scheduler():
 
 def is_scheduler_running() -> bool:
     return bool(_scheduler_thread and _scheduler_thread.is_alive())
+
+
+def is_worker_alive(max_age_seconds: int = 90) -> bool:
+    """True jika worker proses mandiri masih mengirim heartbeat baru."""
+    try:
+        age = time.time() - WORKER_HEARTBEAT_FILE.stat().st_mtime
+        return 0 <= age <= max(10, int(max_age_seconds))
+    except (FileNotFoundError, OSError, ValueError):
+        return False

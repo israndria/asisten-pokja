@@ -465,11 +465,27 @@ def _auto_enroll_folder_pl() -> None:
         for target in all_targets
     }
     rows = _sb().table("draft_paket_pl").select(
-        "kode_paket,nama_paket,folder_dibuat,jenis_pl"
+        "kode_paket,nama_paket,folder_dibuat,jenis_pl,nomor_urut,is_ulang"
     ).execute().data or []
     for row in rows:
         code = str(row.get("kode_paket") or "").strip()
-        folder_name = str(row.get("folder_dibuat") or "").strip()
+        raw_folder = row.get("folder_dibuat")
+        folder_name = str(raw_folder or "").strip()
+        if isinstance(raw_folder, bool):
+            folder_name = ""
+            if raw_folder:
+                try:
+                    from parse_kak_pl import _resolve_folder_pl
+
+                    folder_name, _ = _resolve_folder_pl(
+                        row.get("nomor_urut"),
+                        row.get("nama_paket") or "",
+                        row.get("jenis_pl") or "JKK",
+                        is_ulang=bool(row.get("is_ulang")),
+                        strict_name=True,
+                    )
+                except (ImportError, OSError, TypeError, ValueError):
+                    folder_name = ""
         if (
             not code
             or not folder_name
