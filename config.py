@@ -14,6 +14,22 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CODE_ROOT = os.path.dirname(BASE_DIR)
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local"))
 
+# Favicon per instance agar shortcut localhost di Brave mudah dibedakan.
+_INSTANCE_ICON_FILES = {
+    "PP": "pppk-favicon.png",
+    "TENDER": "pokja-favicon.png",
+}
+APP_ICON_PATH = os.path.join(
+    BASE_DIR,
+    "assets",
+    _INSTANCE_ICON_FILES.get(
+        os.environ.get("ASISTEN_INSTANCE", "SHARED").strip().upper(),
+        "",
+    ),
+)
+if not os.path.isfile(APP_ICON_PATH):
+    APP_ICON_PATH = None
+
 # Instance isolation -------------------------------------------------------
 #
 # The app can run twice in parallel.  Keep this contract in one place so all

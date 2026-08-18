@@ -569,6 +569,7 @@ from config import (
     ASISTEN_FIXED_ROLE,
     ASISTEN_ALLOWED_ROLES,
     ASISTEN_DEFAULT_ROLE,
+    APP_ICON_PATH,
 )
 import spse_browser
 import ldk_engine
@@ -932,6 +933,7 @@ def _generate_lampiran_undangan_dpp_preview(kode_tender: str) -> tuple[bool, str
 
 st.set_page_config(
     page_title="Dashboard",
+    page_icon=APP_ICON_PATH,
     layout="wide",
 )
 
@@ -964,7 +966,14 @@ if "header_login_role" not in st.session_state:
         ASISTEN_FIXED_ROLE
         or st.session_state.get("sidebar_login_role", ASISTEN_DEFAULT_ROLE)
     )
-_login_popover = st.popover(f"{APP_VERSION} · 🔐 Login / SPSE", use_container_width=True)
+_instance_role_badge = {
+    "TENDER": "👥 POKJA",
+    "PP": "🏛️ PP/PPK",
+}.get(ASISTEN_INSTANCE, ASISTEN_FIXED_ROLE or ASISTEN_DEFAULT_ROLE)
+_login_popover = st.popover(
+    f"{APP_VERSION} · 🔐 Login / SPSE · {_instance_role_badge}",
+    use_container_width=True,
+)
 
 # ── Mode Switcher ──────────────────────────────────────────────────────────────
 # Filter mode berdasarkan role login

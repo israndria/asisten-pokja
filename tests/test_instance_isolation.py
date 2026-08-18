@@ -27,6 +27,7 @@ def _config_snapshot(instance: str) -> dict:
         "'runtime': config.RUNTIME_ROOT, "
         "'browser': config.BROWSER_SESSION_DIR, "
         "'downloads': config.DOWNLOAD_DIR, "
+        "'icon': config.APP_ICON_PATH, "
         "'browser_cdp': spse_browser.CDP_PORT" 
         "}))"
     )
@@ -82,6 +83,10 @@ class InstanceIsolationTest(unittest.TestCase):
         self.assertNotEqual(pp["runtime"], tender["runtime"])
         self.assertNotEqual(pp["browser"], tender["browser"])
         self.assertNotEqual(pp["downloads"], tender["downloads"])
+        self.assertTrue(pp["icon"].endswith(os.path.join("assets", "pppk-favicon.png")))
+        self.assertTrue(tender["icon"].endswith(os.path.join("assets", "pokja-favicon.png")))
+        self.assertTrue(os.path.isfile(pp["icon"]))
+        self.assertTrue(os.path.isfile(tender["icon"]))
 
     def test_role_allowlist_keeps_ppk_with_pp_but_blocks_cross_instance_roles(self):
         self.assertEqual(_role_probe("PP", "PP"), "allowed")
