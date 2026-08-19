@@ -388,6 +388,222 @@ def _pl_label(row: dict) -> str:
         nama = f"{nomor}. {nama}"
     return nama + _pl_hint_ulang(row)
 
+
+_PL_FOLDER_RE = re.compile(
+    r"^\s*(\d+)\.\s*PL(?:JKK|PK)\s*-\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _pl_folder_name_key(value: str) -> str:
+    """Normalisasi nama paket untuk pencocokan backup yang mungkin terpotong."""
+    text = str(value or "").strip()
+    text = re.sub(r"^\s*(?:\d+\.\s*)?PL(?:JKK|PK)\s*-\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\(\s*PL\s*-\s*Ulang\s*\)\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _pl_numbered_dirs(root: str, include_backup: bool = False) -> list[tuple[int, str]]:
+    """Ambil folder bernomor langsung dari root; tidak scan karantina nested."""
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return []
+    result = []
+    for name in entries:
+        if not include_backup and (name.casefold() == "backup" or name.startswith("_")):
+            continue
+        full = os.path.join(root, name)
+        if not os.path.isdir(full):
+            continue
+        match = _PL_FOLDER_RE.match(name)
+        if match:
+            result.append((int(match.group(1)), name))
+    return result
+
+
+def _pl_backup_match(row: dict, output_base: str) -> tuple[int, str, float] | None:
+    """Cari nomor lama dari folder backup tingkat pertama secara konservatif."""
+    backup = os.path.join(output_base, "backup")
+    expected_kind = str(row.get("jenis_pl") or "JKK").strip().upper()
+    expected = _pl_folder_name_key(row.get("nama_paket") or "")
+    if not expected or not os.path.isdir(backup):
+        return None
+
+    candidates = []
+    try:
+        names = os.listdir(backup)
+    except OSError:
+        return None
+    for name in names:
+        full = os.path.join(backup, name)
+        if not os.path.isdir(full) or name.startswith("_"):
+            continue
+        match = _PL_FOLDER_RE.match(name)
+        if not match:
+            continue
+        prefix_kind = re.search(r"PL(JKK|PK)", name, flags=re.IGNORECASE)
+        if not prefix_kind or prefix_kind.group(1).upper() != expected_kind:
+            continue
+        physical = _pl_folder_name_key(name)
+        if not physical:
+            continue
+        if physical == expected or physical.startswith(expected) or expected.startswith(physical):
+            score = 1.0
+        else:
+            expected_words = set(expected.split())
+            physical_words = set(physical.split())
+            score = len(expected_words & physical_words) / max(len(expected_words), 1)
+        if score >= 0.72:
+            candidates.append((score, int(match.group(1)), name))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    best = candidates[0]
+    if len(candidates) > 1 and best[0] - candidates[1][0] < 0.03:
+        return None
+    return best[1], best[2], best[0]
+
+
+def _pl_clean_pk_reset_root(root: str) -> bool:
+    """True hanya saat root PK masih menyisakan paket canonical 28, 29, 30."""
+    numbered = _pl_numbered_dirs(root)
+    if len(numbered) != 3 or {number for number, _name in numbered} != {28, 29, 30}:
+        return False
+    return all(
+        re.match(r"^\s*\d+\.\s*PLPK\s*-", name, flags=re.IGNORECASE)
+        for _number, name in numbered
+    )
+
+
+def plan_nomor_folder_pl(
+    rows: list[dict],
+    output_bases: tuple[str, ...],
+    *,
+    use_backup: bool = True,
+    use_database: bool = True,
+    start_number: int | None = None,
+    allocation_base: str | None = None,
+) -> dict:
+    """Rencanakan nomor folder PL tanpa mengubah filesystem/Database.
+
+    Mode normal: backup canonical → nomor_urut DB → nomor baru.
+    Mode reset bersih hanya aktif bila ``allocation_base`` masih tepat berisi
+    folder PK 28, 29, 30. Mode ini mengabaikan backup/DB dan mulai dari
+    ``start_number``. Begitu folder baru dibuat, guard mati dan mode normal
+    otomatis dipakai lagi.
+    """
+    reset_requested = (
+        not use_backup
+        and not use_database
+        and start_number is not None
+        and bool(allocation_base)
+    )
+    reset_active = reset_requested and _pl_clean_pk_reset_root(allocation_base)
+    if reset_requested and not reset_active:
+        # Caller meminta reset, tetapi root sudah berubah; kembali ke allocator
+        # normal agar retry tidak terus mengabaikan state baru.
+        use_backup = True
+        use_database = True
+
+    active_numbers = {
+        number
+        for root in output_bases
+        for number, _name in _pl_numbered_dirs(root)
+    }
+    backup_numbers = {
+        number
+        for root in output_bases
+        for number, _name in _pl_numbered_dirs(os.path.join(root, "backup"))
+    } if use_backup else set()
+
+    records = []
+    stable_numbers = set()
+    for row in rows or []:
+        code = str(row.get("kode_paket") or "").strip()
+        kind = str(row.get("jenis_pl") or "JKK").strip().upper()
+        backup_match = None
+        if use_backup:
+            for root in output_bases:
+                if (kind == "JKK" and not root.casefold().endswith("jkk")) or (
+                    kind == "PK" and not root.casefold().endswith("pk")
+                ):
+                    continue
+                backup_match = _pl_backup_match(row, root)
+                if backup_match:
+                    break
+        db_value = str(row.get("nomor_urut") or "").strip()
+        db_number = int(db_value) if use_database and db_value.isdigit() else None
+        if backup_match:
+            number, source_name, score = backup_match
+            source = "backup"
+        elif db_number is not None:
+            number, source_name, score = db_number, "database", 1.0
+            source = "database"
+        else:
+            number, source_name, score = None, "nomor baru", 0.0
+            source = "baru"
+        if number is not None:
+            stable_numbers.add(number)
+        records.append({
+            "kode_paket": code,
+            "nomor_urut": number,
+            "source": source,
+            "source_name": source_name,
+            "match_score": score,
+        })
+
+    used = set(active_numbers) | set(backup_numbers) | set(stable_numbers)
+    assignments = {}
+    conflicts = []
+    assigned_numbers = {}
+    for record in records:
+        code = record["kode_paket"]
+        number = record["nomor_urut"]
+        if number is None:
+            continue
+        if number in active_numbers:
+            conflicts.append(f"Nomor {number} masih dipakai folder aktif: {code or '-'}")
+        previous = assigned_numbers.get(number)
+        if previous and previous != code:
+            conflicts.append(f"Nomor {number} dipetakan ke {previous} dan {code}")
+        assigned_numbers[number] = code
+        assignments[code] = record
+
+    if reset_active:
+        # Reset PK dimulai dari state root PK, bukan nomor tinggi JKK yang
+        # kebetulan ada di output_bases. ``used`` tetap global agar collision
+        # dengan folder aktif keluarga lain dihindari saat rentang bertemu.
+        allocation_active_numbers = {
+            number
+            for number, _name in _pl_numbered_dirs(allocation_base)
+        }
+        next_number = max(
+            int(start_number),
+            max(allocation_active_numbers or {int(start_number) - 1}) + 1,
+        )
+    else:
+        next_number = max(used or {0}) + 1
+    for record in records:
+        if record["nomor_urut"] is not None:
+            continue
+        while next_number in used:
+            next_number += 1
+        record["nomor_urut"] = next_number
+        record["source"] = "baru"
+        used.add(next_number)
+        assignments[record["kode_paket"]] = record
+        next_number += 1
+
+    return {
+        "assignments": assignments,
+        "conflicts": list(dict.fromkeys(conflicts)),
+        "active_numbers": sorted(active_numbers),
+        "backup_numbers": sorted(backup_numbers),
+    }
+
 def _cari_xlsm_pl(folder):
     """Cari .xlsm utama di folder paket PL (prefix '0. BA', skip Backup)."""
     try:

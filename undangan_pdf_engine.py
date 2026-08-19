@@ -44,6 +44,43 @@ def _title_case_dinas(nama: str) -> str:
                     for i, w in enumerate(words))
 
 
+def _nomor_urut_folder_pl(data: dict) -> str:
+    """Ambil nomor folder PL aktual; jangan turunkan nomor dari kode unik."""
+    nama_paket = str(data.get("nama_paket") or "").strip()
+    jenis_pl = str(data.get("jenis_pl") or "JKK").upper()
+    nomor_db = str(data.get("nomor_urut") or "").strip()
+
+    # Resolver existing mengembalikan nomor dari nama folder fisik jika ada.
+    try:
+        from parse_kak_pl import _resolve_folder_pl
+
+        _folder, nomor_folder = _resolve_folder_pl(
+            nomor_db,
+            nama_paket,
+            jenis_pl,
+            is_ulang=bool(data.get("is_ulang")),
+        )
+        if str(nomor_folder).strip().isdigit():
+            return str(int(nomor_folder))
+    except Exception:
+        pass
+
+    # Fallback aman: nomor_urut DB atau prefix folder yang tersimpan sebagai teks.
+    for raw in (nomor_db, data.get("folder_dibuat")):
+        match = re.match(r"^\s*(\d+)\s*\.\s*", str(raw or ""))
+        value = match.group(1) if match else str(raw or "").strip()
+        if value.isdigit():
+            return str(int(value))
+
+    raise ValueError(
+        f"Nomor urut folder PL tidak ditemukan untuk paket {nama_paket or '-'}"
+    )
+
+
+def _build_nomor_surat_pl(nomor_folder: str, singkatan_satker: str, tahun: int) -> str:
+    return f"000.3.3/PP-{int(nomor_folder):02d}/{singkatan_satker}/Reviu/{tahun}"
+
+
 def _build_nomor_surat(kode_pokja: str, kode_unik: str, tahun: int) -> str:
     no = str(int(kode_pokja)).zfill(2) if kode_pokja.isdigit() else "01"
     return f"000.3.3/{no}/Pokja{kode_pokja.zfill(3)}/T/Reviu-{kode_unik}/{tahun}"
@@ -366,7 +403,6 @@ def generate_undangan_pdf_pl(
 
     nama_satker  = _title_case_dinas(data.get("satker", ""))
     nama_paket   = data.get("nama_paket", "")
-    kode_unik    = data.get("kode_unik") or "DPP"
     jenis        = data.get("jenis_pl", "JKK")
 
     # Nomor + Perihal surat Permohonan PPK — extract dari PDF di folder paket PL
@@ -411,14 +447,13 @@ def generate_undangan_pdf_pl(
         if w and w[0].isupper() and w not in _SKIP
     )
 
-    # Nomor paket dari digit akhir kode_unik, zero-pad 2 digit
-    _no_m = _re2.search(r"\d+$", kode_unik)
-    _no_paket_str = _no_m.group().zfill(2) if _no_m else "01"
+    _nomor_folder = _nomor_urut_folder_pl(data)
 
     if not nomor_surat:
-        nomor_surat = (
-            f"000.3.3/PP-{_no_paket_str}/{_singkatan}"
-            f"/Reviu-{kode_unik}/{tanggal_kirim.year}"
+        nomor_surat = _build_nomor_surat_pl(
+            _nomor_folder,
+            _singkatan,
+            tanggal_kirim.year,
         )
 
     NAMA_PP = "Muhammad Isra Andria, S.T."

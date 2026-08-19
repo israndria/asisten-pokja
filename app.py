@@ -137,7 +137,7 @@ def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
         pass
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow
+from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -2909,27 +2909,38 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 and str(r.get("kode_paket") or "") not in _pl_local_by_kode
             ]
 
-            # Plan: pre-compute nama folder per paket
-            # Deteksi nomor tertinggi yang sudah ada di masing-masing output_base
-            _pl_no_global = max(
-                pl_engine.nomor_folder_tertinggi(_PL_DIR_JKK),
-                pl_engine.nomor_folder_tertinggi(_PL_DIR_PK),
-            )
-            _pl_no_offset = {_PL_DIR_JKK: _pl_no_global, _PL_DIR_PK: _pl_no_global}
+            # Plan: nomor lama dari backup/database lebih authoritative daripada
+            # nomor tertinggi folder aktif. Karantina ``_...`` sengaja diabaikan.
+            _pl_number_plan = plan_nomor_folder_pl(_pl_rows_belum, (_PL_DIR_JKK, _PL_DIR_PK))
+            _pl_number_by_kode = _pl_number_plan["assignments"]
+            _pl_number_conflicts = _pl_number_plan["conflicts"]
+            if _pl_number_conflicts:
+                st.error("⛔ Konflik nomor folder; bulk ditahan:\n" + "\n".join(f"- {msg}" for msg in _pl_number_conflicts))
+            _pl_preview = [
+                f"{info['nomor_urut']} ← {str(row.get('nama_paket') or '-')[:42]} ({info['source']})"
+                for row in _pl_rows_belum
+                if (info := _pl_number_by_kode.get(str(row.get('kode_paket') or "")))
+            ]
+            if _pl_preview:
+                st.caption("Preview nomor folder: " + " · ".join(_pl_preview))
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
                 _bj0   = (_br0.get("jenis_pl") or "JKK").upper()
                 _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
-                # Nomor = offset (folder tertinggi di disk) + urutan paket ini
-                _bno0  = _pl_no_offset[_bout_base0] + _bi0
+                _bnum_info0 = _pl_number_by_kode.get(str(_br0.get("kode_paket") or ""), {})
+                _bno0 = int(_bnum_info0.get("nomor_urut") or 0)
+                if not _bno0:
+                    continue
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
                 _bnm_folder0 = pl_engine.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
+                    "nomor_urut": _bno0,
+                    "nomor_source": _bnum_info0.get("source", ""),
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
                     "workflow": _pl_workflow(_br0),
@@ -2960,8 +2971,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _plf_chk_key = f"plf_chk_{_bkp_chk}"
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
+                    _chk_num_info = _pl_number_by_kode.get(str(_bkp_chk), {})
+                    _chk_display = dict(_br_chk)
+                    if _chk_num_info.get("nomor_urut"):
+                        _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
                     st.checkbox(
-                        f"{_pl_label(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_pl_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
@@ -2971,7 +2986,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 ]
                 if st.button(
                     f"📁 Buat Folder Terpilih ({len(_pl_terpilih_plan)} paket)",
-                    disabled=len(_pl_terpilih_plan) == 0,
+                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts),
                     use_container_width=True,
                     key="pl_btn_buat_terpilih",
                     type="primary",
@@ -6303,25 +6318,45 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 and str(r.get("kode_paket") or "") not in _pl_local_by_kode
             ]
 
-            # Plan: pre-compute nama folder per paket
-            _pl_no_global = max(
-                _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_JKK),
-                _pl_engine_utils.nomor_folder_tertinggi(_PL_DIR_PK),
+            # Plan: nomor lama dari backup/database lebih authoritative daripada
+            # nomor tertinggi folder aktif. Karantina ``_...`` sengaja diabaikan.
+            _pl_number_plan = plan_nomor_folder_pl(
+                _pl_rows_belum,
+                (_PL_DIR_JKK, _PL_DIR_PK),
+                use_backup=False,
+                use_database=False,
+                start_number=35,
+                allocation_base=_PL_DIR_PK,
             )
-            _pl_no_offset = {_PL_DIR_JKK: _pl_no_global, _PL_DIR_PK: _pl_no_global}
+            _pl_number_by_kode = _pl_number_plan["assignments"]
+            _pl_number_conflicts = _pl_number_plan["conflicts"]
+            if _pl_number_conflicts:
+                st.error("⛔ Konflik nomor folder; bulk ditahan:\n" + "\n".join(f"- {msg}" for msg in _pl_number_conflicts))
+            _pl_preview = [
+                f"{info['nomor_urut']} ← {str(row.get('nama_paket') or '-')[:42]} ({info['source']})"
+                for row in _pl_rows_belum
+                if (info := _pl_number_by_kode.get(str(row.get('kode_paket') or "")))
+            ]
+            if _pl_preview:
+                st.caption("Preview nomor folder: " + " · ".join(_pl_preview))
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
                 _bj0   = (_br0.get("jenis_pl") or "PK").upper()
                 _bpfx0 = {"JKK": "PLJKK", "PK": "PLPK"}.get(_bj0, f"PL{_bj0}")
                 _bout_base0  = _PL_DIR_JKK if _bj0 == "JKK" else _PL_DIR_PK
-                _bno0  = _pl_no_offset[_bout_base0] + _bi0
+                _bnum_info0 = _pl_number_by_kode.get(str(_br0.get("kode_paket") or ""), {})
+                _bno0 = int(_bnum_info0.get("nomor_urut") or 0)
+                if not _bno0:
+                    continue
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
                 _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
                 _bnm_folder0 = _pl_engine_utils.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
                     "nama_folder": _bnm_folder0,
+                    "nomor_urut": _bno0,
+                    "nomor_source": _bnum_info0.get("source", ""),
                     "out_base": _bout_base0,
                     "jenis_pl": _bj0,
                     "workflow": _pl_workflow(_br0),
@@ -6347,8 +6382,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _plf_chk_key = f"plf_chk_{_bkp_chk}"
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
+                    _chk_num_info = _pl_number_by_kode.get(str(_bkp_chk), {})
+                    _chk_display = dict(_br_chk)
+                    if _chk_num_info.get("nomor_urut"):
+                        _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
                     st.checkbox(
-                        f"{_pl_label(_br_chk)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_pl_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
@@ -6358,7 +6397,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 ]
                 if st.button(
                     f"📁 Buat Folder Terpilih ({len(_pl_terpilih_plan)} paket)",
-                    disabled=len(_pl_terpilih_plan) == 0,
+                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts),
                     use_container_width=True,
                     key="pl_btn_buat_terpilih",
                     type="primary",
