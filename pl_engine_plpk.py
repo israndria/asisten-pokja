@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from config import sb as _sb
-from pl_engine import is_paket_ditarik, _safe_download_name_for_folder
+from pl_engine import is_paket_ditarik, _safe_download_name_for_folder, _spse_retry_call
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 
@@ -714,6 +714,8 @@ def download_dokumen_paket_pl(
     cookie_str: str = "",
     skip_merge: bool = False,
     force_clean: bool = False,
+    per_file_workers: int = 1,
+    download_timeout: int = 60,
 ) -> dict:
     """
     Download dokumen dari endpoint non-tender PP ke folder_tujuan:
@@ -795,7 +797,7 @@ def download_dokumen_paket_pl(
         current = url
         for _ in range(5):
             current, req_hdrs = _fix_customhostname_url(current)
-            resp = requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+            resp = requests.get(current, headers=req_hdrs, timeout=download_timeout, stream=True, allow_redirects=False)
             if resp.status_code not in (301, 302, 303, 307, 308):
                 return resp
             loc = resp.headers.get("Location")
@@ -803,13 +805,18 @@ def download_dokumen_paket_pl(
                 return resp
             current = urllib.parse.urljoin(current, loc)
         current, req_hdrs = _fix_customhostname_url(current)
-        return requests.get(current, headers=req_hdrs, timeout=30, stream=True, allow_redirects=False)
+        return requests.get(current, headers=req_hdrs, timeout=download_timeout, stream=True, allow_redirects=False)
 
     def _get_download_response_retry(url):
         for i, delay in enumerate((0, 0.7, 1.5), start=1):
             if delay:
                 time.sleep(delay)
-            resp = _get_download_response(url)
+            resp = _spse_retry_call(
+                lambda: _get_download_response(url),
+                requests,
+                log=log,
+                label="file",
+            )
             if resp.status_code not in (404, 429, 500, 502, 503, 504):
                 return resp
             if i < 3:
@@ -821,7 +828,12 @@ def download_dokumen_paket_pl(
         """Scrape link /dl/ dari endpoint, download semua file ke subfolder rapi."""
         r = None
         try:
-            r = requests.get(endpoint_url, headers=hdrs, timeout=15)
+            r = _spse_retry_call(
+                lambda: requests.get(endpoint_url, headers=hdrs, timeout=30),
+                requests,
+                log=log,
+                label=label,
+            )
             if r.status_code in (401, 403) or r.status_code >= 500:
                 err = f"HTTP {r.status_code} — sesi SPSE tidak valid atau server gagal"
                 hasil["error"].append(f"{label}: {err}")
@@ -859,35 +871,57 @@ def download_dokumen_paket_pl(
                 os.makedirs(folder_dl, exist_ok=True)
 
             log(f"  📂 {label}: {len(links)} file")
+            def _download_satu(link):
+                url_dl, initial_fname = link
+
+                def _download_once():
+                    r_dl = None
+                    partial = None
+                    fname = initial_fname
+                    try:
+                        r_dl = _get_download_response_retry(url_dl)
+                        r_dl.raise_for_status()
+                        cd = r_dl.headers.get("Content-Disposition", "")
+                        m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
+                        if m_cd:
+                            clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
+                            if clean:
+                                fname = clean
+                        original_fname = fname
+                        fname = _safe_download_name_for_folder(folder_dl, fname)
+                        if fname != original_fname:
+                            log(f"    ⚠️ nama file dipendekkan ({len(original_fname)}→{len(fname)} karakter): {fname}")
+                        with open(_unique_dst(folder_dl, fname) + ".part", "wb") as f:
+                            partial = f.name
+                            for chunk in r_dl.iter_content(65536):
+                                f.write(chunk)
+                        dst = partial[:-5]
+                        os.replace(partial, dst)
+                        partial = None
+                        return dst, fname
+                    finally:
+                        if partial and os.path.exists(partial):
+                            os.remove(partial)
+                        if r_dl is not None:
+                            close = getattr(r_dl, "close", None)
+                            if callable(close):
+                                close()
+
+                return _spse_retry_call(
+                    _download_once,
+                    requests,
+                    log=log,
+                    label=initial_fname,
+                )
+
             for url_dl, fname in links:
-                r_dl = None
                 try:
-                    r_dl = _get_download_response_retry(url_dl)
-                    r_dl.raise_for_status()
-                    cd = r_dl.headers.get("Content-Disposition", "")
-                    m_cd = re.search(r'filename[^;=\n]*=["\']?([^"\';\n]+)', cd)
-                    if m_cd:
-                        clean = re.sub(r'[<>:"/\\|?*]', "_", urllib.parse.unquote_plus(m_cd.group(1).strip())).strip()
-                        if clean:
-                            fname = clean
-                    original_fname = fname
-                    fname = _safe_download_name_for_folder(folder_dl, fname)
-                    if fname != original_fname:
-                        log(f"    ⚠️ nama file dipendekkan ({len(original_fname)}→{len(fname)} karakter): {fname}")
-                    dst = _unique_dst(folder_dl, fname)
-                    with open(dst, "wb") as f:
-                        for chunk in r_dl.iter_content(65536):
-                            f.write(chunk)
+                    dst, final_fname = _download_satu((url_dl, fname))
                     hasil["ok"].append(dst)
                     log(f"    ✅ {os.path.basename(dst)}")
                 except Exception as e:
                     hasil["error"].append(f"{fname}: {e}")
                     log(f"    ❌ {fname}: {e}")
-                finally:
-                    if r_dl is not None:
-                        close = getattr(r_dl, "close", None)
-                        if callable(close):
-                            close()
         except Exception as e:
             hasil["error"].append(f"{label}: {e}")
             log(f"  ❌ {label}: {e}")

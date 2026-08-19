@@ -24,6 +24,31 @@ SATKER_LIST = [
 
 STATUS_LIST = ["draft", "undangan", "evaluasi", "negosiasi", "selesai"]
 
+
+def _spse_retry_call(call, requests_module, *, log=None, label="", delays=(0.0, 1.5, 4.0, 8.0)):
+    """Retry gangguan koneksi transient tanpa mengulang error file lokal."""
+    retryable = (
+        requests_module.exceptions.Timeout,
+        requests_module.exceptions.ConnectionError,
+        requests_module.exceptions.ChunkedEncodingError,
+        TimeoutError,
+        ConnectionError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+    )
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            import time as _time
+            _time.sleep(delay)
+        try:
+            return call()
+        except retryable as exc:
+            if attempt >= len(delays):
+                raise
+            if log:
+                suffix = f" {label}" if label else ""
+                log(f"    ↻ retry koneksi {attempt}/{len(delays) - 1}{suffix}: {exc}")
+
 _BULAN_INDONESIA = {
     "januari": 1, "februari": 2, "maret": 3, "april": 4,
     "mei": 5, "juni": 6, "juli": 7, "agustus": 8,

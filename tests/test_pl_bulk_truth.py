@@ -44,6 +44,80 @@ def test_bulk_worker_resolves_engine_by_family():
     assert _engine_for_jenis_pl("").__name__ == "pl_engine"
 
 
+def test_spse_retry_call_retries_transient_connection_error():
+    calls = []
+
+    def flaky_call():
+        calls.append(len(calls) + 1)
+        if len(calls) < 3:
+            raise requests.exceptions.ConnectionError("reset oleh server")
+        return "OK"
+
+    result = pl_engine._spse_retry_call(
+        flaky_call,
+        requests,
+        delays=(0, 0, 0),
+    )
+
+    assert result == "OK"
+    assert calls == [1, 2, 3]
+
+
+def test_pk_download_retries_broken_stream_and_removes_partial_file(monkeypatch, tmp_path):
+    class _Response:
+        def __init__(self, url, text="", headers=None, chunks=()):
+            self.url = url
+            self.status_code = 200
+            self.text = text
+            self.headers = headers or {}
+            self._chunks = chunks
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _chunk_size):
+            for chunk in self._chunks:
+                if isinstance(chunk, BaseException):
+                    raise chunk
+                yield chunk
+
+        def close(self):
+            pass
+
+    stream_calls = []
+
+    def fake_get(url, **_kwargs):
+        if "/dl/" in url:
+            stream_calls.append(url)
+            chunks = (
+                (b"partial", requests.exceptions.ChunkedEncodingError("reset"))
+                if len(stream_calls) == 1
+                else (b"complete",)
+            )
+            return _Response(
+                url,
+                headers={
+                    "Content-Type": "application/pdf",
+                    "Content-Disposition": 'attachment; filename="dokumen.pdf"',
+                },
+                chunks=chunks,
+            )
+        html = '<a href="/tapinkab/dl/test">dokumen.pdf</a>' if url.endswith("/spek") else "<html></html>"
+        return _Response(url, text=html)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    result = pl_engine_plpk.download_dokumen_paket_pl(
+        "X", str(tmp_path), cookie_str="SPSE_SESSION=test", skip_merge=True,
+    )
+
+    assert result["error"] == []
+    assert len(result["ok"]) == 1
+    output = tmp_path / "1. KAK & Spesifikasi Teknis" / "dokumen.pdf"
+    assert output.read_bytes() == b"complete"
+    assert not list(output.parent.glob("*.part"))
+    assert len(stream_calls) == 2
+
+
 def test_download_filename_is_bounded_for_windows_path_limit(tmp_path):
     folder = tmp_path / ("paket-" + "x" * 80)
     folder.mkdir()

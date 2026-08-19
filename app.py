@@ -6426,7 +6426,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _pl_io_hasil = []
                     _pl_done_ct = 0
                     _pl_n_total = len(_pl_terpilih_plan)
-                    with ThreadPoolExecutor(max_workers=4) as _pl_ex:
+                    # SPSE sering mereset koneksi jika terlalu banyak paket
+                    # mengunduh bersamaan; tiap paket sendiri sudah retry dan
+                    # mengunduh file secara sequential.
+                    with ThreadPoolExecutor(max_workers=2) as _pl_ex:
                         from concurrent.futures import wait as _pl_wait, FIRST_COMPLETED as _PL_FIRST_COMPLETED
                         _pl_pending = {
                             _pl_ex.submit(_pl_proses_io_satu_paket, _it, _pl_cookie, _pl_cfg_io)
