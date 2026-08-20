@@ -11,6 +11,102 @@ import os
 import streamlit as st
 
 _LOCAL_DRAFT_CACHE_VERSION = "folder-identity-v3-family-gate"
+_PL_UMUMKAN_STATUS_KEY = "pl_umumkan_status"
+_PUBLISH_DONE_MARKERS = (
+    "sudah diumumkan",
+    "diumumkan",
+    "pengumuman",
+    "berjalan",
+    "aktif",
+    "published",
+)
+_PUBLISH_NEGATIVE_MARKERS = (
+    "belum",
+    "draft",
+    "gagal",
+    "ditolak",
+    "batal",
+    "ditarik",
+    "tidak aktif",
+    "nonaktif",
+)
+_PUBLISH_PRESTART_STAGE = "paket belum dilaksanakan"
+
+
+def _publish_status_text_is_done(value) -> bool:
+    """True jika teks status menunjukkan paket sudah melewati tahap draft."""
+    text = str(value or "").strip().lower()
+    if not text or any(marker in text for marker in _PUBLISH_NEGATIVE_MARKERS):
+        return False
+    return any(marker in text for marker in _PUBLISH_DONE_MARKERS)
+
+
+def get_paket_umumkan_status() -> dict:
+    """Ambil status pengumuman lokal tanpa memicu I/O."""
+    status = st.session_state.get(_PL_UMUMKAN_STATUS_KEY, {})
+    return status if isinstance(status, dict) else {}
+
+
+def mark_paket_sudah_diumumkan(kode_paket: str, result: dict | None = None) -> None:
+    """Simpan bukti POST pengumuman sukses untuk rerun Streamlit saat ini."""
+    kode = str(kode_paket or "").strip()
+    if not kode:
+        return
+    status = dict(get_paket_umumkan_status())
+    entry = {"status": "sudah diumumkan"}
+    if isinstance(result, dict):
+        for key in ("status_code", "location"):
+            if result.get(key) not in (None, ""):
+                entry[key] = result[key]
+    status[kode] = entry
+    st.session_state[_PL_UMUMKAN_STATUS_KEY] = status
+
+
+def mark_tahap_spse_sudah_diumumkan(tahap_map: dict) -> int:
+    """Salin batch tahap aktif SPSE ke session sebagai status sudah diumumkan."""
+    status = dict(get_paket_umumkan_status())
+    jumlah = 0
+    for kode_paket, tahap in (tahap_map or {}).items():
+        kode = str(kode_paket or "").strip()
+        tahap_text = str(tahap or "").strip()
+        if not kode or not tahap_text:
+            continue
+        status[kode] = {
+            "status": "sudah diumumkan",
+            "tahap_spse": tahap_text,
+        }
+        jumlah += 1
+    if jumlah:
+        st.session_state[_PL_UMUMKAN_STATUS_KEY] = status
+    return jumlah
+
+
+def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> bool:
+    """Deteksi paket yang sudah diumumkan dari session atau field SPSE."""
+    row = row or {}
+    kode = str(row.get("kode_paket") or "").strip()
+    session_status = session_status if isinstance(session_status, dict) else get_paket_umumkan_status()
+    if kode and kode in session_status:
+        marker = session_status[kode]
+        if marker is True:
+            return True
+        if isinstance(marker, dict):
+            if marker.get("ok") is True:
+                return True
+            marker = marker.get("status") or marker.get("tahap_spse") or marker.get("pesan")
+        if _publish_status_text_is_done(marker):
+            return True
+
+    tahap = str(row.get("tahap_spse") or "").strip().lower()
+    if tahap == _PUBLISH_PRESTART_STAGE:
+        # SPSE memakai label ini untuk paket yang sudah diumumkan/disetujui,
+        # tetapi jadwal mulai belum tercapai.
+        return True
+    if tahap and not any(marker in tahap for marker in _PUBLISH_NEGATIVE_MARKERS):
+        # Tahap berikutnya (mis. Upload Dokumen Penawaran) berarti Draft sudah
+        # dilewati walau label tahap tidak memuat kata "Pengumuman".
+        return True
+    return _publish_status_text_is_done(row.get("status"))
 
 
 def _filter_pl_family(rows: list[dict], engine_kind: str) -> list[dict]:
@@ -43,6 +139,33 @@ def fetch_status_semua_paket_cached(kode_tuple: tuple) -> dict:
         return peserta_monitor_pl.fetch_status_semua_paket(list(kode_tuple))
     except Exception:
         return {}
+
+
+def load_status_peserta_on_demand(
+    kode_tuple: tuple,
+    state_key: str,
+    button_key: str,
+) -> dict:
+    """Muat badge peserta hanya setelah diminta user.
+
+    Tab 1 tidak boleh memblokir perpindahan mode dengan puluhan request SPSE.
+    Hasil disimpan di session state agar rerun widget berikutnya tetap ringan;
+    tombol sengaja mengosongkan cache supaya refresh benar-benar mengambil data
+    terbaru.
+    """
+    kode = tuple(str(k) for k in kode_tuple if k)
+    if not kode:
+        return {}
+
+    status = st.session_state.get(state_key)
+    if not isinstance(status, dict):
+        status = {}
+
+    if st.button("🔄 Muat status peserta", key=button_key, help="Ambil jumlah peserta dari SPSE"):
+        fetch_status_semua_paket_cached.clear()
+        status = fetch_status_semua_paket_cached(kode)
+        st.session_state[state_key] = status
+    return status
 
 
 def filter_local_pl_rows(rows: list[dict]) -> list[dict]:

@@ -97,6 +97,20 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     ]
 
 
+def hitung_jadwal_pl_3_minggu(tgl_mulai: datetime) -> list[dict]:
+    """Mode Normal dengan durasi T5 selama 21 hari kalender."""
+    jadwal = hitung_jadwal_pl(tgl_mulai)
+    t5_mulai = jadwal[4]["mulai"]
+    t5_selesai_kand = (t5_mulai + timedelta(days=21)).replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+    t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+    jadwal[4] = {"nama": jadwal[4]["nama"], "mulai": t5_mulai, "selesai": t5_selesai}
+    return jadwal
+
+
 def hitung_jadwal_pl_cepat(tgl_mulai: datetime) -> list[dict]:
     """
     Hitung 5 tahap PL cepat. Tayang Senin → Upload s.d. Rabu, Pembukaan Rabu
@@ -331,6 +345,8 @@ def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "norma
         jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
     elif mode == "standar":
         jadwal_list = hitung_jadwal_pl_standar(tgl_mulai)
+    elif mode == "normal_3_minggu":
+        jadwal_list = hitung_jadwal_pl_3_minggu(tgl_mulai)
     else:
         jadwal_list = hitung_jadwal_pl(tgl_mulai)
     payload = build_payload_pl(scraped, jadwal_list)

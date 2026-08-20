@@ -1,7 +1,10 @@
 """Regression gate folder lokal/workbook untuk daftar operasional PL."""
 
+from unittest.mock import patch
+
 import parse_kak_pl
 import pl_engine
+import pl_data_ui
 import pl_ui_helpers
 import zipfile
 from pl_data_ui import _filter_pl_family, _hydrate_provider_from_excel, filter_local_pl_rows
@@ -378,3 +381,86 @@ def test_strict_resolver_rejects_ambiguous_short_physical_name(monkeypatch, tmp_
 
     assert resolved is None
     assert nomor == ""
+
+def test_status_peserta_tab1_lazy_loads_only_when_requested():
+    state = {}
+    kode = ("1001", "1002")
+    status = {"1001": {"jumlah": 1}, "1002": {"jumlah": 0}}
+
+    with patch.object(pl_data_ui.st, "session_state", state), patch.object(
+        pl_data_ui.st, "button", side_effect=[False, True]
+    ), patch.object(
+        pl_data_ui, "fetch_status_semua_paket_cached", return_value=status
+    ) as fetch:
+        awal = pl_data_ui.load_status_peserta_on_demand(
+            kode, "test_status", "test_status_button"
+        )
+        assert awal == {}
+        fetch.assert_not_called()
+
+        setelah_muat = pl_data_ui.load_status_peserta_on_demand(
+            kode, "test_status", "test_status_button"
+        )
+
+    assert setelah_muat == status
+    assert state["test_status"] == status
+    fetch.assert_called_once_with(kode)
+
+
+def test_paket_umumkan_status_uses_session_then_spse_fields():
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {"kode_paket": "34", "status": "draft"},
+        {"34": {"status": "sudah diumumkan"}},
+    ) is True
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {"kode_paket": "35", "status": "berjalan"},
+        {},
+    ) is True
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {"kode_paket": "36", "status": "draft", "tahap_spse": "Pengumuman"},
+        {},
+    ) is True
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {"kode_paket": "36b", "status": "draft", "tahap_spse": "Upload Dokumen Penawaran"},
+        {},
+    ) is True
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {"kode_paket": "37", "status": "draft", "tahap_spse": ""},
+        {},
+    ) is False
+    assert pl_data_ui.is_paket_sudah_diumumkan(
+        {
+            "kode_paket": "34",
+            "status": "draft",
+            "tahap_spse": "Paket Belum Dilaksanakan",
+        },
+        {},
+    ) is True
+
+
+def test_mark_paket_sudah_diumumkan_ke_session_state():
+    state = {}
+    with patch.object(pl_data_ui.st, "session_state", state):
+        pl_data_ui.mark_paket_sudah_diumumkan(
+            "34", {"status_code": 302, "location": "/nontender/34"}
+        )
+
+    assert state["pl_umumkan_status"]["34"] == {
+        "status": "sudah diumumkan",
+        "status_code": 302,
+        "location": "/nontender/34",
+    }
+
+
+def test_mark_tahap_spse_sudah_diumumkan_menyimpan_status_batch():
+    state = {}
+    with patch.object(pl_data_ui.st, "session_state", state):
+        jumlah = pl_data_ui.mark_tahap_spse_sudah_diumumkan({
+            "34": "Paket Belum Dilaksanakan",
+            "35": "Upload Dokumen Penawaran",
+            "36": "",
+        })
+
+    assert jumlah == 2
+    assert state["pl_umumkan_status"]["34"]["tahap_spse"] == "Paket Belum Dilaksanakan"
+    assert state["pl_umumkan_status"]["35"]["status"] == "sudah diumumkan"

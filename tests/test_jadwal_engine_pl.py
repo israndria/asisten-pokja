@@ -38,3 +38,17 @@ class JadwalEnginePlTest(unittest.TestCase):
                 t4 = jadwal[3]
                 t5 = jadwal[4]
                 self.assertEqual(t5["mulai"], t4["selesai"] + timedelta(minutes=1))
+
+    def test_normal_3_minggu_keeps_normal_t1_to_t4_and_extends_t5(self):
+        tgl_mulai = datetime(2026, 8, 6, 8, 0)
+        normal = jadwal_engine_pl.hitung_jadwal_pl(tgl_mulai)
+        tiga_minggu = jadwal_engine_pl.hitung_jadwal_pl_3_minggu(tgl_mulai)
+
+        self.assertEqual(tiga_minggu[:4], normal[:4])
+        self.assertEqual(tiga_minggu[4]["mulai"], normal[4]["mulai"])
+        expected_selesai = jadwal_engine.geser_ke_hari_kerja(
+            (normal[4]["mulai"] + timedelta(days=21)).replace(
+                hour=16, minute=0, second=0, microsecond=0
+            )
+        ).replace(hour=16, minute=0, second=0, microsecond=0)
+        self.assertEqual(tiga_minggu[4]["selesai"], expected_selesai)

@@ -1626,7 +1626,9 @@ def umumkan_paket_pl(kode_paket: str, cookie_str: str) -> dict:
         payload = {
             'authenticityToken': token,
             'alasan': '',
-            'setuju': 'setuju',
+            # Form SPSE mengirim value tombol submit, bukan nama tombol.
+            # DOM aktual: <button name="setuju" value="true">.
+            'setuju': 'true',
         }
         resp_post = requests.post(
             f"{SPSE_BASE_URL}nontender/{kode_paket}/pengumumanpp",

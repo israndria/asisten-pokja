@@ -12,6 +12,14 @@ import threading
 import time
 from datetime import datetime, timedelta, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Pastikan bootstrap lokal ditemukan, lalu prioritaskan config.py Asisten
+# termasuk saat Streamlit hot-reload masih menyimpan modul asing di cache.
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _APP_DIR)
+from app_bootstrap import ensure_local_config
+ensure_local_config(_APP_DIR)
+
 import streamlit as st
 from ui_state import (
     activate_mode,
@@ -23,8 +31,13 @@ from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
     filter_local_pl_rows as _filter_local_pl_rows,
+    get_paket_umumkan_status as _get_paket_umumkan_status,
+    is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
+    load_status_peserta_on_demand as _load_status_peserta_on_demand,
     load_draft_pl_cached as _load_draft_pl_cached,
     load_verifikasi_pl_rows_cached as _load_verifikasi_pl_rows_cached,
+    mark_paket_sudah_diumumkan as _mark_paket_sudah_diumumkan,
+    mark_tahap_spse_sudah_diumumkan as _mark_tahap_spse_sudah_diumumkan,
     parse_jadwal_pl_cached as _parse_jadwal_pl_cached,
 )
 from ui_pl_pk import (
@@ -141,8 +154,6 @@ from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _ca
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Suppress Playwright/CDP/Node stderr noise di console Streamlit
 import io as _io
@@ -2566,8 +2577,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ]
             _pl_filtered = _pl_unfoldered + _pl_foldered
 
-            _pl_peserta_map = _fetch_status_semua_paket_cached(
-                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
+            _pl_peserta_map = _load_status_peserta_on_demand(
+                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket")),
+                "pl_tab1_status_peserta_jkk",
+                "pl_tab1_status_peserta_jkk_button",
             )
 
             if not _pl_filtered:
@@ -3793,7 +3806,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _gcal_ok = _gcalpl_g.check_gcal_token()
 
                 st.divider()
-                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Standar", "Cepat"], horizontal=True, key="pljd_mode")
+                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode")
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -3806,7 +3819,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
                     _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("08:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
-                    if _pljd_mode == "Cepat":
+                    if _pljd_mode == "Normal 3 Minggu":
+                        _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
+                    elif _pljd_mode == "Cepat":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv)
                     elif _pljd_mode == "Standar":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_standar(_t1_pv)
@@ -3850,7 +3865,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                            _mode_str = {"Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil_row = {
@@ -3922,8 +3937,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "cepat":
+                                _mode_str_prev = {"Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                                if _mode_str_prev == "normal_3_minggu":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
+                                elif _mode_str_prev == "cepat":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
                                 elif _mode_str_prev == "standar":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
@@ -4669,8 +4686,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.rerun()
         _pp_rows = _load_draft_pl_cached()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
+        _pp_umumkan_status = _get_paket_umumkan_status()
+        _pp_sudah_diumumkan = [
+            r for r in _pp_rows
+            if _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
         # Tab 4 tetap fase setup: hanya paket yang masih Draft.
-        _pp_rows = [r for r in _pp_rows if pl_engine.is_paket_draft(r)]
+        _pp_rows = [
+            r for r in _pp_rows
+            if not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+            and pl_engine.is_paket_draft(r)
+        ]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -4796,23 +4822,74 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum = [r for r in _pp_rows if r.get("kode_paket") and r.get("folder_dibuat")]
-        if not _paket_berfolder_umum:
-            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        if st.button(
+            "🔄 Sinkronkan status pengumuman dari SPSE",
+            key="sync_umum_status_jkk",
+            help="Read-only: membaca tahap paket dari SPSE tanpa mengumumkan ulang.",
+        ):
+            try:
+                import spse_browser as _spse_br_status_jkk
+                _cookie_status_jkk = _spse_br_status_jkk.get_spse_cookies()
+                if not _cookie_status_jkk:
+                    st.error("Browser SPSE tidak terhubung atau session kosong.")
+                else:
+                    with st.spinner("Membaca status pengumuman dari SPSE..."):
+                        _tahap_status_jkk = pl_engine._fetch_tahap_spse(
+                            _cookie_status_jkk, pl_engine.BASE_URL
+                        )
+                    _n_status_jkk = _mark_tahap_spse_sudah_diumumkan(_tahap_status_jkk)
+                    if _n_status_jkk:
+                        _load_draft_pl_cached.clear()
+                        st.session_state["pl_umumkan_status_flash_jkk"] = (
+                            f"✅ {_n_status_jkk} status paket berhasil disinkronkan dari SPSE."
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
+            except Exception as _e_status_jkk:
+                st.error(f"Sinkronisasi status SPSE gagal: {_e_status_jkk}")
+        _status_flash_jkk = st.session_state.pop("pl_umumkan_status_flash_jkk", "")
+        if _status_flash_jkk:
+            st.success(_status_flash_jkk)
+        for _flash_jkk in st.session_state.pop("pl_umumkan_flash_jkk", []):
+            if _flash_jkk.get("ok"):
+                st.success(f"✅ {_flash_jkk['paket'][:60]} — {_flash_jkk.get('pesan', 'Berhasil diumumkan')}")
+            else:
+                st.error(f"❌ {_flash_jkk['paket'][:60]} — {_flash_jkk.get('pesan', 'Gagal diumumkan')}")
+        _pp_umum_semua = _pp_rows + _pp_sudah_diumumkan
+        _paket_sudah_umum = [
+            r for r in _pp_umum_semua
+            if r.get("kode_paket") and r.get("folder_dibuat")
+            and _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
+        _paket_belum_umum = [
+            r for r in _pp_umum_semua
+            if r.get("kode_paket") and r.get("folder_dibuat")
+            and not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
+        if _paket_sudah_umum:
+            with st.expander(
+                f"✅ Sudah diumumkan ({len(_paket_sudah_umum)} paket)",
+                expanded=False,
+            ):
+                for _r_sudah_umum in _paket_sudah_umum:
+                    st.success(f"✅ {_pl_label(_r_sudah_umum)} — Sudah diumumkan")
+        if not _paket_belum_umum:
+            st.info("✅ Semua paket berfolder sudah diumumkan." if _paket_sudah_umum else "Tidak ada paket berfolder yang bisa diumumkan.")
         else:
             _umum_col1, _umum_col2 = st.columns(2)
             with _umum_col1:
                 if st.button("✅ Semua", key="umum_sel_all_jkk", use_container_width=True):
-                    for _r in _paket_berfolder_umum:
+                    for _r in _paket_belum_umum:
                         st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
                     st.rerun()
             with _umum_col2:
                 if st.button("⬜ Kosong", key="umum_sel_none_jkk", use_container_width=True):
-                    for _r in _paket_berfolder_umum:
+                    for _r in _paket_belum_umum:
                         st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
                     st.rerun()
             _pilih_umum = []
-            for _r in _paket_berfolder_umum:
+            for _r in _paket_belum_umum:
                 _umum_key = f"umum_chk_{_r['kode_paket']}"
                 _umum_chk = st.checkbox(
                     _pl_label(_r),
@@ -4830,14 +4907,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.error(f"Browser SPSE tidak terhubung: {_e_br_umum}")
                     _cookie_umum = None
                 if _cookie_umum:
+                    _umum_hasil_jkk = []
                     for _kp_umum in _pilih_umum:
-                        _r_umum = next((r for r in _paket_berfolder_umum if r["kode_paket"] == _kp_umum), {"nama_paket": _kp_umum})
+                        _r_umum = next((r for r in _paket_belum_umum if r["kode_paket"] == _kp_umum), {"nama_paket": _kp_umum})
                         _nm_umum = _pl_label(_r_umum)
                         _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
+                        _umum_hasil_jkk.append({"paket": _nm_umum, **_ru})
                         if _ru["ok"]:
-                            st.success(f"✅ {_nm_umum[:60]} — {_ru['pesan']}")
+                            _mark_paket_sudah_diumumkan(_kp_umum, _ru)
                         else:
                             st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
+                    if any(row.get("ok") for row in _umum_hasil_jkk):
+                        st.session_state["pl_umumkan_flash_jkk"] = _umum_hasil_jkk
+                        _load_draft_pl_cached.clear()
+                        st.rerun()
 
     if _pl_active_tab == "8️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
@@ -6048,8 +6131,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ]
             _pl_filtered = _pl_unfoldered + _pl_foldered
 
-            _pl_peserta_map = _fetch_status_semua_paket_cached(
-                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket"))
+            _pl_peserta_map = _load_status_peserta_on_demand(
+                tuple(r.get("kode_paket", "") for r in _pl_filtered if r.get("kode_paket")),
+                "pl_tab1_status_peserta_pk",
+                "pl_tab1_status_peserta_pk_button",
             )
 
             if not _pl_filtered:
@@ -7065,7 +7150,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 import gcal_pl_helper as _gcalpl_gpk
                 _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
 
-                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Standar", "Cepat"], horizontal=True, key="pljd_mode_pk")
+                _pljd_mode = st.radio("Mode Jadwal", ["Normal", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_pk")
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -7078,7 +7163,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
                     _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("08:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
-                    if _pljd_mode == "Cepat":
+                    if _pljd_mode == "Normal 3 Minggu":
+                        _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
+                    elif _pljd_mode == "Cepat":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv)
                     elif _pljd_mode == "Standar":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_standar(_t1_pv)
@@ -7123,7 +7210,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                            _mode_str = {"Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil_row = {
@@ -7195,8 +7282,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("08:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "cepat":
+                                _mode_str_prev = {"Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                                if _mode_str_prev == "normal_3_minggu":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
+                                elif _mode_str_prev == "cepat":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
                                 elif _mode_str_prev == "standar":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
@@ -7959,7 +8048,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.rerun()
         _pp_rows = _load_draft_pl_cached("PK")
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
-        _pp_rows = [r for r in _pp_rows if _pl_engine_utils.is_paket_draft(r)]
+        _pp_umumkan_status = _get_paket_umumkan_status()
+        _pp_sudah_diumumkan = [
+            r for r in _pp_rows
+            if _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
+        _pp_rows = [
+            r for r in _pp_rows
+            if not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+            and _pl_engine_utils.is_paket_draft(r)
+        ]
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -8087,23 +8185,74 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
-        _paket_berfolder_umum_pk = [r for r in _pp_rows if r.get("kode_paket") and r.get("folder_dibuat")]
-        if not _paket_berfolder_umum_pk:
-            st.info("Tidak ada paket berfolder yang bisa diumumkan.")
+        if st.button(
+            "🔄 Sinkronkan status pengumuman dari SPSE",
+            key="sync_umum_status_pk",
+            help="Read-only: membaca tahap paket dari SPSE tanpa mengumumkan ulang.",
+        ):
+            try:
+                import spse_browser as _spse_br_status_pk
+                _cookie_status_pk = _spse_br_status_pk.get_spse_cookies()
+                if not _cookie_status_pk:
+                    st.error("Browser SPSE tidak terhubung atau session kosong.")
+                else:
+                    with st.spinner("Membaca status pengumuman dari SPSE..."):
+                        _tahap_status_pk = pl_engine._fetch_tahap_spse(
+                            _cookie_status_pk, pl_engine.BASE_URL
+                        )
+                    _n_status_pk = _mark_tahap_spse_sudah_diumumkan(_tahap_status_pk)
+                    if _n_status_pk:
+                        _load_draft_pl_cached.clear()
+                        st.session_state["pl_umumkan_status_flash_pk"] = (
+                            f"✅ {_n_status_pk} status paket berhasil disinkronkan dari SPSE."
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
+            except Exception as _e_status_pk:
+                st.error(f"Sinkronisasi status SPSE gagal: {_e_status_pk}")
+        _status_flash_pk = st.session_state.pop("pl_umumkan_status_flash_pk", "")
+        if _status_flash_pk:
+            st.success(_status_flash_pk)
+        for _flash_pk in st.session_state.pop("pl_umumkan_flash_pk", []):
+            if _flash_pk.get("ok"):
+                st.success(f"✅ {_flash_pk['paket'][:60]} — {_flash_pk.get('pesan', 'Berhasil diumumkan')}")
+            else:
+                st.error(f"❌ {_flash_pk['paket'][:60]} — {_flash_pk.get('pesan', 'Gagal diumumkan')}")
+        _pp_umum_semua_pk = _pp_rows + _pp_sudah_diumumkan
+        _paket_sudah_umum_pk = [
+            r for r in _pp_umum_semua_pk
+            if r.get("kode_paket") and r.get("folder_dibuat")
+            and _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
+        _paket_belum_umum_pk = [
+            r for r in _pp_umum_semua_pk
+            if r.get("kode_paket") and r.get("folder_dibuat")
+            and not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
+        ]
+        if _paket_sudah_umum_pk:
+            with st.expander(
+                f"✅ Sudah diumumkan ({len(_paket_sudah_umum_pk)} paket)",
+                expanded=False,
+            ):
+                for _r_sudah_umum_pk in _paket_sudah_umum_pk:
+                    st.success(f"✅ {_pl_label(_r_sudah_umum_pk)} — Sudah diumumkan")
+        if not _paket_belum_umum_pk:
+            st.info("✅ Semua paket berfolder sudah diumumkan." if _paket_sudah_umum_pk else "Tidak ada paket berfolder yang bisa diumumkan.")
         else:
             _umum_col1_pk, _umum_col2_pk = st.columns(2)
             with _umum_col1_pk:
                 if st.button("✅ Semua", key="umum_sel_all_pk", use_container_width=True):
-                    for _r in _paket_berfolder_umum_pk:
+                    for _r in _paket_belum_umum_pk:
                         st.session_state[f"umum_chk_{_r['kode_paket']}"] = True
                     st.rerun()
             with _umum_col2_pk:
                 if st.button("⬜ Kosong", key="umum_sel_none_pk", use_container_width=True):
-                    for _r in _paket_berfolder_umum_pk:
+                    for _r in _paket_belum_umum_pk:
                         st.session_state[f"umum_chk_{_r['kode_paket']}"] = False
                     st.rerun()
             _pilih_umum_pk = []
-            for _r in _paket_berfolder_umum_pk:
+            for _r in _paket_belum_umum_pk:
                 _umum_key_pk = f"umum_chk_{_r['kode_paket']}"
                 _umum_chk_pk = st.checkbox(
                     _pl_label(_r),
@@ -8121,14 +8270,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.error(f"Browser SPSE tidak terhubung: {_e_br_umum_pk}")
                     _cookie_umum_pk = None
                 if _cookie_umum_pk:
+                    _umum_hasil_pk = []
                     for _kp_umum_pk in _pilih_umum_pk:
-                        _r_umum_pk = next((r for r in _paket_berfolder_umum_pk if r["kode_paket"] == _kp_umum_pk), {"nama_paket": _kp_umum_pk})
+                        _r_umum_pk = next((r for r in _paket_belum_umum_pk if r["kode_paket"] == _kp_umum_pk), {"nama_paket": _kp_umum_pk})
                         _nm_umum_pk = _pl_label(_r_umum_pk)
                         _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
+                        _umum_hasil_pk.append({"paket": _nm_umum_pk, **_ru_pk})
                         if _ru_pk["ok"]:
-                            st.success(f"✅ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+                            _mark_paket_sudah_diumumkan(_kp_umum_pk, _ru_pk)
                         else:
                             st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+                    if any(row.get("ok") for row in _umum_hasil_pk):
+                        st.session_state["pl_umumkan_flash_pk"] = _umum_hasil_pk
+                        _load_draft_pl_cached.clear()
+                        st.rerun()
 
     if _pl_active_tab == "8️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
