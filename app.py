@@ -49,6 +49,7 @@ from ui_pl_pk import (
     render_skp_gate as render_plpk_skp_gate,
 )
 from ui_pl_common import render_package_selection
+from dokumen_ppk_pl_ui import render_tab_dokumen_ppk_pl
 from sbu_history import load_sbu_history as _load_shared_sbu_history
 from sbu_history import save_sbu_history as _save_shared_sbu_history
 from sbu_history import compact_sbu_label as _compact_sbu_label
@@ -148,6 +149,26 @@ def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
         tmp.replace(_PL_UNDANGAN_DATES_PATH)
     except (OSError, TypeError, ValueError):
         pass
+
+
+def _migrate_pl_tab_selection(state_key: str) -> None:
+    """Pindahkan pilihan radio PL lama setelah Tab 2 monitor disisipkan."""
+    old_to_new = {
+        "2️⃣ Kirim Undangan DPP": "3️⃣ Kirim Undangan DPP",
+        "3️⃣ Setup Paket": "4️⃣ Setup Paket",
+        "4️⃣ Pilih Penyedia & Umumkan": "5️⃣ Pilih Penyedia & Umumkan",
+        "5️⃣ Buat Jadwal": "6️⃣ Buat Jadwal",
+        "6️⃣ Download Kualifikasi": "7️⃣ Download Kualifikasi",
+        "7️⃣ Evaluasi & Teknis/Biaya": "8️⃣ Evaluasi & Teknis/Biaya",
+        "8️⃣ Kirim Verifikasi": "9️⃣ Kirim Verifikasi",
+        "9️⃣ Upload BA PL": "🔟 Upload BA PL",
+        "🔟 Penetapan Pemenang": "1️⃣1️⃣ Penetapan Pemenang",
+    }
+    current = st.session_state.get(state_key)
+    if current in old_to_new:
+        st.session_state[state_key] = old_to_new[current]
+
+
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
 from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl
@@ -2414,21 +2435,26 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
     _PL_TAB_LABELS = [
         "1️⃣ Draft Paket PL",
-        "2️⃣ Kirim Undangan DPP",
-        "3️⃣ Setup Paket",
-        "4️⃣ Pilih Penyedia & Umumkan",
-        "5️⃣ Buat Jadwal",
-        "6️⃣ Download Kualifikasi",
-        "7️⃣ Evaluasi & Teknis/Biaya",
-        "8️⃣ Kirim Verifikasi",
-        "9️⃣ Upload BA PL",
-        "🔟 Penetapan Pemenang",
+        "2️⃣ Monitor Dokumen PPK",
+        "3️⃣ Kirim Undangan DPP",
+        "4️⃣ Setup Paket",
+        "5️⃣ Pilih Penyedia & Umumkan",
+        "6️⃣ Buat Jadwal",
+        "7️⃣ Download Kualifikasi",
+        "8️⃣ Evaluasi & Teknis/Biaya",
+        "9️⃣ Kirim Verifikasi",
+        "🔟 Upload BA PL",
+        "1️⃣1️⃣ Penetapan Pemenang",
         "📄 Import DPA",
     ]
+    _migrate_pl_tab_selection("pl_active_tab_jkk")
     _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_jkk")
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
+
+    if _pl_active_tab == "2️⃣ Monitor Dokumen PPK":
+        render_tab_dokumen_ppk_pl(st, "JKK", _pl_label)
 
     # ── Tab 1: Draft Paket PL (JKK) ──────────────────────────────────────────
     if _pl_active_tab == "1️⃣ Draft Paket PL":
@@ -3458,7 +3484,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         )
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
+    if _pl_active_tab == "3️⃣ Kirim Undangan DPP":
         # Satu kanvas penuh: daftar paket juga menjadi tempat upload BA Reviu.
         _kd_col_list = st.container()
 
@@ -3699,7 +3725,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _do_upload_ba_pl(_ba_pl_valid)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "5️⃣ Buat Jadwal":
+    if _pl_active_tab == "6️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -4034,7 +4060,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_jkk")
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    if _pl_active_tab == "3️⃣ Setup Paket":
+    if _pl_active_tab == "4️⃣ Setup Paket":
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -4673,7 +4699,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
 
 
-    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -4818,7 +4844,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
-    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -4922,7 +4948,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _load_draft_pl_cached.clear()
                         st.rerun()
 
-    if _pl_active_tab == "8️⃣ Kirim Verifikasi":
+    if _pl_active_tab == "9️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -5079,7 +5105,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    if _pl_active_tab == "9️⃣ Upload BA PL":
+    if _pl_active_tab == "🔟 Upload BA PL":
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -5525,7 +5551,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.info(f"Tidak ada file `BA_PLJKK_*.pdf` ditemukan. Paket yang di-scan: {_ba_nama_paket_aktif or '(kosong)'}.")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    if _pl_active_tab == "6️⃣ Download Kualifikasi":
+    if _pl_active_tab == "7️⃣ Download Kualifikasi":
         _ke_pl = _ke_pl_jkk  # alias — sudah di-import top-level
         _he_pl = _he_pl_jkk
 
@@ -5679,7 +5705,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    if _pl_active_tab == "7️⃣ Evaluasi & Teknis/Biaya":
+    if _pl_active_tab == "8️⃣ Evaluasi & Teknis/Biaya":
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
@@ -5953,7 +5979,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         from batch_summary import render_ringkasan_batch as _rrb8
                         _rrb8(st, _ringkasan8)
 
-    if _pl_active_tab == "🔟 Penetapan Pemenang":
+    if _pl_active_tab == "1️⃣1️⃣ Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached()
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
         _rows10 = [r for r in _raw10 if pl_engine.is_paket_berjalan(r)]
@@ -5979,11 +6005,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # Rebind engine PK-specific ke varian _plpk (scope module, mode PK only)
     pl_engine = get_plpk_engine()
     import pl_engine as _pl_engine_utils
+    _migrate_pl_tab_selection("pl_active_tab_pk")
     _pl_active_tab = st.radio("Tab PL", PLPK_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
-    _is_plpk_tab6 = _pl_active_tab == "6️⃣ Download Kualifikasi"
+    _is_plpk_tab6 = _pl_active_tab == "7️⃣ Download Kualifikasi"
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
+
+    if _pl_active_tab == "2️⃣ Monitor Dokumen PPK":
+        render_tab_dokumen_ppk_pl(st, "PK", _pl_label)
 
     # ── Tab 1: Draft Paket PL (PK) ───────────────────────────────────────────
     if _pl_active_tab == "1️⃣ Draft Paket PL":
@@ -6810,7 +6840,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.success(f"🤖 Pra-reviu selesai: ✅ {_pra_ok}, ❌ {len(_pra_res)-_pra_ok}")
 
     # ── Tab 2: Kirim Undangan DPP ─────────────────────────────────────────────
-    if _pl_active_tab == "2️⃣ Kirim Undangan DPP":
+    if _pl_active_tab == "3️⃣ Kirim Undangan DPP":
         # Satu kanvas penuh: daftar paket juga menjadi tempat upload BA Reviu.
         _kd_col_list = st.container()
 
@@ -7045,7 +7075,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _do_upload_ba_pl(_ba_pl_valid)
 
     # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "5️⃣ Buat Jadwal":
+    if _pl_active_tab == "6️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -7379,7 +7409,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_pk")
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
-    if _pl_active_tab == "3️⃣ Setup Paket":
+    if _pl_active_tab == "4️⃣ Setup Paket":
         st.markdown("### Setup Paket Pengadaan Langsung")
         st.caption(
             "Submit LDK (Persyaratan Kualifikasi) + Masa Berlaku Penawaran + "
@@ -8034,7 +8064,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
 
 
-    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -8181,7 +8211,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
     # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
     # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
-    if _pl_active_tab == "4️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -8285,7 +8315,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _load_draft_pl_cached.clear()
                         st.rerun()
 
-    if _pl_active_tab == "8️⃣ Kirim Verifikasi":
+    if _pl_active_tab == "9️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
         from gcal_helper import get_jadwal_klarifikasi_pl as _gcal_klarifikasi
 
@@ -8442,7 +8472,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         st.write(f"  ❌ {h['paket']} — {h['nama']}: {h['msg']}")
 
     # ── Tab 8: Upload BA PL ───────────────────────────────────────────────────
-    if _pl_active_tab == "9️⃣ Upload BA PL":
+    if _pl_active_tab == "🔟 Upload BA PL":
         import ba_engine_pl as _ba_pl_engine5
         import ba_config_pl as _ba_cfg_pl
         import os as _os8
@@ -8764,7 +8794,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _st8l.write(f"  ❌ {_pbl['kode_paket']} — status {_rbl.get('status')}")
 
     # ── Tab 5: Download Dok Kualifikasi PL ───────────────────────────────────
-    if _pl_active_tab == "6️⃣ Download Kualifikasi":
+    if _pl_active_tab == "7️⃣ Download Kualifikasi":
         _ke_pl = _ke_pl_pk   # alias — sudah di-import top-level
         _he_pl = _he_pl_pk
 
@@ -8920,7 +8950,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _rrb7(st, _ringkasan7)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
-    if _pl_active_tab == "7️⃣ Evaluasi & Teknis/Biaya":
+    if _pl_active_tab == "8️⃣ Evaluasi & Teknis/Biaya":
         import evaluasi_admin_kualifikasi_pl as _eval_pl
         import dokumen_teknis_biaya_pl as _dtb_pl
         import penawaran_pl_engine as _penawaran_pl
@@ -9208,7 +9238,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         from batch_summary import render_ringkasan_batch as _rrb8
                         _rrb8(st, _ringkasan8)
 
-    if _pl_active_tab == "🔟 Penetapan Pemenang":
+    if _pl_active_tab == "1️⃣1️⃣ Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached("PK")
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
         _rows10 = [r for r in _raw10 if _pl_engine_utils.is_paket_berjalan(r)]
@@ -13183,7 +13213,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         if n_ps else "⚠️ Tidak ada peserta yang siap diproses."
                     )
                     if st.button(
-                        "▶ Jalankan paket ini",
+                        "▶ Proses 1 paket (sesuai opsi aksi)",
                         key=f"kl_run_{p['kode']}",
                         use_container_width=True,
                         disabled=(n_ps == 0) or (item.get("folder_ok") is False),

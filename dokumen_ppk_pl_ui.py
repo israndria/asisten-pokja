@@ -1,0 +1,187 @@
+"""Renderer Tab 2 monitor dokumen PPK PL JKK/PK."""
+
+from __future__ import annotations
+
+
+def _package_name(row: dict, label_fn) -> str:
+    try:
+        return str(label_fn(row) or row.get("nama_paket") or row.get("kode_paket") or "-")
+    except Exception:
+        return str(row.get("nama_paket") or row.get("kode_paket") or "-")
+
+
+def _render_snapshot_summary(st, engine, snapshot: dict) -> None:
+    total = 0
+    for kind, label in engine.DOCUMENT_TYPES.items():
+        files = snapshot.get(kind) or []
+        total += len(files)
+        st.markdown(f"- **{label}:** {len(files)} file")
+        for item in files:
+            name = item.get("nama") or "-"
+            tanggal = item.get("tanggal") or "tanggal tidak terbaca"
+            st.caption(f"  `{name}` — {tanggal}")
+    if total == 0:
+        st.caption("Belum ada file yang terdeteksi pada kategori dokumen PPK.")
+
+
+def _render_diff(st, result: dict) -> None:
+    for item in result.get("berubah", []):
+        st.markdown(
+            f"- **Berubah** [{item.get('jenis', '-')}]: "
+            f"`{item.get('nama_lama', '-')}` → `{item.get('nama_baru', '-')}` "
+            f"({item.get('tanggal_lama', '-')} → {item.get('tanggal_baru', '-')})"
+        )
+    for item in result.get("baru", []):
+        st.markdown(
+            f"- **File baru** [{item.get('jenis', '-')}]: "
+            f"`{item.get('nama', '-')}` — {item.get('tanggal') or 'tanggal tidak terbaca'}"
+        )
+    for item in result.get("perlu_verifikasi", []):
+        st.warning(
+            f"Perlu verifikasi [{item.get('jenis', '-')}]: "
+            f"`{item.get('nama_lama', '-')}` → `{item.get('nama_baru', '-')}`. "
+            f"{item.get('alasan', '')}"
+        )
+    for item in result.get("hilang", []):
+        st.markdown(
+            f"- **File hilang dari live SPSE** [{item.get('jenis', '-')}]: "
+            f"`{item.get('nama', '-')}` — mungkin diganti"
+        )
+
+
+def _render_result(st, engine, row: dict, result: dict, state_key: str, results: dict) -> None:
+    if result.get("error"):
+        if result.get("error_kind") == "session":
+            st.error(f"⚠️ Cookie SPSE invalid/expired — login ulang di Brave. {result['error']}")
+        else:
+            st.error(result["error"])
+        return
+
+    if result.get("baseline_created"):
+        st.info(
+            "Baseline dokumen berhasil disimpan. Cek ulang nanti untuk mendeteksi "
+            "file baru, perubahan tanggal upload, rename, atau file yang hilang."
+        )
+    elif result.get("ada_update"):
+        st.warning("Ada perubahan dokumen PPK pada paket ini.")
+        _render_diff(st, result)
+        if st.button(
+            "✅ Tandai snapshot terbaru sudah diperiksa",
+            key=f"pldoc_ack_{state_key}_{row['kode_paket']}",
+            use_container_width=True,
+            help="Simpan daftar live terbaru sebagai baseline berikutnya.",
+        ):
+            engine.save_snapshot(
+                row["kode_paket"],
+                row.get("jenis_pl") or state_key,
+                result.get("snapshot_baru") or {},
+            )
+            results.pop(str(row["kode_paket"]), None)
+            st.session_state[state_key] = results
+            st.success("✅ Snapshot terbaru disimpan sebagai baseline.")
+            st.rerun()
+    else:
+        st.success("✅ Tidak ada perubahan dokumen PPK sejak baseline terakhir.")
+
+    with st.expander("📄 Daftar dokumen live", expanded=False):
+        _render_snapshot_summary(st, engine, result.get("snapshot_baru") or {})
+
+
+def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
+    """Render checklist paket Draft + cek dokumen PPK secara on-demand."""
+    import pl_engine
+    from pl_data_ui import load_draft_pl_cached
+    from ui_pl_common import render_package_selection
+    import dokumen_ppk_pl as engine
+
+    family = str(jenis_pl or "JKK").upper()
+    state_key = f"pl_dokumen_ppk_results_{family.lower()}"
+    prefix = f"pldoc_{family.lower()}"
+
+    st.markdown(f"## Monitor Dokumen PPK — PL {family}")
+    st.caption(
+        "Hanya paket berstatus Draft yang ditampilkan. Pemeriksaan SPSE berjalan "
+        "saat tombol ditekan, tidak otomatis ketika tab dibuka."
+    )
+
+    try:
+        rows = load_draft_pl_cached(family, only_local=False)
+        kind_engine = __import__("pl_engine_plpk" if family == "PK" else "pl_engine")
+        rows, duplicate_count = kind_engine.buang_duplikat_paket_lama(rows)
+        rows = [row for row in rows if pl_engine.is_paket_draft(row)]
+    except Exception as exc:
+        st.error(f"Gagal memuat paket Draft PL {family}: {exc}")
+        return
+
+    if duplicate_count:
+        st.caption(f"↻ {duplicate_count} row paket ulang lama disembunyikan otomatis.")
+
+    if st.button("🔄 Muat ulang daftar paket Draft", key=f"{prefix}_reload", use_container_width=True):
+        load_draft_pl_cached.clear()
+        st.session_state.pop(state_key, None)
+        st.rerun()
+
+    if not rows:
+        st.info(f"Tidak ada paket PL {family} berstatus Draft.")
+        return
+
+    st.caption(f"📋 {len(rows)} paket Draft — centang paket yang ingin diperiksa:")
+    selected = render_package_selection(st, rows, label_fn, prefix=prefix)
+    results = st.session_state.setdefault(state_key, {})
+
+    if not selected:
+        st.info("Centang minimal satu paket.")
+        return
+
+    st.divider()
+    st.markdown(f"#### Aksi — {len(selected)} paket terpilih")
+    if st.button(
+        "🔍 Cek semua paket terpilih",
+        key=f"{prefix}_check_all",
+        type="primary",
+        use_container_width=True,
+    ):
+        progress = st.progress(0.0, text="Memulai pemeriksaan...")
+        for index, row in enumerate(selected, start=1):
+            name = _package_name(row, label_fn)
+            progress.progress((index - 1) / len(selected), text=f"Memeriksa {name[:55]}...")
+            try:
+                results[str(row["kode_paket"])] = engine.check_dokumen_ppk_pl(
+                    row["kode_paket"], family
+                )
+            except Exception as exc:
+                results[str(row["kode_paket"])] = {
+                    "error": str(exc),
+                    "error_kind": getattr(exc, "kind", "request"),
+                }
+        st.session_state[state_key] = results
+        progress.progress(1.0, text="Pemeriksaan selesai.")
+
+    st.caption("Atau periksa satu paket dari kartu masing-masing:")
+    for row in selected:
+        code = str(row.get("kode_paket") or "")
+        name = _package_name(row, label_fn)
+        result = results.get(code)
+        with st.expander(f"📄 {name}", expanded=bool(result)):
+            st.caption(f"Kode paket: `{code}` · Status SPSE: **Draft**")
+            if st.button(
+                "🔍 Cek ulang Dokumen PPK" if result else "🔍 Cek Dokumen PPK",
+                key=f"{prefix}_check_{code}",
+                use_container_width=True,
+            ):
+                with st.spinner(f"Memeriksa dokumen PPK {name[:45]}..."):
+                    try:
+                        result = engine.check_dokumen_ppk_pl(code, family)
+                    except Exception as exc:
+                        result = {
+                            "error": str(exc),
+                            "error_kind": getattr(exc, "kind", "request"),
+                        }
+                    results[code] = result
+                    st.session_state[state_key] = results
+
+            result = results.get(code)
+            if result:
+                _render_result(st, engine, row, result, state_key, results)
+            else:
+                st.caption("Belum diperiksa pada sesi ini.")

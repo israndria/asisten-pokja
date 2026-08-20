@@ -4,15 +4,16 @@ import re
 
 PLPK_TAB_LABELS = [
     "1️⃣ Draft Paket PL",
-    "2️⃣ Kirim Undangan DPP",
-    "3️⃣ Setup Paket",
-    "4️⃣ Pilih Penyedia & Umumkan",
-    "5️⃣ Buat Jadwal",
-    "6️⃣ Download Kualifikasi",
-    "7️⃣ Evaluasi & Teknis/Biaya",
-    "8️⃣ Kirim Verifikasi",
-    "9️⃣ Upload BA PL",
-    "🔟 Penetapan Pemenang",
+    "2️⃣ Monitor Dokumen PPK",
+    "3️⃣ Kirim Undangan DPP",
+    "4️⃣ Setup Paket",
+    "5️⃣ Pilih Penyedia & Umumkan",
+    "6️⃣ Buat Jadwal",
+    "7️⃣ Download Kualifikasi",
+    "8️⃣ Evaluasi & Teknis/Biaya",
+    "9️⃣ Kirim Verifikasi",
+    "🔟 Upload BA PL",
+    "1️⃣1️⃣ Penetapan Pemenang",
     "📄 Import DPA",
 ]
 
