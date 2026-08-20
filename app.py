@@ -1,7 +1,6 @@
 """Asisten Pokja — SPSE Automation (Streamlit)."""
 
 import os
-import glob as _glob_mod
 import json
 import pathlib
 import re
@@ -13094,10 +13093,8 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                     # folder_out = .../{folder_paket}/1. Dokumen Kualifikasi
                                     # xlsm ada di folder paket (parent), bukan subfolder kualifikasi
                                     _folder_paket = os.path.dirname(folder_out)
-                                    _xlsm_list = (
-                                        _glob_mod.glob(os.path.join(_folder_paket, "0. BA*.xlsm")) or
-                                        _glob_mod.glob(os.path.join(_folder_paket, "*.xlsm"))
-                                    )
+                                    _xlsm_list = [kualifikasi_engine.find_xlsm_paket(_folder_paket)]
+                                    _xlsm_list = [path for path in _xlsm_list if path]
                                     if _xlsm_list:
                                         _excel_path = _xlsm_list[0]
                                         _log_cb(f"  📝 [{kode_tender}] Menulis KK Evaluasi ke Excel: {os.path.basename(_excel_path)}")
@@ -14172,12 +14169,7 @@ Mulai sekarang."""
             _folder_paket = os.path.dirname(_folder_kual) if _folder_kual else ""
             _xlsm = ""
             if _folder_paket and os.path.isdir(_folder_paket):
-                _candidates = (
-                    _glob_mod.glob(os.path.join(_folder_paket, "0. BA*.xlsm")) or
-                    _glob_mod.glob(os.path.join(_folder_paket, "*.xlsm"))
-                )
-                if _candidates:
-                    _xlsm = _candidates[0]
+                _xlsm = kualifikasi_engine.find_xlsm_paket(_folder_paket)
             return _folder_kual, _xlsm
 
         _iba_bulk = [r for r in _iba_paket_list if r["kode_tender"] in _dp_selected_kodes]
@@ -14236,23 +14228,24 @@ Mulai sekarang."""
                     else:
                         _iba_info += "  \n⚠️ xlsm tidak ditemukan"
                     st.markdown(_iba_info)
+                _iba_clicked = False
                 with _iba_c2:
-                    if st.button(
+                    _iba_clicked = st.button(
                         "▶ Input BA",
                         key=f"iba_{_iba_kode}",
                         type="primary",
                         use_container_width=True,
                         disabled=not bool(_iba_xlsm),
-                    ):
-                        if _iba_xlsm:
-                            _proses_input_ba(
-                                _iba_kode,
-                                _iba_nama,
-                                _iba_folder_kual,
-                                _iba_xlsm,
-                                st.session_state.get("iba_do_teknis", True),
-                                st.session_state.get("iba_do_gcal", True),
-                            )
+                    )
+                if _iba_clicked and _iba_xlsm:
+                    _proses_input_ba(
+                        _iba_kode,
+                        _iba_nama,
+                        _iba_folder_kual,
+                        _iba_xlsm,
+                        st.session_state.get("iba_do_teknis", True),
+                        st.session_state.get("iba_do_gcal", True),
+                    )
 
     # ── Seksi 5: Konflik Personil Lintas Paket ───────────────────────────────
     st.divider()

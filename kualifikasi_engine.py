@@ -155,6 +155,26 @@ def fetch_peserta_by_id_lelang(id_lelang: str) -> dict:
     return fetch_peserta(url)
 
 
+def find_xlsm_paket(folder_paket: str) -> str:
+    """Cari workbook paket tanpa menafsirkan nama folder sebagai pola glob."""
+    try:
+        files = [
+            os.path.join(folder_paket, name)
+            for name in os.listdir(folder_paket)
+            if os.path.isfile(os.path.join(folder_paket, name))
+            and name.casefold().endswith(".xlsm")
+        ]
+    except (OSError, TypeError):
+        return ""
+
+    files.sort(key=lambda path: os.path.basename(path).casefold())
+    preferred = [
+        path for path in files
+        if os.path.basename(path).casefold().startswith("0. ba")
+    ]
+    return (preferred or files)[0] if (preferred or files) else ""
+
+
 def resolve_folder_paket(kode_tender: str) -> dict:
     """
     Lookup folder paket dari Supabase draft_paket.folder_dibuat.
