@@ -10,6 +10,11 @@ def _package_name(row: dict, label_fn) -> str:
         return str(row.get("nama_paket") or row.get("kode_paket") or "-")
 
 
+def _filter_unannounced_rows(rows: list[dict], session_status: dict, is_announced) -> list[dict]:
+    """Sembunyikan paket yang sudah tayang dari checklist monitoring."""
+    return [row for row in rows if not is_announced(row, session_status)]
+
+
 def _render_snapshot_summary(st, engine, snapshot: dict) -> None:
     total = 0
     for kind, label in engine.DOCUMENT_TYPES.items():
@@ -83,14 +88,21 @@ def _render_result(st, engine, row: dict, result: dict, state_key: str, results:
     else:
         st.success("✅ Tidak ada perubahan dokumen PPK sejak baseline terakhir.")
 
-    with st.expander("📄 Daftar dokumen live", expanded=False):
-        _render_snapshot_summary(st, engine, result.get("snapshot_baru") or {})
+    # Kartu paket di caller sudah berupa expander. Streamlit melarang expander
+    # bersarang, jadi daftar live dirender sebagai section biasa di dalam kartu.
+    st.markdown("**📄 Daftar dokumen live**")
+    _render_snapshot_summary(st, engine, result.get("snapshot_baru") or {})
 
 
 def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     """Render checklist paket Draft + cek dokumen PPK secara on-demand."""
     import pl_engine
-    from pl_data_ui import load_draft_pl_cached
+    from pl_data_ui import (
+        get_paket_umumkan_status,
+        is_paket_sudah_diumumkan,
+        load_draft_pl_cached,
+        mark_tahap_spse_sudah_diumumkan,
+    )
     from ui_pl_common import render_package_selection
     import dokumen_ppk_pl as engine
 
@@ -104,17 +116,57 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
         "saat tombol ditekan, tidak otomatis ketika tab dibuka."
     )
 
+    if st.button(
+        "🔄 Sinkronkan status tayang dari SPSE",
+        key=f"{prefix}_sync_status",
+        use_container_width=True,
+        help="Read-only: paket yang sudah diumumkan/disetujui tidak dimonitor lagi.",
+    ):
+        try:
+            import spse_browser
+
+            cookie = spse_browser.get_spse_cookies()
+            if not cookie:
+                st.error("Browser SPSE tidak terhubung atau session kosong.")
+            else:
+                with st.spinner("Membaca status tayang dari SPSE..."):
+                    tahap_map = pl_engine._fetch_tahap_spse(cookie, pl_engine.BASE_URL)
+                count = mark_tahap_spse_sudah_diumumkan(tahap_map)
+                load_draft_pl_cached.clear()
+                if count:
+                    st.session_state[f"{prefix}_status_flash"] = (
+                        f"✅ {count} status paket berhasil disinkronkan dari SPSE."
+                    )
+                    st.rerun()
+                st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
+        except Exception as exc:
+            st.error(f"Sinkronisasi status SPSE gagal: {exc}")
+
+    status_flash = st.session_state.pop(f"{prefix}_status_flash", "")
+    if status_flash:
+        st.success(status_flash)
+
     try:
         rows = load_draft_pl_cached(family, only_local=False)
         kind_engine = __import__("pl_engine_plpk" if family == "PK" else "pl_engine")
         rows, duplicate_count = kind_engine.buang_duplikat_paket_lama(rows)
         rows = [row for row in rows if pl_engine.is_paket_draft(row)]
+        sebelum_filter = len(rows)
+        rows = _filter_unannounced_rows(
+            rows,
+            get_paket_umumkan_status(),
+            is_paket_sudah_diumumkan,
+        )
     except Exception as exc:
         st.error(f"Gagal memuat paket Draft PL {family}: {exc}")
         return
 
     if duplicate_count:
         st.caption(f"↻ {duplicate_count} row paket ulang lama disembunyikan otomatis.")
+    if sebelum_filter != len(rows):
+        st.caption(
+            f"✅ {sebelum_filter - len(rows)} paket yang sudah tayang disembunyikan dari monitoring."
+        )
 
     if st.button("🔄 Muat ulang daftar paket Draft", key=f"{prefix}_reload", use_container_width=True):
         load_draft_pl_cached.clear()

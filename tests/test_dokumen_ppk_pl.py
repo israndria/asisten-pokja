@@ -1,6 +1,58 @@
 from unittest.mock import patch
 
 import dokumen_ppk_pl as engine
+import dokumen_ppk_pl_ui as ui
+import pl_data_ui
+
+
+class _ExpanderGuard:
+    def __init__(self, owner, label):
+        self.owner = owner
+        self.label = label
+
+    def __enter__(self):
+        if self.owner.depth:
+            raise AssertionError(f"nested expander: {self.label}")
+        self.owner.depth += 1
+        return self
+
+    def __exit__(self, *_args):
+        self.owner.depth -= 1
+
+
+class _FakeStreamlit:
+    def __init__(self):
+        self.depth = 0
+
+    def expander(self, label, **_kwargs):
+        return _ExpanderGuard(self, label)
+
+    def __getattr__(self, _name):
+        return lambda *_args, **_kwargs: None
+
+
+def test_render_result_does_not_nest_expander_inside_package_card():
+    st = _FakeStreamlit()
+    result = {"baseline_created": True, "snapshot_baru": {"spek": []}}
+
+    with st.expander("📄 Paket"):
+        ui._render_result(st, engine, {"kode_paket": "123"}, result, "jkk", {})
+
+
+def test_monitor_excludes_packages_already_announced():
+    rows = [
+        {"kode_paket": "34", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "71", "status": "draft", "tahap_spse": ""},
+    ]
+    session_status = {"34": {"status": "sudah diumumkan"}}
+
+    filtered = ui._filter_unannounced_rows(
+        rows,
+        session_status,
+        pl_data_ui.is_paket_sudah_diumumkan,
+    )
+
+    assert [row["kode_paket"] for row in filtered] == ["71"]
 
 
 def test_same_name_and_date_is_unchanged():

@@ -78,6 +78,16 @@ def _hydrate_nomor_urut_folder(rows: list[dict]) -> list[dict]:
         for row in rows:
             if row.get("nomor_urut"):
                 continue
+            # Jangan fuzzy-match paket yang belum punya folder. Nama paket
+            # berurutan (mis. Paket 1/11/16) berbagi kata umum dan bisa
+            # menerima nomor folder paket lain.
+            folder_state = row.get("folder_dibuat")
+            if (
+                folder_state is None
+                or folder_state is False
+                or str(folder_state).strip().casefold() in {"", "0", "false", "none", "null"}
+            ):
+                continue
             words = set(sanitasi_nama_folder(row.get("nama_paket") or "").lower().split())
             if not words:
                 continue

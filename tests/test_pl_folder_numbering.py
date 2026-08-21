@@ -1,4 +1,23 @@
+import config
+from pl_engine import _hydrate_nomor_urut_folder
 from pl_ui_helpers import plan_nomor_folder_pl
+
+
+def test_hydrate_does_not_assign_existing_folder_number_to_unfoldered_packages(tmp_path, monkeypatch):
+    jkk_root = tmp_path / "jkk"
+    (jkk_root / "27. PLJKK - Konsultan Pengawasan Paket 1").mkdir(parents=True)
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_JKK", str(jkk_root))
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_PK", str(tmp_path / "pk"))
+
+    rows = _hydrate_nomor_urut_folder([
+        {"kode_paket": "owner", "nama_paket": "Konsultan Pengawasan Paket 1", "folder_dibuat": True},
+        {"kode_paket": "paket-11", "nama_paket": "Konsultan Pengawasan Paket 11", "folder_dibuat": False},
+        {"kode_paket": "paket-16", "nama_paket": "Konsultan Pengawasan Paket 16", "folder_dibuat": False},
+    ])
+
+    assert rows[0]["nomor_urut"] == 27
+    assert rows[1].get("nomor_urut") in (None, "")
+    assert rows[2].get("nomor_urut") in (None, "")
 
 
 def test_backup_number_wins_over_stale_database_number(tmp_path):
