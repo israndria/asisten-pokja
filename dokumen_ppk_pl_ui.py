@@ -29,6 +29,25 @@ def _render_snapshot_summary(st, engine, snapshot: dict) -> None:
         st.caption("Belum ada file yang terdeteksi pada kategori dokumen PPK.")
 
 
+def _snapshot_file_count(engine, snapshot: dict) -> int:
+    return sum(len(snapshot.get(kind) or []) for kind in engine.DOCUMENT_TYPES)
+
+
+def _render_download_result(st, result: dict) -> None:
+    folder = result.get("folder") or "-"
+    ok = result.get("ok") or []
+    errors = result.get("error") or []
+    st.caption(f"Folder tujuan: `{folder}`")
+    if ok:
+        st.success(f"✅ {len(ok)} file berhasil diunduh.")
+    if errors:
+        st.warning(f"⚠️ {len(errors)} file gagal diunduh.")
+        for error in errors:
+            st.error(str(error))
+    if not ok and not errors:
+        st.info("Tidak ada file yang perlu diunduh.")
+
+
 def _render_diff(st, result: dict) -> None:
     for item in result.get("berubah", []):
         st.markdown(
@@ -91,7 +110,32 @@ def _render_result(st, engine, row: dict, result: dict, state_key: str, results:
     # Kartu paket di caller sudah berupa expander. Streamlit melarang expander
     # bersarang, jadi daftar live dirender sebagai section biasa di dalam kartu.
     st.markdown("**📄 Daftar dokumen live**")
-    _render_snapshot_summary(st, engine, result.get("snapshot_baru") or {})
+    snapshot = result.get("snapshot_baru") or {}
+    _render_snapshot_summary(st, engine, snapshot)
+    total_files = _snapshot_file_count(engine, snapshot)
+    if st.button(
+        "⬇️ Download semua dokumen PPK",
+        key=f"pldoc_download_{state_key}_{row['kode_paket']}",
+        use_container_width=True,
+        disabled=total_files == 0,
+        help="Download semua file live ke subfolder 10. Revisi Uploadan PPK.",
+    ):
+        with st.spinner("Mengunduh semua dokumen PPK..."):
+            try:
+                download_result = engine.download_all_dokumen_ppk(row, snapshot)
+            except Exception as exc:
+                download_result = {
+                    "folder": "",
+                    "ok": [],
+                    "error": [str(exc)],
+                }
+        result["download"] = download_result
+        results[str(row["kode_paket"])] = result
+        st.session_state[state_key] = results
+
+    if result.get("download"):
+        st.markdown("**📥 Hasil download dokumen PPK**")
+        _render_download_result(st, result["download"])
 
 
 def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
@@ -187,12 +231,23 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
 
     st.divider()
     st.markdown(f"#### Aksi — {len(selected)} paket terpilih")
-    if st.button(
-        "🔍 Cek semua paket terpilih",
-        key=f"{prefix}_check_all",
-        type="primary",
-        use_container_width=True,
-    ):
+    check_col, download_col = st.columns(2)
+    with check_col:
+        check_all_clicked = st.button(
+            "🔍 Cek semua paket terpilih",
+            key=f"{prefix}_check_all",
+            type="primary",
+            use_container_width=True,
+        )
+    with download_col:
+        download_all_clicked = st.button(
+            "⬇️ Download semua dokumen PPK",
+            key=f"{prefix}_download_all",
+            use_container_width=True,
+            help="Cek snapshot live tiap paket lalu simpan semua dokumen PPK ke folder masing-masing.",
+        )
+
+    if check_all_clicked:
         progress = st.progress(0.0, text="Memulai pemeriksaan...")
         for index, row in enumerate(selected, start=1):
             name = _package_name(row, label_fn)
@@ -208,6 +263,30 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
                 }
         st.session_state[state_key] = results
         progress.progress(1.0, text="Pemeriksaan selesai.")
+
+    if download_all_clicked:
+        progress = st.progress(0.0, text="Menyiapkan download...")
+        for index, row in enumerate(selected, start=1):
+            code = str(row.get("kode_paket") or "")
+            name = _package_name(row, label_fn)
+            progress.progress(
+                (index - 1) / len(selected),
+                text=f"Cek dan download {name[:48]}...",
+            )
+            try:
+                result = engine.check_dokumen_ppk_pl(code, family)
+                if not result.get("error"):
+                    result["download"] = engine.download_all_dokumen_ppk(
+                        row, result.get("snapshot_baru") or {}
+                    )
+                results[code] = result
+            except Exception as exc:
+                results[code] = {
+                    "error": str(exc),
+                    "error_kind": getattr(exc, "kind", "request"),
+                }
+        st.session_state[state_key] = results
+        progress.progress(1.0, text="Download paket terpilih selesai.")
 
     st.caption("Atau periksa satu paket dari kartu masing-masing:")
     for row in selected:

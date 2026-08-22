@@ -1288,7 +1288,7 @@ def _safe_download_name_for_folder(folder: str, filename: str, limit: int = _DOW
 
 
 def buat_subfolder_dokumen(folder_paket: str) -> list:
-    """Buat semua subfolder dokumen di folder_paket (0-9, selaras setup_paket_baru.py).
+    """Buat semua subfolder dokumen di folder_paket (0-10, selaras setup_paket_baru.py).
     Return list subfolder yang baru dibuat."""
     dibuat = []
     _semua_subfolder = [
@@ -1302,6 +1302,7 @@ def buat_subfolder_dokumen(folder_paket: str) -> list:
         "7. Berita Acara + Summary Non Tender",
         "8. Dokumen Kualifikasi",
         "9. Dokumen Teknis Biaya",
+        "10. Revisi Uploadan PPK",
     ]
     for sub in _semua_subfolder:
         p = os.path.join(folder_paket, sub)

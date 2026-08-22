@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 import dokumen_ppk_pl as engine
@@ -145,3 +146,120 @@ def test_save_snapshot_preserves_existing_data_snapshot_keys():
     assert saved["r3"] == existing["r3"]
     assert saved["r4"] == existing["r4"]
     assert saved[engine.SNAPSHOT_NAMESPACE]["paket"]["123"]["jenis_pl"] == "JKK"
+
+
+class _SnapshotDownloadResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, url, content=b"downloaded"):
+        self.url = url
+        self.content = content
+
+    def iter_content(self, chunk_size=65536):
+        yield self.content
+
+    def close(self):
+        pass
+
+
+def test_download_all_snapshot_categories_to_revision_folder(monkeypatch, tmp_path):
+    package_dir = tmp_path / "35. PLPK - Paket Uji"
+    package_dir.mkdir()
+    (package_dir / engine.DOWNLOAD_SUBFOLDER).mkdir()
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+    requested = []
+
+    def fake_get(url, **_kwargs):
+        requested.append(url)
+        return _SnapshotDownloadResponse(url)
+
+    monkeypatch.setattr(engine.requests, "get", fake_get)
+    snapshot = {
+        kind: [{"nama": f"{kind}.pdf", "tanggal": "22 Agustus 2026", "url_dl": f"https://x/{kind}"}]
+        for kind in engine.DOCUMENT_TYPES
+    }
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"}, snapshot, cookie_str="cookie"
+    )
+
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    assert result["error"] == []
+    assert result["folder"] == str(target)
+    assert target.is_dir()
+    assert {Path(path).name for path in result["ok"]} == {
+        f"{kind}.pdf" for kind in engine.DOCUMENT_TYPES
+    }
+    assert requested == [f"https://x/{kind}" for kind in engine.DOCUMENT_TYPES]
+
+
+def test_download_failure_removes_partial_file(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    (package_dir / engine.DOWNLOAD_SUBFOLDER).mkdir()
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+
+    class _BrokenResponse(_SnapshotDownloadResponse):
+        def iter_content(self, chunk_size=65536):
+            yield b"partial"
+            raise RuntimeError("stream putus")
+
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _BrokenResponse(url),
+    )
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "KAK.pdf", "url_dl": "https://x/kak"}]},
+        cookie_str="cookie",
+    )
+
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    assert result["ok"] == []
+    assert result["error"]
+    assert not list(target.glob("*.part"))
+    assert not (target / "KAK.pdf").exists()
+
+
+def test_download_duplicate_names_get_unique_suffix(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    (package_dir / engine.DOWNLOAD_SUBFOLDER).mkdir()
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _SnapshotDownloadResponse(url),
+    )
+    snapshot = {
+        "spek": [{"nama": "dokumen.pdf", "url_dl": "https://x/spek"}],
+        "docsskk": [{"nama": "dokumen.pdf", "url_dl": "https://x/docsskk"}],
+    }
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"}, snapshot, cookie_str="cookie"
+    )
+
+    names = {Path(path).name for path in result["ok"]}
+    assert names == {"dokumen.pdf", "dokumen_2.pdf"}
+    assert (package_dir / engine.DOWNLOAD_SUBFOLDER / "dokumen.pdf").read_bytes() == b"downloaded"
+    assert (package_dir / engine.DOWNLOAD_SUBFOLDER / "dokumen_2.pdf").read_bytes() == b"downloaded"
+
+
+def test_download_does_not_create_missing_revision_folder(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "KAK.pdf", "url_dl": "https://x/kak"}]},
+        cookie_str="cookie",
+    )
+
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    assert result["ok"] == []
+    assert result["error"]
+    assert not target.exists()

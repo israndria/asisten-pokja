@@ -174,6 +174,8 @@ def test_pl_evaluator_copy_puts_canonical_review_sops_in_draft_folder(tmp_path):
     for filename in (
         "SOP_ISI_REVIU_DPP_CORE.md",
         "SOP_ISI_REVIU_DPP_DOMAIN.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
         "PROTOKOL_EVALUASI_AI.md",
         "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
         "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
@@ -187,9 +189,27 @@ def test_pl_evaluator_copy_puts_canonical_review_sops_in_draft_folder(tmp_path):
     evaluator = target / "5. Evaluator Kualifikasi & Teknis"
     assert (draft / "SOP_ISI_REVIU_DPP_CORE.md").read_text(encoding="utf-8")
     assert (draft / "SOP_ISI_REVIU_DPP_DOMAIN.md").read_text(encoding="utf-8")
+    assert (draft / "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md").read_text(encoding="utf-8")
+    assert (draft / "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md").read_text(encoding="utf-8")
     assert (evaluator / "PROTOKOL_EVALUASI_AI.md").exists()
     assert "SOP_ISI_REVIU_DPP_CORE.md" in copied
     assert "SOP_ISI_REVIU_DPP_DOMAIN.md" in copied
+    assert "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md" in copied
+    assert "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md" in copied
+
+
+@pytest.mark.parametrize("engine", [pl_engine, pl_engine_plpk])
+def test_revision_folder_is_provisioned_idempotently_for_both_pl_families(tmp_path, engine):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+
+    first = engine.buat_subfolder_dokumen(str(package_dir))
+    second = engine.buat_subfolder_dokumen(str(package_dir))
+
+    revision = "10. Revisi Uploadan PPK"
+    assert (package_dir / revision).is_dir()
+    assert revision in first
+    assert revision not in second
 
 
 def test_download_allows_optional_nota_dinas_failure_when_files_exist():

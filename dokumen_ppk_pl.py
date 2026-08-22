@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -31,6 +32,8 @@ _LOGIN_MARKERS = (
     "silakan login",
     "session expired",
 )
+DOWNLOAD_SUBFOLDER = "10. Revisi Uploadan PPK"
+_DOWNLOAD_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class DokumenPpkPlError(RuntimeError):
@@ -385,3 +388,194 @@ def check_dokumen_ppk_pl(kode_paket: str, jenis_pl: str) -> dict:
         diff["baseline_created"] = True
         diff["ada_update"] = False
     return diff
+
+
+def _iter_snapshot_files(snapshot: dict | None):
+    """Iterasi file snapshot dalam urutan kategori yang ditampilkan UI."""
+    data = snapshot if isinstance(snapshot, dict) else {}
+    for kind in DOCUMENT_TYPES:
+        for item in data.get(kind) or []:
+            if isinstance(item, dict):
+                yield kind, item
+
+
+def _resolve_package_folder(row: dict) -> str | None:
+    """Cari folder fisik paket dengan resolver resmi PL, tanpa membuat folder baru."""
+    from parse_kak_pl import _resolve_folder_pl
+
+    folder, _ = _resolve_folder_pl(
+        row.get("nomor_urut"),
+        row.get("nama_paket") or "",
+        row.get("jenis_pl") or "JKK",
+        is_ulang=row.get("is_ulang", False),
+        strict_name=True,
+    )
+    return folder if folder and os.path.isdir(folder) else None
+
+
+def _clean_download_filename(value: str) -> str:
+    """Jadikan nama metadata aman sebagai satu nama file Windows."""
+    name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = re.sub(r'[<>:"/\\|?*]', "_", name).strip().rstrip(" .")
+    return name or "dokumen"
+
+
+def _bounded_download_filename(folder: str, filename: str) -> str:
+    """Pakai batas path download yang sudah dipakai engine PL lainnya."""
+    from pl_engine import _safe_download_name_for_folder
+
+    return _safe_download_name_for_folder(folder, filename)
+
+
+def _unique_download_path(folder: str, filename: str) -> str:
+    """Pilih nama baru agar file lama tidak pernah tertimpa."""
+    safe_name = _bounded_download_filename(folder, _clean_download_filename(filename))
+    candidate = os.path.join(folder, safe_name)
+    if not os.path.exists(candidate):
+        return candidate
+
+    stem, ext = os.path.splitext(safe_name)
+    number = 2
+    while True:
+        numbered = _bounded_download_filename(folder, f"{stem}_{number}{ext}")
+        candidate = os.path.join(folder, numbered)
+        if not os.path.exists(candidate):
+            return candidate
+        number += 1
+
+
+def _download_snapshot_file(url_dl: str, destination: str, cookie_str: str) -> str:
+    """Download satu URL ke .part lalu atomically rename ke tujuan."""
+    def _get_response():
+        current_url = url_dl
+        for _ in range(5):
+            parsed = urlsplit(current_url)
+            headers = _headers(current_url, cookie_str)
+            if parsed.hostname == "customhostname":
+                path = parsed.path
+                if not path.startswith("/lpse-prod-data/"):
+                    path = "/lpse-prod-data" + path
+                current_url = urlunsplit(
+                    (parsed.scheme, "storage.googleapis.com", path, parsed.query, parsed.fragment)
+                )
+                headers = {
+                    key: value
+                    for key, value in headers.items()
+                    if key.lower() not in {"cookie", "host"}
+                }
+            response = requests.get(
+                current_url,
+                headers=headers,
+                timeout=60,
+                stream=True,
+                allow_redirects=False,
+            )
+            if response.status_code not in (301, 302, 303, 307, 308):
+                return response
+            location = response.headers.get("Location")
+            response.close()
+            if not location:
+                return response
+            current_url = urljoin(current_url, location)
+        return requests.get(
+            current_url,
+            headers=_headers(current_url, cookie_str),
+            timeout=60,
+            stream=True,
+            allow_redirects=False,
+        )
+
+    last_error = None
+    partial = f"{destination}.part"
+    for attempt, delay in enumerate((0.0, 0.5, 1.5), start=1):
+        if delay:
+            time.sleep(delay)
+        response = None
+        try:
+            response = _get_response()
+            status = int(getattr(response, "status_code", 0) or 0)
+            if status in _DOWNLOAD_TRANSIENT_STATUS:
+                last_error = f"HTTP {status}"
+                if attempt < 3:
+                    continue
+                raise RuntimeError(last_error)
+            if status != 200:
+                raise RuntimeError(f"HTTP {status}")
+
+            final_url = str(getattr(response, "url", url_dl) or url_dl)
+            if urlsplit(final_url).path.lower().rstrip("/").endswith("/login"):
+                raise RuntimeError("server mengembalikan halaman login")
+            content_type = str((getattr(response, "headers", {}) or {}).get("Content-Type", ""))
+            if "text/html" in content_type.lower():
+                raise RuntimeError("server mengembalikan halaman HTML/login")
+
+            with open(partial, "wb") as handle:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        handle.write(chunk)
+            os.replace(partial, destination)
+            return destination
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+            if attempt >= 3:
+                raise RuntimeError(f"gagal setelah 3 percobaan: {last_error}") from exc
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+            if os.path.exists(partial):
+                os.remove(partial)
+    raise RuntimeError(last_error or "download gagal")
+
+
+def download_all_dokumen_ppk(
+    row: dict,
+    snapshot: dict | None,
+    cookie_str: str | None = None,
+) -> dict[str, list | str]:
+    """Download semua file snapshot PPK flat ke ``10. Revisi Uploadan PPK``."""
+    folder_paket = _resolve_package_folder(row)
+    if not folder_paket:
+        return {
+            "folder": "",
+            "ok": [],
+            "error": [
+                f"Folder paket tidak ditemukan untuk {row.get('kode_paket') or row.get('nama_paket') or '-'}"
+            ],
+        }
+
+    folder_tujuan = os.path.join(folder_paket, DOWNLOAD_SUBFOLDER)
+    if not os.path.isdir(folder_tujuan):
+        return {
+            "folder": folder_tujuan,
+            "ok": [],
+            "error": [
+                f"Folder tujuan belum diprovision saat create paket: {folder_tujuan}"
+            ],
+        }
+    items = list(_iter_snapshot_files(snapshot))
+    if not items:
+        return {"folder": folder_tujuan, "ok": [], "error": []}
+
+    cookie = cookie_str if cookie_str is not None else _get_cookies()
+    if not cookie:
+        return {
+            "folder": folder_tujuan,
+            "ok": [],
+            "error": ["Cookie SPSE kosong — buka Brave SPSE dan login sebagai PP."],
+        }
+
+    result = {"folder": folder_tujuan, "ok": [], "error": []}
+    for kind, item in items:
+        label = DOCUMENT_TYPES[kind]
+        name = _clean_download_filename(item.get("nama"))
+        url_dl = str(item.get("url_dl") or "").strip()
+        if not url_dl:
+            result["error"].append(f"{label}/{name}: URL download kosong")
+            continue
+        try:
+            destination = _unique_download_path(folder_tujuan, name)
+            result["ok"].append(_download_snapshot_file(url_dl, destination, cookie))
+        except Exception as exc:
+            result["error"].append(f"{label}/{name}: {exc}")
+    return result

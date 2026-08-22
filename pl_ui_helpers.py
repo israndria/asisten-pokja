@@ -103,6 +103,8 @@ def _copy_pl_evaluator_files(target_dir: str, pokja_root: str, jenis_pl: str) ->
     draft_files = (
         "SOP_ISI_REVIU_DPP_CORE.md",
         "SOP_ISI_REVIU_DPP_DOMAIN.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
     )
     jenis = str(jenis_pl or "").upper().strip()
     if jenis == "JKK":
