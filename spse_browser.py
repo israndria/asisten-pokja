@@ -1554,16 +1554,17 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
       3. POST /action/nonlelang.pengadaanlctr/simpanpilihpenyedia?lelangId={kode} — submit
 
     Strategi pencarian:
-      - Prioritas 1: search by NPWP (format 15-digit)
-      - Prioritas 2: search by nama (kata signifikan pertama)
-      - Match: rkn_npwp_16 == npwp16 (16-digit) ATAU nama exact, atau satu-satunya hasil
+      - Prioritas 1: NPWP 16/15 digit, provinsi Kalsel lalu nasional
+      - Prioritas 2: nama bertahap (full, dua kata, satu kata signifikan)
+      - Match nama memakai skor overlap/fuzzy + domisili; hasil tunggal tidak
+        otomatis diterima bila identitasnya lemah
 
     Return: {"ok": bool, "nama": str, "mode": str, "pesan": str}
     """
     import re as _re
     import requests as _req
     from bs4 import BeautifulSoup as _BS
-
+    from difflib import SequenceMatcher as _SequenceMatcher
     import urllib.parse as _up
 
     _base = (base_url or "").rstrip("/")
@@ -1580,7 +1581,24 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         "Referer": url_edit,
     })
 
-    # Helper: parse semua rekanan dari soup
+    # Search form SPSE memakai ID provinsi; fallback nasional hanya dipakai
+    # setelah pencarian lokal tidak menghasilkan kandidat yang meyakinkan.
+    _PROVINSI_KALSEL = "22"
+    _DOMISILI_TAPIN = (
+        "RANTAU", "LUMBU RAYA", "BUNGUR", "BINUANG", "KUPANG",
+        "BITAHAN", "LOKPAIKAT", "PIANI", "HATUNGUN", "TAPIN",
+    )
+    _DOMISILI_KALSEL = (
+        "BANJARMASIN", "BANJARBARU", "BANJAR", "HULU SUNGAI",
+        "HSS", "HST", "HSU", "TABALONG", "BALANGAN", "TANAH LAUT",
+        "TANAH BUMBU", "KOTABARU", "BARITO KUALA",
+    )
+    _NAMA_STOP = {
+        "CV", "PT", "UD", "TB", "FA", "FIRMA", "KOPERASI",
+        "CONSULTANT", "CONSULTING", "ENGINEERING",
+    }
+
+    # Helper: parse semua rekanan dari soup.
     def _parse_rekanan(soup) -> dict:
         result = {}
         for inp in soup.find_all("input"):
@@ -1597,23 +1615,136 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         return inp["value"] if inp else ""
 
     def _nama_key(s: str) -> str:
-        return _re.sub(r"\s+", " ", (s or "").upper().replace(".", " ")).strip()
+        return _re.sub(r"\s+", " ", _re.sub(r"[^A-Z0-9]+", " ", (s or "").upper())).strip()
 
     def _nama_tanpa_prefix(s: str) -> str:
-        stop = {"CV", "PT", "UD", "TB", "FA", "FIRMA", "KOPERASI"}
-        return " ".join(w for w in _nama_key(s).split() if w and w not in stop)
+        return " ".join(w for w in _nama_key(s).split() if w and w not in _NAMA_STOP)
+
+    def _digits(s: str) -> str:
+        return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+    def _npwp_match(candidate: dict) -> bool:
+        candidate_npwp = _digits(
+            candidate.get("rkn_npwp_16") or candidate.get("rkn_npwp") or ""
+        )
+        return bool(
+            npwp16
+            and candidate_npwp
+            and (
+                candidate_npwp == npwp16
+                or candidate_npwp.lstrip("0") == npwp16.lstrip("0")
+            )
+        )
+
+    def _provider_score(candidate: dict) -> int:
+        candidate_name = _nama_key(candidate.get("rkn_nama", ""))
+        candidate_name_strip = _nama_tanpa_prefix(candidate_name)
+        target_words = set(target_name.split())
+        candidate_words = set(candidate_name_strip.split())
+        score = 200 if _npwp_match(candidate) else 0
+        if target_name and candidate_name == target_name:
+            score += 1000
+        elif target_name and (
+            target_name in candidate_name_strip or candidate_name_strip in target_name
+        ):
+            score += 100
+        score += 20 * len(target_words & candidate_words)
+        if target_name and candidate_name_strip:
+            score += int(
+                _SequenceMatcher(None, candidate_name_strip, target_name).ratio() * 30
+            )
+        address = _nama_key(candidate.get("rkn_alamat", ""))
+        if any(term in address for term in _DOMISILI_TAPIN):
+            score += 50
+        elif any(term in address for term in _DOMISILI_KALSEL):
+            score += 20
+        return score
+
+    def _pick_candidate(candidates: dict):
+        ranked = sorted(
+            ((_provider_score(item), item) for item in candidates.values()),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        if not ranked:
+            return None
+        exact_npwp = next((item for score, item in ranked if _npwp_match(item)), None)
+        if exact_npwp is not None:
+            return exact_npwp, "npwp_exact"
+        best_score, best = ranked[0]
+        if best_score < 70:
+            return None
+        if len(ranked) > 1 and best_score - ranked[1][0] < 15:
+            return None
+        best_name = _nama_tanpa_prefix(best.get("rkn_nama"))
+        overlap = set(target_name.split()) & set(best_name.split())
+        ratio = _SequenceMatcher(None, best_name, target_name).ratio() if target_name else 0
+        name_confident = (
+            not target_name
+            or target_name in best_name
+            or best_name in target_name
+            or len(overlap) >= 2
+            or ratio >= 0.82
+        )
+        if not name_confident:
+            return None
+        mode = (
+            "nama_exact"
+            if _nama_tanpa_prefix(best.get("rkn_nama")) == target_name
+            else "nama_fuzzy"
+        )
+        return best, mode
 
     # Siapkan NPWP dalam 2 format
     npwp_fmt = _format_npwp_15(npwp)
     npwp_digits = "".join(c for c in npwp if c.isdigit())
     # NPWP 16-digit: pad kiri jika kurang, ambil 16 digit TERAKHIR jika lebih
     # (NPWP baru Indonesia selalu 16 digit, digit ke-1 adalah prefix tambahan)
-    npwp16 = npwp_digits.zfill(16) if len(npwp_digits) <= 16 else npwp_digits[-16:]
+    if npwp_digits:
+        npwp16 = npwp_digits.zfill(16) if len(npwp_digits) <= 16 else npwp_digits[-16:]
+    else:
+        npwp16 = ""
 
-    rekanan_data = {}
-    target_idx = None
-    search_mode = ""
+    target_name = _nama_tanpa_prefix(nama_penyedia)
+    candidates = {}
     csrf = ""
+    search_errors = []
+
+    def _merge_candidates(data: dict) -> None:
+        for item in data.values():
+            key = (
+                item.get("rkn_id")
+                or item.get("rkn_npwp_16")
+                or item.get("rkn_nama")
+                or str(len(candidates))
+            )
+            candidates[key] = {**candidates.get(key, {}), **item}
+
+    def _search(*, nama: str = "", npwp_query: str = "", province: bool = True) -> dict:
+        params = {
+            "search": "true",
+            "propinsiId": _PROVINSI_KALSEL if province else "",
+            "kabupatenId": "",
+            "nama": nama,
+            "npwp": npwp_query,
+            "jenisIjin": "",
+        }
+        url = f"{url_form}?{_up.urlencode(params)}"
+        try:
+            response = sess.get(url, timeout=45)
+        except _req.RequestException as exc:
+            search_errors.append(str(exc))
+            return {}
+        if response.status_code != 200:
+            search_errors.append(f"HTTP {response.status_code}")
+            return {}
+        if _is_spse_login_page_text(response.text):
+            search_errors.append("Sesi SPSE tidak authenticated")
+            return {}
+        soup = _BS(response.text, "html.parser")
+        nonlocal csrf
+        csrf = csrf or _get_csrf(soup)
+        return _parse_rekanan(soup)
 
     # Step 0: Cek halaman edit — apakah penyedia sudah terpilih (NPWP16 match)
     r_edit = sess.get(url_edit, timeout=45)
@@ -1621,7 +1752,7 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         soup_edit = _BS(r_edit.text, "html.parser")
         # Tabel rekanan terpilih berisi NPWP16 sebagai teks di kolom NPWP
         edit_txt = soup_edit.get_text(separator=" ")
-        if npwp16 in edit_txt or npwp16.lstrip("0") in edit_txt:
+        if npwp16 and (npwp16 in edit_txt or npwp16.lstrip("0") in edit_txt):
             # NPWP16 sudah ada di tabel rekanan terpilih
             # Cari nama penyedia dari teks tabel
             nama_hasil = nama_penyedia
@@ -1648,61 +1779,54 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
                 "pesan": "Penyedia sudah terpilih sebelumnya",
             }
 
-    # Step 1+2a gabung: Search by NPWP16 (format 16-digit leading-zero) + ambil CSRF
-    # SPSE hanya match NPWP jika format 16-digit dengan leading zero persis
+    # Step 1: NPWP exact, lokal dahulu lalu nasional. Coba format 16 dan 15
+    # karena implementasi SPSE antar instance kadang memfilter salah satunya.
     sess.headers.update({"Referer": url_form})
-    url_search_npwp = f"{url_form}?search=true&nama=&npwp={_up.quote(npwp16)}&jenisIjin="
-    r1 = sess.get(url_search_npwp, timeout=45)
-    if r1.status_code == 200:
-        soup1 = _BS(r1.text, "html.parser")
-        csrf = _get_csrf(soup1)
-        rekanan_data = _parse_rekanan(soup1)
-        for idx, d in rekanan_data.items():
-            np16 = d.get("rkn_npwp_16", "").strip()
-            if npwp16 and (np16 == npwp16 or np16.lstrip("0") == npwp16.lstrip("0")):
-                target_idx = idx
-                search_mode = "npwp_exact"
+    npwp_queries = []
+    for query in (npwp16, npwp_fmt):
+        if query and query not in npwp_queries:
+            npwp_queries.append(query)
+    selected = None
+    for npwp_query in npwp_queries:
+        for province in (True, False):
+            _merge_candidates(_search(npwp_query=npwp_query, province=province))
+            selected = _pick_candidate(candidates)
+            if selected and selected[1] == "npwp_exact":
                 break
-        if target_idx is None and len(rekanan_data) == 1:
-            target_idx = list(rekanan_data.keys())[0]
-            search_mode = "npwp_single"
+        if selected and selected[1] == "npwp_exact":
+            break
 
-    # Fallback: search by nama. Penting untuk NPWP 16 placeholder/NIK-like yang
-    # tidak terdaftar persis di DB rekanan SPSE, tapi nama penyedia tersedia.
-    if target_idx is None and nama_penyedia:
-        nama_cari = _nama_tanpa_prefix(nama_penyedia)
-        if nama_cari:
-            url_search_nama = f"{url_form}?search=true&nama={_up.quote(nama_cari)}&npwp=&jenisIjin="
-            r2 = sess.get(url_search_nama, timeout=45)
-            if r2.status_code == 200:
-                soup2 = _BS(r2.text, "html.parser")
-                csrf = csrf or _get_csrf(soup2)
-                rekanan_data = _parse_rekanan(soup2)
-                target_nama = _nama_key(nama_penyedia)
-                target_nama_strip = _nama_tanpa_prefix(nama_penyedia)
-                for idx, d in rekanan_data.items():
-                    nama_db = _nama_key(d.get("rkn_nama", ""))
-                    nama_db_strip = _nama_tanpa_prefix(d.get("rkn_nama", ""))
-                    if nama_db == target_nama or nama_db_strip == target_nama_strip:
-                        target_idx = idx
-                        search_mode = "nama_exact"
-                        break
-                if target_idx is None and len(rekanan_data) == 1:
-                    target_idx = list(rekanan_data.keys())[0]
-                    search_mode = "nama_single"
+    # Step 2: nama bertahap. Query kecil membantu typo dan variasi nama pada
+    # SPSE; kandidat tetap disaring dengan skor agar satu hasil acak tidak lolos.
+    if selected is None and target_name:
+        words = target_name.split()
+        name_queries = []
+        for query in (target_name, " ".join(words[:2]), words[0]):
+            if query and query not in name_queries:
+                name_queries.append(query)
+        for name_query in name_queries:
+            for province in (True, False):
+                _merge_candidates(_search(nama=name_query, province=province))
+                selected = _pick_candidate(candidates)
+                if selected:
+                    break
+            if selected:
+                break
 
     # Fallback: GET form saja untuk CSRF jika search NPWP tidak menghasilkan rekanan
     if not csrf:
         r0 = sess.get(url_form, timeout=45)
         if r0.status_code == 200:
-            csrf = _get_csrf(_BS(r0.text, "html.parser"))
+            if not _is_spse_login_page_text(r0.text):
+                csrf = _get_csrf(_BS(r0.text, "html.parser"))
     if not csrf:
-        return {"ok": False, "pesan": "CSRF tidak ditemukan di form pilih penyedia"}
+        message = "Sesi SPSE tidak authenticated" if search_errors else "CSRF tidak ditemukan di form pilih penyedia"
+        return {"ok": False, "pesan": message}
 
-    if target_idx is None:
+    if selected is None:
         return {"ok": False, "pesan": f"Penyedia tidak ditemukan di DB rekanan SPSE (NPWP: {npwp_fmt}). Pastikan penyedia sudah terdaftar di SPSE sebelum dipilih."}
 
-    d = rekanan_data[target_idx]
+    d, search_mode = selected
     nama_hasil = d.get("rkn_nama", nama_penyedia)
 
     # Step 3: Submit
@@ -1720,6 +1844,12 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
     sess.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
     rp = sess.post(url_submit, data=payload, allow_redirects=False, timeout=45)
     ok = rp.status_code in (200, 302)
+    location = rp.headers.get("Location", "")
+    if ok and (
+        "login" in location.casefold()
+        or _is_spse_login_page_text(getattr(rp, "text", ""))
+    ):
+        ok = False
     return {
         "ok": ok,
         "nama": nama_hasil,
@@ -1729,10 +1859,13 @@ def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penye
         "rkn_id": d.get("rkn_id", ""),
         "rkn_npwp": d.get("rkn_npwp", ""),
         "rkn_npwp_16": d.get("rkn_npwp_16", ""),
+        "rkn_email": d.get("rkn_email", ""),
+        "rkn_telepon": d.get("rkn_telepon", ""),
+        "rkn_alamat": d.get("rkn_alamat", ""),
         "kabupaten_id": d.get("kabupaten_id", ""),
         "mode": search_mode,
         "status": rp.status_code,
-        "pesan": rp.headers.get("Location", "") if ok else f"HTTP {rp.status_code}: {rp.text[:200]}",
+        "pesan": location if ok else f"HTTP {rp.status_code}: {getattr(rp, 'text', '')[:200]}",
     }
 
 

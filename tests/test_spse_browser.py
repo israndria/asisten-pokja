@@ -2,6 +2,7 @@ import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import spse_browser
 
@@ -402,6 +403,137 @@ class SpseBrowserPageMappingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(error_two.closed)
         self.assertFalse(normal.closed)
         self.assertTrue(normal.brought_to_front)
+
+
+class SpseProviderApiTest(unittest.TestCase):
+    @staticmethod
+    def _provider_html(providers):
+        fields = [
+            '<input name="authenticityToken" value="csrf-test">',
+        ]
+        for idx, provider in enumerate(providers):
+            for key, value in provider.items():
+                fields.append(
+                    f'<input name="rekananList[{idx}].{key}" value="{value}">'
+                )
+        return "<html><body><form>{}</form></body></html>".format("".join(fields))
+
+    class _Response:
+        def __init__(self, text="", status_code=200, headers=None):
+            self.text = text
+            self.status_code = status_code
+            self.headers = headers or {}
+
+    class _Session:
+        def __init__(self, edit_text, search_text):
+            self.headers = {}
+            self.edit_text = edit_text
+            self.search_text = search_text
+            self.get_urls = []
+            self.post_calls = []
+
+        def get(self, url, timeout=45):
+            self.get_urls.append(url)
+            if url.endswith("/edit"):
+                return SpseProviderApiTest._Response(self.edit_text)
+            return SpseProviderApiTest._Response(self.search_text)
+
+        def post(self, url, data, allow_redirects=False, timeout=45):
+            self.post_calls.append((url, data, allow_redirects))
+            return SpseProviderApiTest._Response(
+                status_code=302,
+                headers={"Location": "/tapinkab/nontender/PK-1/edit"},
+            )
+
+    def _run(self, session, *, npwp="", nama=""):
+        with patch("requests.Session", return_value=session):
+            return spse_browser.pilih_penyedia_via_api(
+                "PK-1",
+                npwp,
+                "https://spse.inaproc.id/tapinkab/",
+                nama_penyedia=nama,
+                cookie_str="session=test",
+            )
+
+    def test_npwp_search_is_scoped_to_kalsel_and_returns_contacts(self):
+        provider = {
+            "rkn_id": "351564009",
+            "rkn_nama": "CV. ANUGRAH BANGUN BANUA",
+            "rkn_npwp": "01.875.607.2-733.000",
+            "rkn_npwp_16": "0018756072733000",
+            "rkn_email": "vendor@example.test",
+            "rkn_telepon": "0800000000",
+            "rkn_alamat": "Rantau, Tapin",
+        }
+        session = self._Session(
+            "<html><body>Belum ada penyedia</body></html>",
+            self._provider_html([provider]),
+        )
+
+        result = self._run(session, npwp="0018756072733000", nama=provider["rkn_nama"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode"], "npwp_exact")
+        self.assertEqual(result["rkn_email"], "vendor@example.test")
+        search_url = next(url for url in session.get_urls if "search=true" in url)
+        query = parse_qs(urlsplit(search_url).query, keep_blank_values=True)
+        self.assertEqual(query["propinsiId"], ["22"])
+        self.assertEqual(query["kabupatenId"], [""])
+        self.assertEqual(query["npwp"], ["0018756072733000"])
+        self.assertEqual(session.post_calls[0][1]["rekananList[0].rkn_id"], "351564009")
+
+    def test_name_fallback_prefers_tapin_candidate_for_typo(self):
+        providers = [
+            {
+                "rkn_id": "tapin-1",
+                "rkn_nama": "CV. SAHABAT SARANA TEKNIK MANDIRI",
+                "rkn_npwp_16": "0011111111111111",
+                "rkn_email": "tapin@example.test",
+                "rkn_alamat": "Rantau, Kabupaten Tapin",
+            },
+            {
+                "rkn_id": "banjar-1",
+                "rkn_nama": "CV. SAHABAT SARANA TEKNIK MANDIRI",
+                "rkn_npwp_16": "0022222222222222",
+                "rkn_email": "banjar@example.test",
+                "rkn_alamat": "Banjarmasin, Kalimantan Selatan",
+            },
+        ]
+        session = self._Session(
+            "<html><body>Belum ada penyedia</body></html>",
+            self._provider_html(providers),
+        )
+
+        result = self._run(
+            session,
+            nama="CV. SAHABAT SARANA TEKHNIK MANDIRI",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode"], "nama_fuzzy")
+        self.assertEqual(result["rkn_id"], "tapin-1")
+        self.assertEqual(result["rkn_email"], "tapin@example.test")
+        search_url = next(url for url in session.get_urls if "search=true" in url)
+        query = parse_qs(urlsplit(search_url).query, keep_blank_values=True)
+        self.assertEqual(query["propinsiId"], ["22"])
+
+    def test_weak_single_name_result_is_not_accepted(self):
+        provider = {
+            "rkn_id": "wrong-1",
+            "rkn_nama": "CV. PENYEDIA LAIN",
+            "rkn_npwp_16": "0011111111111111",
+            "rkn_alamat": "Rantau, Kabupaten Tapin",
+        }
+        session = self._Session(
+            "<html><body>Belum ada penyedia</body></html>",
+            self._provider_html([provider]),
+        )
+
+        result = self._run(session, nama="CV. NAMA TIDAK TERDAFTAR")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("tidak ditemukan", result["pesan"].lower())
+        self.assertEqual(session.post_calls, [])
 
 
 if __name__ == "__main__":
