@@ -7,6 +7,7 @@ import requests
 
 import pl_engine
 import pl_engine_plpk
+import pl_ui_helpers
 import ppk_upload_engine
 import spse_browser
 from pl_ui_helpers import (
@@ -222,6 +223,26 @@ def test_download_keeps_required_endpoint_failure_fatal():
     assert _pl_download_success(
         ["1. KAK.pdf"], ["KAK & Personil: HTTP 403"]
     ) is False
+
+
+def test_output_validation_requires_revision_folder(monkeypatch, tmp_path):
+    target = tmp_path / "paket"
+    target.mkdir()
+    (target / ".template-meta.json").write_text("{}", encoding="utf-8")
+    for name in (
+        "0. Draft Dokumen PPK",
+        "1. KAK & Spesifikasi Teknis",
+        "2. Rancangan Kontrak",
+        "3. Uraian Singkat Pekerjaan",
+        "4. Informasi Lainnya",
+    ):
+        (target / name).mkdir()
+    monkeypatch.setattr(pl_ui_helpers, "_cari_xlsm_pl", lambda _target: "dummy.xlsm")
+
+    ok, error = pl_ui_helpers._pl_output_dasar_valid(str(target))
+
+    assert ok is False
+    assert "10. Revisi Uploadan PPK" in error
 
 
 class _FakeSupabaseQuery:

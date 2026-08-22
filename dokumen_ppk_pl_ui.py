@@ -33,6 +33,37 @@ def _snapshot_file_count(engine, snapshot: dict) -> int:
     return sum(len(snapshot.get(kind) or []) for kind in engine.DOCUMENT_TYPES)
 
 
+def _summarize_bulk_download(results: dict, selected_codes: list[str]) -> dict[str, int | list[str]]:
+    """Ringkas hasil bulk berdasarkan paket terpilih, bukan pesan progress."""
+    paket_berhasil = 0
+    paket_gagal = 0
+    paket_tanpa_file = 0
+    file_berhasil = 0
+    for code in selected_codes:
+        result = results.get(str(code)) or {}
+        download = result.get("download")
+        if result.get("error") or not download:
+            paket_gagal += 1
+            continue
+        ok = download.get("ok") or []
+        errors = download.get("error") or []
+        file_berhasil += len(ok)
+        if errors:
+            paket_gagal += 1
+        elif ok:
+            paket_berhasil += 1
+        else:
+            paket_tanpa_file += 1
+    return {
+        "codes": [str(code) for code in selected_codes],
+        "paket_total": len(selected_codes),
+        "paket_berhasil": paket_berhasil,
+        "paket_gagal": paket_gagal,
+        "paket_tanpa_file": paket_tanpa_file,
+        "file_berhasil": file_berhasil,
+    }
+
+
 def _render_download_result(st, result: dict) -> None:
     folder = result.get("folder") or "-"
     ok = result.get("ok") or []
@@ -43,7 +74,7 @@ def _render_download_result(st, result: dict) -> None:
     if ok:
         st.success(f"✅ {len(ok)} file berhasil diunduh.")
     if errors:
-        st.warning(f"⚠️ {len(errors)} file gagal diunduh.")
+        st.warning(f"⚠️ {len(errors)} masalah pada proses download.")
         for error in errors:
             st.error(str(error))
     if not ok and not errors:
@@ -217,6 +248,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     if st.button("🔄 Muat ulang daftar paket Draft", key=f"{prefix}_reload", use_container_width=True):
         load_draft_pl_cached.clear()
         st.session_state.pop(state_key, None)
+        st.session_state.pop(f"{state_key}_download_summary", None)
         st.rerun()
 
     if not rows:
@@ -226,6 +258,8 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     st.caption(f"📋 {len(rows)} paket Draft — centang paket yang ingin diperiksa:")
     selected = render_package_selection(st, rows, label_fn, prefix=prefix)
     results = st.session_state.setdefault(state_key, {})
+    selected_codes = [str(row.get("kode_paket") or "") for row in selected]
+    summary_key = f"{state_key}_download_summary"
 
     if not selected:
         st.info("Centang minimal satu paket.")
@@ -250,6 +284,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
         )
 
     if check_all_clicked:
+        st.session_state.pop(summary_key, None)
         progress = st.progress(0.0, text="Memulai pemeriksaan...")
         for index, row in enumerate(selected, start=1):
             name = _package_name(row, label_fn)
@@ -287,8 +322,31 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
                     "error": str(exc),
                     "error_kind": getattr(exc, "kind", "request"),
                 }
+        summary = _summarize_bulk_download(results, selected_codes)
+        st.session_state[summary_key] = summary
         st.session_state[state_key] = results
-        progress.progress(1.0, text="Download paket terpilih selesai.")
+        progress.progress(
+            1.0,
+            text=(
+                f"Pemrosesan selesai: {summary['paket_berhasil']} paket berhasil, "
+                f"{summary['paket_gagal']} paket perlu diperiksa."
+            ),
+        )
+
+    summary = st.session_state.get(summary_key)
+    if summary and summary.get("codes") == selected_codes:
+        message = (
+            f"{summary['paket_berhasil']}/{summary['paket_total']} paket berhasil; "
+            f"{summary['file_berhasil']} file berhasil diunduh."
+        )
+        if summary["paket_gagal"]:
+            st.warning(message + f" {summary['paket_gagal']} paket perlu diperiksa di kartunya.")
+        else:
+            st.success(message)
+        if summary["paket_tanpa_file"]:
+            st.caption(
+                f"{summary['paket_tanpa_file']} paket tidak memiliki file live untuk diunduh."
+            )
 
     st.caption("Atau periksa satu paket dari kartu masing-masing:")
     for row in selected:

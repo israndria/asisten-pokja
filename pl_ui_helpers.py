@@ -64,6 +64,7 @@ def _pl_output_dasar_valid(target_dir):
         "2. Rancangan Kontrak",
         "3. Uraian Singkat Pekerjaan",
         "4. Informasi Lainnya",
+        "10. Revisi Uploadan PPK",
     )
     missing_dirs = [
         name for name in required_dirs

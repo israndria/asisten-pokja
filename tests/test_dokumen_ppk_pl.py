@@ -40,6 +40,27 @@ def test_render_result_does_not_nest_expander_inside_package_card():
         ui._render_result(st, engine, {"kode_paket": "123"}, result, "jkk", {})
 
 
+def test_bulk_download_summary_separates_success_errors_and_empty_snapshots():
+    summary = ui._summarize_bulk_download(
+        {
+            "ok": {"download": {"ok": ["a.pdf"], "error": []}},
+            "failed": {"download": {"ok": [], "error": ["folder missing"]}},
+            "session": {"error": "session expired"},
+            "empty": {"download": {"ok": [], "error": []}},
+        },
+        ["ok", "failed", "session", "empty"],
+    )
+
+    assert summary == {
+        "codes": ["ok", "failed", "session", "empty"],
+        "paket_total": 4,
+        "paket_berhasil": 1,
+        "paket_gagal": 2,
+        "paket_tanpa_file": 1,
+        "file_berhasil": 1,
+    }
+
+
 def test_monitor_excludes_packages_already_announced():
     rows = [
         {"kode_paket": "34", "status": "draft", "tahap_spse": ""},
