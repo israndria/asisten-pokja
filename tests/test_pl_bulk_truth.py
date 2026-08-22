@@ -169,13 +169,31 @@ def test_io_false_when_hps_phase_failed():
     assert _pl_io_success(result, download_requested=True) is False
 
 
-def test_pl_evaluator_copy_puts_canonical_review_sops_in_draft_folder(tmp_path):
+@pytest.mark.parametrize(
+    ("jenis_pl", "domain_sop", "other_domain_sop"),
+    [
+        (
+            "JKK",
+            "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLJKK.md",
+            "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
+        ),
+        (
+            "PK",
+            "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
+            "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLJKK.md",
+        ),
+    ],
+)
+def test_pl_evaluator_copy_routes_xml_sop_by_family(
+    tmp_path, jenis_pl, domain_sop, other_domain_sop
+):
     sop_root = tmp_path / "_SOP Evaluator"
     sop_root.mkdir()
     for filename in (
         "SOP_ISI_REVIU_DPP_CORE.md",
         "SOP_ISI_REVIU_DPP_DOMAIN.md",
         "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLJKK.md",
         "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
         "PROTOKOL_EVALUASI_AI.md",
         "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
@@ -184,19 +202,21 @@ def test_pl_evaluator_copy_puts_canonical_review_sops_in_draft_folder(tmp_path):
         (sop_root / filename).write_text(filename, encoding="utf-8")
 
     target = tmp_path / "paket"
-    copied = _copy_pl_evaluator_files(str(target), str(tmp_path), "JKK")
+    copied = _copy_pl_evaluator_files(str(target), str(tmp_path), jenis_pl)
 
     draft = target / "0. Draft Dokumen PPK"
     evaluator = target / "5. Evaluator Kualifikasi & Teknis"
     assert (draft / "SOP_ISI_REVIU_DPP_CORE.md").read_text(encoding="utf-8")
     assert (draft / "SOP_ISI_REVIU_DPP_DOMAIN.md").read_text(encoding="utf-8")
     assert (draft / "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md").read_text(encoding="utf-8")
-    assert (draft / "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md").read_text(encoding="utf-8")
+    assert (draft / domain_sop).read_text(encoding="utf-8")
+    assert not (draft / other_domain_sop).exists()
     assert (evaluator / "PROTOKOL_EVALUASI_AI.md").exists()
     assert "SOP_ISI_REVIU_DPP_CORE.md" in copied
     assert "SOP_ISI_REVIU_DPP_DOMAIN.md" in copied
     assert "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md" in copied
-    assert "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md" in copied
+    assert domain_sop in copied
+    assert other_domain_sop not in copied
 
 
 @pytest.mark.parametrize("engine", [pl_engine, pl_engine_plpk])

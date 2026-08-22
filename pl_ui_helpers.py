@@ -101,29 +101,33 @@ def _copy_pl_evaluator_files(target_dir: str, pokja_root: str, jenis_pl: str) ->
     master ``_SOP Evaluator``.
     """
     eval_root = os.path.join(pokja_root, "_SOP Evaluator")
-    draft_files = (
-        "SOP_ISI_REVIU_DPP_CORE.md",
-        "SOP_ISI_REVIU_DPP_DOMAIN.md",
-        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md",
-        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md",
-    )
     jenis = str(jenis_pl or "").upper().strip()
     if jenis == "JKK":
+        reconciliation_sop = "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLJKK.md"
         evaluator_files = (
             "PROTOKOL_EVALUASI_AI.md",
             "EVALUATOR_KUALIFIKASI_PL_JKK_LUMSUM.md",
             "EVALUATOR_KUALIFIKASI_PL_JKK_ADMIN_TEKNIS.md",
         )
     elif jenis == "PK":
+        reconciliation_sop = "SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md"
         evaluator_files = (
             "PROTOKOL_EVALUASI_AI.md",
             "EVALUATOR_KUALIFIKASI_PL_PK.md",
         )
     else:
+        # Jangan menebak domain XML untuk family yang tidak dikenal.
+        reconciliation_sop = None
         evaluator_files = (
             "PROTOKOL_EVALUASI_AI.md",
             "EVALUATOR_E2E_TENDER_PK_PASCAKUALIFIKASI.md",
         )
+
+    draft_files = (
+        "SOP_ISI_REVIU_DPP_CORE.md",
+        "SOP_ISI_REVIU_DPP_DOMAIN.md",
+        "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md",
+    ) + ((reconciliation_sop,) if reconciliation_sop else ())
 
     copied = []
     destinations = (
