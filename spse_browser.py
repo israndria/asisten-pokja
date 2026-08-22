@@ -190,9 +190,14 @@ _SPSE_ACCESS_ERROR_MARKERS = (
 
 def _is_spse_login_page_text(text: str) -> bool:
     """Deteksi halaman publik/login yang bukan sesi authenticated."""
+    if not text:
+        return False
     import re
-
-    normalized = " ".join((text or "").casefold().split())
+    # Bersihkan script, style, dan tag HTML bila input berupa raw HTML
+    clean = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.IGNORECASE)
+    clean = re.sub(r"<style[\s\S]*?</style>", " ", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    normalized = " ".join(clean.casefold().split())
     return bool(
         re.search(r"\blogin\b", normalized)
         or "nama pengguna" in normalized
