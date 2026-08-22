@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -33,6 +35,7 @@ _LOGIN_MARKERS = (
     "session expired",
 )
 DOWNLOAD_SUBFOLDER = "10. Revisi Uploadan PPK"
+DOWNLOAD_ARCHIVE_SUBFOLDER = "10. Revisi Uploadan PPK - Archive"
 _DOWNLOAD_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
@@ -444,6 +447,54 @@ def _unique_download_path(folder: str, filename: str) -> str:
         number += 1
 
 
+def _archive_active_revision_files(folder_paket: str, folder_tujuan: str) -> str:
+    """Pindahkan batch aktif ke archive bertimestamp dengan rollback lokal."""
+    with os.scandir(folder_tujuan) as scan:
+        entries = list(scan)
+    if not entries:
+        return ""
+
+    archive_root = os.path.join(folder_paket, DOWNLOAD_ARCHIVE_SUBFOLDER)
+    os.makedirs(archive_root, exist_ok=True)
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    archive_dir = os.path.join(archive_root, stamp)
+    suffix = 2
+    while os.path.exists(archive_dir):
+        archive_dir = os.path.join(archive_root, f"{stamp}_{suffix}")
+        suffix += 1
+    os.makedirs(archive_dir)
+
+    moved = []
+    try:
+        for entry in entries:
+            destination = os.path.join(archive_dir, entry.name)
+            shutil.move(entry.path, destination)
+            moved.append(destination)
+    except Exception:
+        for destination in reversed(moved):
+            if os.path.exists(destination):
+                shutil.move(destination, os.path.join(folder_tujuan, os.path.basename(destination)))
+        try:
+            os.rmdir(archive_dir)
+        except OSError:
+            pass
+        raise
+    return archive_dir
+
+
+def _restore_archived_revision_files(archive_dir: str, folder_tujuan: str) -> None:
+    """Kembalikan archive ke folder aktif setelah promosi batch baru gagal."""
+    if not archive_dir or not os.path.isdir(archive_dir):
+        return
+    with os.scandir(archive_dir) as scan:
+        entries = list(scan)
+    for entry in entries:
+        destination = os.path.join(folder_tujuan, entry.name)
+        if os.path.exists(destination):
+            raise RuntimeError(f"Gagal rollback: nama file sudah dipakai {destination}")
+        shutil.move(entry.path, destination)
+
+
 def _download_snapshot_file(url_dl: str, destination: str, cookie_str: str) -> str:
     """Download satu URL ke .part lalu atomically rename ke tujuan."""
     def _get_response():
@@ -533,7 +584,12 @@ def download_all_dokumen_ppk(
     snapshot: dict | None,
     cookie_str: str | None = None,
 ) -> dict[str, list | str]:
-    """Download semua file snapshot PPK flat ke ``10. Revisi Uploadan PPK``."""
+    """Refresh batch dokumen PPK ke ``10. Revisi Uploadan PPK``.
+
+    File baru diunduh ke staging lebih dahulu. Folder aktif hanya diganti
+    setelah seluruh file berhasil; batch lama dipindahkan ke archive sibling
+    bertimestamp agar folder aktif tidak mencampur revisi.
+    """
     folder_paket = _resolve_package_folder(row)
     if not folder_paket:
         return {
@@ -555,7 +611,7 @@ def download_all_dokumen_ppk(
         }
     items = list(_iter_snapshot_files(snapshot))
     if not items:
-        return {"folder": folder_tujuan, "ok": [], "error": []}
+        return {"folder": folder_tujuan, "archive": "", "ok": [], "error": []}
 
     cookie = cookie_str if cookie_str is not None else _get_cookies()
     if not cookie:
@@ -565,17 +621,49 @@ def download_all_dokumen_ppk(
             "error": ["Cookie SPSE kosong — buka Brave SPSE dan login sebagai PP."],
         }
 
-    result = {"folder": folder_tujuan, "ok": [], "error": []}
+    result = {"folder": folder_tujuan, "archive": "", "ok": [], "error": []}
+    staging = tempfile.mkdtemp(prefix=".ppk_revision_download_", dir=folder_paket)
+    staged_files = []
+    download_errors = []
     for kind, item in items:
         label = DOCUMENT_TYPES[kind]
         name = _clean_download_filename(item.get("nama"))
         url_dl = str(item.get("url_dl") or "").strip()
         if not url_dl:
-            result["error"].append(f"{label}/{name}: URL download kosong")
+            download_errors.append(f"{label}/{name}: URL download kosong")
             continue
         try:
-            destination = _unique_download_path(folder_tujuan, name)
-            result["ok"].append(_download_snapshot_file(url_dl, destination, cookie))
+            destination = _unique_download_path(staging, name)
+            staged_files.append(_download_snapshot_file(url_dl, destination, cookie))
         except Exception as exc:
-            result["error"].append(f"{label}/{name}: {exc}")
+            download_errors.append(f"{label}/{name}: {exc}")
+
+    if download_errors:
+        shutil.rmtree(staging, ignore_errors=True)
+        result["error"] = download_errors + [
+            "Batch terbaru tidak diaktifkan; folder 10 tetap memakai batch sebelumnya."
+        ]
+        return result
+
+    archive_dir = ""
+    promoted = []
+    try:
+        archive_dir = _archive_active_revision_files(folder_paket, folder_tujuan)
+        for staged_path in staged_files:
+            destination = os.path.join(folder_tujuan, os.path.basename(staged_path))
+            shutil.move(staged_path, destination)
+            promoted.append(destination)
+        result["archive"] = archive_dir
+        result["ok"] = promoted
+    except Exception as exc:
+        for destination in reversed(promoted):
+            if os.path.exists(destination):
+                shutil.move(destination, os.path.join(staging, os.path.basename(destination)))
+        try:
+            _restore_archived_revision_files(archive_dir, folder_tujuan)
+        except Exception as rollback_exc:
+            exc = RuntimeError(f"{exc}; rollback batch lama gagal: {rollback_exc}")
+        result["error"] = [f"Batch refresh gagal: {exc}"]
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return result

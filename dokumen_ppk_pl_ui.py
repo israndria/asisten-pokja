@@ -37,6 +37,8 @@ def _render_download_result(st, result: dict) -> None:
     folder = result.get("folder") or "-"
     ok = result.get("ok") or []
     errors = result.get("error") or []
+    if result.get("archive"):
+        st.caption(f"Batch sebelumnya diarsipkan ke: `{result['archive']}`")
     st.caption(f"Folder tujuan: `{folder}`")
     if ok:
         st.success(f"✅ {len(ok)} file berhasil diunduh.")
@@ -118,7 +120,7 @@ def _render_result(st, engine, row: dict, result: dict, state_key: str, results:
         key=f"pldoc_download_{state_key}_{row['kode_paket']}",
         use_container_width=True,
         disabled=total_files == 0,
-        help="Download semua file live ke subfolder 10. Revisi Uploadan PPK.",
+        help="Refresh folder 10 dengan batch terbaru; batch sebelumnya diarsipkan bertimestamp.",
     ):
         with st.spinner("Mengunduh semua dokumen PPK..."):
             try:
@@ -244,7 +246,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
             "⬇️ Download semua dokumen PPK",
             key=f"{prefix}_download_all",
             use_container_width=True,
-            help="Cek snapshot live tiap paket lalu simpan semua dokumen PPK ke folder masing-masing.",
+            help="Cek snapshot live tiap paket lalu refresh folder 10; batch sebelumnya diarsipkan.",
         )
 
     if check_all_clicked:

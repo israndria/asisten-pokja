@@ -248,6 +248,66 @@ def test_download_duplicate_names_get_unique_suffix(monkeypatch, tmp_path):
     assert (package_dir / engine.DOWNLOAD_SUBFOLDER / "dokumen_2.pdf").read_bytes() == b"downloaded"
 
 
+def test_refresh_archives_old_batch_and_replaces_active_folder(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    target.mkdir()
+    (target / "revisi-lama.pdf").write_bytes(b"old")
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _SnapshotDownloadResponse(url, b"new"),
+    )
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "revisi-baru.pdf", "url_dl": "https://x/new"}]},
+        cookie_str="cookie",
+    )
+
+    assert result["error"] == []
+    assert result["archive"]
+    assert {path.name for path in target.iterdir()} == {"revisi-baru.pdf"}
+    archive = Path(result["archive"])
+    assert archive.parent.name == engine.DOWNLOAD_ARCHIVE_SUBFOLDER
+    assert (archive / "revisi-lama.pdf").read_bytes() == b"old"
+
+
+def test_refresh_failure_keeps_previous_active_batch(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    target.mkdir()
+    old_file = target / "revisi-lama.pdf"
+    old_file.write_bytes(b"old")
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+
+    class _BrokenResponse(_SnapshotDownloadResponse):
+        def iter_content(self, chunk_size=65536):
+            yield b"partial"
+            raise RuntimeError("stream putus")
+
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _BrokenResponse(url),
+    )
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "revisi-baru.pdf", "url_dl": "https://x/new"}]},
+        cookie_str="cookie",
+    )
+
+    assert result["ok"] == []
+    assert result["archive"] == ""
+    assert result["error"]
+    assert old_file.read_bytes() == b"old"
+    assert not list(package_dir.glob(".ppk_revision_download_*"))
+    assert not list(package_dir.glob(f"{engine.DOWNLOAD_ARCHIVE_SUBFOLDER}/*"))
+
+
 def test_download_does_not_create_missing_revision_folder(monkeypatch, tmp_path):
     package_dir = tmp_path / "paket"
     package_dir.mkdir()
