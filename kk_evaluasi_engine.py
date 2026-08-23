@@ -88,7 +88,13 @@ def _ms_tms(data: dict) -> str:
         return "TMS"
     if not data.get("nib_nomor"):
         return "TMS"
+    if not data.get("ss_nomor"):
+        return "TMS"
+    if data.get("ss_terverifikasi") not in (None, "", "Terverifikasi"):
+        return "TMS"
     if not data.get("sbu_nomor"):
+        return "TMS"
+    if data.get("sbu_tidak_sesuai") or data.get("ss_tidak_sesuai"):
         return "TMS"
     if not data.get("pengalaman"):
         return "TMS"
@@ -272,21 +278,17 @@ def fill_kk_evaluasi(
             _set(_ROW["nama_peserta"], col, data.get("nama", ""))
             _set(_ROW["urutan"], col, urutan)
 
-            # Syarat 1: NIB & Perizinan — tentukan poin a/b/c
-            # Poin a: NIB + SS + SBU semua ada
-            # Poin b: NIB + SS ada, SBU tidak ada (atau sebaliknya)
-            # Poin c: NIB ada saja (SS dan SBU tidak ada)
-            # Tidak memenuhi: NIB tidak ada
+            # Syarat 1: NIB + Sertifikat Standar.
+            # Poin a = SS terverifikasi; poin b = SS ada tetapi belum terverifikasi.
+            # SBU adalah syarat terpisah pada baris 12-17, bukan penentu poin 1.
             nib_ada = "Ada" if data.get("nib_nomor") else "Tidak Ada"
             _has_nib = bool(data.get("nib_nomor"))
             _has_ss  = bool(data.get("ss_nomor"))
-            _has_sbu = bool(data.get("sbu_nomor"))
-            if _has_nib and _has_ss and _has_sbu:
+            _ss_verified = data.get("ss_terverifikasi") == "Terverifikasi"
+            if _has_nib and _has_ss and _ss_verified:
                 _poin1 = "Memenuhi Syarat Kualifikasi pada Poin a)."
-            elif _has_nib and (_has_ss or _has_sbu):
+            elif _has_nib and _has_ss:
                 _poin1 = "Memenuhi Syarat Kualifikasi pada Poin b)."
-            elif _has_nib:
-                _poin1 = "Memenuhi Syarat Kualifikasi pada Poin c)."
             else:
                 _poin1 = "Tidak Memenuhi"
             _set(_ROW["syarat1_hasil"], col, _poin1)

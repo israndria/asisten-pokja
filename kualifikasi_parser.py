@@ -108,14 +108,97 @@ def _find_file(folder: str, *patterns: str) -> str | None:
     return None
 
 
+def _normalisasi_spasi(value: str) -> str:
+    """Rapatkan whitespace hasil HTML/OCR agar regex stabil."""
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _parse_sbu_requirement_keywords(value: str) -> set[str]:
+    """Ambil kode subklasifikasi, KBLI, dan nama SBU dari requirement."""
+    text = _normalisasi_spasi(value).upper()
+    if not text:
+        return set()
+
+    keywords = set(re.findall(r"\b[A-Z]{2}\d{3}\b", text))
+    keywords.update(
+        match.group(1)
+        for match in re.finditer(r"\bKBLI(?:\s+20\d{2})?\s*[:\-]?\s*(\d{5})\b", text)
+    )
+
+    # Fallback nama untuk requirement lama yang tidak memuat KBLI numerik.
+    name = re.search(
+        r"\b[A-Z]{2}\d{3}\b(?:\s*\([^)]*\))?\s+(.+?)(?:\s+KBLI\b|$)",
+        text,
+    )
+    if name:
+        phrase = _normalisasi_spasi(name.group(1))
+        keywords.add(phrase)
+        words = phrase.split()
+        if len(words) >= 2:
+            keywords.add(" ".join(words[-2:]))
+        if words:
+            keywords.add(words[-1])
+    return keywords
+
+
+def _find_nearest_xlsm(folder: str) -> str | None:
+    """Cari workbook paket pada folder peserta atau ancestor-nya."""
+    current = os.path.abspath(folder or "")
+    while current and os.path.isdir(current):
+        try:
+            for name in sorted(os.listdir(current)):
+                if name.lower().endswith(".xlsm"):
+                    return os.path.join(current, name)
+        except Exception:
+            pass
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def _ambil_requirement_lokal(folder_peserta: str) -> str:
+    """Baca requirement SBU dari list_dokpil workbook paket bila tersedia."""
+    workbook = _find_nearest_xlsm(folder_peserta)
+    if not workbook:
+        return ""
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(workbook, read_only=True, data_only=True, keep_vba=True)
+        try:
+            ws = wb["list_dokpil"]
+            # AQ = SBU 1, AS = SBU gabungan. Satu workbook = satu paket.
+            for row in range(2, min(ws.max_row or 2, 30) + 1):
+                for col in (43, 45):
+                    value = ws.cell(row, col).value
+                    if value and "SBU" in str(value).upper():
+                        return _normalisasi_spasi(str(value))
+        finally:
+            wb.close()
+    except Exception:
+        return ""
+    return ""
+
+
 # ── Parse halaman HTML /preview ───────────────────────────────────────────────
 
-def _ambil_syarat_sbu_keywords(kode_tender: str) -> list[str] | None:
+def _ambil_syarat_sbu_keywords(
+    kode_tender: str,
+    folder_peserta: str | None = None,
+) -> list[str] | None:
+    """Ambil token syarat SBU dengan prioritas workbook Dokpil lokal.
+
+    ``draft_paket`` dapat tertinggal dari Dokpil yang sudah dipakai paket.
+    Karena itu workbook lokal menjadi sumber pertama; Supabase hanya fallback.
     """
-    Ambil keyword nama SBU dari draft_paket untuk paket tertentu.
-    Dipakai untuk memilih baris izin usaha yang sesuai syarat (bukan selalu baris pertama).
-    Return list keyword uppercase, atau None kalau gagal/kosong.
-    """
+    local_requirement = _ambil_requirement_lokal(folder_peserta or "")
+    if local_requirement:
+        keywords = _parse_sbu_requirement_keywords(local_requirement)
+        if keywords:
+            return sorted(keywords)
+
     try:
         from config import sb as _sb_fn
         row = _sb_fn().table("draft_paket").select("sbu_baru,sbu_lama") \
@@ -127,17 +210,7 @@ def _ambil_syarat_sbu_keywords(kode_tender: str) -> list[str] | None:
             val = (row.data.get(field) or "").strip()
             if not val:
                 continue
-            # Ekstrak nama setelah '(KBLI xxxx)': "Subklasifikasi BG005 (KBLI 2020) Konstruksi Gedung Kesehatan"
-            m = re.search(r'\(KBLI[^)]*\)\s*(.+)$', val, re.IGNORECASE)
-            if not m:
-                continue
-            nama = m.group(1).strip().upper()  # "KONSTRUKSI GEDUNG KESEHATAN"
-            keywords.add(nama)
-            words = nama.split()
-            if len(words) >= 2:
-                keywords.add(" ".join(words[-2:]))   # "GEDUNG KESEHATAN"
-            if words:
-                keywords.add(words[-1])               # "KESEHATAN"
+            keywords.update(_parse_sbu_requirement_keywords(val))
         return list(keywords) if keywords else None
     except Exception:
         return None
@@ -352,6 +425,184 @@ def parse_preview_html(kualifikasi_id: str, syarat_keywords: list[str] | None = 
     hasil["skp_preview"] = 5 - len(jp_berjalan)
 
     return hasil
+
+
+_BULAN_ID = (
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+)
+
+
+def _tanggal_id_from_iso(value: str) -> str:
+    match = re.fullmatch(r"(\d{4})[-/]([01]\d)[-/]([0-3]\d)", value or "")
+    if not match:
+        return value
+    year, month, day = match.groups()
+    month_num = int(month)
+    return f"{int(day)} {_BULAN_ID[month_num - 1]} {year}" if 1 <= month_num <= 12 else value
+
+
+def _pdf_candidates(folder: str, kind: str) -> list[str]:
+    try:
+        names = sorted(os.listdir(folder))
+    except Exception:
+        return []
+    result = []
+    for name in names:
+        lower = name.lower()
+        if not lower.endswith(".pdf"):
+            continue
+        if kind == "sbu" and ("sbu" in lower or "sertifikat badan usaha" in lower):
+            result.append(os.path.join(folder, name))
+        elif kind == "ss" and (
+            lower.startswith("ss ")
+            or "sertifikat standar" in lower
+            or "sertifikat_standar" in lower
+            or "serifikat standar" in lower  # typo umum pada nama upload
+        ):
+            result.append(os.path.join(folder, name))
+    return result
+
+
+def _parse_local_sbu_pdf(folder: str) -> dict:
+    """Ambil identitas SBU dari PDF peserta; return kosong bila tidak terbaca."""
+    for pdf in _pdf_candidates(folder, "sbu"):
+        try:
+            text = _normalisasi_spasi(_pdf_to_text(pdf))
+        except Exception:
+            continue
+        upper = text.upper()
+        filename_upper = os.path.basename(pdf).upper()
+        metadata_text = f"{upper} {filename_upper}"
+        if "SERTIFIKAT BADAN USAHA" not in upper and "PB-UMKU" not in upper:
+            continue
+
+        number = ""
+        match = re.search(r"\bPB[- ]?UMKU\s*:\s*(\d{10,})", upper)
+        if match:
+            number = match.group(1)
+        if not number:
+            match = re.search(r"\bNOMOR\s*:\s*(\d{12,})", upper)
+            if match:
+                number = match.group(1)
+
+        code_match = re.search(r"\b([A-Z]{2}\d{3})\b", metadata_text)
+        kbli_match = re.search(
+            r"\bKBLI\b[^\d]{0,20}(4\d{4})(?:\s*-\s*|\s+)",
+            metadata_text,
+        )
+        label = ""
+        if kbli_match:
+            label_match = re.search(
+                rf"\b{kbli_match.group(1)}\s*-\s*(.+?)(?=\s+(?:\d+\.\s+)?LOKASI|\s+TELAH\s+MEMENUHI|\s+DITERBITKAN|\s+MASA\s+BERLAKU|$)",
+                upper,
+            )
+            if label_match:
+                label = _normalisasi_spasi(label_match.group(1)).title()
+                label = re.sub(r"\s+Indonesia\s+\(Kbli\)$", "", label, flags=re.IGNORECASE)
+        if not label and code_match:
+            known = {"BG002": "Konstruksi Gedung Perkantoran"}
+            label = known.get(code_match.group(1), "")
+        if not code_match and kbli_match and kbli_match.group(1) == "41012":
+            code = "BG002"
+        else:
+            code = code_match.group(1) if code_match else ""
+
+        validity_match = re.search(
+            r"MASA\s+BERLAKU\s*S\.?D\.?\s*:\s*(\d{4}[-/]\d{2}[-/]\d{2})",
+            upper,
+        )
+        validity = _tanggal_id_from_iso(validity_match.group(1)) if validity_match else ""
+        qualification = "Kecil" if re.search(r"\bKECIL\b", upper) else ""
+        if number or code or kbli_match:
+            kbli = kbli_match.group(1) if kbli_match else ""
+            display = f"{code} - {label}" if code and label else (code or label)
+            return {
+                "sbu_nomor": number,
+                "sbu_berlaku": validity,
+                "sbu_kualifikasi": qualification,
+                "sbu_klasifikasi": f"{display}|KBLI {kbli}" if display and kbli else display,
+                "sbu_subklas_label": display,
+                "sbu_kbli": kbli,
+                "sbu_source": os.path.basename(pdf),
+            }
+    return {}
+
+
+def _parse_local_ss_pdf(folder: str) -> dict:
+    """Ambil nomor/status Sertifikat Standar dari PDF peserta."""
+    for pdf in _pdf_candidates(folder, "ss"):
+        try:
+            text = _normalisasi_spasi(_pdf_to_text(pdf))
+        except Exception:
+            continue
+        upper = text.upper()
+        if "SERTIFIKAT STANDAR" not in upper:
+            continue
+        match = re.search(r"SERTIFIKAT\s+STANDAR\s*:\s*(\d{10,})", upper)
+        number = match.group(1) if match else ""
+        if not number:
+            continue
+        if re.search(r"\bBELUM\s+TERVERIFIKASI\b", upper):
+            status = "Belum Terverifikasi"
+        elif "TELAH TERVERIFIKASI" in upper or "TELAH MEMENUHI PERSYARATAN" in upper:
+            status = "Terverifikasi"
+        else:
+            status = ""
+        return {
+            "ss_nomor": number,
+            "ss_status": status,
+            "ss_source": os.path.basename(pdf),
+        }
+    return {}
+
+
+def _merge_local_license_evidence(
+    html_data: dict,
+    folder_peserta: str,
+    syarat_keywords: list[str] | None,
+    log_cb=None,
+) -> dict:
+    """Gunakan bukti PDF lokal sebagai koreksi data preview yang stale/salah."""
+    local_sbu = _parse_local_sbu_pdf(folder_peserta)
+    local_ss = _parse_local_ss_pdf(folder_peserta)
+    conflicts = []
+
+    def _apply(field, value, label):
+        if not value:
+            return
+        before = html_data.get(field)
+        if before and _normalisasi_spasi(str(before)).upper() != _normalisasi_spasi(str(value)).upper():
+            conflicts.append(f"{label}: {before} -> {value}")
+        html_data[field] = value
+
+    for field in (
+        "sbu_nomor", "sbu_berlaku", "sbu_kualifikasi", "sbu_klasifikasi",
+        "sbu_subklas_label", "sbu_kbli",
+    ):
+        _apply(field, local_sbu.get(field), field)
+    _apply("ss_nomor", local_ss.get("ss_nomor"), "ss_nomor")
+
+    if local_ss.get("ss_status"):
+        html_data["ss_status"] = local_ss["ss_status"]
+        html_data["ss_instansi"] = "OSS"
+    if local_sbu.get("sbu_subklas_label"):
+        evidence = " ".join(
+            str(local_sbu.get(key) or "")
+            for key in ("sbu_subklas_label", "sbu_kbli")
+        ).upper()
+        matches_requirement = not syarat_keywords or any(
+            keyword.upper() in evidence for keyword in syarat_keywords
+        )
+        html_data["sbu_tidak_sesuai"] = not matches_requirement
+    if local_ss.get("ss_nomor") and local_ss.get("ss_status"):
+        html_data["ss_tidak_sesuai"] = False
+    if conflicts and log_cb:
+        log_cb(
+            "  ⚠️ Preview SPSE berbeda dengan PDF izin lokal; "
+            f"pakai PDF: {'; '.join(conflicts[:4])}"
+        )
+    return html_data
 
 
 # ── KSWP: DOM Playwright (fallback primer) ─────────────────────────────────────
@@ -573,10 +824,17 @@ def parse_peserta_lengkap(
             progress_cb(msg)
 
     _log(f"[Parser] Fetch HTML preview kualifikasi {kualifikasi_id}...")
-    syarat_keywords = _ambil_syarat_sbu_keywords(kode_tender) if kode_tender else None
+    syarat_keywords = (
+        _ambil_syarat_sbu_keywords(kode_tender, folder_peserta)
+        if kode_tender else None
+    )
     html_data = parse_preview_html(kualifikasi_id, syarat_keywords=syarat_keywords)
     if not html_data.get("ok"):
         return {"ok": False, "pesan": html_data.get("pesan", "Gagal fetch preview")}
+
+    _merge_local_license_evidence(
+        html_data, folder_peserta, syarat_keywords, log_cb=_log
+    )
 
     _log("[Parser] Cek KSWP...")
     kswp = get_kswp_status(kualifikasi_id, folder_peserta)
@@ -600,12 +858,12 @@ def parse_peserta_lengkap(
         "ss_nomor":      html_data.get("ss_nomor", ""),
         "ss_berlaku":    html_data.get("ss_berlaku", ""),
         "ss_kualifikasi": html_data.get("ss_kualifikasi", ""),
-        # ss_terverifikasi: NIB dari OSS selalu "Terverifikasi" jika ada nomor,
-        # "Belum Terverifikasi" hanya jika ada nomor tapi instansi bukan OSS
+        # Status PDF OSS lebih kuat daripada label instansi di preview SPSE.
         "ss_terverifikasi": (
-            "Terverifikasi" if html_data.get("ss_nomor") and "OSS" in html_data.get("ss_instansi", "")
+            html_data.get("ss_status") if html_data.get("ss_status")
+            else ("Terverifikasi" if html_data.get("ss_nomor") and "OSS" in html_data.get("ss_instansi", "")
             else ("Belum Terverifikasi" if html_data.get("ss_nomor")
-            else "Tidak Menyampaikan")
+            else "Tidak Menyampaikan"))
         ),
         # SBU
         "sbu_nomor":      html_data.get("sbu_nomor", ""),
