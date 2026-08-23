@@ -170,7 +170,7 @@ def _migrate_pl_tab_selection(state_key: str) -> None:
 
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl
+from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -5598,6 +5598,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                     _do_download7 = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
                     _do_parse7    = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
+                    _do_hps7      = st.checkbox("💰 Update HPS (sheet 5. HPS)", value=True, key="pl7_do_hps_jkk")
 
                     _btn7 = st.button(
                         f"▶ Jalankan — {_n_paket7} paket",
@@ -5619,14 +5620,48 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 def _lcb7(msg, _lines=_log7_lines):
                                     _lines.append(msg)
 
+                                _hps7 = None
+                                if _do_hps7:
+                                    _pb7.progress(_i7 / _n_paket7, text=f"{_nama7} — update HPS")
+                                    _lcb7("--- Update HPS ke sheet 5. HPS ---")
+                                    _hps7 = update_hps_paket_pl(_kpl7, _he_pl, _lcb7)
+                                    if _hps7.get("ok"):
+                                        _lcb7(f"[OK] HPS: {_hps7.get('count', 0)} item ditulis")
+                                    else:
+                                        _lcb7(f"[GAGAL] HPS: {_hps7.get('pesan', '-')}")
+                                _hps7_summary = ""
+                                if _hps7 is not None:
+                                    _hps7_summary = (
+                                        f"Update HPS berhasil ({_hps7.get('count', 0)} item)"
+                                        if _hps7.get("ok") else
+                                        f"Update HPS gagal: {_hps7.get('pesan', '-')}"
+                                    )
+                                _hasil7 = None
+                                if not _do_download7 and not _do_parse7:
+                                    _hps7_ok = bool(_hps7 and _hps7.get("ok"))
+                                    _ringkasan7.append({
+                                        "nama": _nama7,
+                                        "status": "ok" if _hps7_ok else "gagal",
+                                        "detail": _hps7_summary or "tidak ada operasi",
+                                    })
+                                    _status7.update(
+                                        label=f"Selesai — {_nama7}",
+                                        state="complete" if _hps7_ok else "error",
+                                        expanded=False,
+                                    )
+                                    continue
+
                                 # Fetch peserta
                                 _lcb7(f"[{_i7+1}/{_n_paket7}] Fetch peserta SPSE...")
                                 _pb7.progress((_i7) / _n_paket7, text=f"{_nama7} — fetch peserta")
                                 _fp7 = _ke_pl.fetch_peserta_pl(_kpl7)
                                 if not _fp7.get("ok"):
-                                    _lcb7(f"[SKIP] Peserta: {_fp7['pesan']}")
-                                    _status7.update(label=f"SKIP {_nama7} — {_fp7['pesan']}", state="error", expanded=False)
-                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _fp7["pesan"]})
+                                    _fp7_detail = _fp7["pesan"]
+                                    if _hps7_summary:
+                                        _fp7_detail = f"{_fp7_detail}; {_hps7_summary}"
+                                    _lcb7(f"[SKIP] Peserta: {_fp7_detail}")
+                                    _status7.update(label=f"SKIP {_nama7} — {_fp7_detail}", state="error", expanded=False)
+                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _fp7_detail})
                                     continue
                                 _peserta7 = _fp7["peserta"]
                                 _lcb7(f"Peserta ({len(_peserta7)}): {', '.join(p['nama'] for p in _peserta7)}")
@@ -5634,9 +5669,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 # Resolve folder
                                 _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
                                 if not _folder7.get("ok"):
-                                    _lcb7(f"[SKIP] Folder: {_folder7['pesan']}")
-                                    _status7.update(label=f"SKIP {_nama7} — folder tidak ditemukan", state="error", expanded=False)
-                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _folder7.get("pesan", "folder tidak ditemukan")})
+                                    _folder7_detail = _folder7.get("pesan", "folder tidak ditemukan")
+                                    if _hps7_summary:
+                                        _folder7_detail = f"{_folder7_detail}; {_hps7_summary}"
+                                    _lcb7(f"[SKIP] Folder: {_folder7_detail}")
+                                    _status7.update(label=f"SKIP {_nama7} — {_folder7_detail}", state="error", expanded=False)
+                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _folder7_detail})
                                     continue
                                 _folder_kual7 = _folder7["path"]
 
@@ -5684,14 +5722,29 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                                     _ringkasan7.append({
                                         "nama"  : _nama7,
-                                        "status": "ok" if _hasil7.get("ok") else "gagal",
-                                        "detail": _hasil7.get("pesan", ""),
+                                        "status": "ok" if _hasil7.get("ok") and not (_hps7 and not _hps7.get("ok")) else "gagal",
+                                        "detail": "; ".join(
+                                            part for part in (_hasil7.get("pesan", ""), _hps7_summary) if part
+                                        ),
                                     })
                                 else:
                                     # Tidak ada parse → anggap OK (hanya download)
-                                    _ringkasan7.append({"nama": _nama7, "status": "ok", "detail": "download saja"})
+                                    _ringkasan7.append({
+                                        "nama": _nama7,
+                                        "status": "gagal" if _hps7 and not _hps7.get("ok") else "ok",
+                                        "detail": "; ".join(
+                                            part for part in ("download saja", _hps7_summary) if part
+                                        ),
+                                    })
 
-                                _status7.update(label=f"Selesai — {_nama7}", state="complete", expanded=False)
+                            _paket7_ok = (not _do_parse7 or bool(_hasil7 and _hasil7.get("ok"))) and (
+                                not _do_hps7 or bool(_hps7 and _hps7.get("ok"))
+                            )
+                            _status7.update(
+                                label=f"Selesai — {_nama7}",
+                                state="complete" if _paket7_ok else "error",
+                                expanded=False,
+                            )
 
                             if _log7_lines:
                                 with st.expander(f"📋 Log {_nama7[:50]}", expanded=False):

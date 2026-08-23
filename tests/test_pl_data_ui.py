@@ -464,3 +464,34 @@ def test_mark_tahap_spse_sudah_diumumkan_menyimpan_status_batch():
     assert jumlah == 2
     assert state["pl_umumkan_status"]["34"]["tahap_spse"] == "Paket Belum Dilaksanakan"
     assert state["pl_umumkan_status"]["35"]["status"] == "sudah diumumkan"
+
+
+def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, monkeypatch):
+    workbook = tmp_path / "0. BAPLPK - Uji.xlsm"
+    workbook.write_bytes(b"macro-workbook")
+    calls = {}
+
+    class Engine:
+        @staticmethod
+        def _find_xlsm(kode_paket):
+            calls["kode"] = kode_paket
+            return str(workbook)
+
+    def fake_writer(kode_paket, excel_path, progress_cb=None):
+        calls["writer"] = (kode_paket, excel_path, progress_cb)
+        return {"ok": True, "pesan": "HPS ditulis", "count": 3}
+
+    import hps_engine
+    monkeypatch.setattr(hps_engine, "scrape_hps_pl_ke_excel", fake_writer)
+
+    logs = []
+    result = pl_ui_helpers.update_hps_paket_pl("PK-1", Engine, logs.append)
+
+    assert result["ok"] is True
+    assert result["count"] == 3
+    assert calls["kode"] == "PK-1"
+    assert calls["writer"] == ("PK-1", str(workbook), logs.append)
+    backup = tmp_path / result["backup_path"].split("\\")[-1]
+    assert backup.is_file()
+    assert backup.read_bytes() == workbook.read_bytes()
+    assert any(line.startswith("Backup HPS:") for line in logs)

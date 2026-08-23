@@ -6,6 +6,7 @@ import re
 import json
 import shutil
 import subprocess
+import uuid
 from datetime import datetime
 from functools import lru_cache
 
@@ -622,6 +623,45 @@ def _cari_xlsm_pl(folder):
         return None
     xs.sort(key=lambda f: (not f.lower().startswith("0. ba"), f))
     return os.path.join(folder, xs[0])
+
+
+def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict:
+    """Refresh HPS live ke sheet ``5. HPS`` dengan backup workbook unik."""
+    try:
+        workbook = hasil_engine._find_xlsm(kode_paket)
+    except Exception as exc:
+        return {"ok": False, "pesan": f"Gagal mencari workbook: {exc}", "count": 0}
+
+    if not workbook or not os.path.isfile(workbook):
+        return {"ok": False, "pesan": "Workbook .xlsm tidak ditemukan", "count": 0}
+
+    source = pathlib.Path(workbook)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = source.with_name(
+        f"{source.stem}.backup_{stamp}_{uuid.uuid4().hex[:8]}{source.suffix}"
+    )
+    try:
+        shutil.copy2(source, backup)
+    except Exception as exc:
+        return {"ok": False, "pesan": f"Backup workbook gagal: {exc}", "count": 0}
+
+    if progress_cb:
+        progress_cb(f"Backup HPS: {backup.name}")
+
+    try:
+        import hps_engine
+        result = hps_engine.scrape_hps_pl_ke_excel(
+            kode_paket, str(source), progress_cb=progress_cb
+        )
+    except Exception as exc:
+        result = {"ok": False, "pesan": str(exc), "count": 0}
+
+    result = dict(result or {})
+    result.setdefault("ok", False)
+    result.setdefault("pesan", "Tidak ada respons dari writer HPS")
+    result.setdefault("count", 0)
+    result["backup_path"] = str(backup)
+    return result
 
 
 def _provider_master_cells(row: dict) -> tuple[str, str]:

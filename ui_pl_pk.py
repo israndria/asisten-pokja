@@ -257,6 +257,7 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
     st.caption("Peserta akan di-fetch via CDP saat tombol Jalankan diklik.")
     do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
     do_parse = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
+    do_hps = st.checkbox("💰 Update HPS (sheet 5. HPS)", value=True, key="pl7_do_hps_pk")
     run = st.button(
         f"▶ Jalankan — {jumlah} paket",
         type="primary", key="pl7_run", use_container_width=True,
@@ -281,11 +282,49 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
                 lines.append(str(message))
                 box.caption(str(message).replace("\n", " ")[:120])
 
+            hps_result = None
+            if do_hps:
+                progress.progress(index / jumlah, text=f"{nama} — update HPS")
+                log_cb("--- Update HPS ke sheet 5. HPS ---")
+                from pl_ui_helpers import update_hps_paket_pl
+                hps_result = update_hps_paket_pl(kode, hasil_engine, log_cb)
+                if hps_result.get("ok"):
+                    log_cb(f"[OK] HPS: {hps_result.get('count', 0)} item ditulis")
+                else:
+                    log_cb(f"[GAGAL] HPS: {hps_result.get('pesan', '-')}")
+            result = None
+
+            hps_summary = ""
+            if hps_result is not None:
+                hps_summary = (
+                    f"Update HPS berhasil ({hps_result.get('count', 0)} item)"
+                    if hps_result.get("ok") else
+                    f"Update HPS gagal: {hps_result.get('pesan', '-')}"
+                )
+            if not do_download and not do_parse:
+                hps_ok = bool(hps_result and hps_result.get("ok"))
+                detail = hps_summary or "tidak ada operasi"
+                status.update(
+                    label=f"Selesai — {nama}",
+                    state="complete" if hps_ok else "error",
+                    expanded=False,
+                )
+                summary.append({
+                    "nama": nama,
+                    "status": "ok" if hps_ok else "gagal",
+                    "detail": detail,
+                })
+                detail_logs.append((nama, list(logs)))
+                progress.progress((index + 1) / jumlah, text=f"Selesai {index + 1}/{jumlah} paket")
+                continue
+
             log_cb(f"[{index + 1}/{jumlah}] Fetch peserta SPSE...")
             progress.progress(index / jumlah, text=f"{nama} — fetch peserta")
             fetched = kualifikasi_engine.fetch_peserta_pl(kode)
             if not fetched.get("ok"):
                 detail = fetched.get("pesan", "peserta tidak ditemukan")
+                if hps_summary:
+                    detail = f"{detail}; {hps_summary}"
                 log_cb(f"[SKIP] Peserta: {detail}")
                 status.update(label=f"SKIP {nama} — {detail}", state="error", expanded=False)
                 summary.append({"nama": nama, "status": "skip", "detail": detail})
@@ -297,8 +336,10 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
             folder = kualifikasi_engine.resolve_folder_paket_pl(kode)
             if not folder.get("ok"):
                 detail = folder.get("pesan", "folder tidak ditemukan")
+                if hps_summary:
+                    detail = f"{detail}; {hps_summary}"
                 log_cb(f"[SKIP] Folder: {detail}")
-                status.update(label=f"SKIP {nama} — folder tidak ditemukan", state="error", expanded=False)
+                status.update(label=f"SKIP {nama} — {detail}", state="error", expanded=False)
                 summary.append({"nama": nama, "status": "skip", "detail": detail})
                 detail_logs.append((nama, list(logs)))
                 continue
@@ -344,13 +385,26 @@ def render_download_actions(st, selected_rows: list[dict], kualifikasi_engine, h
                         log_cb(f"[WARN] Refresh @ Master Data gagal: {exc}")
                 summary.append({
                     "nama": nama,
-                    "status": "ok" if result.get("ok") else "gagal",
-                    "detail": result.get("pesan", ""),
+                    "status": "ok" if result.get("ok") and not (hps_result and not hps_result.get("ok")) else "gagal",
+                    "detail": "; ".join(
+                        part for part in (result.get("pesan", ""), hps_summary) if part
+                    ),
                 })
             else:
-                summary.append({"nama": nama, "status": "ok", "detail": "download saja"})
+                summary.append({
+                    "nama": nama,
+                    "status": "gagal" if hps_result and not hps_result.get("ok") else "ok",
+                    "detail": "; ".join(part for part in ("download saja", hps_summary) if part),
+                })
 
-            status.update(label=f"Selesai — {nama}", state="complete", expanded=False)
+            _package_ok = (not do_parse or bool(result and result.get("ok"))) and (
+                not do_hps or bool(hps_result and hps_result.get("ok"))
+            )
+            status.update(
+                label=f"Selesai — {nama}",
+                state="complete" if _package_ok else "error",
+                expanded=False,
+            )
             detail_logs.append((nama, list(logs)))
         progress.progress((index + 1) / jumlah, text=f"Selesai {index + 1}/{jumlah} paket")
 
