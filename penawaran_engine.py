@@ -163,9 +163,11 @@ def scrape_rincian_penawaran(peserta_id: str) -> dict:
 # ============================================================
 
 _SHEET_PENAWARAN = "6. Harga Penawaran"
+MAX_PARTICIPANTS = 10
 
-# Kolom awal tiap blok peserta (0-based: 0=A, 9=J, 18=S)
-_BLOK_START_COLS = [0, 9, 18]  # A, J, S
+# Blok peserta berjarak 9 kolom: 8 kolom data + 1 kolom pemisah.
+_BLOK_STRIDE = 9
+_BLOK_START_COLS = [0, 9, 18]  # A, J, S — kompatibel template lama
 _BLOK_LEBAR = 8  # kolom A-H, J-Q, S-Z
 _TOTAL_ROW = 200  # baris ringkasan; sengaja di luar area item normal
 
@@ -176,7 +178,26 @@ _BLOK_HEADERS = [
 ]
 
 
-def _sync_harga_input_ba_from_sheet6(wb, progress_cb=None):
+def _block_starts(count: int) -> list[int]:
+    count = min(MAX_PARTICIPANTS, max(0, int(count or 0)))
+    return [_BLOK_STRIDE * i for i in range(count)]
+
+
+def _sheet6_block_lookup_formula(row: int, input_col: int, block_count: int) -> str:
+    """Formula harga Sheet 0 berdasarkan nama dan seluruh blok Sheet 6."""
+    input_letter = _col_idx_to_letter(input_col - 1)
+    expr = '"-"'
+    for start in reversed(_block_starts(block_count)):
+        name_letter = _col_idx_to_letter(start)
+        total_letter = _col_idx_to_letter(start + _BLOK_LEBAR - 1)
+        expr = (
+            f"IF(${input_letter}${row}='{_SHEET_PENAWARAN}'!${name_letter}$1,"
+            f"'{_SHEET_PENAWARAN}'!${total_letter}${_TOTAL_ROW},{expr})"
+        )
+    return f'=IFERROR({expr},"-")'
+
+
+def _sync_harga_input_ba_from_sheet6(wb, progress_cb=None, participant_count: int = 0):
     """Jadikan Sheet 6 sumber harga untuk Sheet 0, berdasarkan nama peserta.
 
     Sheet 0 tidak boleh menerima angka harga dari parser/DB lama.  Harga
@@ -198,27 +219,30 @@ def _sync_harga_input_ba_from_sheet6(wb, progress_cb=None):
     except Exception:
         pass
 
-    # Sheet 6: nama blok A1/J1/S1, total setelah pajak H/Q/Z.
-    for col in range(3, 6):  # C:E pada Sheet 0
-        nama = ws0.Cells(7, col).Value
-        if not nama:
-            ws0.Cells(11, col).Value = None
-            ws0.Cells(12, col).Value = None
-            continue
+    participant_count = min(MAX_PARTICIPANTS, max(0, int(participant_count or 0)))
+    block_count = min(MAX_PARTICIPANTS, max(3, participant_count))
+    try:
+        import input_ba_engine
+        input_ba_engine._ensure_input_ba_layout(ws0, participant_count)
+    except Exception as e_layout:
+        _log(f"  ⚠️ Layout peserta tambahan Input BA tidak diperbarui: {e_layout}")
 
-        # Formula berbasis nama; tidak bergantung urutan/ranking peserta.
-        formula = "=IFERROR(IF($%s$7='6. Harga Penawaran'!$A$1,'6. Harga Penawaran'!$H$%d,IF($%s$7='6. Harga Penawaran'!$J$1,'6. Harga Penawaran'!$Q$%d,IF($%s$7='6. Harga Penawaran'!$S$1,'6. Harga Penawaran'!$Z$%d,\"-\"))),\"-\")" % (
-            chr(64 + col), _TOTAL_ROW,
-            chr(64 + col), _TOTAL_ROW,
-            chr(64 + col), _TOTAL_ROW,
-        )
-        ws0.Cells(11, col).Formula = formula
-        # Belum ada kolom harga terkoreksi di Sheet 6. Default sama dengan
-        # penawaran; operator tetap dapat mengganti baris 12 bila ada koreksi.
-        ws0.Cells(12, col).Formula = "=%s11" % chr(64 + col)
-        ws0.Cells(11, col).NumberFormat = '#,##0.00'
-        ws0.Cells(12, col).NumberFormat = '#,##0.00'
-        _log(f"  Harga {nama}: Sheet 0 <- Sheet 6 (berdasarkan nama)")
+    # Matrix kanonik Sheet 0: C:L. Compatibility view C:E/I hanya formula
+    # turunan dari matrix dan tidak pernah menjadi target tulis.
+    try:
+        ws0.Range("C42:L43").ClearContents()
+    except Exception:
+        pass
+    for urutan in range(1, participant_count + 1):
+        col = urutan + 2  # peserta 1..10 = C..L
+        input_letter = _col_idx_to_letter(col - 1)
+        ws0.Cells(42, col).Formula = _sheet6_block_lookup_formula(38, col, block_count)
+        ws0.Cells(43, col).Formula = f"={input_letter}42"
+        ws0.Cells(42, col).NumberFormat = '#,##0.00'
+        ws0.Cells(43, col).NumberFormat = '#,##0.00'
+        nama = ws0.Cells(38, col).Value
+        if nama:
+            _log(f"  Harga {nama}: Sheet 0 matrix <- Sheet 6 (berdasarkan nama)")
 
     _log("✅ Sheet 0 harga tersinkron dari Sheet 6; tidak memakai nilai parser/DB.")
 
@@ -235,7 +259,7 @@ def _col_idx_to_letter(col_0based: int) -> str:
 
 def _tulis_penawaran_ke_sheet(xl_ws, peserta_data: list, progress_cb=None):
     """
-    Tulis max 3 peserta secara horizontal ke worksheet yang sudah dibuka.
+    Tulis seluruh peserta secara horizontal ke worksheet yang sudah dibuka.
 
     peserta_data: [{"nama_peserta": str, "items": [...], "total_penawaran": float}, ...]
     Item fields: urutan, jenis_bj, satuan, vol, harga_satuan, pajak_pct,
@@ -248,14 +272,26 @@ def _tulis_penawaran_ke_sheet(xl_ws, peserta_data: list, progress_cb=None):
             except Exception:
                 pass
 
-    # Bersih area data lama (A1:Z + cukup baris)
+    peserta_data = list(peserta_data or [])[:MAX_PARTICIPANTS]
+
+    # Bersih area data lama. Sheet lama hanya A:Z; blok tambahan memakai
+    # AB:AI, BA:BH, dst dengan stride yang sama.
     last_row_clear = max(
         xl_ws.Cells(xl_ws.Rows.Count, 1).End(-4162).Row,  # xlUp
         xl_ws.Cells(xl_ws.Rows.Count, 2).End(-4162).Row,
         200,  # jangkau baris hantu lama
     )
+    try:
+        used = xl_ws.UsedRange
+        used_last_col = int(used.Column + used.Columns.Count - 1)
+    except Exception:
+        used_last_col = 26
+    requested_last_col = (_block_starts(max(3, len(peserta_data)))[-1] + _BLOK_LEBAR)
+    clear_last_col = max(26, used_last_col, requested_last_col)
     if last_row_clear >= 1:
-        rng_clear = xl_ws.Range(f"A1:Z{last_row_clear}")
+        rng_clear = xl_ws.Range(
+            f"A1:{_col_idx_to_letter(clear_last_col - 1)}{last_row_clear}"
+        )
         rng_clear.ClearContents()
         rng_clear.Interior.ColorIndex = -4142  # xlNone
         # Hapus merge lama di area tersebut
@@ -264,8 +300,29 @@ def _tulis_penawaran_ke_sheet(xl_ws, peserta_data: list, progress_cb=None):
         except Exception:
             pass
 
-    for blok_idx, peserta in enumerate(peserta_data[:3]):
-        col_start = _BLOK_START_COLS[blok_idx]  # 0-based
+    # Copy format block ketiga ke blok tambahan sebelum menulis. Copy isi lalu
+    # clear aman untuk merge/header; format template tetap konsisten.
+    for blok_idx, col_start in enumerate(_block_starts(len(peserta_data))):
+        if blok_idx < 3:
+            continue
+        source_start = _BLOK_START_COLS[2]
+        source = xl_ws.Range(
+            f"{_col_idx_to_letter(source_start)}1:"
+            f"{_col_idx_to_letter(source_start + _BLOK_LEBAR - 1)}{last_row_clear}"
+        )
+        target = xl_ws.Range(
+            f"{_col_idx_to_letter(col_start)}1:"
+            f"{_col_idx_to_letter(col_start + _BLOK_LEBAR - 1)}{last_row_clear}"
+        )
+        try:
+            source.Copy(Destination=target)
+            target.UnMerge()
+            target.ClearContents()
+        except Exception:
+            pass
+
+    for blok_idx, peserta in enumerate(peserta_data):
+        col_start = _block_starts(len(peserta_data))[blok_idx]  # 0-based
         nama = peserta.get("nama_peserta") or f"Peserta {blok_idx + 1}"
         items = peserta.get("items", [])
 
@@ -323,15 +380,15 @@ def _tulis_penawaran_ke_sheet(xl_ws, peserta_data: list, progress_cb=None):
 
     # Total SPSE ditulis eksplisit agar pembulatan per-item tidak mengubah
     # angka resmi (contoh selisih 0,02 rupiah pada cvrantingutamamakmur).
-    for blok_idx, peserta in enumerate(peserta_data[:3]):
-        col_start = _BLOK_START_COLS[blok_idx]
+    for blok_idx, peserta in enumerate(peserta_data):
+        col_start = _block_starts(len(peserta_data))[blok_idx]
         xl_ws.Cells(_TOTAL_ROW, col_start + 2).Value = "TOTAL PENAWARAN SPSE"
         xl_ws.Cells(_TOTAL_ROW, col_start + 8).Value = peserta.get("total_penawaran") or 0
         xl_ws.Cells(_TOTAL_ROW, col_start + 8).NumberFormat = '#,##0.00'
 
 
 def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
-                               progress_cb=None, max_peserta: int = 3,
+                               progress_cb=None, max_peserta: int | None = None,
                                peserta_override: list[dict] | None = None) -> dict:
     """
     Scrape harga penawaran top-N peserta termurah → tulis ke sheet '6. Harga Penawaran'.
@@ -409,9 +466,13 @@ def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
         return {"peserta": 0, "items_per_peserta": [], "nama_peserta": [],
                 "errors": errors or ["Semua peserta gagal di-scrape"]}
 
-    # ── 3. Sort by total_penawaran ascending, ambil top N ────────────────────
+    # ── 3. Sort by total_penawaran ascending, ambil seluruh peserta default ─
     scrape_results.sort(key=lambda x: x["total_penawaran"])
-    top_peserta = scrape_results[:max_peserta]
+    requested_limit = len(scrape_results) if max_peserta is None else max(0, int(max_peserta))
+    limit = min(MAX_PARTICIPANTS, requested_limit)
+    top_peserta = scrape_results[:limit]
+    if requested_limit > MAX_PARTICIPANTS:
+        _log(f"⚠️ Peserta dibatasi maksimal {MAX_PARTICIPANTS} (dari {requested_limit}).")
     _log(f"Top {len(top_peserta)} peserta termurah: "
          + ", ".join(p["nama_peserta"] for p in top_peserta))
 
@@ -439,7 +500,9 @@ def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
 
         # Harga total di Sheet 0 harus selalu mengikuti rincian Sheet 6 yang
         # baru saja ditulis. Ini mencegah angka stale dari workbook/template.
-        _sync_harga_input_ba_from_sheet6(wb, progress_cb=progress_cb)
+        _sync_harga_input_ba_from_sheet6(
+            wb, progress_cb=progress_cb, participant_count=len(top_peserta)
+        )
 
         wb.Save()
         _log("Tersimpan.")
@@ -478,7 +541,7 @@ def update_rumus_penawaran_72(xlsm_path: str, progress_cb=None) -> dict:
     Update rumus kolom L di sheet '7.2 Dengan Nego' agar baca langsung dari
     sheet '6. Harga Penawaran' berdasarkan dropdown D5, bukan middleman sheet 7.
 
-    Juga setup Data Validation dropdown D5 dari nama peserta di sheet 6 (A1, J1, S1).
+    Juga setup Data Validation dropdown D5 dari seluruh blok peserta di Sheet 6.
 
     Returns: {"ok": bool, "rows_updated": int, "error": str|None}
     """
@@ -525,11 +588,20 @@ def update_rumus_penawaran_72(xlsm_path: str, progress_cb=None) -> dict:
         except Exception:
             pass
 
-        # Baca nama 3 peserta dari sheet 6 (A1, J1, S1)
-        nama1 = ws6.Cells(1, 1).Value or ""   # A1
-        nama2 = ws6.Cells(1, 10).Value or ""  # J1
-        nama3 = ws6.Cells(1, 19).Value or ""  # S1
-        nama_valid = [n for n in [nama1, nama2, nama3] if n]
+        # Baca seluruh header blok: A1, J1, S1, AB1, ...
+        try:
+            used = ws6.UsedRange
+            used_last_col = int(used.Column + used.Columns.Count - 1)
+        except Exception:
+            used_last_col = 26
+        max_blocks = min(MAX_PARTICIPANTS, max(3, (used_last_col + _BLOK_STRIDE - 1) // _BLOK_STRIDE))
+        blocks = []
+        for idx in range(max_blocks):
+            start = _BLOK_STRIDE * idx
+            nama = ws6.Cells(1, start + 1).Value or ""
+            if nama:
+                blocks.append((str(nama), start))
+        nama_valid = [n for n, _ in blocks]
         _log(f"Peserta dari sheet 6: {nama_valid}")
 
         # Setup Data Validation dropdown D5
@@ -562,15 +634,18 @@ def update_rumus_penawaran_72(xlsm_path: str, progress_cb=None) -> dict:
             # Cek kolom A ada isi (skip baris kosong)
             if ws72.Cells(r, 1).Value is None:
                 continue
-            # Rumus US-locale (pakai .Formula, koma sebagai separator)
-            rumus = (
-                f"=IFERROR(IF($D$5='{_SHEET_6}'!$A$1,"
-                f"INDEX('{_SHEET_6}'!$E:$E,MATCH(A{r},'{_SHEET_6}'!$A:$A,0)),"
-                f"IF($D$5='{_SHEET_6}'!$J$1,"
-                f"INDEX('{_SHEET_6}'!$N:$N,MATCH(A{r},'{_SHEET_6}'!$J:$J,0)),"
-                f"INDEX('{_SHEET_6}'!$W:$W,MATCH(A{r},'{_SHEET_6}'!$S:$S,0)))),"
-                f'"-")'
-            )
+            # Rumus US-locale (pakai .Formula, koma sebagai separator).
+            # Nested IF menjaga kompatibilitas Excel lama tanpa CHOOSECOLS.
+            expr = '"-"'
+            for _nama, _start in reversed(blocks):
+                _name_col = _col_idx_to_letter(_start)
+                _price_col = _col_idx_to_letter(_start + 4)
+                expr = (
+                    f"IF($D$5='{_SHEET_6}'!${_name_col}$1,"
+                    f"INDEX('{_SHEET_6}'!${_price_col}:${_price_col},"
+                    f"MATCH(A{r},'{_SHEET_6}'!${_name_col}:${_name_col},0)),{expr})"
+                )
+            rumus = f'=IFERROR({expr},"-")'
             ws72.Cells(r, 12).Formula = rumus
             rows_updated += 1
 

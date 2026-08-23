@@ -12789,7 +12789,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
 
     # Hapus hasil lama saat logika peserta berubah dari pendaftar menjadi
     # peserta yang benar-benar mengirim penawaran.
-    _KL_PESERTA_STATE_VERSION = "penawaran-only-v1"
+    _KL_PESERTA_STATE_VERSION = "penawaran-only-all-v2"
     if st.session_state.get("_kl_peserta_state_version") != _KL_PESERTA_STATE_VERSION:
         for _kl_state_key in list(st.session_state.keys()):
             if _kl_state_key.startswith("kl_peserta_") or _kl_state_key.startswith("kl_cek_"):
@@ -12852,7 +12852,12 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
         _kl_top3_col, _kl_top3_spacer = st.columns([3, 1])
         with _kl_top3_col:
             st.markdown("#### 2. Peserta per Paket")
-        _kl_hanya_top3 = st.checkbox("✅ Hanya 3 peserta teratas (harga terendah)", value=True, key="kl_hanya_top3")
+        _kl_hanya_top3 = st.checkbox(
+            "✅ Hanya 3 peserta teratas (harga terendah)",
+            value=False,
+            key="kl_hanya_top3_v2",
+            help="Default sekarang semua peserta. Aktifkan jika memang hanya ingin 3 peserta termurah.",
+        )
 
         if _kl_has_source:
             _kl_paket_list2 = sorted(
@@ -12886,7 +12891,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 else:
                     n_p = len(kl_res_p["peserta"])
                     _kl_limit = min(3, n_p) if _kl_hanya_top3 else n_p
-                    _kl_badge = f"Top {_kl_limit} dari {n_p}" if (_kl_hanya_top3 and n_p > 3) else str(n_p)
+                    _kl_badge = f"Top {_kl_limit} dari {n_p}" if (_kl_hanya_top3 and n_p > 3) else f"Semua {n_p}"
                     with st.expander(f"**{_kl_paket_label(p)}** — {_kl_badge} peserta", expanded=True):
                         c1, c2, c3, c4 = st.columns(4)
                         with c1:
@@ -12913,7 +12918,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                     st.session_state[f"kl_cek_{p['kode']}_{ps['kualifikasi_id']}"] = False
                                 st.rerun()
                         for i, ps in enumerate(kl_res_p["peserta"], 1):
-                            # Default: centang top-3 saja jika toggle aktif
+                            # Default: semua peserta; Top 3 hanya jika toggle aktif.
                             _kl_default_cek = (i <= 3) if _kl_hanya_top3 else True
                             st.checkbox(
                                 f"{i}. {ps['nama']}",
@@ -14067,8 +14072,8 @@ Mulai sekarang."""
                 }
 
                 if _kk_rows:
-                    # Susun peserta sesuai urutan KK Evaluasi (maks 3)
-                    for _kr in _kk_rows[:3]:
+                    # Susun seluruh peserta sesuai urutan KK Evaluasi.
+                    for _kr in _kk_rows:
                         _nama_kk = (_kr.get("nama") or "").lower()
                         _id_data = _id_by_nama.get(_nama_kk, {})
                         # Fallback: partial match
@@ -14095,7 +14100,7 @@ Mulai sekarang."""
                 else:
                     # Fallback: urut peserta_identitas apa adanya
                     _log_cb("  ⚠️ kk_evaluasi_peserta kosong, fallback urut peserta_identitas")
-                    for _id_row in (_id_r.data or [])[:3]:
+                    for _id_row in (_id_r.data or []):
                         peserta_rows.append({
                             "nama_perusahaan": _id_row.get("nama_perusahaan", ""),
                             "npwp":         kk_evaluasi_engine._format_npwp(_id_row.get("npwp_raw") or ""),
@@ -14125,7 +14130,7 @@ Mulai sekarang."""
                     return "Memenuhi"
 
                 skp_rows = []
-                for _kr in _kk_rows[:3]:
+                for _kr in _kk_rows:
                     _skp_int = None
                     try:
                         _skp_int = int(_kr.get("skp")) if _kr.get("skp") is not None else None

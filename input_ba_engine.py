@@ -13,7 +13,13 @@ ROW_TGL_PEMBUKAAN  = 3
 ROW_TGL_PEMBUKTIAN = 4
 CELL_TGL_PENETAPAN = "G2"  # helper tanggal khusus BA Penetapan Pemenang
 
-# Per peserta (kolom C=3, D=4, E=5)
+# Layout kanonik peserta berada di matrix C37:L53 (maksimal 10 peserta).
+# Baris 7:33 adalah compatibility view untuk BA lama; engine tidak menulis
+# langsung ke view tersebut.
+MAX_PARTICIPANTS = 10
+MATRIX_HEADER_ROW = 37
+MATRIX_FIRST_ROW = 38
+MATRIX_LAST_ROW = 53
 ROW_NAMA_PERUSAHAAN = 7
 ROW_NPWP            = 8
 ROW_ALAMAT          = 9
@@ -33,10 +39,14 @@ ROW_JML_KIRIM      = 26
 ROW_JML_TDK_KIRIM  = 27
 ROW_JML_TDK_LENGKAP = 28
 ROW_JML_TDK_BUKA   = 29
+ROW_HARGA_PENAWARAN = 11
+ROW_HARGA_TERKOREKSI = 12
 
-# JP (Pekerjaan Berjalan) & Hasil Pembuktian (per peserta, kolom C/D/E)
+# JP (Pekerjaan Berjalan) & Hasil Pembuktian (per peserta)
 ROW_JP = 32
 ROW_HASIL_PEMBUKTIAN = 33
+MATRIX_ROW_JP = 52
+MATRIX_ROW_HASIL_PEMBUKTIAN = 53
 
 # Nama bulan English (tanggal ditulis sebagai teks, locale-independent)
 _BULAN_EN = [
@@ -54,14 +64,72 @@ def _tgl_teks(tgl) -> str:
         return f"{tgl.day:02d} {_BULAN_EN[tgl.month]} {tgl.year}"
     return str(tgl)
 
-# Kolom peserta: urutan → kolom Excel (C/D/E)
-_COL_PESERTA = {1: 3, 2: 4, 3: 5}
+# Kolom peserta kanonik: urutan 1..10 → C:L.
+_COL_PESERTA = {urutan: urutan + 2 for urutan in range(1, MAX_PARTICIPANTS + 1)}
+_LEGACY_VIEW_COLS = {1: 3, 2: 4, 3: 5, 4: 9}  # C/D/E + I
+_LEGACY_VIEW_ROWS = {
+    ROW_NAMA_PERUSAHAAN: 38,
+    ROW_NPWP: 39,
+    ROW_ALAMAT: 40,
+    ROW_DIREKTUR: 41,
+    ROW_HARGA_PENAWARAN: 42,
+    ROW_HARGA_TERKOREKSI: 43,
+    ROW_PERSONEL_1: 44,
+    ROW_PERSONEL_2: 45,
+    ROW_ALAT_1: 46,
+    ROW_ALAT_2: 47,
+    ROW_ALAT_3: 48,
+    ROW_ALAT_4: 49,
+    ROW_ALAT_5: 50,
+    ROW_ALAT_6: 51,
+    ROW_JP: 52,
+    ROW_HASIL_PEMBUKTIAN: 53,
+}
+_PESERTA_LAYOUT_ROWS = (
+    ROW_NAMA_PERUSAHAAN, ROW_NPWP, ROW_ALAMAT, ROW_DIREKTUR,
+    ROW_PERSONEL_1, ROW_PERSONEL_2,
+    ROW_ALAT_1, ROW_ALAT_2, ROW_ALAT_3, ROW_ALAT_4, ROW_ALAT_5, ROW_ALAT_6,
+    ROW_JP, ROW_HASIL_PEMBUKTIAN,
+)
 
 # Baris NPWP harus format teks (cegah notasi ilmiah)
-_TEXT_ROWS = {ROW_NPWP}
+_TEXT_ROWS = {ROW_NPWP, 39}  # view lama + NPWP pada matrix kanonik
 
 _SHEET_INPUT_BA  = "0. Input BA"
 _SHEET_SKP_KLARIF = "6. BA KLARIF SKP ALAT"
+
+
+def _ensure_input_ba_layout(ws, participant_count: int) -> None:
+    """Provision matrix 10 peserta + compatibility view secara idempotent."""
+    # Header matrix selalu lengkap agar dropdown dan referensi formula stabil,
+    # walaupun paket hanya mempunyai 1-3 peserta.
+    ws.Cells(36, 2).Value = "DATABASE PESERTA (MAKSIMAL 10)"
+    ws.Cells(37, 2).Value = "Data"
+    for urutan, col in _COL_PESERTA.items():
+        ws.Cells(MATRIX_HEADER_ROW, col).Value = f"Peserta {urutan}"
+        ws.Cells(MATRIX_HEADER_ROW, col).Font.Bold = True
+
+    # C5 memilih peserta; F5 menyimpan index 1..10 untuk seluruh formula BA.
+    if not ws.Cells(5, 3).Value:
+        ws.Cells(5, 3).Value = "Peserta 1"
+    ws.Cells(5, 6).Formula = '=IFERROR(MATCH($C$5,$C$37:$L$37,0),1)'
+    try:
+        ws.Range("C5").Validation.Delete()
+        ws.Range("C5").Validation.Add(
+            Type=3, AlertStyle=1, Operator=1, Formula1="=$C$37:$L$37"
+        )
+    except Exception:
+        pass
+
+    # G = peserta terpilih; C/D/E/I = view compatibility slot 1..4.
+    for view_row, matrix_row in _LEGACY_VIEW_ROWS.items():
+        ws.Cells(view_row, 7).Formula = (
+            f'=IF(INDEX($C${matrix_row}:$L${matrix_row},1,$F$5)="","",'
+            f'INDEX($C${matrix_row}:$L${matrix_row},1,$F$5))'
+        )
+        for urutan, legacy_col in _LEGACY_VIEW_COLS.items():
+            matrix_col = chr(ord("C") + urutan - 1)
+            ws.Cells(view_row, legacy_col).Formula = f"={matrix_col}${matrix_row}"
 
 
 def fill_input_ba(
@@ -79,7 +147,8 @@ def fill_input_ba(
 
     Args:
         excel_path    : path .xlsm absolut
-        peserta_rows  : list dict maks 3, urut ranking KK Evaluasi.
+        peserta_rows  : list dict, urut ranking KK Evaluasi. Maksimal 10
+                        peserta ditulis ke matrix kanonik C:L.
                         Key tiap dict: nama_perusahaan, npwp, alamat, nama_direktur,
                         personel_1, personel_2, alat_1..alat_6
         dokpen        : dict atau None. Key: jml_daftar, jml_kirim, jml_tidak_kirim,
@@ -159,6 +228,28 @@ def fill_input_ba(
             ws.Unprotect()
         except Exception:
             pass
+        peserta_rows = list(peserta_rows or [])
+        peserta_dibatasi = max(0, len(peserta_rows) - MAX_PARTICIPANTS)
+        if peserta_dibatasi:
+            _log(
+                f"  ⚠️ {peserta_dibatasi} peserta di luar kapasitas; "
+                f"Input BA dibatasi maksimal {MAX_PARTICIPANTS}."
+            )
+        peserta_rows = peserta_rows[:MAX_PARTICIPANTS]
+        _ensure_input_ba_layout(ws, len(peserta_rows))
+
+        # Bersihkan data kanonik lama yang memang dikelola proses ini. Harga
+        # (42:43) dipertahankan untuk peserta aktif karena berasal dari Sheet
+        # 6/evaluasi harga. Slot di luar peserta aktif wajib ikut dibersihkan
+        # agar workbook yang pernah memuat 10 peserta tidak meninggalkan data.
+        ws.Range("C38:L41").ClearContents()
+        ws.Range("C44:L53").ClearContents()
+        harga_clear_start = 3 + len(peserta_rows)
+        if harga_clear_start <= 12:
+            ws.Range(
+                ws.Cells(42, harga_clear_start),
+                ws.Cells(43, 12),
+            ).ClearContents()
 
         # ── Tanggal Pembukaan & Pembuktian (kolom C=3) ───────────────────────
         # Ditulis sebagai TEKS Indonesia ('25 Mei 2026'), bukan date object,
@@ -196,24 +287,36 @@ def fill_input_ba(
             _d_pen = tgl_penetapan.date() if isinstance(tgl_penetapan, datetime.datetime) else tgl_penetapan
             cell_pen.Value = (_d_pen - datetime.date(1899, 12, 30)).days
 
-        # ── Identitas peserta (kolom C/D/E per urutan) ───────────────────────
-        for urutan, p in enumerate(peserta_rows[:3], 1):
+        # ── Identitas peserta (matrix kanonik C:L) ──────────────────────────
+        peserta_ditulis = 0
+        for urutan, p in enumerate(peserta_rows, 1):
             col = _COL_PESERTA[urutan]
             nama = p.get("nama_perusahaan", "")
             _log(f"  Mengisi peserta {urutan}: {nama}")
+            peserta_ditulis += 1
 
-            _set(ws, ROW_NAMA_PERUSAHAAN, col, nama)
-            _set(ws, ROW_NPWP,            col, p.get("npwp", ""))
-            _set(ws, ROW_ALAMAT,          col, p.get("alamat", ""))
-            _set(ws, ROW_DIREKTUR,        col, p.get("nama_direktur", ""))
-            _set(ws, ROW_PERSONEL_1,      col, p.get("personel_1", ""))
-            _set(ws, ROW_PERSONEL_2,      col, p.get("personel_2", ""))
-            _set(ws, ROW_ALAT_1,          col, p.get("alat_1", ""))
-            _set(ws, ROW_ALAT_2,          col, p.get("alat_2", ""))
-            _set(ws, ROW_ALAT_3,          col, p.get("alat_3", ""))
-            _set(ws, ROW_ALAT_4,          col, p.get("alat_4", ""))
-            _set(ws, ROW_ALAT_5,          col, p.get("alat_5", ""))
-            _set(ws, ROW_ALAT_6,          col, p.get("alat_6", ""))
+            values = {
+                38: nama,
+                39: p.get("npwp", ""),
+                40: p.get("alamat", ""),
+                41: p.get("nama_direktur", ""),
+                44: p.get("personel_1", ""),
+                45: p.get("personel_2", ""),
+                46: p.get("alat_1", ""),
+                47: p.get("alat_2", ""),
+                48: p.get("alat_3", ""),
+                49: p.get("alat_4", ""),
+                50: p.get("alat_5", ""),
+                51: p.get("alat_6", ""),
+            }
+            # Harga boleh dibawa caller, tetapi tidak dipaksa kosong bila
+            # sumbernya sudah ditulis oleh engine Sheet 6.
+            if "harga_penawaran" in p:
+                values[42] = p.get("harga_penawaran")
+            if "harga_terkoreksi" in p:
+                values[43] = p.get("harga_terkoreksi")
+            for row, value in values.items():
+                _set(ws, row, col, value)
 
         # ── Dokumen Penawaran (kolom C=3 saja) ───────────────────────────────
         if dokpen:
@@ -224,19 +327,21 @@ def fill_input_ba(
             _set(ws, ROW_JML_TDK_LENGKAP, 3, dokpen.get("jml_tidak_lengkap"))
             _set(ws, ROW_JML_TDK_BUKA,   3, dokpen.get("jml_tidak_dapat_dibuka"))
 
-        # ── JP (Pekerjaan Berjalan) & Hasil Pembuktian per peserta (kolom C/D/E) ──
+        # ── JP (Pekerjaan Berjalan) & Hasil Pembuktian per peserta ───────────
         if skp_rows:
-            for urutan, srow in enumerate(skp_rows[:3], 1):
+            skp_ditulis = 0
+            for urutan, srow in enumerate(list(skp_rows)[:MAX_PARTICIPANTS], 1):
                 col = _COL_PESERTA[urutan]
                 jp_val = srow.get("skp_catatan")  # sekarang berisi int JP dari parser
                 if jp_val is None and srow.get("skp") is not None:
                     jp_val = 5 - int(srow.get("skp"))  # fallback kalkulasi JP dari SKP lama
                 if jp_val is not None:
-                    _set(ws, ROW_JP, col, jp_val)
+                    _set(ws, MATRIX_ROW_JP, col, jp_val)
                 _hasil = srow.get("hasil", "")
                 if _hasil:
-                    _set(ws, ROW_HASIL_PEMBUKTIAN, col, _hasil)
-            _log(f"  JP & Hasil Pembuktian: {len(skp_rows[:3])} peserta")
+                    _set(ws, MATRIX_ROW_HASIL_PEMBUKTIAN, col, _hasil)
+                skp_ditulis += 1
+            _log(f"  JP & Hasil Pembuktian: {skp_ditulis} peserta")
 
             # Port dari VBA: sheet 6 W29 = jp (jumlah pekerjaan berjalan, peserta 1).
             # Jangan pakai formula referensi → circular reference.
@@ -258,7 +363,10 @@ def fill_input_ba(
         _log("Menyimpan Excel...")
         wb.Save()
         _log("Input BA berhasil diisi.")
-        return {"ok": True, "pesan": f"Berhasil mengisi {len(peserta_rows[:3])} peserta"}
+        pesan = f"Berhasil mengisi {peserta_ditulis} peserta"
+        if peserta_dibatasi:
+            pesan += f"; {peserta_dibatasi} peserta di luar batas maksimal {MAX_PARTICIPANTS}"
+        return {"ok": True, "pesan": pesan}
 
     except Exception as e:
         return {"ok": False, "pesan": f"Error saat menulis: {e}"}

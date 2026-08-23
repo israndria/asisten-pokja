@@ -1,10 +1,10 @@
 """Scrape Harga Penawaran + Harga Terkoreksi peserta dari halaman /evaluasi/{kode}
-→ tulis langsung ke Excel sheet '0. Input BA' baris 11 (penawaran) & 12 (terkoreksi).
+→ tulis langsung ke matrix Excel sheet '0. Input BA' baris 42 (penawaran) & 43 (terkoreksi).
 
 Endpoint server-rendered HTML (bukan XHR), butuh sesi login (cookie CDP).
 Tabel: header 'Harga Penawaran' + 'Harga Terkoreksi', kolom 1=No, 2=Nama Peserta.
 
-Match peserta ke kolom C/D/E (Peserta 1/2/3) lewat nama ternormalisasi
+Match peserta ke matrix kolom C:L (Peserta 1/2/…/10) lewat nama ternormalisasi
 (nama Excel vs SPSE bisa beda spasi/titik) → tulis ke kolom yang cocok.
 """
 
@@ -43,6 +43,10 @@ def _parse_rp(s: str):
         return None
 
 
+MAX_PARTICIPANTS = 10
+_INPUT_BA_PESERTA_COLS = tuple(range(3, 3 + MAX_PARTICIPANTS))  # C:L
+
+
 def scrape_evaluasi(kode_tender: str) -> list:
     """GET /evaluasi/{kode} → list dict {nama, penawaran, terkoreksi}."""
     url = f"{SPSE_BASE_URL}evaluasi/{kode_tender}"
@@ -74,17 +78,15 @@ def scrape_evaluasi(kode_tender: str) -> list:
 
 def tulis_harga_ke_input_ba(kode_tender: str, xlsm_path: str,
                             progress_cb=None) -> dict:
-    """Scrape evaluasi → tulis Harga Penawaran (baris 11) & Terkoreksi (baris 12)
-    ke sheet '0. Input BA' kolom C/D/E sesuai match nama Peserta 1/2/3."""
+    """Scrape evaluasi → tulis harga ke matrix canonical C42:L43."""
     def _log(msg):
         if progress_cb:
             progress_cb(msg)
 
     data = scrape_evaluasi(kode_tender)
-    # Harga terendah sistem gugur: tabel sudah ter-rank termurah di atas.
-    # Ambil 3 teratas yang ADA penawaran; sisanya diabaikan.
-    bernilai = [d for d in data if d["penawaran"] is not None][:3]
-    _log(f"Scrape evaluasi: {len(data)} peserta, ambil {len(bernilai)} top")
+    # Tabel sudah ter-rank termurah di atas. Ambil seluruh peserta bernilai.
+    bernilai = [d for d in data if d["penawaran"] is not None][:MAX_PARTICIPANTS]
+    _log(f"Scrape evaluasi: {len(data)} peserta, ambil {len(bernilai)} peserta bernilai")
     lookup = {_norm(d["nama"]): d for d in bernilai}
 
     pythoncom.CoInitialize()
@@ -100,21 +102,24 @@ def tulis_harga_ke_input_ba(kode_tender: str, xlsm_path: str,
         except Exception:
             pass
 
+        import input_ba_engine
+        input_ba_engine._ensure_input_ba_layout(iba, len(bernilai))
+        iba.Range("C42:L43").ClearContents()
+
         # Label
         iba.Range("B11").Value = "Harga Penawaran"
         iba.Range("B12").Value = "Harga Penawaran Terkoreksi"
 
-        # Kolom 3=C(Peserta1), 4=D(Peserta2), 5=E(Peserta3)
-        for col in (3, 4, 5):
-            nama_xl = iba.Cells(7, col).Value  # baris 7 = Nama Perusahaan
+        for col in _INPUT_BA_PESERTA_COLS:
+            nama_xl = iba.Cells(38, col).Value  # matrix: baris 38 = Nama Perusahaan
             if not nama_xl:
                 continue
             match = lookup.get(_norm(nama_xl))
             if not match:
                 _log(f"  Kol {col}: '{nama_xl}' tak match di evaluasi")
                 continue
-            iba.Cells(11, col).Value = match["penawaran"]
-            iba.Cells(12, col).Value = match["terkoreksi"]
+            iba.Cells(42, col).Value = match["penawaran"]
+            iba.Cells(43, col).Value = match["terkoreksi"]
             ditulis.append({
                 "kolom": col, "nama": nama_xl,
                 "penawaran": match["penawaran"],

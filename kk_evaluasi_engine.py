@@ -1,15 +1,16 @@
 """
 Engine pengisi sheet '3. KK Evaluasi Kualifikasi' di Excel BA PK.
 
-Pakai win32com agar Excel tidak perlu ditutup saat diisi.
-Kolom peserta: C=1, D=2, E=3 (maks 3 peserta sesuai tender kecil).
+Pakai win32com agar format Excel tidak rusak. Kapasitas arsitektur dibatasi
+10 peserta; slot tambahan disisipkan sebelum kolom helper tersembunyi pertama.
 """
 
 import os
 import re
 
-# Peta kolom Excel: peserta ke-N → kolom (1=A, 3=C, 4=D, 5=E)
-_COL_PESERTA = {1: 3, 2: 4, 3: 5}   # urutan → kolom Excel (C/D/E)
+# Tiga slot lama: C/D/E. Slot tambahan dibuat dinamis menjadi F/G/...
+_BASE_PESERTA_SLOTS = 3
+MAX_PARTICIPANTS = 10
 _SHEET_NAME = "3. KK Evaluasi Kualifikasi"
 
 # Peta baris tetap (tidak berubah per paket)
@@ -104,6 +105,54 @@ def _format_kinerja(nilai, kategori) -> str:
     return value
 
 
+def _is_formula(value) -> bool:
+    return isinstance(value, str) and value.startswith("=")
+
+
+def _find_helper_column(ws, start_col: int = 6, max_col: int = 16384) -> int:
+    """Cari kolom helper pertama setelah slot peserta C:E.
+
+    Template aktif memakai F3 sebagai formula helper. Setelah slot tambahan
+    disisipkan, formula tersebut bergeser ke kanan. Ini membuat provisioning
+    idempotent tanpa marker tambahan di workbook.
+    """
+    for col in range(start_col, max_col + 1):
+        try:
+            if _is_formula(ws.Cells(3, col).Formula):
+                return col
+        except Exception:
+            continue
+    return start_col
+
+
+def _ensure_participant_columns(ws, participant_count: int, progress_cb=None) -> dict[int, int]:
+    """Pastikan sheet KK punya satu kolom aman per peserta.
+
+    Kolom F dan seterusnya pada template lama berisi helper tersembunyi.
+    Karena itu kolom baru disisipkan tepat sebelum helper, lalu hanya format
+    kolom peserta terakhir (E) yang disalin. Tidak menimpa helper existing.
+    """
+    wanted = min(MAX_PARTICIPANTS, max(_BASE_PESERTA_SLOTS, int(participant_count or 0)))
+    helper_col = _find_helper_column(ws)
+    while helper_col <= 2 + wanted:
+        source_col = 5  # slot peserta 3, format referensi stabil
+        ws.Columns(helper_col).Insert()
+        try:
+            ws.Columns(source_col).Copy()
+            ws.Columns(helper_col).PasteSpecial(Paste=-4122)  # xlPasteFormats
+            ws.Application.CutCopyMode = False
+        except Exception:
+            # Data tetap bisa ditulis bila Excel menolak clipboard format.
+            pass
+        try:
+            ws.Columns(helper_col).ColumnWidth = ws.Columns(source_col).ColumnWidth
+        except Exception:
+            pass
+        helper_col += 1
+
+    return {urutan: 2 + urutan for urutan in range(1, wanted + 1)}
+
+
 def fill_kk_evaluasi(
     excel_path: str,
     semua_peserta: list[dict],
@@ -119,6 +168,10 @@ def fill_kk_evaluasi(
 
     Return: {"ok": bool, "pesan": str}
     """
+    semua_peserta = list(semua_peserta or [])
+    peserta_dibatasi = max(0, len(semua_peserta) - MAX_PARTICIPANTS)
+    semua_peserta = semua_peserta[:MAX_PARTICIPANTS]
+
     def _log(msg):
         if progress_cb:
             try:
@@ -185,15 +238,33 @@ def fill_kk_evaluasi(
             pass
 
     try:
+        try:
+            ws.Unprotect()
+        except Exception:
+            pass
+        if peserta_dibatasi:
+            _log(
+                f"⚠️ {peserta_dibatasi} peserta di luar kapasitas; "
+                f"KK Evaluasi dibatasi maksimal {MAX_PARTICIPANTS}."
+            )
+        col_peserta = _ensure_participant_columns(ws, len(semua_peserta), progress_cb)
+
+        # Jika workbook sebelumnya memuat 10 peserta lalu sekarang hanya 4,
+        # slot lama di antara peserta aktif dan helper juga harus dibersihkan.
+        # Batas helper aman: tidak menyentuh kolom formula tersembunyi.
+        helper_col = _find_helper_column(ws)
+        last_provisioned_col = min(2 + MAX_PARTICIPANTS, helper_col - 1)
+        ws.Range(
+            ws.Cells(3, 3),
+            ws.Cells(54, last_provisioned_col),
+        ).ClearContents()
+
         for urutan, data in enumerate(semua_peserta, 1):
             if not data.get("ok"):
                 _log(f"  Peserta {urutan}: data tidak lengkap, skip")
                 continue
 
-            col = _COL_PESERTA.get(urutan)
-            if col is None:
-                _log(f"  Peserta {urutan}: melebihi 3 peserta, skip")
-                continue
+            col = col_peserta[urutan]
 
             _log(f"  Mengisi kolom peserta {urutan}: {data.get('nama','')}")
 
@@ -309,7 +380,10 @@ def fill_kk_evaluasi(
         _log("Menyimpan Excel...")
         wb.Save()
         _log("✅ KK Evaluasi Kualifikasi berhasil diisi.")
-        return {"ok": True, "pesan": f"Berhasil mengisi {len(semua_peserta)} peserta"}
+        pesan = f"Berhasil mengisi {len(semua_peserta)} peserta"
+        if peserta_dibatasi:
+            pesan += f"; {peserta_dibatasi} peserta di luar batas maksimal {MAX_PARTICIPANTS}"
+        return {"ok": True, "pesan": pesan}
 
     except Exception as e:
         return {"ok": False, "pesan": f"Error saat menulis: {e}"}
