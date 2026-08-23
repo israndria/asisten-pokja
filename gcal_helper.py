@@ -2,6 +2,7 @@
 
 import os
 import json
+import subprocess
 import time
 from datetime import datetime, date
 
@@ -14,17 +15,92 @@ CRED_PATH = str(find_secret("credentials.json"))
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
-def generate_token():
-    """Buka browser OAuth → simpan token.json baru. Panggil saat token expired/hilang."""
+def _find_brave_exe() -> str:
+    """Cari Brave utama yang dipakai profile POKJA."""
+    candidates = [
+        os.environ.get("POKJA_BRAVE_EXE", "").strip(),
+        os.path.join(
+            os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+            "BraveSoftware", "Brave-Browser", "Application", "brave.exe",
+        ),
+        os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "BraveSoftware", "Brave-Browser", "Application", "brave.exe",
+        ),
+    ]
+    return next((path for path in candidates if path and os.path.isfile(path)), "")
+
+
+class _BraveOAuthBrowser:
+    """Adapter webbrowser yang selalu mengarah ke Brave Profile 1."""
+
+    def __init__(self, executable: str, profile_dir: str):
+        self.executable = executable
+        self.profile_dir = profile_dir
+
+    def open(self, url, new=0, autoraise=True):
+        command = [self.executable, f"--profile-directory={self.profile_dir}"]
+        if new:
+            command.append("--new-tab")
+        command.append(url)
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return True
+
+    def open_new(self, url):
+        return self.open(url, new=1)
+
+    def open_new_tab(self, url):
+        return self.open(url, new=2)
+
+
+def _register_brave_oauth_browser() -> str:
+    import webbrowser
+
+    executable = _find_brave_exe()
+    if not executable:
+        raise FileNotFoundError(
+            "Brave utama tidak ditemukan. Periksa POKJA_BRAVE_EXE atau instalasi Brave."
+        )
+    name = "pokja-brave-profile-1"
+    webbrowser.register(
+        name,
+        None,
+        _BraveOAuthBrowser(executable, os.environ.get("POKJA_BRAVE_PROFILE", "Profile 1")),
+    )
+    return name
+
+
+def generate_token(timeout_seconds: int = 600):
+    """Buka OAuth di Brave utama Profile 1 lalu simpan token secara atomic."""
     from google_auth_oauthlib.flow import InstalledAppFlow
     if not os.path.isfile(CRED_PATH):
         raise FileNotFoundError(f"credentials.json tidak ditemukan: {CRED_PATH}")
-    if os.path.isfile(TOKEN_PATH):
-        os.remove(TOKEN_PATH)
     flow = InstalledAppFlow.from_client_secrets_file(CRED_PATH, SCOPES)
-    creds = flow.run_local_server(port=0)
-    with open(TOKEN_PATH, "w") as f:
-        f.write(creds.to_json())
+    creds = flow.run_local_server(
+        port=0,
+        browser=_register_brave_oauth_browser(),
+        authorization_prompt_message=None,
+        timeout_seconds=timeout_seconds,
+        prompt="consent",
+    )
+    os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+    temp_path = f"{TOKEN_PATH}.{os.getpid()}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+        os.replace(temp_path, TOKEN_PATH)
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
     return TOKEN_PATH
 
 # Mapping jenis_key → keyword yang dicari di judul event GCal
