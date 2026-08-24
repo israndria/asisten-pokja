@@ -239,8 +239,16 @@ def load_status_pilih_penyedia_on_demand(
     provider_items: tuple[tuple[str, str, str], ...],
     state_key: str,
     button_key: str,
+    *,
+    auto_sync: bool = True,
 ) -> dict:
-    """Muat status pilihan provider hanya saat user meminta sinkronisasi."""
+    """Muat status pilihan provider sekali saat daftar paket pertama dirender.
+
+    Status tetap read-only dan disimpan berdasarkan signature daftar paket.
+    Tombol refresh memaksa pembacaan ulang untuk menangkap perubahan manual di
+    SPSE tanpa menunggu TTL cache. ``auto_sync=False`` dipertahankan sebagai
+    escape hatch untuk render yang memang tidak boleh melakukan request.
+    """
     normalized = tuple(
         (
             str(kode or "").strip(),
@@ -255,12 +263,21 @@ def load_status_pilih_penyedia_on_demand(
     if st.session_state.get(signature_key) != normalized:
         status = {}
 
-    if st.button(
-        "🔄 Cek status pilihan penyedia di SPSE",
+    refresh_clicked = st.button(
+        "🔄 Refresh status pilihan penyedia di SPSE",
         key=button_key,
-        help="Read-only: membaca tabel Daftar Penyedia dari halaman edit SPSE.",
-    ):
-        fetch_status_pilih_penyedia_cached.clear()
+        help=(
+            "Status otomatis dibaca sekali saat daftar paket pertama tampil. "
+            "Klik untuk memaksa refresh live dari tabel Daftar Penyedia SPSE."
+        ),
+    )
+    signature_matches = st.session_state.get(signature_key) == normalized
+    should_sync = bool(normalized) and (
+        refresh_clicked or (auto_sync and not signature_matches)
+    )
+    if should_sync:
+        if refresh_clicked:
+            fetch_status_pilih_penyedia_cached.clear()
         with st.spinner("Membaca status penyedia terpilih dari SPSE..."):
             status = fetch_status_pilih_penyedia_cached(normalized)
         st.session_state[state_key] = status

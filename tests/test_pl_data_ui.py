@@ -436,6 +436,36 @@ def test_status_peserta_tab1_lazy_loads_only_when_requested():
     fetch.assert_called_once_with(kode)
 
 
+def test_provider_selection_status_auto_syncs_once_per_signature():
+    state = {}
+    provider_items = (("PK-1", "CV. Target", "0012345678901234"),)
+    status = {"PK-1": {"ok": True, "status": "sudah_terpilih", "nama": "CV. Target"}}
+
+    class _Spinner:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    with patch.object(pl_data_ui.st, "session_state", state), patch.object(
+        pl_data_ui.st, "button", return_value=False
+    ), patch.object(pl_data_ui.st, "spinner", return_value=_Spinner()), patch.object(
+        pl_data_ui, "fetch_status_pilih_penyedia_cached", return_value=status
+    ) as fetch:
+        first = pl_data_ui.load_status_pilih_penyedia_on_demand(
+            provider_items, "provider_status", "provider_status_button"
+        )
+        second = pl_data_ui.load_status_pilih_penyedia_on_demand(
+            provider_items, "provider_status", "provider_status_button"
+        )
+
+    assert first == status
+    assert second == status
+    assert state["provider_status_signature"] == provider_items
+    fetch.assert_called_once_with(provider_items)
+
+
 def test_paket_umumkan_status_uses_session_then_spse_fields():
     assert pl_data_ui.is_paket_sudah_diumumkan(
         {"kode_paket": "34", "status": "draft"},

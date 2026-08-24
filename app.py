@@ -4813,7 +4813,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         )
         if _pp_selection_status:
             _sel_count = sum(
-                result.get("status") == "sudah_terpilih"
+                result.get("status") in {"sudah_terpilih", "sudah_terpilih_lain"}
                 for result in _pp_selection_status.values()
                 if isinstance(result, dict)
             )
@@ -7845,6 +7845,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _sbu_baru_global = _first_p.get("sbu_baru") or ""
 
                         if _sbu_baru_global:
+                            st.caption("📋 SBU Baru lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_baru_global, language=None, wrap_lines=True)
+                        if _sbu_lama_global:
+                            st.caption("📋 SBU Lama lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_lama_global, language=None, wrap_lines=True)
+                        if _sbu_baru_global:
                             st.caption(f"🔹 Baru: `{_sbu_baru_global[:80]}`")
                         if _sbu_lama_global:
                             st.caption(f"🔸 Lama: `{_sbu_lama_global[:80]}`")
@@ -7911,8 +7917,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             ) or None
                             st.session_state[_pk_last_sbu_baru_key] = _sbu_baru_global or ""
                             st.session_state[_pk_last_sbu_lama_key] = _sbu_lama_global or ""
-                            if _sbu_baru_global:
-                                st.caption("ℹ️ Nilai terakhir sesi ini dipakai sebagai default saat pindah paket.")
+                        if _sbu_baru_global:
+                            st.caption("📋 SBU Baru lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_baru_global, language=None, wrap_lines=True)
+                        if _sbu_lama_global:
+                            st.caption("📋 SBU Lama lengkap — klik ikon salin untuk copy ke Excel")
+                            st.code(_sbu_lama_global, language=None, wrap_lines=True)
                         if st.button(
                             f"💾 Simpan SBU Custom + POST LDK ke {len(_plsp_selected)} paket",
                             key="pk_save_sbu_custom_btn", use_container_width=True,
@@ -8294,7 +8304,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         )
         if _pp_selection_status:
             _sel_count = sum(
-                result.get("status") == "sudah_terpilih"
+                result.get("status") in {"sudah_terpilih", "sudah_terpilih_lain"}
                 for result in _pp_selection_status.values()
                 if isinstance(result, dict)
             )
