@@ -1,4 +1,4 @@
-"""
+r"""
 pindah_penawaran_engine.py — Tab 7 Dokumen Penawaran
 Scan D:\data\biddings, lookup Supabase, pindah file ke folder paket, gabung PDF teknis.
 """
@@ -169,6 +169,100 @@ def lookup_supabase(items: list[dict]) -> list[dict]:
                 "folder_paket":    os.path.join(TENDER_ROOT, folder_nama) if folder_nama else "",
                 "nama_perusahaan": nama_map.get(item["peserta_id"], f"Peserta {item['peserta_id']}"),
             })
+    return hasil
+
+
+def _apendo_package_dirs(kode_tender: str) -> list[str]:
+    """Cari direktori paket mentah Apendo untuk satu kode tender.
+
+    ``scan_apendo`` hanya mengembalikan peserta yang memiliki dokumen teknis
+    valid. Status UI tetap perlu membedakan antara paket yang benar-benar
+    belum di-unpack dan paket yang sudah ada di Apendo tetapi isinya belum
+    lengkap.
+    """
+    kode = str(kode_tender or "").strip()
+    if not kode or not os.path.isdir(APENDO_ROOT):
+        return []
+    hasil = []
+    try:
+        for lpse_id in os.listdir(APENDO_ROOT):
+            kandidat = os.path.join(APENDO_ROOT, lpse_id, kode)
+            if os.path.isdir(kandidat):
+                hasil.append(kandidat)
+    except OSError:
+        return []
+    return sorted(hasil)
+
+
+def build_package_status(package_rows: list[dict], scanned_items: list[dict]) -> list[dict]:
+    """Gabungkan daftar paket aktif dengan hasil scan Apendo untuk status UI.
+
+    Fungsi ini sengaja read-only. Paket tanpa hasil scan tetap dikembalikan,
+    sehingga UI dapat menjelaskan apakah sumber Apendo belum ada, belum
+    lengkap, atau dokumen sudah pernah dipindahkan.
+
+    Return tiap baris memuat ``kode_tender``, ``folder_paket``,
+    ``peserta_count``, ``output_file_count``, ``status_key`` dan
+    ``status_label``.
+    """
+    scanned_by_code: dict[str, list[dict]] = {}
+    for item in scanned_items or []:
+        kode = str(item.get("kode_tender") or "").strip()
+        if kode:
+            scanned_by_code.setdefault(kode, []).append(item)
+
+    hasil = []
+    seen_codes = set()
+    for row in package_rows or []:
+        kode = str(row.get("kode_tender") or row.get("kode") or "").strip()
+        if not kode or kode in seen_codes:
+            continue
+        seen_codes.add(kode)
+        peserta = scanned_by_code.get(kode, [])
+        folder_nama = str(row.get("folder_dibuat") or "").strip()
+        folder_paket = next(
+            (str(item.get("folder_paket") or "").strip() for item in peserta
+             if str(item.get("folder_paket") or "").strip()),
+            os.path.join(TENDER_ROOT, folder_nama) if folder_nama else "",
+        )
+        folder_ada = bool(folder_paket and os.path.isdir(folder_paket))
+        folder_penawaran = os.path.join(folder_paket, DEST_SUBFOLDER) if folder_paket else ""
+        output_file_count = len(_collect_files(folder_penawaran)) if os.path.isdir(folder_penawaran) else 0
+        apendo_dirs = _apendo_package_dirs(kode)
+
+        if not folder_ada:
+            status_key = "folder_missing"
+            status_label = "❌ Folder paket belum ada"
+            status_detail = "Buat/validasi folder paket terlebih dahulu di Tab 0."
+        elif peserta:
+            status_key = "source_ready"
+            status_label = "✅ Sumber Apendo siap"
+            status_detail = f"{len(peserta)} peserta terdeteksi; siap dipindahkan."
+        elif output_file_count:
+            status_key = "output_present"
+            status_label = "✅ Dokumen penawaran sudah ada"
+            status_detail = f"{output_file_count} file sudah berada di folder tujuan."
+        elif apendo_dirs:
+            status_key = "source_incomplete"
+            status_label = "⚠️ Folder Apendo ada, isi belum lengkap"
+            status_detail = "Tidak ada dokumen teknis valid yang bisa dipindahkan."
+        else:
+            status_key = "source_missing"
+            status_label = "⏳ Sumber Apendo belum tersedia"
+            status_detail = "Kode paket belum ditemukan di D:\\data\\biddings. Jalankan decrypt/unpack Apendo terlebih dahulu."
+
+        hasil.append({
+            **row,
+            "kode_tender": kode,
+            "folder_paket": folder_paket,
+            "folder_ada": folder_ada,
+            "peserta_count": len(peserta),
+            "output_file_count": output_file_count,
+            "apendo_dirs": apendo_dirs,
+            "status_key": status_key,
+            "status_label": status_label,
+            "status_detail": status_detail,
+        })
     return hasil
 
 

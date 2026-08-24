@@ -13669,6 +13669,16 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
 
     if "dp_notif" in st.session_state:
         st.success(st.session_state.pop("dp_notif"))
+    _dp_report = st.session_state.pop("dp_operation_report", None)
+    if _dp_report:
+        if _dp_report.get("failure_packages"):
+            st.error(
+                f"❌ {_dp_report['failure_packages']} paket memiliki file gagal "
+                "atau hasil operasi tidak lengkap."
+            )
+        if _dp_report.get("details"):
+            with st.expander("📋 Detail operasi terakhir", expanded=bool(_dp_report.get("failure_packages"))):
+                st.code("\n".join(_dp_report["details"]))
 
     # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
     _dp_paket_base = [
@@ -13688,17 +13698,19 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     _reset_tender_stale_widget_keys("gab2_chk_", _dp_paket_rows)
     _dp_paket_rows.sort(key=lambda _r: _r.get("folder_dibuat", ""))
 
-    _dp_scanned_kodes = {
-        x.get("kode_tender") for x in _dp_items if x.get("kode_tender")
-    }
+    # Gabungkan daftar paket aktif dengan hasil scan Apendo. Daftar scan saja
+    # tidak cukup: paket tanpa sumber harus tetap terlihat dan beralasan.
+    _dp_status_rows = _pe.build_package_status(_dp_paket_rows, _dp_items)
+    _dp_status_by_code = {r["kode_tender"]: r for r in _dp_status_rows}
+
     if st.session_state.pop("dp_reset_selection_on_scan", False):
-        for _r in _dp_paket_rows:
-            _dp_code = _r["kode_tender"]
-            st.session_state[f"dp_chk_{_dp_code}"] = _dp_code in _dp_scanned_kodes
+        for _status in _dp_status_rows:
+            _dp_code = _status["kode_tender"]
+            st.session_state[f"dp_chk_{_dp_code}"] = _status["status_key"] == "source_ready"
 
     st.caption(
-        "Paket hasil scan Apendo — otomatis tercentang. Pilih Semua/Batal Semua "
-        "tetap tersedia untuk penyesuaian sebelum aksi bulk."
+        "Paket aktif ditampilkan bersama status sumber Apendo. Paket siap scan "
+        "otomatis tercentang; Pilih Semua/Batal Semua tersedia untuk aksi bulk."
     )
     if _dp_paket_pra_pembukaan:
         st.info(
@@ -13718,28 +13730,77 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                 st.rerun()
         _dp_sel_n = 0
         _dp_check_cols = st.columns(2)
-        for _dp_i, _r in enumerate(_dp_paket_rows):
-            _dp_kt = _r["kode_tender"]
+        for _dp_i, _status in enumerate(_dp_status_rows):
+            _dp_kt = _status["kode_tender"]
             _dp_ck = f"dp_chk_{_dp_kt}"
             if _dp_ck not in st.session_state:
-                st.session_state[_dp_ck] = _dp_kt in _dp_scanned_kodes
+                _dp_status = _dp_status_by_code.get(_dp_kt, {})
+                st.session_state[_dp_ck] = (
+                    _dp_status.get("status_key") == "source_ready"
+                    and _dp_status.get("folder_ada", False)
+                )
             if _dp_check_cols[_dp_i % 2].checkbox(
-                f"{_r.get('folder_dibuat', _r.get('nama_tender', _dp_kt))}",
+                f"{_status.get('folder_dibuat', _status.get('nama_tender', _dp_kt))} — {_status['status_label']}",
                 key=_dp_ck,
-                help=f"{_dp_kt} · status: {_r.get('status_tahap') or '-'}",
+                help=f"{_dp_kt} · {_status.get('status_label') or '-'}",
             ):
                 _dp_sel_n += 1
         _dp_selected_kodes = {
-            _r["kode_tender"] for _r in _dp_paket_rows
-            if st.session_state.get(f"dp_chk_{_r['kode_tender']}", False)
+            _status["kode_tender"] for _status in _dp_status_rows
+            if st.session_state.get(f"dp_chk_{_status['kode_tender']}", False)
         }
         _dp_sel_c3.caption(f"{_dp_sel_n} dari {len(_dp_paket_rows)} paket terpilih untuk aksi bulk.")
+        _dp_actionable_kodes = {
+            _status["kode_tender"] for _status in _dp_status_rows
+            if _status["status_key"] == "source_ready" and _status["folder_ada"]
+        }
+        _dp_blocked_selected = _dp_selected_kodes - _dp_actionable_kodes
+        if _dp_blocked_selected:
+            _blocked_labels = [
+                _dp_status_by_code[_code].get("folder_dibuat") or _code
+                for _code in sorted(_dp_blocked_selected)
+            ]
+            st.warning(
+                "Paket terpilih tetapi belum diproses karena sumber Apendo belum "
+                "siap/folder belum valid: " + "; ".join(_blocked_labels)
+            )
+        _dp_not_ready = [
+            _status for _status in _dp_status_rows
+            if _status["status_key"] in {"source_missing", "source_incomplete", "folder_missing"}
+        ]
+        if _dp_not_ready:
+            with st.expander("⚠️ Detail paket belum siap", expanded=False):
+                for _status in _dp_not_ready:
+                    _label = _status.get("folder_dibuat") or _status.get("nama_tender") or _status["kode_tender"]
+                    st.caption(f"**{_label}** · {_status['status_detail']}")
     else:
         _dp_selected_kodes = set()
+        _dp_actionable_kodes = set()
+        _dp_blocked_selected = set()
         st.info("Tidak ada paket aktif dengan folder yang dapat diproses.")
 
+    if _dp_status_rows:
+        _dp_status_counts = {
+            _key: sum(1 for _status in _dp_status_rows if _status["status_key"] == _key)
+            for _key in {_status["status_key"] for _status in _dp_status_rows}
+        }
+        with st.container(border=True):
+            _dp_m1, _dp_m2, _dp_m3, _dp_m4 = st.columns(4)
+            _dp_m1.metric("Paket aktif", len(_dp_status_rows))
+            _dp_m2.metric("Sumber siap", _dp_status_counts.get("source_ready", 0))
+            _dp_m3.metric("Sudah dipindah", _dp_status_counts.get("output_present", 0))
+            _dp_m4.metric(
+                "Perlu Apendo",
+                _dp_status_counts.get("source_missing", 0)
+                + _dp_status_counts.get("source_incomplete", 0),
+            )
+        st.caption(
+            "Status di bawah mencakup paket tanpa hasil scan agar sumber yang belum "
+            "tersedia tidak terlihat sebagai kegagalan diam-diam."
+        )
+
     if not _dp_items:
-        st.info("Tidak ada data di `D:\\data\\biddings`. Download dulu via Apendo.")
+        st.info("Belum ada peserta valid dari `D:\\data\\biddings`; periksa status paket di daftar di atas.")
     else:
         # Hitung total peserta per paket untuk resolve_dest
         _dp_total: dict[str, int] = {}
@@ -13752,7 +13813,8 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
             _dp_by_paket.setdefault(_it["kode_tender"], []).append(_it)
 
         _dp_scan_selected = {
-            _kt for _kt in _dp_by_paket if _kt in _dp_selected_kodes
+            _kt for _kt in _dp_by_paket
+            if _kt in _dp_selected_kodes and _kt in _dp_actionable_kodes
         }
         _dp_bulk_c1, _dp_bulk_c2 = st.columns([1, 3])
         with _dp_bulk_c1:
@@ -13772,6 +13834,12 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                         _bulk_ok.extend(_bulk_res["sukses"])
                         _bulk_fail.extend(_bulk_res["gagal"])
                 if _bulk_ok:
+                    st.session_state["dp_operation_report"] = {
+                        "success_files": len(_bulk_ok),
+                        "success_packages": len(_dp_scan_selected),
+                        "failure_packages": 1 if _bulk_fail else 0,
+                        "details": _bulk_log + [f"  ❌ {_e}" for _e in _bulk_fail],
+                    }
                     st.session_state["dp_notif"] = (
                         f"✅ {len(_bulk_ok)} file berhasil dipindah dari {len(_dp_scan_selected)} paket."
                     )
