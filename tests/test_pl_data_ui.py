@@ -29,10 +29,33 @@ def test_pl_operational_filter_requires_active_status_or_stage():
     assert pl_engine.is_paket_berjalan({"status": "berjalan", "tahap_spse": "Penandatanganan Kontrak"}) is False
 
 
+def test_pl_operational_gate_excludes_pre_upload_and_ambiguous_stage():
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Upload Dokumen Penawaran",
+    }) is False
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "draft",
+        "tahap_spse": "",
+    }) is False
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Tidak Ada Jadwal",
+    }) is True
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Evaluasi Penawaran",
+    }) is True
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Penandatanganan Kontrak",
+    }) is False
+
+
 def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
     rows = [
         {"kode_paket": "D", "status": "draft"},
-        {"kode_paket": "A", "status": "berjalan"},
+        {"kode_paket": "A", "status": "berjalan", "tahap_spse": "Evaluasi Penawaran"},
         {"kode_paket": "X", "status": ""},
         {"kode_paket": "S", "status": "selesai"},
     ]

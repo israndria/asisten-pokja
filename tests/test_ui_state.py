@@ -27,3 +27,15 @@ def test_ppk_upload_expander_label_changes_identity_when_active():
     assert idle != active
     assert idle.endswith("10. Paket")
     assert active.endswith("10. Paket")
+
+
+def test_tab_selection_round_trips_through_query_params():
+    state = {}
+    params = {"tab": "2"}
+    options = ["Tab 0", "Tab 1", "Tab 2"]
+    with patch.object(ui_state.st, "session_state", state), patch.object(ui_state.st, "query_params", params):
+        ui_state.restore_selection_from_query("active_tab", options, "tab")
+        assert state["active_tab"] == "Tab 2"
+        ui_state.persist_selection_to_query("Tab 1", options, "tab")
+
+    assert params["tab"] == "1"

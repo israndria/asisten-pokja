@@ -26,11 +26,11 @@ def get_engine():
 
 def active_rows(load_fn, engine) -> tuple[list[dict], int]:
     """Ambil row PK aktif/berjalan dan jumlah duplikat yang disembunyikan UI."""
-    from pl_engine import is_paket_berjalan
+    from pl_engine import is_paket_operasional_eligible
 
     rows = load_fn("PK")
     rows, duplicate_count = engine.buang_duplikat_paket_lama(rows)
-    return [row for row in rows if is_paket_berjalan(row)], duplicate_count
+    return [row for row in rows if is_paket_operasional_eligible(row)], duplicate_count
 
 
 def _provider_check_signature(rows: list[dict]) -> tuple:

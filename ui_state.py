@@ -64,6 +64,39 @@ def activate_mode(mode: str) -> bool:
     return changed
 
 
+def restore_selection_from_query(state_key: str, options: list[str], query_key: str) -> None:
+    """Restore one select/radio value after browser refresh, if still valid."""
+    if state_key in st.session_state:
+        return
+    try:
+        raw = st.query_params.get(query_key, "")
+    except Exception:
+        return
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ""
+    raw = str(raw or "")
+    if raw in options:
+        st.session_state[state_key] = raw
+        return
+    try:
+        index = int(raw)
+    except (TypeError, ValueError):
+        return
+    if 0 <= index < len(options):
+        st.session_state[state_key] = options[index]
+
+
+def persist_selection_to_query(value: str, options: list[str], query_key: str) -> None:
+    """Persist a valid select/radio value in URL query params."""
+    try:
+        index = options.index(value)
+        if str(st.query_params.get(query_key, "")) != str(index):
+            st.query_params[query_key] = str(index)
+    except (AttributeError, TypeError, ValueError):
+        # Older Streamlit/test doubles may not expose query params.
+        pass
+
+
 def invalidate_ppk_session_state(clear_navigation: bool = True) -> None:
     """Bersihkan state PPK; navigasi boleh dipertahankan saat cookie berotasi."""
     st.session_state["_spse_session_epoch"] = time.time_ns()

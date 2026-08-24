@@ -401,6 +401,31 @@ def is_paket_berjalan(r: dict) -> bool:
     return not is_paket_draft(r) and not is_paket_selesai(r)
 
 
+_PL_PRE_OPERATIONAL_STAGE_MARKERS = (
+    "draft",
+    "pengumuman",
+    "belum dilaksanakan",
+    "upload dokumen penawaran",
+)
+
+
+def is_paket_operasional_eligible(r: dict) -> bool:
+    """Gate paket untuk Tab 7--11: lokal, aktif, dan sudah lewat upload.
+
+    ``is_paket_berjalan`` sengaja tetap kompatibel untuk loader lama. Tab
+    operasional membutuhkan gate lebih ketat agar paket Draft/Upload Penawaran
+    tidak bocor ke download, evaluasi, BA, verifikasi, atau penetapan.
+    Tahap kosong ditolak fail-closed; ``Tidak Ada Jadwal`` tetap valid karena
+    SPSE memang mengirimnya untuk paket aktif tertentu.
+    """
+    if not is_paket_berjalan(r):
+        return False
+    tahap = str(r.get("tahap_spse") or "").strip().lower()
+    if not tahap:
+        return False
+    return not any(marker in tahap for marker in _PL_PRE_OPERATIONAL_STAGE_MARKERS)
+
+
 def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
     """
     Jika ada >1 row dgn nama_paket sama (paket di-ulang → kode baru, row lama nyangkut),

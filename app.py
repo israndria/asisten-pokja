@@ -24,7 +24,9 @@ import pandas as _pd2
 from ui_state import (
     activate_mode,
     invalidate_ppk_session_state,
+    persist_selection_to_query,
     ppk_upload_expander_label,
+    restore_selection_from_query,
 )
 from tender_package_filters import filter_tender_candidates, is_draft, package_code, stale_selection_keys
 from pl_data_ui import (
@@ -1568,6 +1570,8 @@ if _spse_role:
         else _MODE_OPTIONS[0]
     )
     if "app_mode" not in st.session_state:
+        restore_selection_from_query("app_mode", _MODE_OPTIONS, "mode")
+    if "app_mode" not in st.session_state:
         st.session_state["app_mode"] = _default_mode
 
     _mode_col, _ = st.columns([2, 5])
@@ -1583,6 +1587,7 @@ if _spse_role:
             key="radio_app_mode",
         )
         st.session_state["app_mode"] = _selected_mode
+        persist_selection_to_query(_selected_mode, _MODE_OPTIONS, "mode")
         activate_mode(_selected_mode)
 
     st.divider()
@@ -2502,7 +2507,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "📄 Import DPA",
     ]
     _migrate_pl_tab_selection("pl_active_tab_jkk")
+    restore_selection_from_query("pl_active_tab_jkk", _PL_TAB_LABELS, "pl_jkk_tab")
     _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_jkk")
+    persist_selection_to_query(_pl_active_tab, _PL_TAB_LABELS, "pl_jkk_tab")
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
@@ -5079,7 +5086,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
-        _verif_rows = [r for r in _verif_rows if pl_engine.is_paket_berjalan(r)]
+        _verif_rows = [r for r in _verif_rows if pl_engine.is_paket_operasional_eligible(r)]
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -5234,7 +5241,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         try:
             _raw8 = _load_draft_pl_cached()
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
-            _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_berjalan(r)]
+            _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_operasional_eligible(r)]
             _pl8_kode_status = []
             for _r8 in _pl8_rows:
                 _s8 = _enrich_kode_unik_pl_excel(_r8)
@@ -5680,7 +5687,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             _raw7 = _load_draft_pl_cached()
             _raw7, _pl7_dup_n = pl_engine.buang_duplikat_paket_lama(_raw7)
             _raw7 = _filter_local_pl_rows(_raw7)
-            _raw7 = [r for r in _raw7 if pl_engine.is_paket_berjalan(r)]
+            _raw7 = [r for r in _raw7 if pl_engine.is_paket_operasional_eligible(r)]
             st.session_state[_pl7_state_key] = _raw7
             if _pl7_dup_n:
                 st.caption(f"♻️ {_pl7_dup_n} row lama duplikat disembunyikan otomatis.")
@@ -5885,7 +5892,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # tanpa lebih dulu merender Tab Download Kualifikasi.
         _raw8 = _load_draft_pl_cached()
         _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
-        _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_berjalan(r)]
+        _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_operasional_eligible(r)]
         if _pl8_dup_n:
             st.caption(f"♻️ {_pl8_dup_n} row lama duplikat disembunyikan otomatis.")
 
@@ -6150,7 +6157,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     if _pl_active_tab == "1️⃣1️⃣ Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached()
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
-        _rows10 = [r for r in _raw10 if pl_engine.is_paket_berjalan(r)]
+        _rows10 = [r for r in _raw10 if pl_engine.is_paket_operasional_eligible(r)]
         _render_tab10_pl(_rows10, "pl10")
 
     st.stop()  # Jangan render tab Tender jika mode PL
@@ -6174,7 +6181,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     pl_engine = get_plpk_engine()
     import pl_engine as _pl_engine_utils
     _migrate_pl_tab_selection("pl_active_tab_pk")
+    restore_selection_from_query("pl_active_tab_pk", PLPK_TAB_LABELS, "pl_pk_tab")
     _pl_active_tab = st.radio("Tab PL", PLPK_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
+    persist_selection_to_query(_pl_active_tab, PLPK_TAB_LABELS, "pl_pk_tab")
     _is_plpk_tab6 = _pl_active_tab == "7️⃣ Download Kualifikasi"
 
     if _pl_active_tab == "📄 Import DPA":
@@ -8554,7 +8563,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
-        _verif_rows = [r for r in _verif_rows if _pl_engine_utils.is_paket_berjalan(r)]
+        _verif_rows = [r for r in _verif_rows if _pl_engine_utils.is_paket_operasional_eligible(r)]
 
         # Load status peserta untuk filter
         _batch_rows = _verif_rows  # sudah di-load di atas
@@ -8709,7 +8718,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         try:
             _raw8 = _load_draft_pl_cached("PK")
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
-            _pl8_rows = [r for r in _raw8 if _pl_engine_utils.is_paket_berjalan(r)]
+            _pl8_rows = [r for r in _raw8 if _pl_engine_utils.is_paket_operasional_eligible(r)]
             _pl8_kode_status = []
             for _r8 in _pl8_rows:
                 _s8 = _enrich_kode_unik_pl_excel(_r8)
@@ -9464,7 +9473,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     if _pl_active_tab == "1️⃣1️⃣ Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached("PK")
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
-        _rows10 = [r for r in _raw10 if _pl_engine_utils.is_paket_berjalan(r)]
+        _rows10 = [r for r in _raw10 if _pl_engine_utils.is_paket_operasional_eligible(r)]
         _render_tab10_pl(_rows10, "pl10pk")
 
     st.stop()  # Jangan render tab Tender jika mode PL
@@ -9479,7 +9488,9 @@ _TENDER_TAB_LABELS = [
     "5️⃣ Undangan Pembuktian Kualifikasi", "6️⃣ Download Kualifikasi",
     "7️⃣ Dokumen Penawaran", "8️⃣ Upload & Cetak 5 BA",
 ]
+restore_selection_from_query("tender_active_tab", _TENDER_TAB_LABELS, "tender_tab")
 _tender_active_tab = st.radio("Tab Tender", _TENDER_TAB_LABELS, horizontal=True, key="tender_active_tab")
+persist_selection_to_query(_tender_active_tab, _TENDER_TAB_LABELS, "tender_tab")
 
 # ============================================================
 # Tab 0: Persiapan Draft Paket

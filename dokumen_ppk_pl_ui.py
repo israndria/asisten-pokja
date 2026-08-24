@@ -177,6 +177,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     from pl_data_ui import (
         get_paket_umumkan_status,
         is_paket_sudah_diumumkan,
+        filter_local_pl_rows,
         load_draft_pl_cached,
         mark_tahap_spse_sudah_diumumkan,
     )
@@ -227,6 +228,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
         rows = load_draft_pl_cached(family, only_local=False)
         kind_engine = __import__("pl_engine_plpk" if family == "PK" else "pl_engine")
         rows, duplicate_count = kind_engine.buang_duplikat_paket_lama(rows)
+        rows = filter_local_pl_rows(rows)
         rows = [row for row in rows if pl_engine.is_paket_draft(row)]
         sebelum_filter = len(rows)
         rows = _filter_unannounced_rows(
