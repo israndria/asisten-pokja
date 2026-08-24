@@ -192,6 +192,82 @@ def load_status_peserta_on_demand(
     return status
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_status_pilih_penyedia_cached(
+    provider_items: tuple[tuple[str, str, str], ...],
+) -> dict:
+    """Baca status provider terpilih dari SPSE untuk daftar paket.
+
+    ``provider_items`` berisi ``(kode_paket, nama_penyedia, npwp)``. Cache
+    hanya 2 menit agar tombol refresh tetap murah, tetapi status tidak stale
+    terlalu lama setelah user memilih penyedia manual di SPSE.
+    """
+    try:
+        import spse_browser
+        from config import SPSE_BASE_URL
+
+        cookie = spse_browser.get_spse_cookies()
+        result = {}
+        for kode, nama, npwp in provider_items or ():
+            kode = str(kode or "").strip()
+            if not kode:
+                continue
+            try:
+                result[kode] = spse_browser.cek_status_pilih_penyedia_via_api(
+                    kode,
+                    SPSE_BASE_URL,
+                    npwp=str(npwp or ""),
+                    nama_penyedia=str(nama or ""),
+                    cookie_str=cookie,
+                )
+            except Exception as exc:
+                result[kode] = {
+                    "ok": False,
+                    "status": "gagal",
+                    "pesan": str(exc),
+                }
+        return result
+    except Exception as exc:
+        return {
+            str(kode): {"ok": False, "status": "gagal", "pesan": str(exc)}
+            for kode, _nama, _npwp in provider_items or ()
+            if str(kode or "").strip()
+        }
+
+
+def load_status_pilih_penyedia_on_demand(
+    provider_items: tuple[tuple[str, str, str], ...],
+    state_key: str,
+    button_key: str,
+) -> dict:
+    """Muat status pilihan provider hanya saat user meminta sinkronisasi."""
+    normalized = tuple(
+        (
+            str(kode or "").strip(),
+            str(nama or "").strip(),
+            str(npwp or "").strip(),
+        )
+        for kode, nama, npwp in provider_items or ()
+        if str(kode or "").strip()
+    )
+    signature_key = f"{state_key}_signature"
+    status = st.session_state.get(state_key)
+    if st.session_state.get(signature_key) != normalized:
+        status = {}
+
+    if st.button(
+        "🔄 Cek status pilihan penyedia di SPSE",
+        key=button_key,
+        help="Read-only: membaca tabel Daftar Penyedia dari halaman edit SPSE.",
+    ):
+        fetch_status_pilih_penyedia_cached.clear()
+        with st.spinner("Membaca status penyedia terpilih dari SPSE..."):
+            status = fetch_status_pilih_penyedia_cached(normalized)
+        st.session_state[state_key] = status
+        st.session_state[signature_key] = normalized
+    return status if isinstance(status, dict) else {}
+
+
 def filter_local_pl_rows(rows: list[dict]) -> list[dict]:
     """Kembalikan hanya paket yang benar-benar siap di disk lokal.
 

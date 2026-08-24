@@ -1549,6 +1549,128 @@ def pilih_penyedia_via_playwright(kode_paket: str, npwp: str, base_url: str, nam
     return _run(_pilih_penyedia_async(kode_paket, npwp, base_url, nama_penyedia=nama_penyedia), timeout=180)
 
 
+def cek_status_pilih_penyedia_via_api(
+    kode_paket: str,
+    base_url: str,
+    npwp: str = "",
+    nama_penyedia: str = "",
+    cookie_str: str = "",
+) -> dict:
+    """Baca status penyedia terpilih dari halaman edit paket secara read-only.
+
+    ``/pilihpenyedia/{kode}`` selalu menampilkan form pencarian kosong, jadi
+    halaman itu tidak dapat dipakai sebagai bukti bahwa penyedia sudah dipilih.
+    Bukti canonical berada pada tabel ``Daftar Penyedia`` di ``/edit``.
+    Status gagal dibedakan dari ``belum_terpilih`` agar UI tidak memberi
+    kesimpulan negatif saat session SPSE/CDP bermasalah.
+    """
+    import re as _re
+    import requests as _req
+    from bs4 import BeautifulSoup as _BS
+
+    kode = str(kode_paket or "").strip()
+    base = (base_url or "").rstrip("/")
+    if not kode or not base:
+        return {"ok": False, "status": "gagal", "pesan": "Kode paket atau base URL kosong."}
+
+    cookie = cookie_str or get_spse_cookies()
+    if not cookie:
+        return {"ok": False, "status": "gagal", "pesan": "Cookie SPSE kosong."}
+
+    url_edit = f"{base}/nontender/{kode}/edit"
+    session = _req.Session()
+    session.headers.update({
+        "Cookie": cookie,
+        "User-Agent": "Mozilla/5.0",
+        "Referer": url_edit,
+    })
+
+    def _npwp_key(value: str) -> str:
+        digits = "".join(char for char in str(value or "") if char.isdigit())
+        return f"0{digits}" if len(digits) == 15 else digits
+
+    def _name_key(value: str) -> str:
+        return _re.sub(r"\s+", " ", _re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())).strip()
+
+    try:
+        response = session.get(url_edit, timeout=45)
+    except _req.RequestException as exc:
+        return {"ok": False, "status": "gagal", "pesan": f"HTTP SPSE gagal: {exc}"}
+    if response.status_code != 200:
+        return {"ok": False, "status": "gagal", "pesan": f"HTTP {response.status_code} dari halaman edit SPSE."}
+    if _is_spse_login_page_text(response.text):
+        return {"ok": False, "status": "gagal", "pesan": "Sesi SPSE tidak authenticated."}
+
+    soup = _BS(response.text, "html.parser")
+    providers: list[dict] = []
+    for table in soup.find_all("table"):
+        headers = [cell.get_text(" ", strip=True).lower() for cell in table.find_all("th")]
+        header_text = " ".join(headers)
+        if "nama perusahaan" not in header_text or "npwp" not in header_text:
+            continue
+        name_index = next((idx for idx, value in enumerate(headers) if "nama perusahaan" in value), 1)
+        npwp_index = next((idx for idx, value in enumerate(headers) if value == "npwp" or "npwp" in value), 2)
+        for row in table.find_all("tr"):
+            cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
+            if len(cells) <= max(name_index, npwp_index):
+                continue
+            name = cells[name_index].strip()
+            npwp_value = cells[npwp_index].strip()
+            if not name and not npwp_value:
+                continue
+            if name.lower() == "nama perusahaan" or npwp_value.lower() == "npwp":
+                continue
+            providers.append({"nama": name, "npwp": npwp_value})
+
+    # Tabel server dapat terbaca dua kali bila berada dalam wrapper card.
+    unique: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for provider in providers:
+        key = (_name_key(provider["nama"]), _npwp_key(provider["npwp"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(provider)
+    providers = unique
+
+    target_npwp = _npwp_key(npwp)
+    target_name = _name_key(nama_penyedia)
+    matched = None
+    for provider in providers:
+        provider_npwp = _npwp_key(provider["npwp"])
+        provider_name = _name_key(provider["nama"])
+        if target_npwp and provider_npwp and target_npwp == provider_npwp:
+            matched = provider
+            break
+        if target_name and provider_name == target_name:
+            matched = provider
+            break
+
+    if not providers:
+        status = "belum_terpilih"
+    elif matched is not None or not (target_npwp or target_name):
+        status = "sudah_terpilih"
+    else:
+        status = "sudah_terpilih_lain"
+    selected = matched or (providers[0] if providers else {})
+    return {
+        "ok": True,
+        "status": status,
+        "count": len(providers),
+        "providers": providers,
+        "nama": selected.get("nama", ""),
+        "npwp": selected.get("npwp", ""),
+        "matched": matched is not None,
+        "pesan": (
+            "Belum ada penyedia terpilih."
+            if status == "belum_terpilih"
+            else "Penyedia sesuai identitas paket sudah terpilih."
+            if status == "sudah_terpilih"
+            else "Paket sudah memiliki penyedia berbeda dari identitas Excel."
+        ),
+    }
+
+
 def pilih_penyedia_via_api(kode_paket: str, npwp: str, base_url: str, nama_penyedia: str = "", cookie_str: str = "") -> dict:
     """
     Pilih penyedia PL ke SPSE via direct HTTP API (tanpa Playwright).

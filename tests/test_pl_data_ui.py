@@ -8,7 +8,7 @@ import pl_data_ui
 import pl_ui_helpers
 import zipfile
 from pl_data_ui import _filter_pl_family, _hydrate_provider_from_excel, filter_local_pl_rows
-from ui_pl_pk import active_rows
+from ui_pl_pk import active_rows, provider_identity_available
 
 
 def test_pl_setup_draft_filter_excludes_active_or_published_status():
@@ -41,6 +41,12 @@ def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
 
     assert [row["kode_paket"] for row in filtered] == ["A"]
     assert duplicate_count == 0
+
+
+def test_provider_identity_allows_name_fallback_without_npwp():
+    assert provider_identity_available({"npwp_penyedia": "123"}) is True
+    assert provider_identity_available({"nama_penyedia": "CV. Nama Penyedia"}) is True
+    assert provider_identity_available({"npwp_penyedia": "", "nama_penyedia": ""}) is False
 
 
 def test_pl_family_loader_isolated_and_fail_closed():

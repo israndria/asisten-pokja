@@ -1,7 +1,12 @@
 """Regression tests untuk snapshot SPSE PK dan gate SKP."""
 
 import cek_penyedia_engine as engine
-from cek_penyedia_engine import check_selected_providers, search_provider, summarize_provider_rows
+from cek_penyedia_engine import (
+    _normalize_npwp,
+    check_selected_providers,
+    search_provider,
+    summarize_provider_rows,
+)
 from pl_engine import is_paket_berjalan, is_paket_ditarik
 from pl_engine_plpk import _kode_live_dan_stale
 
@@ -85,6 +90,44 @@ def test_summary_merges_same_provider_name_across_npwp_variants():
     assert summary[0]["total_keterlibatan"] == 2
     assert summary[0]["paket_dimenangkan"] == 1
     assert summary[0]["peserta_bukan_pemenang"] == 1
+
+
+def test_selected_provider_uses_canonical_spse_name_when_npwp_loses_leading_zero():
+    assert _normalize_npwp("209605971734000") == "0209605971734000"
+
+    fake = _FakeSupabase({
+        "tender_peserta": [{
+            "kode_tender": "T-DJAMHURI",
+            "urutan": 1,
+            "nama_peserta": "CV. JHAMHURI JAYA BERSAMA",
+            "npwp": "0209605971734000",
+            "is_pemenang": True,
+        }],
+        "tender": [{
+            "kode_tender": "T-DJAMHURI",
+            "nama_paket": "Paket Pengurugan",
+            "instansi": "Kab. Tapin",
+            "tahapan": "Evaluasi",
+            "jenis_pengadaan": "Pekerjaan Konstruksi",
+            "nama_pemenang": "DJAMHURI JAYA BERSAMA",
+            "pemenang_berkontrak": "DJAMHURI JAYA BERSAMA",
+        }],
+    })
+
+    result = check_selected_providers(
+        [{
+            "kode_paket": "PK-74",
+            "nama_penyedia": "CV. JHAMHURI JAYA BERSAMA",
+            "npwp_penyedia": "209605971734000",
+        }],
+        sb_factory=lambda: fake,
+    )
+
+    provider = result["providers"][0]
+    assert provider["nama_penyedia"] == "DJAMHURI JAYA BERSAMA"
+    assert provider["nama_penyedia_excel"] == "CV. JHAMHURI JAYA BERSAMA"
+    assert provider["nama_penyedia_mismatch"] is True
+    assert provider["total_keterlibatan"] == 1
 
 
 class _FakeQuery:

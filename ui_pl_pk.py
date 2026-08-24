@@ -44,6 +44,14 @@ def _provider_check_signature(rows: list[dict]) -> tuple:
     ))
 
 
+def provider_identity_available(row: dict) -> bool:
+    """True bila provider dapat dicari via NPWP atau fallback nama."""
+    return bool(
+        str((row or {}).get("npwp_penyedia") or "").strip()
+        or str((row or {}).get("nama_penyedia") or "").strip()
+    )
+
+
 def provider_status_caption(
     st,
     row: dict,
@@ -59,11 +67,11 @@ def provider_status_caption(
     if st.session_state.get(signature_key) != _provider_check_signature(selected_rows):
         return "⏳ Status belum dicek"
     result = st.session_state.get(result_key) or {}
-    target_npwp = re.sub(r"\D", "", str(row.get("npwp_penyedia") or ""))
+    target_npwp = engine._normalize_npwp(row.get("npwp_penyedia"))
     target_name = re.sub(r"[^a-z0-9]+", " ", str(row.get("nama_penyedia") or "").lower()).strip()
     provider = None
     for candidate in result.get("providers") or []:
-        candidate_npwp = re.sub(r"\D", "", str(candidate.get("npwp") or ""))
+        candidate_npwp = engine._normalize_npwp(candidate.get("npwp"))
         candidate_name = re.sub(
             r"[^a-z0-9]+", " ", str(candidate.get("nama_penyedia") or "").lower()
         ).strip()
@@ -85,6 +93,32 @@ def provider_status_caption(
     if review:
         return f"🟡 Beban aktif {active} · {review} perlu verifikasi"
     return f"✅ Beban aktif {active} kontrak"
+
+
+def provider_selection_status_caption(row: dict, selection_status: dict) -> str:
+    """Caption read-only status pilihan penyedia di SPSE.
+
+    Status gagal sengaja tidak diterjemahkan menjadi ``belum terpilih``;
+    session/CDP yang gagal tidak boleh menghasilkan kesimpulan operasional.
+    """
+    kode = str((row or {}).get("kode_paket") or "").strip()
+    if not kode or not isinstance(selection_status, dict):
+        return "⏳ Status pilihan SPSE belum disinkronkan"
+    result = selection_status.get(kode)
+    if not isinstance(result, dict):
+        return "⏳ Status pilihan SPSE belum disinkronkan"
+
+    status = result.get("status")
+    if status == "sudah_terpilih":
+        nama = str(result.get("nama") or "").strip()
+        return f"✅ Penyedia sudah dipilih{': ' + nama if nama else ''}"
+    if status == "sudah_terpilih_lain":
+        nama = str(result.get("nama") or "").strip()
+        return f"⚠️ Sudah ada penyedia lain{': ' + nama if nama else ''}"
+    if status == "belum_terpilih":
+        return "⬜ Belum ada penyedia terpilih di SPSE"
+    pesan = str(result.get("pesan") or "status tidak dapat diverifikasi").strip()
+    return f"❔ Status pilihan SPSE tidak dapat diverifikasi: {pesan}"
 
 
 def _render_provider_detail(
@@ -130,9 +164,9 @@ def _render_provider_detail(
 
 
 def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp") -> bool:
-    """Cek SKP provider terpilih sebelum tombol pilih penyedia diaktifkan."""
+    """Tampilkan SKP sebagai informasi; tidak pernah memblokir submit batch."""
     if not selected_rows:
-        return False
+        return True
 
     import cek_penyedia_engine as engine
 
@@ -141,14 +175,17 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
     signature_key = f"{key_prefix}_signature"
 
     with st.container(border=True):
-        st.markdown("#### 🔍 Cek Penyedia — Gate SKP Pekerjaan Berjalan")
+        st.markdown("#### 🔍 Informasi SKP — Pekerjaan Berjalan")
         st.caption(
             "Cek sumber Tender + Non-Tender Pekerjaan Konstruksi. "
             "Akhir jadwal Penandatanganan Kontrak SPSE sampai 30 hari lalu "
             "dihitung aktif; lebih dari 30 hari diasumsikan selesai secara heuristik. "
-            "Tanggal kosong/invalid tetap perlu verifikasi. Paket tanpa NPWP tidak masuk gate. "
-            "Flag tidak menghapus checklist; satu flag menahan seluruh batch sampai diverifikasi. "
-            "Batas maksimal = 5 paket."
+            "Tanggal kosong/invalid tetap perlu verifikasi. Paket tanpa NPWP tetap dicari "
+            "berdasarkan nama; hanya paket tanpa NPWP dan nama yang tidak ikut cek. "
+            "Jika nama Excel berbeda tetapi NPWP cocok, nama SPSE ditampilkan sebagai "
+            "identitas canonical dan perbedaannya diberi catatan audit. "
+            "Hasil ini hanya filter/informasi dan tidak menghapus atau menahan checklist. "
+            "Batas pembanding = 5 paket."
         )
         if st.button(
             "🔍 Cek SKP Penyedia dari Excel",
@@ -166,18 +203,17 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
         result = st.session_state.get(result_key)
         checked_signature = st.session_state.get(signature_key)
         if checked_signature != signature:
-            st.info("Klik **Cek SKP Penyedia dari Excel** sebelum memilih penyedia ke SPSE.")
-            return False
+            st.info("Klik **Cek SKP Penyedia dari Excel** jika ingin melihat histori SKP.")
+            return True
         if not result:
-            st.info("Cek SKP belum dijalankan.")
-            return False
+            st.info("Histori SKP belum dimuat; batch tetap dapat diproses.")
+            return True
         if result.get("errors"):
             for error in result["errors"]:
-                st.error(error)
+                st.warning(f"Status SKP tidak lengkap: {error}")
         if not result.get("ok"):
-            return False
+            st.warning("Pemeriksaan SKP gagal/parsial; hasil ini tidak memblokir pilihan penyedia.")
 
-        allowed = True
         for provider in result.get("providers", []):
             projected = int(provider.get("skp_proyeksi", 0))
             current = int(provider.get("skp_berjalan", 0))
@@ -185,34 +221,35 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
             needs_verification = int(provider.get("skp_perlu_verifikasi", 0))
             conservative = int(provider.get("skp_proyeksi_konservatif", projected))
             label = provider.get("nama_penyedia") or "Penyedia"
+            identity_note = ""
+            input_name = str(provider.get("nama_penyedia_excel") or "").strip()
+            if provider.get("nama_penyedia_mismatch") and input_name:
+                identity_note = (
+                    f" Nama Excel: {input_name}; NPWP cocok dengan identitas SPSE."
+                )
             if projected > engine.SKP_LIMIT:
-                allowed = False
-                st.error(
-                    f"❌ **{label}**: {current}/{engine.SKP_LIMIT} paket aktif terverifikasi; "
+                st.warning(
+                    f"⚠️ **{label}**: {current}/{engine.SKP_LIMIT} paket aktif terverifikasi; "
                     f"batch ini menambah {candidate_count}, proyeksi {projected}/{engine.SKP_LIMIT}. "
-                    "Pilih penyedia lain atau jangan kirim paket ini."
+                    "Catatan kapasitas saja; checklist tetap dipertahankan."
+                    + identity_note
                 )
             elif needs_verification:
                 st.warning(
                     f"⚠️ **{label}**: {needs_verification} kontrak perlu verifikasi status selesai. "
-                    f"Beban konservatif {conservative}/{engine.SKP_LIMIT}."
+                    f"Beban konservatif {conservative}/{engine.SKP_LIMIT}. Verifikasi manual tetap disarankan."
+                    + identity_note
                 )
-                slug = re.sub(
-                    r"[^a-z0-9]+", "_",
-                    f"{label}_{provider.get('npwp') or ''}".lower(),
-                ).strip("_")[:80] or "provider"
-                verified = st.checkbox(
-                    "Saya sudah memverifikasi seluruh kontrak tersebut tidak sedang dikerjakan.",
-                    key=f"{key_prefix}_verify_{slug}",
-                )
-                if not verified:
-                    allowed = False
-                else:
-                    st.success(f"✅ **{label}**: verifikasi manual diterima; proyeksi {projected}/{engine.SKP_LIMIT}.")
             elif projected == engine.SKP_LIMIT:
-                st.warning(f"⚠️ **{label}** tepat di batas: proyeksi {projected}/{engine.SKP_LIMIT}.")
+                st.warning(
+                    f"⚠️ **{label}** tepat di batas: proyeksi {projected}/{engine.SKP_LIMIT}."
+                    + identity_note
+                )
             else:
-                st.success(f"✅ **{label}** masih tersedia: proyeksi {projected}/{engine.SKP_LIMIT}.")
+                st.success(
+                    f"✅ **{label}** masih tersedia: proyeksi {projected}/{engine.SKP_LIMIT}."
+                    + identity_note
+                )
 
         detail_rows = result.get("rows") or []
         if detail_rows:
@@ -225,7 +262,7 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
             _render_provider_detail(st, detail_rows)
         else:
             st.caption("Belum ada riwayat paket konstruksi yang cocok di database scraper; proyeksi dimulai dari 0.")
-        return allowed
+        return True
 
 
 def render_provider_workload(

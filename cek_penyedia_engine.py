@@ -8,7 +8,7 @@ yang benar-benar pemenang dan masih berjalan yang masuk hitungan SKP.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 from typing import Callable
 
@@ -52,6 +52,52 @@ def _text(value) -> str:
 def _query_pattern(query: str) -> str:
     # Jangan izinkan wildcard input memperlebar pencarian tanpa sengaja.
     return f"%{re.sub(r'[%_]', '', _text(query))}%"
+
+
+def _normalize_npwp(value) -> str:
+    """Normalisasi NPWP untuk pencocokan 16 digit tanpa merusak input pendek."""
+    raw = _text(value)
+    if re.fullmatch(r"\d+\.0", raw):
+        raw = raw[:-2]
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 15:
+        return f"0{digits}"
+    return digits
+
+
+def _npwp_variants(value) -> tuple[str, ...]:
+    """Kembalikan bentuk mentah + canonical agar DB lama tetap terbaca."""
+    raw = re.sub(r"\D", "", _text(value))
+    normalized = _normalize_npwp(value)
+    return tuple(dict.fromkeys(item for item in (raw, normalized) if item))
+
+
+def _canonical_provider_name(rows: list[dict], fallback: str = "") -> str:
+    """Pilih nama provider paling authoritative dari row SPSE yang cocok.
+
+    NPWP menjadi kunci identitas. Jika satu NPWP punya beberapa ejaan nama,
+    nama pada field pemenang/kontrak diberi bobot lebih tinggi daripada nama
+    peserta biasa. Ini mencegah typo Nota Dinas/Excel menang hanya karena
+    hasil query nama datang lebih dulu.
+    """
+    scores: Counter[str] = Counter()
+    first_seen: dict[str, int] = {}
+    sequence = 0
+    for row in rows or []:
+        for field, weight in (
+            ("pemenang_berkontrak", 5),
+            ("nama_pemenang", 4),
+            ("nama_peserta", 2),
+        ):
+            name = _text(row.get(field))
+            if not _is_real_provider(name):
+                continue
+            scores[name] += weight
+            first_seen.setdefault(name, sequence)
+            sequence += 1
+    if not scores:
+        return _text(fallback)
+    return max(scores, key=lambda name: (scores[name], -first_seen[name]))
 
 
 def _is_pemenang(value) -> bool:
@@ -129,7 +175,7 @@ def is_pekerjaan_konstruksi(jenis_pengadaan) -> bool:
 
 
 def _provider_key(name: str, npwp: str = "") -> tuple[str, str]:
-    digits = re.sub(r"\D", "", _text(npwp))
+    digits = _normalize_npwp(npwp)
     if digits and len(set(digits)) > 1:
         return ("npwp", digits)
     compact_name = re.sub(r"[^a-z0-9]+", " ", _text(name).lower()).strip()
@@ -367,7 +413,8 @@ def check_selected_providers(
     candidates: dict[tuple[str, str], dict] = {}
     for row in selected_rows or []:
         name = _text(row.get("nama_penyedia"))
-        npwp = _text(row.get("npwp_penyedia"))
+        npwp_raw = _text(row.get("npwp_penyedia"))
+        npwp = _normalize_npwp(npwp_raw)
         if not name and not npwp:
             continue
         key = _provider_key(name, npwp)
@@ -377,7 +424,7 @@ def check_selected_providers(
         )
         if row.get("kode_paket"):
             candidate["kode_paket"].add(_text(row["kode_paket"]))
-        for query in (name, npwp):
+        for query in (name, *_npwp_variants(npwp_raw)):
             if len(query) >= 3 and query not in candidate["queries"]:
                 candidate["queries"].append(query)
 
@@ -401,13 +448,13 @@ def check_selected_providers(
             for item in found.get("rows", []):
                 merged[_provider_row_key(item)] = item
         candidate_name_key = _provider_key(candidate["nama_penyedia"], "")[1]
-        candidate_npwp = re.sub(r"\D", "", candidate["npwp"])
+        candidate_npwp = set(_npwp_variants(candidate["npwp"]))
         provider_rows = [
             item
             for item in merged.values()
             if (
                 candidate_npwp
-                and re.sub(r"\D", "", _text(item.get("npwp"))) == candidate_npwp
+                and candidate_npwp.intersection(_npwp_variants(item.get("npwp")))
             )
             or (
                 item.get("source") == "Non Tender"
@@ -443,6 +490,21 @@ def check_selected_providers(
                     f"Perlu verifikasi — {item['skp_berjalan']}/{SKP_LIMIT} aktif terverifikasi; "
                     f"{item['skp_perlu_verifikasi']} kontrak belum terbukti selesai"
                 )
+            # Simpan nama asal untuk audit, tetapi tampilkan nama canonical
+            # dari SPSE ketika NPWP sudah cocok. Jangan menimpa Excel di sini.
+            input_name = candidate["nama_penyedia"]
+            canonical_name = _canonical_provider_name(
+                provider_rows,
+                fallback=item.get("nama_penyedia") or input_name,
+            )
+            item["nama_penyedia_excel"] = input_name
+            item["nama_penyedia_spse"] = canonical_name
+            item["nama_penyedia_mismatch"] = bool(
+                input_name not in {"", "-"}
+                and _provider_key(input_name, "")[1]
+                != _provider_key(canonical_name, "")[1]
+            )
+            item["nama_penyedia"] = canonical_name or input_name
         else:
             item = {
                 "provider_key": _provider_key(candidate["nama_penyedia"], candidate["npwp"]),
@@ -457,6 +519,9 @@ def check_selected_providers(
                 "skp_konservatif": 0,
                 "status": status_skp(0),
                 "rows": [],
+                "nama_penyedia_excel": candidate["nama_penyedia"],
+                "nama_penyedia_spse": candidate["nama_penyedia"],
+                "nama_penyedia_mismatch": False,
             }
         candidate_count = len(candidate["kode_paket"])
         item = dict(item)

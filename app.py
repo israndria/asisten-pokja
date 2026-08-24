@@ -32,6 +32,7 @@ from pl_data_ui import (
     filter_local_pl_rows as _filter_local_pl_rows,
     get_paket_umumkan_status as _get_paket_umumkan_status,
     is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
+    load_status_pilih_penyedia_on_demand as _load_status_pilih_penyedia_on_demand,
     load_status_peserta_on_demand as _load_status_peserta_on_demand,
     load_draft_pl_cached as _load_draft_pl_cached,
     load_verifikasi_pl_rows_cached as _load_verifikasi_pl_rows_cached,
@@ -46,6 +47,8 @@ from ui_pl_pk import (
     render_download_actions,
     render_provider_search as render_plpk_provider_search,
     render_provider_workload as render_pljkk_provider_workload,
+    provider_identity_available as _provider_identity_available,
+    provider_selection_status_caption as _provider_selection_status_caption,
     provider_status_caption as _provider_status_caption,
     render_skp_gate as render_plpk_skp_gate,
 )
@@ -170,15 +173,52 @@ def _migrate_pl_tab_selection(state_key: str) -> None:
         st.session_state[state_key] = old_to_new[current]
 
 
-def _render_missing_npwp_warning(invalid_rows: list[dict]) -> None:
-    """Tampilkan paket tanpa NPWP secara ringkas dan dapat dilipat."""
+def _render_provider_identity_warning(selected_rows: list[dict]) -> None:
+    """Jelaskan fallback nama dan paket yang benar-benar tanpa identitas."""
+    missing_npwp = [
+        row for row in selected_rows
+        if not str(row.get("npwp_penyedia") or "").strip()
+        and str(row.get("nama_penyedia") or "").strip()
+    ]
+    invalid_rows = [row for row in selected_rows if not _provider_identity_available(row)]
+    if missing_npwp:
+        st.info(
+            f"ℹ️ {len(missing_npwp)} paket belum memiliki NPWP; "
+            "pencarian penyedia akan memakai nama sebagai fallback."
+        )
     if not invalid_rows:
         return
     count = len(invalid_rows)
-    st.warning(f"⚠️ {count} paket belum ada NPWP penyedia.")
-    st.caption("Paket ini tidak masuk proses pilih penyedia sampai NPWP dilengkapi.")
-    with st.expander(f"📋 Lihat {count} paket tanpa NPWP", expanded=False):
+    st.warning(f"⚠️ {count} paket tidak memiliki nama maupun NPWP penyedia.")
+    st.caption("Paket ini tidak dapat diproses sampai identitas penyedia dilengkapi.")
+    with st.expander(f"📋 Lihat {count} paket tanpa identitas penyedia", expanded=False):
         st.markdown("\n".join(f"- **{_pl_label(row)}**" for row in invalid_rows))
+
+
+def _render_manual_selected_provider_info(
+    rows: list[dict],
+    selection_status: dict,
+    *,
+    title: str = "Paket sudah memiliki penyedia di SPSE",
+) -> None:
+    """Tampilkan paket non-Draft yang sudah punya provider sebagai info saja."""
+    existing = []
+    for row in rows or []:
+        result = (selection_status or {}).get(str(row.get("kode_paket") or ""))
+        if isinstance(result, dict) and result.get("status") in {
+            "sudah_terpilih",
+            "sudah_terpilih_lain",
+        }:
+            existing.append((row, result))
+    if not existing:
+        return
+    st.info(f"ℹ️ {len(existing)} {title.lower()}; tidak masuk batch baru.")
+    with st.expander(f"📋 Lihat {len(existing)} paket yang sudah dipilih", expanded=False):
+        for row, result in existing:
+            provider = str(result.get("nama") or "penyedia tidak terbaca").strip()
+            badge = "✅" if result.get("status") == "sudah_terpilih" else "⚠️"
+            st.markdown(f"{badge} **{_pl_label(row)}**")
+            st.caption(f"Penyedia SPSE: {provider}")
 
 
 from ui_dpa import render_tab_dpa as _render_tab_dpa
@@ -4736,6 +4776,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             st.rerun()
         _pp_rows = _load_draft_pl_cached()
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
+        _pp_all_rows = list(_pp_rows)
         _pp_umumkan_status = _get_paket_umumkan_status()
         _pp_sudah_diumumkan = [
             r for r in _pp_rows
@@ -4747,6 +4788,40 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             if not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
             and pl_engine.is_paket_draft(r)
         ]
+        _pp_status_items = tuple(
+            (
+                str(row.get("kode_paket") or ""),
+                str(row.get("nama_penyedia") or ""),
+                str(row.get("npwp_penyedia") or ""),
+            )
+            for row in _pp_all_rows
+            if row.get("kode_paket")
+        )
+        _pp_selection_status = _load_status_pilih_penyedia_on_demand(
+            _pp_status_items,
+            state_key="pljkk_provider_selection_status",
+            button_key="pljkk_provider_selection_status_run",
+        )
+        if _pp_selection_status:
+            _sel_count = sum(
+                result.get("status") == "sudah_terpilih"
+                for result in _pp_selection_status.values()
+                if isinstance(result, dict)
+            )
+            _not_sel_count = sum(
+                result.get("status") == "belum_terpilih"
+                for result in _pp_selection_status.values()
+                if isinstance(result, dict)
+            )
+            st.caption(
+                f"Status SPSE: ✅ {_sel_count} sudah dipilih · "
+                f"⬜ {_not_sel_count} belum dipilih · "
+                "status gagal tetap perlu verifikasi manual."
+            )
+        _render_manual_selected_provider_info(
+            [r for r in _pp_all_rows if not pl_engine.is_paket_draft(r)],
+            _pp_selection_status,
+        )
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -4770,7 +4845,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _rr for _rr in _pp_rows
                     if st.session_state.get(f"pp_chk_{_rr['kode_paket']}_v19", True)
                 ]
-                _pp_valid_for_status = [r for r in _pp_selected if r.get("npwp_penyedia")]
+                _pp_valid_for_status = [r for r in _pp_selected if _provider_identity_available(r)]
                 for _rr in _pp_rows:
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
@@ -4780,6 +4855,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox("", key=_pp_chk_key, label_visibility="collapsed", help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}")
                     st.markdown(f"**{_pl_label(_rr)}**")
+                    st.caption(_provider_selection_status_caption(_rr, _pp_selection_status))
                     st.caption(
                         _provider_status_caption(
                             st,
@@ -4797,12 +4873,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 if not _pp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
-                    _invalid = [r for r in _pp_selected if not r.get("npwp_penyedia")]
-                    _render_missing_npwp_warning(_invalid)
+                    _render_provider_identity_warning(_pp_selected)
 
-                    _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
+                    _valid_pp = [r for r in _pp_selected if _provider_identity_available(r)]
                     if _valid_pp:
-                        st.caption(f"{len(_valid_pp)} paket ber-NPWP masuk pemeriksaan penyedia.")
+                        st.caption(
+                            f"{len(_valid_pp)} paket memiliki identitas penyedia "
+                            "(NPWP atau nama) dan masuk pemeriksaan."
+                        )
                         render_pljkk_provider_workload(
                             st,
                             _valid_pp,
@@ -8178,6 +8256,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             st.rerun()
         _pp_rows = _load_draft_pl_cached("PK")
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
+        _pp_all_rows = list(_pp_rows)
         _pp_umumkan_status = _get_paket_umumkan_status()
         _pp_sudah_diumumkan = [
             r for r in _pp_rows
@@ -8188,6 +8267,40 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             if not _is_paket_sudah_diumumkan(r, _pp_umumkan_status)
             and _pl_engine_utils.is_paket_draft(r)
         ]
+        _pp_status_items = tuple(
+            (
+                str(row.get("kode_paket") or ""),
+                str(row.get("nama_penyedia") or ""),
+                str(row.get("npwp_penyedia") or ""),
+            )
+            for row in _pp_all_rows
+            if row.get("kode_paket")
+        )
+        _pp_selection_status = _load_status_pilih_penyedia_on_demand(
+            _pp_status_items,
+            state_key="plpk_provider_selection_status",
+            button_key="plpk_provider_selection_status_run",
+        )
+        if _pp_selection_status:
+            _sel_count = sum(
+                result.get("status") == "sudah_terpilih"
+                for result in _pp_selection_status.values()
+                if isinstance(result, dict)
+            )
+            _not_sel_count = sum(
+                result.get("status") == "belum_terpilih"
+                for result in _pp_selection_status.values()
+                if isinstance(result, dict)
+            )
+            st.caption(
+                f"Status SPSE: ✅ {_sel_count} sudah dipilih · "
+                f"⬜ {_not_sel_count} belum dipilih · "
+                "status gagal tetap perlu verifikasi manual."
+            )
+        _render_manual_selected_provider_info(
+            [r for r in _pp_all_rows if not _pl_engine_utils.is_paket_draft(r)],
+            _pp_selection_status,
+        )
         if _pp_rows:
             import pilih_penyedia_pl as _ppp
 
@@ -8211,7 +8324,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _rr for _rr in _pp_rows
                     if st.session_state.get(f"pp_chk_{_rr['kode_paket']}_v19", True)
                 ]
-                _pp_valid_for_status = [r for r in _pp_selected if r.get("npwp_penyedia")]
+                _pp_valid_for_status = [r for r in _pp_selected if _provider_identity_available(r)]
                 for _rr in _pp_rows:
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
@@ -8221,6 +8334,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox("", key=_pp_chk_key, label_visibility="collapsed", help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}")
                     st.markdown(f"**{_pl_label(_rr)}**")
+                    st.caption(_provider_selection_status_caption(_rr, _pp_selection_status))
                     st.caption(
                         _provider_status_caption(
                             st,
@@ -8238,19 +8352,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 if not _pp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
-                    _invalid = [r for r in _pp_selected if not r.get("npwp_penyedia")]
-                    _render_missing_npwp_warning(_invalid)
+                    _render_provider_identity_warning(_pp_selected)
 
-                    _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
+                    _valid_pp = [r for r in _pp_selected if _provider_identity_available(r)]
                     if _valid_pp:
-                        st.caption(f"{len(_valid_pp)} paket ber-NPWP masuk gate SKP.")
-                        _skp_gate_ok = render_plpk_skp_gate(st, _valid_pp, key_prefix="plpk_skp_gate")
+                        st.caption(
+                            f"{len(_valid_pp)} paket memiliki identitas penyedia "
+                            "(NPWP atau nama) dan masuk pemeriksaan SKP."
+                        )
+                        render_plpk_skp_gate(st, _valid_pp, key_prefix="plpk_skp_gate")
                         if st.button(
                             f"🏢 Pilih Semua Penyedia ke SPSE ({len(_valid_pp)} paket)",
                             key="pp_submit_btn",
                             type="primary",
                             use_container_width=True,
-                            disabled=not _skp_gate_ok,
                         ):
                             import spse_browser as _spse_br
                             _ck_pp = _spse_br.get_spse_cookies()

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+import requests
 import spse_browser
 
 
@@ -454,6 +455,77 @@ class SpseProviderApiTest(unittest.TestCase):
                 nama_penyedia=nama,
                 cookie_str="session=test",
             )
+
+    def _run_selection_status(self, session, *, npwp="", nama=""):
+        with patch("requests.Session", return_value=session):
+            return spse_browser.cek_status_pilih_penyedia_via_api(
+                "PK-1",
+                "https://spse.inaproc.id/tapinkab",
+                npwp=npwp,
+                nama_penyedia=nama,
+                cookie_str="session=test",
+            )
+
+    def test_selection_status_reads_provider_from_edit_table(self):
+        edit_html = """
+        <html><body><table>
+          <tr><th>No</th><th>Nama Perusahaan</th><th>NPWP</th><th>Email</th></tr>
+          <tr><td>1</td><td>CV. SUDAH DIPILIH</td><td>0012345678901234</td><td>x@example.test</td></tr>
+        </table></body></html>
+        """
+        session = self._Session(edit_html, "")
+
+        result = self._run_selection_status(
+            session,
+            npwp="012345678901234",
+            nama="CV. TYPO DARI EXCEL",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "sudah_terpilih")
+        self.assertEqual(result["nama"], "CV. SUDAH DIPILIH")
+        self.assertEqual(result["count"], 1)
+
+    def test_selection_status_distinguishes_empty_table_from_http_failure(self):
+        edit_html = """
+        <html><body><table>
+          <tr><th>No</th><th>Nama Perusahaan</th><th>NPWP</th></tr>
+        </table></body></html>
+        """
+        result = self._run_selection_status(self._Session(edit_html, ""))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "belum_terpilih")
+
+        class FailingSession(self._Session):
+            def get(self, url, timeout=45):
+                raise requests.RequestException("network down")
+
+        with patch("requests.Session", return_value=FailingSession("", "")):
+            failed = spse_browser.cek_status_pilih_penyedia_via_api(
+                "PK-1",
+                "https://spse.inaproc.id/tapinkab",
+                cookie_str="session=test",
+            )
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["status"], "gagal")
+
+    def test_selection_status_flags_different_provider_without_blocking(self):
+        edit_html = """
+        <html><body><table>
+          <tr><th>No</th><th>Nama Perusahaan</th><th>NPWP</th></tr>
+          <tr><td>1</td><td>CV. LAIN</td><td>0099999999999999</td></tr>
+        </table></body></html>
+        """
+        result = self._run_selection_status(
+            self._Session(edit_html, ""),
+            npwp="0012345678901234",
+            nama="CV. TARGET",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "sudah_terpilih_lain")
+        self.assertFalse(result["matched"])
 
     def test_npwp_search_is_scoped_to_kalsel_and_returns_contacts(self):
         provider = {
