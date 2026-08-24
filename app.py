@@ -225,6 +225,7 @@ def _render_manual_selected_provider_info(
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
 from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
+from tender_hps import update_hps_tender as _update_hps_tender
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -9721,8 +9722,7 @@ if _tender_active_tab == "0️⃣ Persiapan Draft Paket":
                     log.append("⚠ HPS dilewati — tidak ada .xlsm di folder")
                 else:
                     try:
-                        import hps_engine as _hps_eng2
-                        _hr = _hps_eng2.scrape_hps_ke_excel(kode_tender, _xl)
+                        _hr = _update_hps_tender(kode_tender, target_path, progress_cb=_append)
                         if _hr.get("ok"):
                             log.append(f"📊 HPS: {_hr.get('count',0)} baris → Excel")
                             if _hr.get("md_path"):
@@ -12992,8 +12992,15 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
         if not nomor:
             _folder_match = re.match(r"^\s*(\d+)\s*\.\s*", str(p.get("folder_dibuat") or ""))
             nomor = _folder_match.group(1) if _folder_match else ""
-        nama = str(p.get("nama") or p.get("nama_tender") or p.get("kode") or "-").strip()
+        nama = str(p.get("nama") or p.get("nama_tender") or "-").strip()
         return f"{nomor}. {nama}" if nomor else nama
+
+    def _kl_seksi1_label(p: dict) -> str:
+        """Label checkbox Seksi 1: nomor Pokja + nama paket lengkap saja."""
+        pokja_match = re.search(r"\d+", str(p.get("pokja") or ""))
+        pokja_no = pokja_match.group(0) if pokja_match else ""
+        paket_label = _kl_paket_label(p)
+        return f"Pokja {pokja_no} · {paket_label}" if pokja_no else paket_label
 
     with _kl_col1:
         st.markdown("#### 1. Pilih Paket")
@@ -13014,7 +13021,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                     if _kl_chk_key not in st.session_state:
                         st.session_state[_kl_chk_key] = _kl_auto_check
                     _checked = st.checkbox(
-                        f"{_pokja_label(p)[:70]}  \n_{p.get('status', '')}_",
+                        f"{_kl_seksi1_label(p)}  \n_{p.get('status', '')}_",
                         key=_kl_chk_key,
                     )
 
@@ -13189,7 +13196,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         st.info(f"{_pub_ok}/{len(_kl_paket_dipilih)} paket siap di-refresh dari Excel.")
 
             # ── Fungsi proses (dipakai tombol global + per-paket) ──────────────
-            def _proses_paket_kk(items_to_run, do_download, do_kk, do_excel):
+            def _proses_paket_kk(items_to_run, do_download, do_write_kk, do_write_penawaran, do_hps):
                 log_lines = []
 
                 def _log_cb(msg):
@@ -13198,7 +13205,13 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 progress = st.progress(0, text="Memulai...")
                 _total_paket = len(items_to_run)
                 _total_semua = sum(len(it["peserta"]) for it in items_to_run)
-                _total_steps = _total_paket * (2 if (do_download and do_kk) else 1)
+                _fase_per_paket = (
+                    int(bool(do_hps))
+                    + int(bool(do_download))
+                    + int(bool(do_write_kk))
+                    + int(bool(do_write_penawaran))
+                )
+                _total_steps = max(1, _total_paket * _fase_per_paket)
                 _step = 0
 
                 for item in items_to_run:
@@ -13211,11 +13224,37 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                     _log_cb(f"=== Paket {kode_tender}: {p['nama'][:50]} ({n_ps} peserta) ===")
 
                     # ── Download dokumen ───────────────────────────────────────
+                    if do_hps:
+                        progress.progress(
+                            _step / _total_steps,
+                            text=f"[{kode_tender}] Update HPS...",
+                        )
+                        if folder_out:
+                            _log_cb(f"--- [{kode_tender}] Update HPS ke Sheet 5. HPS ---")
+                            _hps_result = _update_hps_tender(
+                                kode_tender,
+                                os.path.dirname(folder_out),
+                                progress_cb=_log_cb,
+                            )
+                            if _hps_result.get("ok"):
+                                _log_cb(
+                                    f"✅ [{kode_tender}] HPS ditulis ke Excel: "
+                                    f"{_hps_result.get('count', 0)} baris"
+                                )
+                            else:
+                                _log_cb(
+                                    f"⚠️ [{kode_tender}] HPS gagal: "
+                                    f"{_hps_result.get('pesan', '-')}"
+                                )
+                        else:
+                            _log_cb(f"⚠️ [{kode_tender}] HPS dilewati — folder paket tidak ditemukan")
+                        _step += 1
+
                     if do_download and folder_out:
                         kualifikasi_engine.save_last_dir(folder_out)
                         for i, ps in enumerate(peserta_list):
                             progress.progress(
-                                _step / _total_steps + (i / n_ps) / _total_steps * (0.5 if do_kk else 1.0),
+                                _step / _total_steps + (i / n_ps) / _total_steps,
                                 text=f"[{kode_tender}] Download {i+1}/{n_ps}: {ps['nama'][:35]}...",
                             )
                             kualifikasi_engine.download_kualifikasi_peserta(
@@ -13229,7 +13268,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         _step += 1
 
                     # ── Parse & simpan KK Evaluasi ─────────────────────────────
-                    if do_kk:
+                    if do_write_kk:
                         _log_cb(f"--- [{kode_tender}] Parse KK Evaluasi ---")
                         semua_data = []
                         for i, ps in enumerate(peserta_list):
@@ -13316,7 +13355,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
 
                             # Tulis langsung ke Excel folder paket
                             _excel_path = None
-                            if do_excel and folder_out:
+                            if do_write_kk and folder_out:
                                 try:
                                     # folder_out = .../{folder_paket}/1. Dokumen Kualifikasi
                                     # xlsm ada di folder paket (parent), bukan subfolder kualifikasi
@@ -13336,34 +13375,6 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                                         _log_cb(f"⚠️ [{kode_tender}] File .xlsm tidak ditemukan di folder paket, skip tulis Excel.")
                                 except Exception as _e_xl:
                                     _log_cb(f"⚠️ [{kode_tender}] Error tulis Excel: {_e_xl}")
-
-                            # Harga Penawaran — scrape SPSE langsung ke Sheet 6 Excel.
-                            if do_excel and _excel_path:
-                                try:
-                                    import penawaran_engine
-                                    _hp_peserta = [
-                                        {"peserta_id": ps.get("kualifikasi_id", ""),
-                                         "nama_peserta": ps.get("nama", "")}
-                                        for ps in peserta_list if ps.get("kualifikasi_id")
-                                    ]
-                                    hasil_hp = penawaran_engine.scrape_penawaran_ke_excel(
-                                        kode_tender, _excel_path, progress_cb=_log_cb,
-                                        peserta_override=_hp_peserta or None,
-                                    )
-                                    if hasil_hp["peserta"] > 0:
-                                        _log_cb(
-                                            f"✅ [{kode_tender}] Penawaran harga langsung ke Sheet 6: "
-                                            f"{hasil_hp['peserta']} peserta"
-                                        )
-                                        _pru = penawaran_engine.update_rumus_penawaran_72(
-                                            _excel_path, progress_cb=_log_cb
-                                        )
-                                        if _pru.get("ok"):
-                                            _log_cb(f"  Rumus 7.2 diperbarui: {_pru['rows_updated']} baris")
-                                    else:
-                                        _log_cb(f"⚠️ [{kode_tender}] Penawaran harga: {hasil_hp.get('errors', ['kosong'])}")
-                                except Exception as e_hp:
-                                    _log_cb(f"⚠️ [{kode_tender}] Penawaran harga → Excel error: {e_hp}")
 
                             try:
                                 import identitas_engine
@@ -13393,27 +13404,94 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         except Exception as e_sb:
                             _log_cb(f"ERROR [{kode_tender}] Supabase: {e_sb}")
 
+                        _step += 1
+
+                    # Harga penawaran berdiri sendiri dari parser KK. Peserta
+                    # tetap memakai daftar SPSE yang sudah dipilih di UI.
+                    if do_write_penawaran:
+                        progress.progress(
+                            _step / _total_steps,
+                            text=f"[{kode_tender}] Tulis Sheet Penawaran...",
+                        )
+                        _excel_penawaran = None
+                        try:
+                            _folder_paket_penawaran = os.path.dirname(folder_out) if folder_out else ""
+                            _excel_penawaran = kualifikasi_engine.find_xlsm_paket(
+                                _folder_paket_penawaran
+                            ) if _folder_paket_penawaran else ""
+                            if not _excel_penawaran:
+                                _log_cb(
+                                    f"⚠️ [{kode_tender}] Sheet Penawaran dilewati — "
+                                    "file .xlsm tidak ditemukan di root folder paket"
+                                )
+                            else:
+                                import penawaran_engine
+
+                                _hp_peserta = [
+                                    {
+                                        "peserta_id": ps.get("kualifikasi_id", ""),
+                                        "nama_peserta": ps.get("nama", ""),
+                                    }
+                                    for ps in peserta_list if ps.get("kualifikasi_id")
+                                ]
+                                hasil_hp = penawaran_engine.scrape_penawaran_ke_excel(
+                                    kode_tender,
+                                    _excel_penawaran,
+                                    progress_cb=_log_cb,
+                                    peserta_override=_hp_peserta or None,
+                                )
+                                if hasil_hp.get("peserta", 0) > 0:
+                                    _log_cb(
+                                        f"✅ [{kode_tender}] Sheet Penawaran ditulis: "
+                                        f"{hasil_hp['peserta']} peserta"
+                                    )
+                                    _pru = penawaran_engine.update_rumus_penawaran_72(
+                                        _excel_penawaran,
+                                        progress_cb=_log_cb,
+                                    )
+                                    if _pru.get("ok"):
+                                        _log_cb(
+                                            f"  Rumus 7.2 diperbarui: "
+                                            f"{_pru['rows_updated']} baris"
+                                        )
+                                else:
+                                    _log_cb(
+                                        f"⚠️ [{kode_tender}] Sheet Penawaran: "
+                                        f"{hasil_hp.get('errors', ['kosong'])}"
+                                    )
+                        except Exception as e_hp:
+                            _log_cb(f"⚠️ [{kode_tender}] Sheet Penawaran gagal: {e_hp}")
+                        _step += 1
+
                     # Sinkronisasi personil menjadi bagian dari setiap proses.
                     # Jalur parse di atas sudah mengisi dari hasil PDF; jika
                     # parse KK tidak dipilih, fallback membaca DoktekFull lokal
                     # untuk peserta yang belum memiliki data personil.
-                    if not do_kk:
+                    if not do_write_kk:
                         try:
                             import conflict_engine as _ce_fallback
                             _ce_fallback.sync_from_doktek_folder(kode_tender, log=_log_cb)
                         except Exception as e_cf_fallback:
                             _log_cb(f"⚠️ [{kode_tender}] Fallback personil error: {e_cf_fallback}")
 
-                    _step += 1
-
                 progress.progress(1.0, text="Selesai!")
                 _parts = []
+                if do_hps: _parts.append("HPS diperbarui")
                 if do_download: _parts.append("dokumen didownload")
-                if do_kk: _parts.append("KK Evaluasi tersimpan")
+                if do_write_kk: _parts.append("Sheet KK Evaluasi ditulis")
+                if do_write_penawaran: _parts.append("Sheet Penawaran ditulis")
                 if log_lines:
                     with st.expander("📋 Log detail proses", expanded=False):
                         st.code("\n".join(log_lines))
-                st.success(f"✅ Selesai: {' + '.join(_parts)} — {_total_paket} paket, {_total_semua} peserta. Harga penawaran sudah ditulis langsung ke Sheet 6 Excel; lanjutkan **Muat Input BA** jika perlu.")
+                _harga_note = (
+                    " Harga penawaran sudah ditulis langsung ke Sheet 6 Excel; "
+                    "lanjutkan **Muat Input BA** jika perlu."
+                    if do_write_penawaran else ""
+                )
+                st.success(
+                    f"✅ Selesai: {' + '.join(_parts)} — "
+                    f"{_total_paket} paket, {_total_semua} peserta.{_harga_note}"
+                )
 
             # Folder tetap di-resolve internal untuk download/parse/Excel, tetapi
             # detail folder tidak ditampilkan pada seksi aksi.
@@ -13441,20 +13519,24 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                         "▶ Proses 1 paket (sesuai opsi aksi)",
                         key=f"kl_run_{p['kode']}",
                         use_container_width=True,
-                        disabled=(n_ps == 0) or (item.get("folder_ok") is False),
+                        disabled=(
+                            (n_ps == 0 and not st.session_state.get("kl_opt_hps", True))
+                            or (item.get("folder_ok") is False)
+                        ),
                     ):
                         _proses_paket_kk(
                             [item],
                             st.session_state.get("kl_opt_download", True),
                             st.session_state.get("kl_opt_kk", True),
-                            st.session_state.get("kl_opt_kk", True),
+                            st.session_state.get("kl_opt_penawaran", True),
+                            st.session_state.get("kl_opt_hps", True),
                         )
 
             st.divider()
 
             # ── Opsi aksi ──────────────────────────────────────────────────────
             st.caption("Pilih aksi sekali, lalu jalankan seluruh paket terpilih dengan satu tombol.")
-            _kl_opt_download_col, _kl_opt_kk_col = st.columns(2)
+            _kl_opt_download_col, _kl_opt_kk_col, _kl_opt_penawaran_col, _kl_opt_hps_col = st.columns(4)
             with _kl_opt_download_col:
                 _kl_do_download = st.checkbox(
                     "⬇️ Download dokumen kualifikasi",
@@ -13463,16 +13545,30 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 )
             with _kl_opt_kk_col:
                 _kl_do_kk = st.checkbox(
-                    "📝 Parse KK + Penawaran Harga → tulis ke Excel paket",
+                    "📝 Tulis Sheet KK Evaluasi",
                     value=True,
                     key="kl_opt_kk",
-                    help="Ambil data KK dan rincian harga dari SPSE lalu tulis langsung ke workbook paket.",
+                    help="Parse dokumen kualifikasi, simpan data KK, lalu tulis Sheet KK Evaluasi.",
                 )
-            _kl_do_excel = _kl_do_kk  # Excel selalu ikut parse; harga ditulis langsung ke Sheet 6
-
+            with _kl_opt_penawaran_col:
+                _kl_do_penawaran = st.checkbox(
+                    "💰 Tulis Sheet Penawaran",
+                    value=True,
+                    key="kl_opt_penawaran",
+                    help="Ambil harga penawaran dari SPSE lalu tulis langsung ke Sheet 6.",
+                )
+            with _kl_opt_hps_col:
+                _kl_do_hps = st.checkbox(
+                    "💰 Isi HPS (sheet 5. HPS)",
+                    value=True,
+                    key="kl_opt_hps",
+                    help="Ambil HPS dari SPSE lalu tulis langsung ke workbook Tender seperti aksi HPS di Tab 0.",
+                )
             _kl_btn_label = []
             if _kl_do_download: _kl_btn_label.append("Download")
-            if _kl_do_kk: _kl_btn_label.append("Parse KK + Harga → Excel")
+            if _kl_do_kk: _kl_btn_label.append("Sheet KK Evaluasi")
+            if _kl_do_penawaran: _kl_btn_label.append("Sheet Penawaran")
+            if _kl_do_hps: _kl_btn_label.append("Isi HPS → Excel")
             _kl_btn_text = " + ".join(_kl_btn_label) if _kl_btn_label else "Pilih minimal satu aksi"
 
             # Tombol global memproses semua paket terpilih; tombol per paket tetap tersedia.
@@ -13480,10 +13576,12 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
             _kl_n_aktif = sum(len(it["peserta"]) for it in _kl_items_run)
 
             _kl_disabled = (
-                (not _kl_btn_label) or (not _kl_items_run) or (_kl_n_aktif == 0)
-                or (_kl_do_download and any(not it["folder_ok"] for it in _kl_items_run))
+                (not _kl_btn_label) or (not _kl_items_run)
+                or (not _kl_n_aktif and not _kl_do_hps)
+                or ((_kl_do_download or _kl_do_kk or _kl_do_penawaran or _kl_do_hps)
+                    and any(not it["folder_ok"] for it in _kl_items_run))
             )
-            if not _kl_semua_folder_ok and _kl_do_download:
+            if not _kl_semua_folder_ok and (_kl_do_download or _kl_do_kk or _kl_do_penawaran or _kl_do_hps):
                 st.warning("⚠️ Ada paket yang foldernya belum ditemukan — buat folder di Tab 0 terlebih dahulu.")
 
             st.divider()
@@ -13499,7 +13597,13 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                 use_container_width=True,
                 disabled=_kl_disabled,
             ):
-                _proses_paket_kk(_kl_items_run, _kl_do_download, _kl_do_kk, _kl_do_excel)
+                _proses_paket_kk(
+                    _kl_items_run,
+                    _kl_do_download,
+                    _kl_do_kk,
+                    _kl_do_penawaran,
+                    _kl_do_hps,
+                )
 
     # Evaluasi AI dipusatkan di Tab 6 agar DokFull menjadi sumber tunggal.
     if False:
