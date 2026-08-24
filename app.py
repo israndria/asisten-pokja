@@ -20,6 +20,7 @@ from app_bootstrap import ensure_local_config
 ensure_local_config(_APP_DIR)
 
 import streamlit as st
+import pandas as _pd2
 from ui_state import (
     activate_mode,
     invalidate_ppk_session_state,
