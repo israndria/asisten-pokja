@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import date, datetime
 from typing import Callable
 
 
 SKP_LIMIT = 5
+SKP_HEURISTIC_COMPLETION_DAYS = 30
 _TERMINAL_STAGE_MARKERS = (
     "selesai",
     "dibatalkan",
@@ -21,6 +23,20 @@ _TERMINAL_STAGE_MARKERS = (
     "tidak ada jadwal",
 )
 _DEFAULT_PROVIDER_NAMES = {"", "belum ada pemenang", "belum ada kontrak", "-", "nan", "none"}
+_INDONESIAN_MONTHS = {
+    "januari": 1,
+    "februari": 2,
+    "maret": 3,
+    "april": 4,
+    "mei": 5,
+    "juni": 6,
+    "juli": 7,
+    "agustus": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "desember": 12,
+}
 
 
 def _sb_default():
@@ -55,6 +71,47 @@ def _is_contract_holder(provider_name: str, contract_name: str) -> bool:
     if not _is_real_provider(contract_name):
         return False
     return _provider_key(provider_name)[1] == _provider_key(contract_name)[1]
+
+
+def _today() -> date:
+    return date.today()
+
+
+def _parse_kontrak_selesai(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raw = _text(value)
+    if not raw:
+        return None
+    iso_value = raw.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(iso_value).date()
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            pass
+    match = re.fullmatch(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", raw.lower())
+    if match:
+        month = _INDONESIAN_MONTHS.get(match.group(2))
+        if month:
+            try:
+                return date(int(match.group(3)), month, int(match.group(1)))
+            except ValueError:
+                pass
+    return None
+
+
+def _classify_contract_completion(value, *, today: date | None = None) -> tuple[date | None, int | None, bool]:
+    parsed = _parse_kontrak_selesai(value)
+    if parsed is None:
+        return None, None, False
+    age_days = (today or _today()) - parsed
+    return parsed, age_days.days, age_days.days > SKP_HEURISTIC_COMPLETION_DAYS
 
 
 def is_paket_berjalan(tahapan) -> bool:
@@ -92,6 +149,10 @@ def _skp_row_status(row: dict) -> str:
         return "Tidak — peserta bukan pemenang"
     if not row.get("is_berkontrak"):
         return "Tidak — pemenang belum berkontrak"
+    if row.get("kontrak_selesai_heuristik"):
+        return "Tidak — kontrak selesai (heuristik)"
+    if row.get("is_pemenang_berjalan"):
+        return "Ya — berkontrak, aktif ≤30 hari dari tanggal selesai"
     if row.get("is_berjalan"):
         return "Ya — berkontrak, tahap SPSE aktif"
     return "Perlu verifikasi — kontrak ada, status selesai fisik belum terbukti"
@@ -125,7 +186,11 @@ def _package_info(sb, source: str, codes: set[str]) -> dict[tuple[str, str], dic
     return {(source, _text(row.get("kode_tender"))): dict(row) for row in rows}
 
 
-def search_provider(query: str, sb_factory: Callable | None = None) -> dict:
+def search_provider(
+    query: str,
+    sb_factory: Callable | None = None,
+    include_non_construction: bool = False,
+) -> dict:
     """Cari keterlibatan penyedia dan kembalikan row pemenang/peserta."""
     query = _text(query)
     if len(query) < 3:
@@ -217,7 +282,9 @@ def search_provider(query: str, sb_factory: Callable | None = None) -> dict:
     for row in collected:
         source = row["source"]
         package = info.get((source, _text(row.get("kode_tender"))), {})
-        if not is_pekerjaan_konstruksi(package.get("jenis_pengadaan")):
+        if not include_non_construction and not is_pekerjaan_konstruksi(
+            package.get("jenis_pengadaan")
+        ):
             continue
         item = {**row, **package}
         item["is_pemenang"] = _is_pemenang(item.get("is_pemenang"))
@@ -225,12 +292,25 @@ def search_provider(query: str, sb_factory: Callable | None = None) -> dict:
         item["is_berkontrak"] = _is_contract_holder(
             item.get("nama_peserta"), item.get("pemenang_berkontrak")
         )
-        item["is_pemenang_berjalan"] = (
-            item["is_pemenang"] and item["is_berjalan"] and item["is_berkontrak"]
-        )
-        item["skp_perlu_verifikasi"] = (
-            item["is_pemenang"] and item["is_berkontrak"] and not item["is_berjalan"]
-        )
+        (
+            item["kontrak_selesai_parsed"],
+            item["kontrak_selesai_umur_hari"],
+            item["kontrak_selesai_heuristik"],
+        ) = _classify_contract_completion(item.get("kontrak_selesai"))
+        if item["kontrak_selesai_parsed"] is not None:
+            item["is_pemenang_berjalan"] = (
+                item["is_pemenang"]
+                and item["is_berkontrak"]
+                and not item["kontrak_selesai_heuristik"]
+            )
+            item["skp_perlu_verifikasi"] = False
+        else:
+            item["is_pemenang_berjalan"] = (
+                item["is_pemenang"] and item["is_berjalan"] and item["is_berkontrak"]
+            )
+            item["skp_perlu_verifikasi"] = (
+                item["is_pemenang"] and item["is_berkontrak"] and not item["is_berjalan"]
+            )
         item["skp_status"] = _skp_row_status(item)
         item["status_peran"] = "Pemenang" if item["is_pemenang"] else "Peserta — bukan pemenang"
         result.append(item)
@@ -281,6 +361,7 @@ def summarize_provider_rows(rows: list[dict]) -> list[dict]:
 def check_selected_providers(
     selected_rows: list[dict],
     sb_factory: Callable | None = None,
+    include_non_construction: bool = False,
 ) -> dict:
     """Cek provider dari Excel terpilih dan proyeksikan batch yang akan dipilih."""
     candidates: dict[tuple[str, str], dict] = {}
@@ -309,7 +390,11 @@ def check_selected_providers(
     for candidate in candidates.values():
         merged: dict[tuple, dict] = {}
         for query in candidate["queries"]:
-            found = search_provider(query, sb_factory=sb_factory)
+            found = search_provider(
+                query,
+                sb_factory=sb_factory,
+                include_non_construction=include_non_construction,
+            )
             if not found.get("ok"):
                 errors.append(f"{candidate['nama_penyedia']}: {found.get('error', 'query gagal')}")
                 continue
@@ -368,6 +453,8 @@ def check_selected_providers(
                 "peserta_bukan_pemenang": 0,
                 "paket_berjalan": 0,
                 "skp_berjalan": 0,
+                "skp_perlu_verifikasi": 0,
+                "skp_konservatif": 0,
                 "status": status_skp(0),
                 "rows": [],
             }

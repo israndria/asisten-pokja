@@ -625,6 +625,63 @@ def _cari_xlsm_pl(folder):
     return os.path.join(folder, xs[0])
 
 
+class _LocalDokpilFile:
+    """Adaptor minimal agar PDF lokal kompatibel dengan UploadedFile Streamlit."""
+
+    def __init__(self, path: str):
+        self._path = str(path)
+        self.name = os.path.basename(self._path)
+
+    def getvalue(self) -> bytes:
+        with open(self._path, "rb") as stream:
+            return stream.read()
+
+
+def _find_dokpil_pdf_root(folder_paket: str) -> dict:
+    """Cari Dokpil PDF hanya pada root folder paket.
+
+    Tidak recursive: subfolder sengaja diabaikan agar Dokpil paket lain atau
+    dokumen pendukung di ``2. Rancangan Kontrak`` tidak ikut terpilih.
+    Kandidat ambigu tidak ditebak dan diserahkan ke fallback manual UI.
+    """
+    if not folder_paket or not os.path.isdir(folder_paket):
+        return {"status": "missing", "path": "", "candidates": []}
+
+    candidates = []
+    try:
+        entries = os.scandir(folder_paket)
+    except OSError:
+        return {"status": "missing", "path": "", "candidates": []}
+
+    with entries:
+        for entry in entries:
+            if not entry.is_file() or not entry.name.casefold().endswith(".pdf"):
+                continue
+            name = entry.name.casefold()
+            if "dokpil" not in name and "dokumen pemilihan" not in name:
+                continue
+            if any(token in name for token in ("backup", ".tmp", "~$")):
+                continue
+            candidates.append(entry.path)
+
+    candidates.sort(key=lambda path: os.path.basename(path).casefold())
+    if len(candidates) == 1:
+        return {"status": "found", "path": candidates[0], "candidates": candidates}
+    if len(candidates) > 1:
+        return {"status": "ambiguous", "path": "", "candidates": candidates}
+    return {"status": "missing", "path": "", "candidates": []}
+
+
+def _resolve_dokpil_file_root(row: dict, manual_file=None):
+    """Pilih file manual bila ada, selain itu gunakan Dokpil PDF root otomatis."""
+    if manual_file is not None:
+        return manual_file
+    detected = _find_dokpil_pdf_root(row.get("_folder_lokal") or "")
+    if detected["status"] == "found":
+        return _LocalDokpilFile(detected["path"])
+    return None
+
+
 def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict:
     """Refresh HPS live ke sheet ``5. HPS`` dengan backup workbook unik."""
     try:

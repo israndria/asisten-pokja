@@ -495,3 +495,58 @@ def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, 
     assert backup.is_file()
     assert backup.read_bytes() == workbook.read_bytes()
     assert any(line.startswith("Backup HPS:") for line in logs)
+
+
+def test_dokpil_resolver_uses_only_package_root(tmp_path):
+    folder = tmp_path / "41. PLPK - Paket Fisik"
+    folder.mkdir()
+    root_pdf = folder / "dokpil_Paket Fisik.pdf"
+    root_pdf.write_bytes(b"root")
+    nested = folder / "2. Rancangan Kontrak"
+    nested.mkdir()
+    (nested / "dokpil_Paket Fisik - subfolder.pdf").write_bytes(b"nested")
+
+    result = pl_ui_helpers._find_dokpil_pdf_root(str(folder))
+
+    assert result["status"] == "found"
+    assert result["path"] == str(root_pdf)
+
+
+def test_dokpil_resolver_does_not_guess_ambiguous_root_files(tmp_path):
+    folder = tmp_path / "61. PLJKK - Paket Konsultan"
+    folder.mkdir()
+    (folder / "dokpil_Paket Konsultan.pdf").write_bytes(b"one")
+    (folder / "dokpil_Paket Konsultan v2.pdf").write_bytes(b"two")
+    (folder / "_backup_dokpil_lama.pdf").write_bytes(b"backup")
+
+    result = pl_ui_helpers._find_dokpil_pdf_root(str(folder))
+
+    assert result["status"] == "ambiguous"
+    assert len(result["candidates"]) == 2
+    assert all("backup" not in path.casefold() for path in result["candidates"])
+
+
+def test_sync_live_paket_umumkan_status_marks_and_throttles(monkeypatch):
+    state = {}
+    calls = []
+
+    monkeypatch.setattr(pl_data_ui.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(pl_data_ui.st, "session_state", state)
+
+    import pl_engine
+    import spse_browser
+
+    monkeypatch.setattr(spse_browser, "get_spse_cookies", lambda: "cookie")
+    monkeypatch.setattr(
+        pl_engine,
+        "_fetch_tahap_spse",
+        lambda *_args, **_kwargs: (calls.append(True) or {"74": "Upload Dokumen Penawaran"}),
+    )
+
+    first = pl_data_ui.sync_live_paket_umumkan_status("test_tayang")
+    second = pl_data_ui.sync_live_paket_umumkan_status("test_tayang")
+
+    assert first == {"ok": True, "cached": False, "count": 1}
+    assert second == {"ok": True, "cached": True, "count": 0}
+    assert len(calls) == 1
+    assert pl_data_ui.is_paket_sudah_diumumkan({"kode_paket": "74", "status": "draft"}) is True

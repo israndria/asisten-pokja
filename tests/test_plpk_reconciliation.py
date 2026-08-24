@@ -1,5 +1,6 @@
 """Regression tests untuk snapshot SPSE PK dan gate SKP."""
 
+import cek_penyedia_engine as engine
 from cek_penyedia_engine import check_selected_providers, search_provider, summarize_provider_rows
 from pl_engine import is_paket_berjalan, is_paket_ditarik
 from pl_engine_plpk import _kode_live_dan_stale
@@ -155,6 +156,19 @@ def test_selected_provider_gate_projects_new_package_against_limit():
     assert result["providers"][0]["boleh_submit"] is False
 
 
+def test_selected_provider_without_history_has_complete_zero_summary():
+    result = check_selected_providers(
+        [{"kode_paket": "PK-NEW", "nama_penyedia": "CV. Baru", "npwp_penyedia": "123"}],
+        sb_factory=lambda: _FakeSupabase({}),
+    )
+
+    provider = result["providers"][0]
+    assert provider["skp_berjalan"] == 0
+    assert provider["skp_perlu_verifikasi"] == 0
+    assert provider["skp_konservatif"] == 0
+    assert provider["skp_proyeksi_konservatif"] == 1
+
+
 def test_non_tender_winner_fields_do_not_count_one_package_twice():
     fake = _FakeSupabase({
         "non_tender": [{
@@ -214,6 +228,91 @@ def test_signed_contract_with_terminal_stage_requires_completion_verification():
     assert row["is_pemenang_berjalan"] is False
     assert row["skp_perlu_verifikasi"] is True
     assert "Perlu verifikasi" in row["skp_status"]
+
+
+def test_contract_completion_date_uses_30_day_heuristic(monkeypatch):
+    monkeypatch.setattr(engine, "_today", lambda: engine.date(2026, 8, 24))
+    fake = _FakeSupabase({
+        "non_tender": [
+            {
+                "kode_tender": "N5",
+                "nama_paket": "Paket selesai heuristik",
+                "instansi": "Tapin",
+                "tahapan": "Evaluasi",
+                "jenis_pengadaan": "Pekerjaan Konstruksi",
+                "nama_pemenang": "CV. A",
+                "pemenang_berkontrak": "CV. A",
+                "kontrak_selesai": "24/07/2026",
+            },
+        ],
+    })
+
+    row = search_provider("CV. A", sb_factory=lambda: fake)["rows"][0]
+
+    assert row["kontrak_selesai_parsed"] == engine.date(2026, 7, 24)
+    assert row["kontrak_selesai_umur_hari"] == 31
+    assert row["kontrak_selesai_heuristik"] is True
+    assert row["is_pemenang_berjalan"] is False
+    assert row["skp_perlu_verifikasi"] is False
+
+
+def test_recent_contract_completion_date_counts_active_and_parses_indonesian_month(monkeypatch):
+    monkeypatch.setattr(engine, "_today", lambda: engine.date(2026, 8, 24))
+    fake = _FakeSupabase({
+        "non_tender": [
+            {
+                "kode_tender": "N6",
+                "nama_paket": "Paket baru selesai",
+                "instansi": "Tapin",
+                "tahapan": "Paket Sudah Selesai",
+                "jenis_pengadaan": "Pekerjaan Konstruksi",
+                "nama_pemenang": "CV. A",
+                "pemenang_berkontrak": "CV. A",
+                "kontrak_selesai": "24 Agustus 2026",
+            },
+        ],
+    })
+
+    row = search_provider("CV. A", sb_factory=lambda: fake)["rows"][0]
+
+    assert row["kontrak_selesai_parsed"] == engine.date(2026, 8, 24)
+    assert row["kontrak_selesai_umur_hari"] == 0
+    assert row["kontrak_selesai_heuristik"] is False
+    assert row["is_pemenang_berjalan"] is True
+    assert row["skp_perlu_verifikasi"] is False
+
+
+def test_non_construction_scope_is_opt_in_for_pljkk_workload(monkeypatch):
+    monkeypatch.setattr(engine, "_today", lambda: engine.date(2026, 8, 24))
+    fake = _FakeSupabase({
+        "non_tender": [{
+            "kode_tender": "J1",
+            "nama_paket": "Pengawasan Paket",
+            "instansi": "Tapin",
+            "tahapan": "Penandatanganan Kontrak",
+            "jenis_pengadaan": "Jasa Konsultansi",
+            "nama_pemenang": "CV. A",
+            "pemenang_berkontrak": "CV. A",
+            "kontrak_selesai": "2026-08-24",
+        }],
+    })
+
+    formal = search_provider("CV. A", sb_factory=lambda: fake)
+    workload = search_provider(
+        "CV. A",
+        sb_factory=lambda: fake,
+        include_non_construction=True,
+    )
+    selected = check_selected_providers(
+        [{"kode_paket": "J-NEW", "nama_penyedia": "CV. A", "npwp_penyedia": ""}],
+        sb_factory=lambda: fake,
+        include_non_construction=True,
+    )
+
+    assert formal["rows"] == []
+    assert len(workload["rows"]) == 1
+    assert workload["rows"][0]["is_pemenang_berjalan"] is True
+    assert selected["providers"][0]["skp_berjalan"] == 1
 
 
 def test_selected_provider_gate_blocks_unverified_terminal_contract():

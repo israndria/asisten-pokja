@@ -36,8 +36,8 @@ from pl_data_ui import (
     load_draft_pl_cached as _load_draft_pl_cached,
     load_verifikasi_pl_rows_cached as _load_verifikasi_pl_rows_cached,
     mark_paket_sudah_diumumkan as _mark_paket_sudah_diumumkan,
-    mark_tahap_spse_sudah_diumumkan as _mark_tahap_spse_sudah_diumumkan,
     parse_jadwal_pl_cached as _parse_jadwal_pl_cached,
+    sync_live_paket_umumkan_status as _sync_live_paket_umumkan_status,
 )
 from ui_pl_pk import (
     PLPK_TAB_LABELS,
@@ -45,6 +45,8 @@ from ui_pl_pk import (
     get_engine as get_plpk_engine,
     render_download_actions,
     render_provider_search as render_plpk_provider_search,
+    render_provider_workload as render_pljkk_provider_workload,
+    provider_status_caption as _provider_status_caption,
     render_skp_gate as render_plpk_skp_gate,
 )
 from ui_pl_common import render_package_selection
@@ -168,9 +170,20 @@ def _migrate_pl_tab_selection(state_key: str) -> None:
         st.session_state[state_key] = old_to_new[current]
 
 
+def _render_missing_npwp_warning(invalid_rows: list[dict]) -> None:
+    """Tampilkan paket tanpa NPWP secara ringkas dan dapat dilipat."""
+    if not invalid_rows:
+        return
+    count = len(invalid_rows)
+    st.warning(f"⚠️ {count} paket belum ada NPWP penyedia.")
+    st.caption("Paket ini tidak masuk proses pilih penyedia sampai NPWP dilengkapi.")
+    with st.expander(f"📋 Lihat {count} paket tanpa NPWP", expanded=False):
+        st.markdown("\n".join(f"- **{_pl_label(row)}**" for row in invalid_rows))
+
+
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
+from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
@@ -4069,9 +4082,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         _depl = _depl_jkk  # alias JKK — sudah di-import top-level
 
+        _sync_live_paket_umumkan_status("pl_auto_tayang_sync_jkk")
         _plsp_rows = _load_draft_pl_cached()
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
-        _plsp_rows = [r for r in _plsp_rows if pl_engine.is_paket_draft(r)]
+        _plsp_rows = [
+            r for r in _plsp_rows
+            if pl_engine.is_paket_draft(r) and not _is_paket_sudah_diumumkan(r)
+        ]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -4106,13 +4123,20 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _chk = st.checkbox("", key=_plsp_chk_key, label_visibility="collapsed")
                         st.markdown(f"**{_pl_label(_rr)}** ({_rr.get('jenis_pl','?')})")
                     with _col_file: # JKK tab3 marker
+                        _dokpil_detected = _find_dokpil_pdf_root(_rr.get("_folder_lokal"))
+                        if _dokpil_detected["status"] == "found":
+                            st.caption(f"✅ Auto root: `{os.path.basename(_dokpil_detected['path'])}`")
+                        elif _dokpil_detected["status"] == "ambiguous":
+                            _names = ", ".join(os.path.basename(p) for p in _dokpil_detected["candidates"])
+                            st.warning(f"⚠️ Dokpil root ambigu: {_names}. Pilih manual.")
                         _dokpil_up = st.file_uploader(
-                            "Dokpil PDF",
+                            "Dokpil PDF (manual override, opsional)",
                             type=["pdf"],
                             key=_plsp_file_key,
                             label_visibility="collapsed",
                         )
-                        if _dokpil_up:
+                        _dokpil_file = _resolve_dokpil_file_root(_rr, _dokpil_up)
+                        if _dokpil_file:
                             _ku_prev = _rr.get("kode_unik") or ""
                             _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
                             # Tanggal: dari DB (tgl_dokpil) → fallback session → hari ini
@@ -4127,7 +4151,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_prev = datetime.now().date()
                             _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
                             if _no_prev:
-                                st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                                st.caption(f"📄 {_dokpil_file.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             else:
                                 st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
@@ -4135,8 +4159,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     try:
                                         _r_up_only = _udpl.upload_dokpil_pl(
                                             kode_paket=_kp_key,
-                                            file_bytes=_dokpil_up.getvalue(),
-                                            file_name=_dokpil_up.name,
+                                            file_bytes=_dokpil_file.getvalue(),
+                                            file_name=_dokpil_file.name,
                                             nomor_dokpil=_no_prev,
                                             tgl_dokpil=_tgl_prev.strftime("%d-%m-%Y"),
                                         )
@@ -4155,17 +4179,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _chk:
                         _plsp_selected.append({
                             **_rr,
-                            "_dokpil_file": _dokpil_up,
+                            "_dokpil_file": _dokpil_file,
                         })
 
                 st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
 
                 # Kumpulkan semua paket yang sudah ada file dokpil
-                _all_with_file = [
-                    {**_rr, "_dokpil_file": st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")}
-                    for _rr in _plsp_rows
-                    if st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")
-                ]
+                _all_with_file = []
+                for _rr in _plsp_rows:
+                    _manual_file = st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")
+                    _dokpil_file = _resolve_dokpil_file_root(_rr, _manual_file)
+                    if _dokpil_file:
+                        _all_with_file.append({**_rr, "_dokpil_file": _dokpil_file})
                 if _all_with_file:
                     st.divider()
                     if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
@@ -4741,7 +4766,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.session_state[f"pp_chk_{_rr['kode_paket']}_v19"] = False
                         st.rerun()
 
-                _pp_selected = []
+                _pp_selected = [
+                    _rr for _rr in _pp_rows
+                    if st.session_state.get(f"pp_chk_{_rr['kode_paket']}_v19", True)
+                ]
+                _pp_valid_for_status = [r for r in _pp_selected if r.get("npwp_penyedia")]
                 for _rr in _pp_rows:
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
@@ -4751,8 +4780,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox("", key=_pp_chk_key, label_visibility="collapsed", help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}")
                     st.markdown(f"**{_pl_label(_rr)}**")
-                    if _chk:
-                        _pp_selected.append(_rr)
+                    st.caption(
+                        _provider_status_caption(
+                            st,
+                            _rr,
+                            _pp_valid_for_status,
+                            result_key="pljkk_provider_workload_result",
+                            signature_key="pljkk_provider_workload_signature",
+                            formal_skp=False,
+                        )
+                    )
 
                 st.caption(f"**{len(_pp_selected)}** paket dipilih")
 
@@ -4760,24 +4797,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 if not _pp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
-                    # Tabel ringkas paket terpilih
-                    import pandas as _pd2
-                    _pp_df = _pd2.DataFrame([{
-                        "Paket": _pl_label(r),
-                        "Penyedia": r.get("nama_penyedia") or "—",
-                        "NPWP": r.get("npwp_penyedia") or "—",
-                    } for r in _pp_selected])
-                    st.dataframe(_pp_df, use_container_width=True, hide_index=True)
-
                     _invalid = [r for r in _pp_selected if not r.get("npwp_penyedia")]
-                    if _invalid:
-                        st.warning(
-                            f"⚠️ {len(_invalid)} paket belum ada NPWP penyedia: "
-                            + ", ".join(_pl_label(r) for r in _invalid)
-                        )
+                    _render_missing_npwp_warning(_invalid)
 
                     _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
                     if _valid_pp:
+                        st.caption(f"{len(_valid_pp)} paket ber-NPWP masuk pemeriksaan penyedia.")
+                        render_pljkk_provider_workload(
+                            st,
+                            _valid_pp,
+                            key_prefix="pljkk_provider_workload",
+                        )
                         if st.button(
                             f"🏢 Pilih Semua Penyedia ke SPSE ({len(_valid_pp)} paket)",
                             key="pp_submit_btn",
@@ -4859,18 +4889,24 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.error("Browser SPSE tidak terhubung atau session kosong.")
                 else:
                     with st.spinner("Membaca status pengumuman dari SPSE..."):
-                        _tahap_status_jkk = pl_engine._fetch_tahap_spse(
-                            _cookie_status_jkk, pl_engine.BASE_URL
+                        _sync_status_jkk = _sync_live_paket_umumkan_status(
+                            "pl_manual_tayang_sync_jkk", ttl_seconds=0
                         )
-                    _n_status_jkk = _mark_tahap_spse_sudah_diumumkan(_tahap_status_jkk)
-                    if _n_status_jkk:
-                        _load_draft_pl_cached.clear()
-                        st.session_state["pl_umumkan_status_flash_jkk"] = (
-                            f"✅ {_n_status_jkk} status paket berhasil disinkronkan dari SPSE."
+                    if not _sync_status_jkk.get("ok"):
+                        st.error(
+                            f"Sinkronisasi status SPSE gagal: "
+                            f"{_sync_status_jkk.get('error', 'error tidak diketahui')}"
                         )
-                        st.rerun()
                     else:
-                        st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
+                        _n_status_jkk = int(_sync_status_jkk.get("count", 0))
+                        if _n_status_jkk:
+                            _load_draft_pl_cached.clear()
+                            st.session_state["pl_umumkan_status_flash_jkk"] = (
+                                f"✅ {_n_status_jkk} status paket berhasil disinkronkan dari SPSE."
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
             except Exception as _e_status_jkk:
                 st.error(f"Sinkronisasi status SPSE gagal: {_e_status_jkk}")
         _status_flash_jkk = st.session_state.pop("pl_umumkan_status_flash_jkk", "")
@@ -7471,9 +7507,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         _depl = _depl_pk  # alias — sudah di-import top-level
 
+        _sync_live_paket_umumkan_status("pl_auto_tayang_sync_pk")
         _plsp_rows = _load_draft_pl_cached("PK")
         _plsp_rows, _ = pl_engine.buang_duplikat_paket_lama(_plsp_rows)
-        _plsp_rows = [r for r in _plsp_rows if _pl_engine_utils.is_paket_draft(r)]
+        _plsp_rows = [
+            r for r in _plsp_rows
+            if _pl_engine_utils.is_paket_draft(r) and not _is_paket_sudah_diumumkan(r)
+        ]
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -7508,13 +7548,20 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _chk = st.checkbox("", key=_plsp_chk_key, label_visibility="collapsed")
                         st.markdown(f"**{_pl_label(_rr)}** ({_rr.get('jenis_pl','?')})")
                     with _col_file:
+                        _dokpil_detected = _find_dokpil_pdf_root(_rr.get("_folder_lokal"))
+                        if _dokpil_detected["status"] == "found":
+                            st.caption(f"✅ Auto root: `{os.path.basename(_dokpil_detected['path'])}`")
+                        elif _dokpil_detected["status"] == "ambiguous":
+                            _names = ", ".join(os.path.basename(p) for p in _dokpil_detected["candidates"])
+                            st.warning(f"⚠️ Dokpil root ambigu: {_names}. Pilih manual.")
                         _dokpil_up = st.file_uploader(
-                            "Dokpil PDF",
+                            "Dokpil PDF (manual override, opsional)",
                             type=["pdf"],
                             key=_plsp_file_key,
                             label_visibility="collapsed",
                         )
-                        if _dokpil_up:
+                        _dokpil_file = _resolve_dokpil_file_root(_rr, _dokpil_up)
+                        if _dokpil_file:
                             _ku_prev = _rr.get("kode_unik") or ""
                             _sk_prev = _lookup_singkatan_dinas(_rr.get("satker", ""))
                             # Tanggal: dari DB (tgl_dokpil) → fallback session → hari ini
@@ -7529,7 +7576,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_prev = datetime.now().date()
                             _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
                             if _no_prev:
-                                st.caption(f"📄 {_dokpil_up.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                                st.caption(f"📄 {_dokpil_file.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
                             else:
                                 st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
@@ -7537,8 +7584,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     try:
                                         _r_up_only = _udpl.upload_dokpil_pl(
                                             kode_paket=_kp_key,
-                                            file_bytes=_dokpil_up.getvalue(),
-                                            file_name=_dokpil_up.name,
+                                            file_bytes=_dokpil_file.getvalue(),
+                                            file_name=_dokpil_file.name,
                                             nomor_dokpil=_no_prev,
                                             tgl_dokpil=_tgl_prev.strftime("%d-%m-%Y"),
                                         )
@@ -7557,17 +7604,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _chk:
                         _plsp_selected.append({
                             **_rr,
-                            "_dokpil_file": _dokpil_up,
+                            "_dokpil_file": _dokpil_file,
                         })
 
                 st.caption(f"**{len(_plsp_selected)}** dari **{len(_plsp_rows)}** paket dipilih")
 
                 # Kumpulkan semua paket yang sudah ada file dokpil
-                _all_with_file = [
-                    {**_rr, "_dokpil_file": st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")}
-                    for _rr in _plsp_rows
-                    if st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")
-                ]
+                _all_with_file = []
+                for _rr in _plsp_rows:
+                    _manual_file = st.session_state.get(f"plsp_dokpil_{_rr['kode_paket']}")
+                    _dokpil_file = _resolve_dokpil_file_root(_rr, _manual_file)
+                    if _dokpil_file:
+                        _all_with_file.append({**_rr, "_dokpil_file": _dokpil_file})
                 if _all_with_file:
                     st.divider()
                     if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
@@ -8159,7 +8207,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.session_state[f"pp_chk_{_rr['kode_paket']}_v19"] = False
                         st.rerun()
 
-                _pp_selected = []
+                _pp_selected = [
+                    _rr for _rr in _pp_rows
+                    if st.session_state.get(f"pp_chk_{_rr['kode_paket']}_v19", True)
+                ]
+                _pp_valid_for_status = [r for r in _pp_selected if r.get("npwp_penyedia")]
                 for _rr in _pp_rows:
                     _kp = _rr["kode_paket"]
                     _npwp_disp = _rr.get("npwp_penyedia") or "—"
@@ -8169,8 +8221,16 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.session_state[_pp_chk_key] = True
                     _chk = st.checkbox("", key=_pp_chk_key, label_visibility="collapsed", help=f"Penyedia: {_nama_disp} | NPWP: {_npwp_disp}")
                     st.markdown(f"**{_pl_label(_rr)}**")
-                    if _chk:
-                        _pp_selected.append(_rr)
+                    st.caption(
+                        _provider_status_caption(
+                            st,
+                            _rr,
+                            _pp_valid_for_status,
+                            result_key="plpk_skp_gate_result",
+                            signature_key="plpk_skp_gate_signature",
+                            formal_skp=True,
+                        )
+                    )
 
                 st.caption(f"**{len(_pp_selected)}** paket dipilih")
 
@@ -8178,24 +8238,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 if not _pp_selected:
                     st.info("Pilih paket di sebelah kiri.")
                 else:
-                    # Tabel ringkas paket terpilih
-                    import pandas as _pd2
-                    _pp_df = _pd2.DataFrame([{
-                        "Paket": _pl_label(r),
-                        "Penyedia": r.get("nama_penyedia") or "—",
-                        "NPWP": r.get("npwp_penyedia") or "—",
-                    } for r in _pp_selected])
-                    st.dataframe(_pp_df, use_container_width=True, hide_index=True)
-
                     _invalid = [r for r in _pp_selected if not r.get("npwp_penyedia")]
-                    if _invalid:
-                        st.warning(
-                            f"⚠️ {len(_invalid)} paket belum ada NPWP penyedia: "
-                            + ", ".join(_pl_label(r) for r in _invalid)
-                        )
+                    _render_missing_npwp_warning(_invalid)
 
                     _valid_pp = [r for r in _pp_selected if r.get("npwp_penyedia")]
                     if _valid_pp:
+                        st.caption(f"{len(_valid_pp)} paket ber-NPWP masuk gate SKP.")
                         _skp_gate_ok = render_plpk_skp_gate(st, _valid_pp, key_prefix="plpk_skp_gate")
                         if st.button(
                             f"🏢 Pilih Semua Penyedia ke SPSE ({len(_valid_pp)} paket)",
@@ -8279,18 +8327,24 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.error("Browser SPSE tidak terhubung atau session kosong.")
                 else:
                     with st.spinner("Membaca status pengumuman dari SPSE..."):
-                        _tahap_status_pk = pl_engine._fetch_tahap_spse(
-                            _cookie_status_pk, pl_engine.BASE_URL
+                        _sync_status_pk = _sync_live_paket_umumkan_status(
+                            "pl_manual_tayang_sync_pk", ttl_seconds=0
                         )
-                    _n_status_pk = _mark_tahap_spse_sudah_diumumkan(_tahap_status_pk)
-                    if _n_status_pk:
-                        _load_draft_pl_cached.clear()
-                        st.session_state["pl_umumkan_status_flash_pk"] = (
-                            f"✅ {_n_status_pk} status paket berhasil disinkronkan dari SPSE."
+                    if not _sync_status_pk.get("ok"):
+                        st.error(
+                            f"Sinkronisasi status SPSE gagal: "
+                            f"{_sync_status_pk.get('error', 'error tidak diketahui')}"
                         )
-                        st.rerun()
                     else:
-                        st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
+                        _n_status_pk = int(_sync_status_pk.get("count", 0))
+                        if _n_status_pk:
+                            _load_draft_pl_cached.clear()
+                            st.session_state["pl_umumkan_status_flash_pk"] = (
+                                f"✅ {_n_status_pk} status paket berhasil disinkronkan dari SPSE."
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
             except Exception as _e_status_pk:
                 st.error(f"Sinkronisasi status SPSE gagal: {_e_status_pk}")
         _status_flash_pk = st.session_state.pop("pl_umumkan_status_flash_pk", "")

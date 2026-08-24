@@ -7,6 +7,7 @@ query SPSE/Supabase dan supaya JKK/PK memiliki cache key yang eksplisit.
 from __future__ import annotations
 
 import os
+import time
 
 import streamlit as st
 
@@ -107,6 +108,29 @@ def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> b
         # dilewati walau label tahap tidak memuat kata "Pengumuman".
         return True
     return _publish_status_text_is_done(row.get("status"))
+
+
+def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) -> dict:
+    """Sinkronkan tahap tayang live SPSE secara read-only dengan TTL singkat."""
+    now = time.monotonic()
+    last_sync = st.session_state.get(state_key)
+    if isinstance(last_sync, (int, float)) and now - last_sync < ttl_seconds:
+        return {"ok": True, "cached": True, "count": 0}
+
+    st.session_state[state_key] = now
+    try:
+        import spse_browser
+        from config import SPSE_BASE_URL
+        import pl_engine as _live_pl_engine
+
+        cookie = spse_browser.get_spse_cookies()
+        if not cookie:
+            return {"ok": False, "cached": False, "count": 0, "error": "Cookie SPSE kosong"}
+        tahap_map = _live_pl_engine._fetch_tahap_spse(cookie, SPSE_BASE_URL)
+        count = mark_tahap_spse_sudah_diumumkan(tahap_map)
+        return {"ok": True, "cached": False, "count": count}
+    except Exception as exc:
+        return {"ok": False, "cached": False, "count": 0, "error": str(exc)}
 
 
 def _filter_pl_family(rows: list[dict], engine_kind: str) -> list[dict]:

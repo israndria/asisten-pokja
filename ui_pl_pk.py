@@ -33,7 +33,63 @@ def active_rows(load_fn, engine) -> tuple[list[dict], int]:
     return [row for row in rows if is_paket_berjalan(row)], duplicate_count
 
 
-def _render_provider_detail(st, rows: list[dict]) -> None:
+def _provider_check_signature(rows: list[dict]) -> tuple:
+    return tuple(sorted(
+        (
+            str(row.get("kode_paket") or ""),
+            str(row.get("nama_penyedia") or ""),
+            str(row.get("npwp_penyedia") or ""),
+        )
+        for row in rows
+    ))
+
+
+def provider_status_caption(
+    st,
+    row: dict,
+    selected_rows: list[dict],
+    *,
+    result_key: str,
+    signature_key: str,
+    formal_skp: bool,
+) -> str:
+    """Status ringkas untuk ditempel di bawah paket pada kolom kiri."""
+    import cek_penyedia_engine as engine
+
+    if st.session_state.get(signature_key) != _provider_check_signature(selected_rows):
+        return "⏳ Status belum dicek"
+    result = st.session_state.get(result_key) or {}
+    target_npwp = re.sub(r"\D", "", str(row.get("npwp_penyedia") or ""))
+    target_name = re.sub(r"[^a-z0-9]+", " ", str(row.get("nama_penyedia") or "").lower()).strip()
+    provider = None
+    for candidate in result.get("providers") or []:
+        candidate_npwp = re.sub(r"\D", "", str(candidate.get("npwp") or ""))
+        candidate_name = re.sub(
+            r"[^a-z0-9]+", " ", str(candidate.get("nama_penyedia") or "").lower()
+        ).strip()
+        if (target_npwp and candidate_npwp and target_npwp == candidate_npwp) or (
+            target_name and target_name == candidate_name
+        ):
+            provider = candidate
+            break
+    if provider is None:
+        return "⚠️ Histori penyedia tidak ditemukan"
+
+    active = int(provider.get("skp_berjalan", 0))
+    review = int(provider.get("skp_perlu_verifikasi", 0))
+    limit = engine.SKP_LIMIT
+    if formal_skp:
+        if review:
+            return f"🟡 SKP {active}/{limit} aktif · {review} perlu verifikasi"
+        return f"✅ SKP {active}/{limit} aktif · proyeksi {int(provider.get('skp_proyeksi', active))}/{limit}"
+    if review:
+        return f"🟡 Beban aktif {active} · {review} perlu verifikasi"
+    return f"✅ Beban aktif {active} kontrak"
+
+
+def _render_provider_detail(
+    st, rows: list[dict], status_header: str = "SKP dihitung"
+) -> None:
     """Render tabel keterlibatan provider seperti pencarian V20."""
     if not rows:
         st.caption("Belum ada detail keterlibatan yang cocok.")
@@ -56,7 +112,7 @@ def _render_provider_detail(st, rows: list[dict]) -> None:
             "Jenis Pengadaan": row.get("jenis_pengadaan"),
             "Tahapan": row.get("tahapan"),
             "Status Peran": row.get("status_peran"),
-            "SKP dihitung": row.get("skp_status") or (
+            status_header: row.get("skp_status") or (
                 "Ya — terindikasi berjalan"
                 if row.get("is_pemenang_berjalan")
                 else (
@@ -80,14 +136,7 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
 
     import cek_penyedia_engine as engine
 
-    signature = tuple(sorted(
-        (
-            str(row.get("kode_paket") or ""),
-            str(row.get("nama_penyedia") or ""),
-            str(row.get("npwp_penyedia") or ""),
-        )
-        for row in selected_rows
-    ))
+    signature = _provider_check_signature(selected_rows)
     result_key = f"{key_prefix}_result"
     signature_key = f"{key_prefix}_signature"
 
@@ -95,9 +144,11 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
         st.markdown("#### 🔍 Cek Penyedia — Gate SKP Pekerjaan Berjalan")
         st.caption(
             "Cek sumber Tender + Non-Tender Pekerjaan Konstruksi. "
-            "Pemenang berkontrak dengan tahap SPSE aktif dihitung. "
-            "Kontrak pada tahap SPSE selesai perlu verifikasi manual karena scraper belum memiliki data PHO. "
-            "Batas maksimal = 5 paket untuk Usaha Kecil."
+            "Akhir jadwal Penandatanganan Kontrak SPSE sampai 30 hari lalu "
+            "dihitung aktif; lebih dari 30 hari diasumsikan selesai secara heuristik. "
+            "Tanggal kosong/invalid tetap perlu verifikasi. Paket tanpa NPWP tidak masuk gate. "
+            "Flag tidak menghapus checklist; satu flag menahan seluruh batch sampai diverifikasi. "
+            "Batas maksimal = 5 paket."
         )
         if st.button(
             "🔍 Cek SKP Penyedia dari Excel",
@@ -143,15 +194,15 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
                 )
             elif needs_verification:
                 st.warning(
-                    f"⚠️ **{label}**: {needs_verification} paket punya kontrak, tetapi belum ada bukti "
-                    f"selesai fisik. Beban konservatif {conservative}/{engine.SKP_LIMIT}."
+                    f"⚠️ **{label}**: {needs_verification} kontrak perlu verifikasi status selesai. "
+                    f"Beban konservatif {conservative}/{engine.SKP_LIMIT}."
                 )
                 slug = re.sub(
                     r"[^a-z0-9]+", "_",
                     f"{label}_{provider.get('npwp') or ''}".lower(),
                 ).strip("_")[:80] or "provider"
                 verified = st.checkbox(
-                    "Saya sudah memverifikasi seluruh paket tersebut tidak sedang dikerjakan.",
+                    "Saya sudah memverifikasi seluruh kontrak tersebut tidak sedang dikerjakan.",
                     key=f"{key_prefix}_verify_{slug}",
                 )
                 if not verified:
@@ -167,15 +218,76 @@ def render_skp_gate(st, selected_rows: list[dict], key_prefix: str = "plpk_skp")
         if detail_rows:
             st.markdown(f"**📋 Detail Semua Keterlibatan ({len(detail_rows)} baris)**")
             st.caption(
-                "🏆 Pemenang dihitung sebagai kemenangan. "
-                "👤 Peserta bukan pemenang hanya konteks dan tidak dihitung sebagai SKP. "
-                "Status ‘Perlu verifikasi’ berarti kontrak ada tetapi PHO/selesai fisik belum tersedia. "
-                "Tanggal di tabel adalah jendela penandatanganan, bukan masa pelaksanaan."
+                "🏆 Pemenang berkontrak dihitung memakai heuristik tanggal akhir jadwal SPSE. "
+                "👤 Peserta bukan pemenang hanya konteks. Ini bukan bukti PHO/selesai fisik; "
+                "tanggal tabel adalah jendela Penandatanganan Kontrak."
             )
             _render_provider_detail(st, detail_rows)
         else:
             st.caption("Belum ada riwayat paket konstruksi yang cocok di database scraper; proyeksi dimulai dari 0.")
         return allowed
+
+
+def render_provider_workload(
+    st,
+    selected_rows: list[dict],
+    key_prefix: str = "pljkk_workload",
+) -> None:
+    """Tampilkan beban kontrak historis tanpa menjadi gate SKP konstruksi."""
+    if not selected_rows:
+        return
+
+    import cek_penyedia_engine as engine
+
+    signature = _provider_check_signature(selected_rows)
+    result_key = f"{key_prefix}_result"
+    signature_key = f"{key_prefix}_signature"
+
+    with st.container(border=True):
+        st.markdown("#### 🔍 Status beban kontrak penyedia")
+        st.caption(
+            "Memakai histori V20 Scraper dari Tender + Non-Tender. "
+            "Kontrak dengan akhir jadwal SPSE lebih dari 30 hari lalu "
+            "diasumsikan selesai; tanggal kosong/invalid ditandai perlu verifikasi. "
+            "Panel ini informatif dan tidak mengunci submit PLJKK."
+        )
+        if st.button(
+            "🔍 Cek beban kontrak dari V20",
+            key=f"{key_prefix}_run",
+            type="secondary",
+            use_container_width=True,
+        ):
+            with st.spinner("Memeriksa histori penyedia di database V20 Scraper..."):
+                st.session_state[result_key] = engine.check_selected_providers(
+                    selected_rows,
+                    include_non_construction=True,
+                )
+                st.session_state[signature_key] = signature
+
+        result = st.session_state.get(result_key)
+        if st.session_state.get(signature_key) != signature:
+            st.info("Klik **Cek beban kontrak dari V20** untuk memuat status penyedia.")
+            return
+        if not result:
+            return
+        for error in result.get("errors") or []:
+            st.warning(error)
+        for provider in result.get("providers") or []:
+            label = provider.get("nama_penyedia") or "Penyedia"
+            active = int(provider.get("skp_berjalan", 0))
+            review = int(provider.get("skp_perlu_verifikasi", 0))
+            if review:
+                st.warning(
+                    f"⚠️ **{label}**: {active} kontrak aktif terindikasi; "
+                    f"{review} perlu verifikasi tanggal akhir."
+                )
+            else:
+                st.success(f"✅ **{label}**: {active} kontrak aktif terindikasi.")
+
+        detail_rows = result.get("rows") or []
+        if detail_rows:
+            st.markdown(f"**📋 Detail histori kontrak ({len(detail_rows)} baris)**")
+            _render_provider_detail(st, detail_rows, "Status kontrak")
 
 
 def render_provider_search(st, key_prefix: str = "plpk_provider_search") -> None:
