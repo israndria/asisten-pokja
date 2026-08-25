@@ -396,17 +396,17 @@ def test_promotion_failure_restores_previous_active_batch(monkeypatch, tmp_path)
         lambda url, **_kwargs: _SnapshotDownloadResponse(url, b"new"),
     )
 
-    real_replace = engine.os.replace
+    real_move = engine.shutil.move
 
     def fail_batch_activation(source, destination):
         if (
-            Path(source).name.startswith(".ppk_new_")
-            and Path(destination).name == engine.DOWNLOAD_SUBFOLDER
+            Path(source).name == "revisi-baru.pdf"
+            and Path(destination).parent.name == engine.DOWNLOAD_SUBFOLDER
         ):
             raise OSError("simulated promotion failure")
-        return real_replace(source, destination)
+        return real_move(source, destination)
 
-    monkeypatch.setattr(engine.os, "replace", fail_batch_activation)
+    monkeypatch.setattr(engine.shutil, "move", fail_batch_activation)
     result = engine.download_all_dokumen_ppk(
         {"kode_paket": "35", "jenis_pl": "PK"},
         {"spek": [{"nama": "revisi-baru.pdf", "url_dl": "https://x/new"}]},

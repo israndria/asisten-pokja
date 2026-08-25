@@ -603,45 +603,62 @@ def download_all_dokumen_ppk(
         return result
 
     previous_folder = ""
-    activated = False
+    moved_old = []
+    promoted = []
     try:
-        for name in _PRESERVED_ACTIVE_NAMES:
-            source = os.path.join(folder_tujuan, name)
-            if os.path.isfile(source):
-                shutil.copy2(source, os.path.join(staging, name))
-
         previous_folder = _temporary_sibling_path(
             folder_paket,
             ".ppk_old_",
         )
-        try:
-            os.replace(folder_tujuan, previous_folder)
-        except OSError as exc:
-            raise OSError(
-                f"ganti folder batch lama gagal: {folder_tujuan} -> {previous_folder}: {exc}"
-            ) from exc
+        os.makedirs(previous_folder)
+        with os.scandir(folder_tujuan) as scan:
+            old_entries = [
+                entry
+                for entry in scan
+                if entry.name.casefold() not in _PRESERVED_ACTIVE_NAMES
+            ]
+        for entry in old_entries:
+            destination = os.path.join(previous_folder, entry.name)
+            try:
+                shutil.move(entry.path, destination)
+            except OSError as exc:
+                raise OSError(
+                    f"pindah batch lama gagal: {entry.path} -> {destination}: {exc}"
+                ) from exc
+            moved_old.append((destination, entry.name))
 
-        try:
-            os.replace(staging, folder_tujuan)
-        except OSError as exc:
-            raise OSError(
-                f"aktifkan batch terbaru gagal: {staging} -> {folder_tujuan}: {exc}"
-            ) from exc
-        staging = ""
-        activated = True
+        for staged_path in staged_files:
+            destination = os.path.join(folder_tujuan, os.path.basename(staged_path))
+            try:
+                shutil.move(staged_path, destination)
+            except OSError as exc:
+                raise OSError(
+                    f"aktifkan batch terbaru gagal: {staged_path} -> {destination}: {exc}"
+                ) from exc
+            promoted.append((destination, os.path.basename(staged_path)))
         result["ok"] = [
-            os.path.join(folder_tujuan, os.path.basename(staged_path))
-            for staged_path in staged_files
+            destination
+            for destination, _name in promoted
         ]
         shutil.rmtree(previous_folder, ignore_errors=True)
     except Exception as exc:
-        if previous_folder and os.path.isdir(previous_folder) and not activated:
-            try:
-                if os.path.isdir(folder_tujuan):
-                    shutil.rmtree(folder_tujuan)
-                os.replace(previous_folder, folder_tujuan)
-            except Exception as rollback_exc:
-                exc = RuntimeError(f"{exc}; rollback batch lama gagal: {rollback_exc}")
+        rollback_errors = []
+        for destination, name in reversed(promoted):
+            if os.path.exists(destination):
+                try:
+                    shutil.move(destination, os.path.join(staging, name))
+                except Exception as rollback_exc:
+                    rollback_errors.append(str(rollback_exc))
+        for source, name in reversed(moved_old):
+            if os.path.exists(source):
+                try:
+                    shutil.move(source, os.path.join(folder_tujuan, name))
+                except Exception as rollback_exc:
+                    rollback_errors.append(str(rollback_exc))
+        if previous_folder:
+            shutil.rmtree(previous_folder, ignore_errors=True)
+        if rollback_errors:
+            exc = RuntimeError(f"{exc}; rollback batch lama gagal: {'; '.join(rollback_errors)}")
         result["error"] = [f"Batch refresh gagal: {exc}"]
     finally:
         if staging:
