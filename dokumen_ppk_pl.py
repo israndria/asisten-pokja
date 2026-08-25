@@ -35,7 +35,7 @@ _LOGIN_MARKERS = (
     "session expired",
 )
 DOWNLOAD_SUBFOLDER = "10. Revisi Uploadan PPK"
-DOWNLOAD_ARCHIVE_SUBFOLDER = "10. Revisi Uploadan PPK - Archive"
+_PRESERVED_ACTIVE_NAMES = frozenset({"desktop.ini"})
 _DOWNLOAD_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
@@ -447,52 +447,11 @@ def _unique_download_path(folder: str, filename: str) -> str:
         number += 1
 
 
-def _archive_active_revision_files(folder_paket: str, folder_tujuan: str) -> str:
-    """Pindahkan batch aktif ke archive bertimestamp dengan rollback lokal."""
-    with os.scandir(folder_tujuan) as scan:
-        entries = list(scan)
-    if not entries:
-        return ""
-
-    archive_root = os.path.join(folder_paket, DOWNLOAD_ARCHIVE_SUBFOLDER)
-    os.makedirs(archive_root, exist_ok=True)
-    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    archive_dir = os.path.join(archive_root, stamp)
-    suffix = 2
-    while os.path.exists(archive_dir):
-        archive_dir = os.path.join(archive_root, f"{stamp}_{suffix}")
-        suffix += 1
-    os.makedirs(archive_dir)
-
-    moved = []
-    try:
-        for entry in entries:
-            destination = os.path.join(archive_dir, entry.name)
-            shutil.move(entry.path, destination)
-            moved.append(destination)
-    except Exception:
-        for destination in reversed(moved):
-            if os.path.exists(destination):
-                shutil.move(destination, os.path.join(folder_tujuan, os.path.basename(destination)))
-        try:
-            os.rmdir(archive_dir)
-        except OSError:
-            pass
-        raise
-    return archive_dir
-
-
-def _restore_archived_revision_files(archive_dir: str, folder_tujuan: str) -> None:
-    """Kembalikan archive ke folder aktif setelah promosi batch baru gagal."""
-    if not archive_dir or not os.path.isdir(archive_dir):
-        return
-    with os.scandir(archive_dir) as scan:
-        entries = list(scan)
-    for entry in entries:
-        destination = os.path.join(folder_tujuan, entry.name)
-        if os.path.exists(destination):
-            raise RuntimeError(f"Gagal rollback: nama file sudah dipakai {destination}")
-        shutil.move(entry.path, destination)
+def _temporary_sibling_path(folder_paket: str, prefix: str) -> str:
+    """Reserve a short sibling path without creating a lasting directory."""
+    path = tempfile.mkdtemp(prefix=prefix, dir=folder_paket)
+    os.rmdir(path)
+    return path
 
 
 def _download_snapshot_file(url_dl: str, destination: str, cookie_str: str) -> str:
@@ -584,11 +543,11 @@ def download_all_dokumen_ppk(
     snapshot: dict | None,
     cookie_str: str | None = None,
 ) -> dict[str, list | str]:
-    """Refresh batch dokumen PPK ke ``10. Revisi Uploadan PPK``.
+    """Replace ``10. Revisi Uploadan PPK`` with the latest complete live batch.
 
-    File baru diunduh ke staging lebih dahulu. Folder aktif hanya diganti
-    setelah seluruh file berhasil; batch lama dipindahkan ke archive sibling
-    bertimestamp agar folder aktif tidak mencampur revisi.
+    All files are downloaded to staging first. The active folder is swapped
+    only after every download succeeds; the previous folder is kept briefly
+    as a short sibling path for rollback, never as a user-facing archive.
     """
     folder_paket = _resolve_package_folder(row)
     if not folder_paket:
@@ -610,19 +569,17 @@ def download_all_dokumen_ppk(
             ],
         }
     items = list(_iter_snapshot_files(snapshot))
-    if not items:
-        return {"folder": folder_tujuan, "archive": "", "ok": [], "error": []}
-
-    cookie = cookie_str if cookie_str is not None else _get_cookies()
-    if not cookie:
+    cookie = cookie_str if cookie_str is not None else (_get_cookies() if items else "")
+    if items and not cookie:
         return {
             "folder": folder_tujuan,
+            "archive": "",
             "ok": [],
             "error": ["Cookie SPSE kosong — buka Brave SPSE dan login sebagai PP."],
         }
 
     result = {"folder": folder_tujuan, "archive": "", "ok": [], "error": []}
-    staging = tempfile.mkdtemp(prefix=".ppk_revision_download_", dir=folder_paket)
+    staging = tempfile.mkdtemp(prefix=".ppk_new_", dir=folder_paket)
     staged_files = []
     download_errors = []
     for kind, item in items:
@@ -645,25 +602,48 @@ def download_all_dokumen_ppk(
         ]
         return result
 
-    archive_dir = ""
-    promoted = []
+    previous_folder = ""
+    activated = False
     try:
-        archive_dir = _archive_active_revision_files(folder_paket, folder_tujuan)
-        for staged_path in staged_files:
-            destination = os.path.join(folder_tujuan, os.path.basename(staged_path))
-            shutil.move(staged_path, destination)
-            promoted.append(destination)
-        result["archive"] = archive_dir
-        result["ok"] = promoted
-    except Exception as exc:
-        for destination in reversed(promoted):
-            if os.path.exists(destination):
-                shutil.move(destination, os.path.join(staging, os.path.basename(destination)))
+        for name in _PRESERVED_ACTIVE_NAMES:
+            source = os.path.join(folder_tujuan, name)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(staging, name))
+
+        previous_folder = _temporary_sibling_path(
+            folder_paket,
+            ".ppk_old_",
+        )
         try:
-            _restore_archived_revision_files(archive_dir, folder_tujuan)
-        except Exception as rollback_exc:
-            exc = RuntimeError(f"{exc}; rollback batch lama gagal: {rollback_exc}")
+            os.replace(folder_tujuan, previous_folder)
+        except OSError as exc:
+            raise OSError(
+                f"ganti folder batch lama gagal: {folder_tujuan} -> {previous_folder}: {exc}"
+            ) from exc
+
+        try:
+            os.replace(staging, folder_tujuan)
+        except OSError as exc:
+            raise OSError(
+                f"aktifkan batch terbaru gagal: {staging} -> {folder_tujuan}: {exc}"
+            ) from exc
+        staging = ""
+        activated = True
+        result["ok"] = [
+            os.path.join(folder_tujuan, os.path.basename(staged_path))
+            for staged_path in staged_files
+        ]
+        shutil.rmtree(previous_folder, ignore_errors=True)
+    except Exception as exc:
+        if previous_folder and os.path.isdir(previous_folder) and not activated:
+            try:
+                if os.path.isdir(folder_tujuan):
+                    shutil.rmtree(folder_tujuan)
+                os.replace(previous_folder, folder_tujuan)
+            except Exception as rollback_exc:
+                exc = RuntimeError(f"{exc}; rollback batch lama gagal: {rollback_exc}")
         result["error"] = [f"Batch refresh gagal: {exc}"]
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if staging:
+            shutil.rmtree(staging, ignore_errors=True)
     return result

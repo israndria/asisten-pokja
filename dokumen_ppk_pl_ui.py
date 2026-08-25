@@ -151,7 +151,7 @@ def _render_result(st, engine, row: dict, result: dict, state_key: str, results:
         key=f"pldoc_download_{state_key}_{row['kode_paket']}",
         use_container_width=True,
         disabled=total_files == 0,
-        help="Refresh folder 10 dengan batch terbaru; batch sebelumnya diarsipkan bertimestamp.",
+        help="Ganti seluruh isi folder 10 dengan batch terbaru dari dokumen live.",
     ):
         with st.spinner("Mengunduh semua dokumen PPK..."):
             try:
@@ -282,7 +282,7 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
             "⬇️ Download semua dokumen PPK",
             key=f"{prefix}_download_all",
             use_container_width=True,
-            help="Cek snapshot live tiap paket lalu refresh folder 10; batch sebelumnya diarsipkan.",
+            help="Cek snapshot live tiap paket lalu ganti seluruh isi folder 10 dengan batch terbaru.",
         )
 
     if check_all_clicked:

@@ -269,12 +269,13 @@ def test_download_duplicate_names_get_unique_suffix(monkeypatch, tmp_path):
     assert (package_dir / engine.DOWNLOAD_SUBFOLDER / "dokumen_2.pdf").read_bytes() == b"downloaded"
 
 
-def test_refresh_archives_old_batch_and_replaces_active_folder(monkeypatch, tmp_path):
+def test_refresh_replaces_old_batch_and_preserves_folder_metadata(monkeypatch, tmp_path):
     package_dir = tmp_path / "paket"
     package_dir.mkdir()
     target = package_dir / engine.DOWNLOAD_SUBFOLDER
     target.mkdir()
     (target / "revisi-lama.pdf").write_bytes(b"old")
+    (target / "desktop.ini").write_bytes(b"folder metadata")
     monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
     monkeypatch.setattr(
         engine.requests,
@@ -289,11 +290,63 @@ def test_refresh_archives_old_batch_and_replaces_active_folder(monkeypatch, tmp_
     )
 
     assert result["error"] == []
-    assert result["archive"]
-    assert {path.name for path in target.iterdir()} == {"revisi-baru.pdf"}
-    archive = Path(result["archive"])
-    assert archive.parent.name == engine.DOWNLOAD_ARCHIVE_SUBFOLDER
-    assert (archive / "revisi-lama.pdf").read_bytes() == b"old"
+    assert result["archive"] == ""
+    assert {path.name for path in target.iterdir()} == {"desktop.ini", "revisi-baru.pdf"}
+    assert (target / "revisi-lama.pdf").exists() is False
+    assert (target / "desktop.ini").read_bytes() == b"folder metadata"
+    assert not list(package_dir.glob("*Archive*"))
+
+
+def test_empty_live_snapshot_replaces_old_batch(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    target.mkdir()
+    (target / "revisi-lama.pdf").write_bytes(b"old")
+    (target / "desktop.ini").write_bytes(b"folder metadata")
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": []},
+        cookie_str="cookie",
+    )
+
+    assert result == {
+        "folder": str(target),
+        "archive": "",
+        "ok": [],
+        "error": [],
+    }
+    assert {path.name for path in target.iterdir()} == {"desktop.ini"}
+
+
+def test_refresh_replaces_long_old_filename_without_archive(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    target.mkdir()
+    old_name = "dokumen lama dengan nama yang sangat panjang " + ("x" * 55) + ".pdf"
+    (target / old_name).write_bytes(b"old")
+    (target / "desktop.ini").write_bytes(b"folder metadata")
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _SnapshotDownloadResponse(url, b"new"),
+    )
+
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "revisi-baru.pdf", "url_dl": "https://x/new"}]},
+        cookie_str="cookie",
+    )
+
+    assert result["error"] == []
+    assert result["archive"] == ""
+    assert (target / old_name).exists() is False
+    assert (target / "desktop.ini").exists()
+    assert not list(package_dir.glob("*Archive*"))
 
 
 def test_refresh_failure_keeps_previous_active_batch(monkeypatch, tmp_path):
@@ -325,8 +378,47 @@ def test_refresh_failure_keeps_previous_active_batch(monkeypatch, tmp_path):
     assert result["archive"] == ""
     assert result["error"]
     assert old_file.read_bytes() == b"old"
-    assert not list(package_dir.glob(".ppk_revision_download_*"))
-    assert not list(package_dir.glob(f"{engine.DOWNLOAD_ARCHIVE_SUBFOLDER}/*"))
+    assert not list(package_dir.glob(".ppk_new_*"))
+    assert not list(package_dir.glob(".ppk_old_*"))
+
+
+def test_promotion_failure_restores_previous_active_batch(monkeypatch, tmp_path):
+    package_dir = tmp_path / "paket"
+    package_dir.mkdir()
+    target = package_dir / engine.DOWNLOAD_SUBFOLDER
+    target.mkdir()
+    old_file = target / "revisi-lama.pdf"
+    old_file.write_bytes(b"old")
+    monkeypatch.setattr(engine, "_resolve_package_folder", lambda _row: str(package_dir))
+    monkeypatch.setattr(
+        engine.requests,
+        "get",
+        lambda url, **_kwargs: _SnapshotDownloadResponse(url, b"new"),
+    )
+
+    real_replace = engine.os.replace
+
+    def fail_batch_activation(source, destination):
+        if (
+            Path(source).name.startswith(".ppk_new_")
+            and Path(destination).name == engine.DOWNLOAD_SUBFOLDER
+        ):
+            raise OSError("simulated promotion failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(engine.os, "replace", fail_batch_activation)
+    result = engine.download_all_dokumen_ppk(
+        {"kode_paket": "35", "jenis_pl": "PK"},
+        {"spek": [{"nama": "revisi-baru.pdf", "url_dl": "https://x/new"}]},
+        cookie_str="cookie",
+    )
+
+    assert result["ok"] == []
+    assert result["error"]
+    assert old_file.read_bytes() == b"old"
+    assert not (target / "revisi-baru.pdf").exists()
+    assert not list(package_dir.glob(".ppk_new_*"))
+    assert not list(package_dir.glob(".ppk_old_*"))
 
 
 def test_download_does_not_create_missing_revision_folder(monkeypatch, tmp_path):
