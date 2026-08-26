@@ -39,6 +39,31 @@ class JadwalEnginePlTest(unittest.TestCase):
                 t5 = jadwal[4]
                 self.assertEqual(t5["mulai"], t4["selesai"] + timedelta(minutes=1))
 
+    def test_24_jam_preserves_input_time_and_calendar_duration(self):
+        mulai = datetime(2026, 8, 26, 21, 30)
+        jadwal = jadwal_engine_pl.hitung_jadwal_pl_24_jam(mulai)
+        self.assertEqual(jadwal[0]["mulai"], mulai)
+        self.assertEqual(jadwal[0]["selesai"], datetime(2026, 8, 31, 10, 0))
+        self.assertEqual(jadwal[1]["mulai"], datetime(2026, 8, 31, 10, 1))
+        self.assertEqual(jadwal[1]["selesai"], datetime(2026, 8, 31, 11, 5))
+        self.assertEqual(jadwal[2]["mulai"], datetime(2026, 8, 31, 11, 6))
+        self.assertEqual(jadwal[2]["selesai"], datetime(2026, 9, 1, 11, 6))
+        self.assertEqual(jadwal[3]["mulai"], datetime(2026, 9, 1, 11, 7))
+        self.assertEqual(jadwal[3]["selesai"], datetime(2026, 9, 1, 17, 0))
+        self.assertEqual(jadwal[4]["mulai"], datetime(2026, 9, 1, 17, 1))
+        self.assertEqual(jadwal[4]["selesai"] - jadwal[4]["mulai"], timedelta(days=10))
+        self.assertLessEqual(jadwal[3]["selesai"].hour, 17)
+
+    def test_24_jam_non_evening_start_keeps_same_finish_time(self):
+        mulai = datetime(2026, 8, 26, 16, 30)
+        jadwal = jadwal_engine_pl.hitung_jadwal_pl_24_jam(mulai)
+        self.assertEqual(jadwal[0]["selesai"], datetime(2026, 8, 31, 16, 30))
+
+    def test_24_jam_seventeen_oclock_uses_ten_oclock_finish(self):
+        mulai = datetime(2026, 8, 26, 17, 0)
+        jadwal = jadwal_engine_pl.hitung_jadwal_pl_24_jam(mulai)
+        self.assertEqual(jadwal[0]["selesai"], datetime(2026, 8, 31, 10, 0))
+
     def test_normal_3_minggu_keeps_normal_t1_to_t4_and_extends_t5(self):
         tgl_mulai = datetime(2026, 8, 6, 8, 0)
         normal = jadwal_engine_pl.hitung_jadwal_pl(tgl_mulai)

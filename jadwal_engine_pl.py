@@ -60,7 +60,7 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     - T2: T1.selesai → T1.selesai + 65 menit (hari sama, no geser)
     - T3: T2.selesai + 1 menit → mulai; selesai = T3.mulai + 1 hari kerja replace(hour=16)
     - T4: hari sama T3.selesai, replace(hour=9) → replace(hour=15,minute=45)
-    - T5: mulai satu menit setelah T4.selesai → selesai +7 hari jam 16:00
+    - T5: mulai satu menit setelah T4.selesai → selesai +10 hari jam 16:00
     """
     # T1 Upload Penawaran — 5 hari KALENDER, geser ke hari kerja jika jatuh di weekend/libur
     t1_mulai = geser_ke_jam_kerja(tgl_mulai)
@@ -88,6 +88,38 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(hour=16, minute=0, second=0, microsecond=0)
     t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(hour=16, minute=0, second=0, microsecond=0)
 
+    return [
+        {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "3. Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "4. Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": "5. Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
+    ]
+
+
+def hitung_jadwal_pl_24_jam(tgl_mulai: datetime) -> list[dict]:
+    """Jadwal PL kalender penuh; tidak menggeser ke jam/hari kerja.
+
+    Dipakai saat SPSE perlu menerima jadwal 24 jam. Semua batas tahap tetap
+    berurutan dan berbasis durasi kalender sehingga input 21:30 tidak berubah
+    diam-diam menjadi 08:00. Start mode ini diarahkan minimal pukul 17:00
+    oleh UI.
+    """
+    t1_mulai = tgl_mulai.replace(second=0, microsecond=0)
+    t1_selesai = t1_mulai + timedelta(days=5)
+    # Start sore/malam tetap bebas, tetapi batas T1 mengikuti pola operasional:
+    # paket yang mulai pukul 17:00–23:59 selesai H+5 pukul 10:00.
+    if 17 <= t1_mulai.hour <= 23:
+        t1_selesai = t1_selesai.replace(hour=10, minute=0)
+    t2_mulai = t1_selesai + timedelta(minutes=1)
+    t2_selesai = t1_selesai + timedelta(minutes=65)
+    t3_mulai = t2_selesai + timedelta(minutes=1)
+    t3_selesai = t3_mulai + timedelta(days=1)
+    t4_mulai = t3_selesai + timedelta(minutes=1)
+    t4_batas = t4_mulai.replace(hour=17, minute=0, second=0, microsecond=0)
+    t4_selesai = min(t4_mulai + timedelta(hours=6, minutes=45), t4_batas)
+    t5_mulai = t4_selesai + timedelta(minutes=1)
+    t5_selesai = t5_mulai + timedelta(days=10)
     return [
         {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
         {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
@@ -341,7 +373,9 @@ def submit_perubahan_jadwal_pl(kode_paket: str, jadwal_list: list[dict], keteran
 def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
     """Full flow: scrap → hitung → build payload."""
     scraped = scrap_hidden_fields_pl(kode_paket)
-    if mode == "cepat":
+    if mode == "24_jam":
+        jadwal_list = hitung_jadwal_pl_24_jam(tgl_mulai)
+    elif mode == "cepat":
         jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
     elif mode == "standar":
         jadwal_list = hitung_jadwal_pl_standar(tgl_mulai)
