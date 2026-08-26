@@ -694,10 +694,16 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
 
     source = pathlib.Path(workbook)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = source.with_name(
+    backup_candidate = source.with_name(
         f"{source.stem}.backup_{stamp}_{uuid.uuid4().hex[:8]}{source.suffix}"
     )
     try:
+        # Folder paket PL dapat sudah mendekati batas MAX_PATH Windows. Pakai
+        # resolver yang sama dengan archive dokumen PPK agar nama backup tidak
+        # membuat copy2 gagal dengan WinError 3 sebelum writer HPS dijalankan.
+        from dokumen_ppk_engine import _fit_local_destination
+        backup_path, _ = _fit_local_destination(str(backup_candidate))
+        backup = pathlib.Path(backup_path)
         shutil.copy2(source, backup)
     except Exception as exc:
         return {"ok": False, "pesan": f"Backup workbook gagal: {exc}", "count": 0}

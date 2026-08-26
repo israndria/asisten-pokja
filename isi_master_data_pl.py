@@ -10,6 +10,63 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 import os
 
 
+def _find_master_data_v2_root() -> str:
+    """Cari clone ``procurement_core`` yang berisi modul snapshot V2.
+
+    ``POKJA_CODE_ROOT`` pada sebagian setup menunjuk langsung ke clone
+    ``Asisten_Pokja``. Modul V2 berada di clone sibling ``procurement_core``,
+    sehingga resolver wajib mempertimbangkan ``POKJA_V19_ROOT`` dan parent
+    dari root aplikasi.
+    """
+    app_root = os.path.dirname(os.path.abspath(__file__))
+    code_root = str(os.environ.get("POKJA_CODE_ROOT") or "").strip()
+    candidates = [
+        os.environ.get("POKJA_V19_ROOT"),
+        os.path.join(code_root, "procurement_core") if code_root else "",
+        os.path.join(os.path.dirname(code_root), "procurement_core") if code_root else "",
+        os.path.join(os.path.dirname(app_root), "procurement_core"),
+    ]
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = os.path.abspath(os.path.normpath(candidate))
+        if root in seen:
+            continue
+        seen.add(root)
+        if os.path.isfile(os.path.join(root, "master_data_v2.py")):
+            return root
+    return ""
+
+
+def _sync_master_data_v2(excel_path: str, log) -> None:
+    """Sinkronkan snapshot V2, dengan error tetap non-blocking."""
+    core_root = _find_master_data_v2_root()
+    if not core_root:
+        log("[WARN] Snapshot V2 tidak tersinkron: master_data_v2.py tidak ditemukan")
+        return
+
+    import importlib
+    import sys
+
+    if core_root not in sys.path:
+        sys.path.insert(0, core_root)
+    expected_module = os.path.normcase(
+        os.path.abspath(os.path.join(core_root, "master_data_v2.py"))
+    )
+    loaded = sys.modules.get("master_data_v2")
+    loaded_file = (
+        os.path.normcase(os.path.abspath(str(getattr(loaded, "__file__", "") or "")))
+        if loaded
+        else ""
+    )
+    if loaded and loaded_file != expected_module:
+        sys.modules.pop("master_data_v2", None)
+    module = importlib.import_module("master_data_v2")
+    module.sync_daftar_paket_snapshot(excel_path)
+    log("Snapshot Daftar Paket V2 tersinkron.")
+
+
 def tulis_identitas_penyedia_ke_excel(
     excel_path: str,
     nama_penyedia: str,
@@ -168,12 +225,7 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
                 pass
         if sync_v2:
             try:
-                import sys
-                code_root = os.environ.get("POKJA_CODE_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                sys.path.insert(0, os.path.join(code_root, "procurement_core"))
-                from master_data_v2 import sync_daftar_paket_snapshot
-                sync_daftar_paket_snapshot(excel_path)
-                _log("Snapshot Daftar Paket V2 tersinkron.")
+                _sync_master_data_v2(excel_path, _log)
             except Exception as exc:
                 _log(f"[WARN] Snapshot V2 tidak tersinkron: {exc}")
         try:
@@ -331,12 +383,7 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
     }
     if result.get("md", {}).get("ok"):
         try:
-            import sys
-            code_root = os.environ.get("POKJA_CODE_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            sys.path.insert(0, os.path.join(code_root, "procurement_core"))
-            from master_data_v2 import sync_daftar_paket_snapshot
-            sync_daftar_paket_snapshot(excel_path)
-            _log("Snapshot Daftar Paket V2 tersinkron.")
+            _sync_master_data_v2(excel_path, _log)
         except Exception as exc:
             _log(f"[WARN] Snapshot V2 tidak tersinkron: {exc}")
     return result

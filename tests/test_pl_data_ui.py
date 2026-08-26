@@ -618,6 +618,40 @@ def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, 
     assert any(line.startswith("Backup HPS:") for line in logs)
 
 
+def test_update_hps_paket_pl_shortens_backup_for_long_workbook_path(tmp_path, monkeypatch):
+    filename = "0. BAPLJKK " + ("x" * 30) + ".xlsm"
+    package_dir = tmp_path
+    while len(str(package_dir / filename)) < 245:
+        package_dir = package_dir / ("s" * 10)
+    package_dir.mkdir(parents=True)
+    workbook = package_dir / filename
+    assert len(str(workbook)) > 240
+    workbook.write_bytes(b"macro-workbook")
+
+    class Engine:
+        @staticmethod
+        def _find_xlsm(kode_paket):
+            return str(workbook)
+
+    import hps_engine
+    monkeypatch.setattr(
+        hps_engine,
+        "scrape_hps_pl_ke_excel",
+        lambda kode_paket, excel_path, progress_cb=None: {
+            "ok": True,
+            "pesan": "HPS ditulis",
+            "count": 1,
+        },
+    )
+
+    result = pl_ui_helpers.update_hps_paket_pl("PK-LONG", Engine)
+
+    assert result["ok"] is True
+    assert len(result["backup_path"]) <= 240
+    assert result["backup_path"] != str(workbook)
+    assert pl_ui_helpers.pathlib.Path(result["backup_path"]).is_file()
+
+
 def test_dokpil_resolver_uses_only_package_root(tmp_path):
     folder = tmp_path / "41. PLPK - Paket Fisik"
     folder.mkdir()
