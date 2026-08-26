@@ -39,6 +39,8 @@ class DokpilNumberTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         self.assertIn("Nomor Dokpil tidak valid", result["error"])
+        self.assertIn("status", result)
+        self.assertEqual(result["stage"], "validasi nomor Dokpil")
         get_cookies.assert_not_called()
 
     def test_loader_overwrites_stale_supabase_number_from_excel(self):

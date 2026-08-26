@@ -17,6 +17,27 @@ from pl_data_ui import (
 from ui_pl_pk import active_rows, provider_identity_available
 
 
+def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
+    state = {
+        "pl8_do_eval_admin": False,
+        "pl8_do_eval_teknis": False,
+        "pl8_do_eval_harga": False,
+    }
+
+    pl_ui_helpers.ensure_pl_evaluation_checkbox_defaults(state)
+
+    assert state["pl8_do_eval_admin"] is True
+    assert state["pl8_do_eval_teknis"] is True
+    assert state["pl8_do_eval_harga"] is True
+
+    state["pl8_do_eval_teknis"] = False
+    pl_ui_helpers.ensure_pl_evaluation_checkbox_defaults(state)
+
+    assert state["pl8_do_eval_admin"] is True
+    assert state["pl8_do_eval_teknis"] is False
+    assert state["pl8_do_eval_harga"] is True
+
+
 def test_pl_setup_draft_filter_excludes_active_or_published_status():
     assert pl_engine.is_paket_draft({"status": "draft"}) is True
     assert pl_engine.is_paket_draft({"status": "paket sedang berjalan"}) is False
@@ -615,6 +636,8 @@ def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, 
     backup = tmp_path / result["backup_path"].split("\\")[-1]
     assert backup.is_file()
     assert backup.read_bytes() == workbook.read_bytes()
+    assert (tmp_path / "_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md").is_file()
+    assert result["hps_prompt_path"].endswith("_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md")
     assert any(line.startswith("Backup HPS:") for line in logs)
 
 

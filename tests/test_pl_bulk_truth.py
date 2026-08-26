@@ -6,6 +6,7 @@ import pytest
 import requests
 
 import pl_engine
+import hps_engine
 import pl_engine_plpk
 import pl_ui_helpers
 import ppk_upload_engine
@@ -231,6 +232,31 @@ def test_revision_folder_is_provisioned_idempotently_for_both_pl_families(tmp_pa
     assert (package_dir / revision).is_dir()
     assert revision in first
     assert revision not in second
+
+
+@pytest.mark.parametrize("family", ["PLJKK", "PLPK"])
+def test_hps_audit_prompt_is_written_for_both_pl_families(tmp_path, family):
+    package_dir = tmp_path / f"79. {family} - Paket Audit HPS"
+    package_dir.mkdir()
+    workbook = package_dir / "0. BAPL - Paket Audit HPS.xlsm"
+    workbook.write_bytes(b"macro-workbook")
+
+    prompt_path = hps_engine.tulis_prompt_audit_hps_agy("11000000000", workbook)
+    prompt = (package_dir / "_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert prompt_path.endswith("_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md")
+    assert f"Family yang diharapkan: `{family}`" in prompt
+    assert "input_data_baseline.xml" in prompt
+    assert "input_data_snapshot.xml" in prompt
+    assert "sheet `5. HPS`" in prompt
+    assert "`C13` = Pagu" in prompt
+    assert "`C14` = HPS" in prompt
+    assert "Join-Path $env:POKJA_CODE_ROOT" in prompt
+    assert "SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md" in prompt
+    assert "Jangan menjalankan `seed-proposal` atau `promote`" in prompt
+    assert "audit_hps_agy_11000000000.md" in prompt
 
 
 def test_download_allows_optional_nota_dinas_failure_when_files_exist():
@@ -510,3 +536,11 @@ def test_pk_merged_draft_is_written_under_draft_dokumen_ppk(monkeypatch, tmp_pat
     result = pl_engine_plpk.gabung_draft_pl("X", str(tmp_path), [])
 
     assert result == str(tmp_path / "0. Draft Dokumen PPK" / "Draft_PL_Paket Uji.pdf")
+
+
+def test_hps_audit_prompt_rejects_tender_mode(tmp_path):
+    package_dir = tmp_path / "12. [Pokja-061] Paket Tender"
+    package_dir.mkdir()
+
+    with pytest.raises(ValueError, match="mode PL"):
+        hps_engine.tulis_prompt_audit_hps_agy("11000000000", package_dir, mode="tender")

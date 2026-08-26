@@ -69,6 +69,46 @@ _PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl
 _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sbu_history.json"
 
 
+def _render_pl_setup_report(results: list[dict]) -> None:
+    """Tampilkan report setup per paket dalam blok teks yang mudah dicopy.
+
+    Upload Dokpil sengaja tidak dirender di sini karena upload memiliki tombol
+    dan alur aksi sendiri di kolom kiri.
+    """
+    if not results:
+        return
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for item in results:
+        package = str(item.get("paket") or "Paket tidak diketahui")
+        if package not in grouped:
+            grouped[package] = []
+            order.append(package)
+        grouped[package].append(item)
+
+    st.markdown("#### 📋 Report Setup Paket")
+    for package in order:
+        items = grouped[package]
+        failed = sum(1 for item in items if not item.get("ok"))
+        label = f"{'❌' if failed else '✅'} {package}"
+        with st.expander(label, expanded=failed > 0):
+            lines = []
+            for item in items:
+                status = "✅" if item.get("ok") else "❌"
+                lines.append(f"{status} {item.get('step', '-')}")
+                lines.append(f"   {item.get('pesan', '-')}")
+            st.code("\n".join(lines), language=None, wrap_lines=True)
+
+
+def _format_dokpil_upload_failure(result: dict) -> str:
+    """Tampilkan status/error upload Dokpil tanpa menyamarkan error sebagai '?'."""
+    status = result.get("status")
+    status_text = str(status) if status not in (None, "", "?") else "tidak tersedia"
+    detail = str(result.get("error") or result.get("body") or "detail tidak dikembalikan SPSE").strip()
+    stage = str(result.get("stage") or "upload Dokpil")
+    return f"{stage}; HTTP {status_text}; {detail[:500]}"
+
+
 def _load_pl_sbu_history() -> list[dict[str, str]]:
     """Baca histori lokal SBU custom, terbaru berada di urutan pertama."""
     try:
@@ -227,7 +267,7 @@ def _render_manual_selected_provider_info(
 
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
+from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, ensure_pl_evaluation_checkbox_defaults, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
 from tender_hps import update_hps_tender as _update_hps_tender
 from ui_pl_jadwal import _render_ubah_jadwal_pl
 from ui_pl_penetapan import _render_tab10_pl
@@ -4254,12 +4294,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
                         from config import sb as _sb_upall
                         _cl_upall = _sb_upall()
-                        for _rr_up in _all_with_file:
+                        _up_progress = st.progress(0, text=f"Menyiapkan 0/{len(_all_with_file)} paket...")
+                        _up_summary = st.empty()
+                        for _up_idx, _rr_up in enumerate(_all_with_file, 1):
                             _kp_up = _rr_up["kode_paket"]
                             _f_up = _rr_up["_dokpil_file"]
+                            _up_label = _pl_label(_rr_up)
+                            _up_log = []
+                            _up_box = st.empty()
+                            with _up_box.container():
+                                with st.expander(f"📄 {_up_label}", expanded=True):
+                                    _up_live = st.empty()
+                                    _up_live.code("⏳ Menyiapkan upload...", language=None)
                             _no_up, _no_up_error = _nomor_dokpil_pl_row(_rr_up)
                             if not _no_up:
-                                st.error(f"❌ {_pl_label(_rr_up)} — Nomor Dokpil tidak valid dari Excel: {_no_up_error}")
+                                _up_live.code(f"❌ Validasi nomor Dokpil gagal\n   {_no_up_error}", language=None)
+                                _up_progress.progress(_up_idx / len(_all_with_file), text=f"Selesai {_up_idx}/{len(_all_with_file)} — {_up_label}")
                                 continue
                             # Tanggal dari DB, fallback session
                             _tgl_db_up = _rr_up.get("tgl_dokpil")
@@ -4272,6 +4322,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             else:
                                 _tgl_up = datetime.now().date()
                             try:
+                                _up_live.code("⏳ Mengambil context upload SPSE...", language=None)
                                 _r_upall = _udpl.upload_dokpil_pl(
                                     kode_paket=_kp_up,
                                     file_bytes=_f_up.getvalue(),
@@ -4281,11 +4332,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
                                 if _r_upall["ok"]:
                                     _cl_upall.table("draft_paket_pl").update({"nomor_dokpil": _no_up}).eq("kode_paket", _kp_up).execute()
-                                    st.success(f"✅ {_pl_label(_rr_up)} — {_no_up}")
+                                    _up_live.code(f"✅ Upload berhasil\n   {_no_up}", language=None)
                                 else:
-                                    st.error(f"❌ {_pl_label(_rr_up)} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
+                                    _up_live.code(f"❌ Upload gagal\n   {_format_dokpil_upload_failure(_r_upall)}\n\nDetail:\n{_r_upall.get('body') or '-'}", language=None)
                             except Exception as _e_upall:
-                                st.error(f"❌ {_pl_label(_rr_up)}: {_e_upall}")
+                                _up_live.code(f"❌ Exception upload\n   {_e_upall}", language=None)
+                            _up_progress.progress(_up_idx / len(_all_with_file), text=f"Selesai {_up_idx}/{len(_all_with_file)} — {_up_label}")
+                        _up_progress.empty()
+                        _up_summary.success(f"Upload Dokpil selesai — {len(_all_with_file)} paket diproses")
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
@@ -4713,53 +4767,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Checklist Dok Penawaran", "ok": False, "pesan": str(_e)[:80]})
 
-                            # 4. Upload Dokpil PDF (jika ada file)
-                            _dokpil_file = _p.get("_dokpil_file")
-                            if _dokpil_file and _id_nt:
-                                try:
-                                    _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
-                                    if not _nomor_dokpil:
-                                        _hasil_sp.append({
-                                            "paket": _nm, "step": "Upload Dokpil",
-                                            "ok": False,
-                                            "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
-                                        })
-                                        continue
-                                    _tgl_excel = _p.get("tgl_dokpil")
-                                    if _tgl_excel:
-                                        from datetime import date as _date_excel
-                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
-                                    else:
-                                        _tgl_excel = datetime.now().date()
-                                    _r_up = _udpl.upload_dokpil_pl(
-                                        kode_paket=_kp,
-                                        file_bytes=_dokpil_file.getvalue(),
-                                        file_name=_dokpil_file.name,
-                                        nomor_dokpil=_nomor_dokpil,
-                                        tgl_dokpil=_tgl_excel.strftime("%d-%m-%Y"),
-                                    )
-                                    _hasil_sp.append({
-                                        "paket": _nm, "step": "Upload Dokpil",
-                                        "ok": _r_up["ok"],
-                                        "pesan": f"HTTP {_r_up.get('status','?')} | {_nomor_dokpil}",
-                                    })
-                                    if _r_up["ok"]:
-                                        try:
-                                            _client_sp.table("draft_paket_pl").update({
-                                                "nomor_dokpil": _nomor_dokpil,
-                                            }).eq("kode_paket", _kp).execute()
-                                        except Exception:
-                                            pass
-                                except Exception as _e:
-                                    _hasil_sp.append({
-                                        "paket": _nm, "step": "Upload Dokpil",
-                                        "ok": False, "pesan": str(_e)[:80],
-                                    })
-                            elif _dokpil_file and not _id_nt:
-                                _hasil_sp.append({
-                                    "paket": _nm, "step": "Upload Dokpil",
-                                    "ok": False, "pesan": "id_nontender kosong, tidak bisa upload",
-                                })
+                            # Upload Dokpil memiliki tombol dan report sendiri
+                            # di kolom kiri; tidak ikut Push Setup/report ini.
 
                         _prog_sp.empty()
                         _sukses_sp = sum(1 for h in _hasil_sp if h["ok"])
@@ -4770,15 +4779,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.warning(f"⚠️ {_sukses_sp} sukses, {_gagal_sp} gagal")
                         _load_draft_pl_cached.clear()
 
-                        # Tampilkan log per paket
-                        import pandas as _pd
-                        _df_sp = _pd.DataFrame(_hasil_sp)
-                        if not _df_sp.empty:
-                            _df_sp["status"] = _df_sp["ok"].map({True: "✅", False: "❌"})
-                            st.dataframe(
-                                _df_sp[["status", "paket", "step", "pesan"]],
-                                use_container_width=True, hide_index=True,
-                            )
+                        _render_pl_setup_report(_hasil_sp)
 
 
     if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
@@ -5959,6 +5960,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 else:
                     st.markdown(f"**{_n_paket8} paket** dipilih")
                     st.caption("Peserta di-scrape dari SPSE saat Jalankan.")
+                    ensure_pl_evaluation_checkbox_defaults(st.session_state)
                     _do_eval_admin = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval_admin")
                     _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=True, key="pl8_do_eval_teknis")
                     _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=True, key="pl8_do_eval_harga")
@@ -7731,12 +7733,21 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
                         from config import sb as _sb_upall
                         _cl_upall = _sb_upall()
-                        for _rr_up in _all_with_file:
+                        _up_progress = st.progress(0, text=f"Menyiapkan 0/{len(_all_with_file)} paket...")
+                        _up_summary = st.empty()
+                        for _up_idx, _rr_up in enumerate(_all_with_file, 1):
                             _kp_up = _rr_up["kode_paket"]
                             _f_up = _rr_up["_dokpil_file"]
+                            _up_label = _pl_label(_rr_up)
+                            _up_box = st.empty()
+                            with _up_box.container():
+                                with st.expander(f"📄 {_up_label}", expanded=True):
+                                    _up_live = st.empty()
+                                    _up_live.code("⏳ Menyiapkan upload...", language=None)
                             _no_up, _no_up_error = _nomor_dokpil_pl_row(_rr_up)
                             if not _no_up:
-                                st.error(f"❌ {_pl_label(_rr_up)} — Nomor Dokpil tidak valid dari Excel: {_no_up_error}")
+                                _up_live.code(f"❌ Validasi nomor Dokpil gagal\n   {_no_up_error}", language=None)
+                                _up_progress.progress(_up_idx / len(_all_with_file), text=f"Selesai {_up_idx}/{len(_all_with_file)} — {_up_label}")
                                 continue
                             # Tanggal dari DB, fallback session
                             _tgl_db_up = _rr_up.get("tgl_dokpil")
@@ -7749,6 +7760,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             else:
                                 _tgl_up = datetime.now().date()
                             try:
+                                _up_live.code("⏳ Mengambil context upload SPSE...", language=None)
                                 _r_upall = _udpl.upload_dokpil_pl(
                                     kode_paket=_kp_up,
                                     file_bytes=_f_up.getvalue(),
@@ -7758,11 +7770,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 )
                                 if _r_upall["ok"]:
                                     _cl_upall.table("draft_paket_pl").update({"nomor_dokpil": _no_up}).eq("kode_paket", _kp_up).execute()
-                                    st.success(f"✅ {_pl_label(_rr_up)} — {_no_up}")
+                                    _up_live.code(f"✅ Upload berhasil\n   {_no_up}", language=None)
                                 else:
-                                    st.error(f"❌ {_pl_label(_rr_up)} HTTP {_r_upall.get('status','?')} — {_r_upall.get('body','')[:100]}")
+                                    _up_live.code(f"❌ Upload gagal\n   {_format_dokpil_upload_failure(_r_upall)}\n\nDetail:\n{_r_upall.get('body') or '-'}", language=None)
                             except Exception as _e_upall:
-                                st.error(f"❌ {_pl_label(_rr_up)}: {_e_upall}")
+                                _up_live.code(f"❌ Exception upload\n   {_e_upall}", language=None)
+                            _up_progress.progress(_up_idx / len(_all_with_file), text=f"Selesai {_up_idx}/{len(_all_with_file)} — {_up_label}")
+                        _up_progress.empty()
+                        _up_summary.success(f"Upload Dokpil selesai — {len(_all_with_file)} paket diproses")
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
@@ -8216,53 +8231,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "Checklist Dok Penawaran", "ok": False, "pesan": str(_e)[:80]})
 
-                            # 4. Upload Dokpil PDF (jika ada file)
-                            _dokpil_file = _p.get("_dokpil_file")
-                            if _dokpil_file and _id_nt:
-                                try:
-                                    _nomor_dokpil, _nomor_dokpil_error = _nomor_dokpil_pl_row(_p)
-                                    if not _nomor_dokpil:
-                                        _hasil_sp.append({
-                                            "paket": _nm, "step": "Upload Dokpil",
-                                            "ok": False,
-                                            "pesan": f"Nomor Dokpil tidak valid dari Excel: {_nomor_dokpil_error}",
-                                        })
-                                        continue
-                                    _tgl_excel = _p.get("tgl_dokpil")
-                                    if _tgl_excel:
-                                        from datetime import date as _date_excel
-                                        _tgl_excel = _date_excel.fromisoformat(str(_tgl_excel)[:10])
-                                    else:
-                                        _tgl_excel = datetime.now().date()
-                                    _r_up = _udpl.upload_dokpil_pl(
-                                        kode_paket=_kp,
-                                        file_bytes=_dokpil_file.getvalue(),
-                                        file_name=_dokpil_file.name,
-                                        nomor_dokpil=_nomor_dokpil,
-                                        tgl_dokpil=_tgl_excel.strftime("%d-%m-%Y"),
-                                    )
-                                    _hasil_sp.append({
-                                        "paket": _nm, "step": "Upload Dokpil",
-                                        "ok": _r_up["ok"],
-                                        "pesan": f"HTTP {_r_up.get('status','?')} | {_nomor_dokpil}",
-                                    })
-                                    if _r_up["ok"]:
-                                        try:
-                                            _client_sp.table("draft_paket_pl").update({
-                                                "nomor_dokpil": _nomor_dokpil,
-                                            }).eq("kode_paket", _kp).execute()
-                                        except Exception:
-                                            pass
-                                except Exception as _e:
-                                    _hasil_sp.append({
-                                        "paket": _nm, "step": "Upload Dokpil",
-                                        "ok": False, "pesan": str(_e)[:80],
-                                    })
-                            elif _dokpil_file and not _id_nt:
-                                _hasil_sp.append({
-                                    "paket": _nm, "step": "Upload Dokpil",
-                                    "ok": False, "pesan": "id_nontender kosong, tidak bisa upload",
-                                })
+                            # Upload Dokpil memiliki tombol dan report sendiri
+                            # di kolom kiri; tidak ikut Push Setup/report ini.
 
                         _prog_sp.empty()
                         _sukses_sp = sum(1 for h in _hasil_sp if h["ok"])
@@ -8273,15 +8243,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.warning(f"⚠️ {_sukses_sp} sukses, {_gagal_sp} gagal")
                         _load_draft_pl_cached.clear()
 
-                        # Tampilkan log per paket
-                        import pandas as _pd
-                        _df_sp = _pd.DataFrame(_hasil_sp)
-                        if not _df_sp.empty:
-                            _df_sp["status"] = _df_sp["ok"].map({True: "✅", False: "❌"})
-                            st.dataframe(
-                                _df_sp[["status", "paket", "step", "pesan"]],
-                                use_container_width=True, hide_index=True,
-                            )
+                        _render_pl_setup_report(_hasil_sp)
 
 
     if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
@@ -9280,6 +9242,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.markdown(f"**{_n_paket8} paket** dipilih")
                     # Staged gate PLPK: dokumen nyata + hasil Sesi 1 wajib ada.
                     import ai_evaluator as _heval8pk
+                    ensure_pl_evaluation_checkbox_defaults(st.session_state)
                     _spse_tek_ready = True
                     _ai_teknis_ready_pk = True
                     for _r_ready8 in _pl8_selected_rows:
@@ -9299,20 +9262,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         )
                         _spse_tek_ready = _spse_tek_ready and _dok_tek_ready8
                         _ai_teknis_ready_pk = _ai_teknis_ready_pk and _dok_tek_ready8 and _kual_ready8
-                    for _staged_key8 in (
-                        "pl8_do_eval_admin", "pl8_do_eval_teknis", "pl8_do_eval_harga",
-                    ):
-                        st.session_state.setdefault(_staged_key8, False)
                     st.session_state.setdefault("pl8pk_do_ai_kual", True)
                     st.session_state.setdefault("pl8pk_do_ai_teknis", False)
-                    if not _spse_tek_ready:
-                        st.session_state["pl8_do_eval_teknis"] = False
-                        st.session_state["pl8_do_eval_harga"] = False
                     if not _ai_teknis_ready_pk:
                         st.session_state["pl8pk_do_ai_teknis"] = False
                     st.caption("Urutan staged: Admin/Kualifikasi → download teknis/biaya → evaluasi Teknis/Biaya.")
                     if not _spse_tek_ready:
-                        st.info("Submit Teknis/Harga dan Sesi 2 AI dikunci sampai dokumen teknis/biaya nyata tersedia.")
+                        st.info(
+                            "Checklist tetap aktif. Saat Jalankan, Admin/Kualifikasi diproses "
+                            "dulu, lalu download teknis/biaya; Submit Teknis/Harga hanya "
+                            "dilanjutkan jika dokumen nyata tersedia."
+                        )
                     _do_eval_admin = st.checkbox("⚖️ Submit evaluasi Admin + Kualifikasi LULUS di SPSE", value=True, key="pl8_do_eval_admin")
                     _do_eval_teknis = st.checkbox("⚙️ Submit evaluasi Teknis LULUS di SPSE", value=True, key="pl8_do_eval_teknis")
                     _do_eval_harga = st.checkbox("💰 Submit evaluasi Harga LULUS di SPSE", value=True, key="pl8_do_eval_harga")

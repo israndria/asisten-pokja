@@ -28,6 +28,24 @@ HDRS = {
 }
 
 
+def _dokpil_failure(stage: str, error: object, status: int | None = None) -> dict:
+    """Return failure dengan kontrak konsisten untuk UI batch dan audit."""
+    message = str(error or "Unknown error").strip()
+    response = getattr(error, "response", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+    if status is None:
+        match = re.search(r"HTTP\s+(\d{3})", message, re.IGNORECASE)
+        status = int(match.group(1)) if match else None
+    return {
+        "ok": False,
+        "status": status,
+        "stage": stage,
+        "error": message,
+        "body": (getattr(response, "text", "") or "")[:1500],
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Generate Nomor Dokpil
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,7 +125,7 @@ def generate_nomor_dokpil(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_signed_url(kode_paket: str, file_name: str, cookie: str) -> dict:
-    """POST /dokumennontender/{kode}/getSignedUrl → {fileId, signedUrl, path}."""
+    """Ambil signed URL; endpoint paketnontender adalah flow produksi terbaru."""
     payload = {
         "input[uploadSignedUrlReq][0][contentType]": "application/pdf",
         "input[uploadSignedUrlReq][0][identifier]": "",
@@ -115,31 +133,45 @@ def _get_signed_url(kode_paket: str, file_name: str, cookie: str) -> dict:
         "input[uploadSignedUrlReq][0][isPublic]": "false",
         "isArchieve": "true",
     }
-    r = requests.post(
-        f"{BASE}/dokumennontender/{kode_paket}/getSignedUrl",
-        data=payload,
-        headers={**HDRS, "Cookie": cookie},
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
-    return {
-        "fileId":    data["result"]["data"]["fileId"],
-        "signedUrl": data["result"]["data"]["signedUrl"],
-        "path":      data.get("path", data["result"]["data"].get("path", "")),
-    }
+    errors = []
+    for endpoint in ("paketnontender", "dokumennontender", "nontender"):
+        try:
+            r = requests.post(
+                f"{BASE}/{endpoint}/{kode_paket}/getSignedUrl",
+                data=payload,
+                headers={**HDRS, "Cookie": cookie},
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
+            item = data["result"]["data"]
+            return {
+                "fileId": item["fileId"],
+                "signedUrl": item["signedUrl"],
+                "path": data.get("path", item.get("path", "")),
+            }
+        except Exception as exc:
+            errors.append(f"{endpoint}: {exc}")
+    raise RuntimeError("; ".join(errors))
 
 
 def _otorisasi_data_pl(kode_paket: str, cookie: str) -> tuple[bool, str]:
-    """POST /otorisasiDataPlSeleksi → grant ACL upload. Return (ok, debug_msg)."""
-    r = requests.post(
-        f"{BASE}/otorisasiDataPlSeleksi",
-        data={"id": kode_paket},
-        headers={**HDRS, "Cookie": cookie},
-        timeout=15,
-    )
-    ok = r.status_code == 200
-    return ok, f"HTTP {r.status_code} body={r.text[:200]}"
+    """Grant ACL; nama endpoint berubah pada flow SPSE produksi terbaru."""
+    errors = []
+    for url, data in (
+        (f"{BASE}/otorisasiDataPaketPlUpload?id={kode_paket}", None),
+        (f"{BASE}/otorisasiDataPlSeleksi", {"id": kode_paket}),
+    ):
+        try:
+            r = requests.get(url, headers={**HDRS, "Cookie": cookie}, timeout=15) if data is None else requests.post(
+                url, data=data, headers={**HDRS, "Cookie": cookie}, timeout=15
+            )
+            if r.status_code in (200, 204, 302):
+                return True, f"HTTP {r.status_code}"
+            errors.append(f"HTTP {r.status_code}")
+        except Exception as exc:
+            errors.append(str(exc))
+    return False, "; ".join(errors)
 
 
 def _put_to_gcs(signed_url: str, file_bytes: bytes) -> bool:
@@ -197,6 +229,29 @@ def _resolve_id_dokpil(kode_paket: str, cookie: str) -> str:
     if not m:
         raise RuntimeError("Link uploaddoknontender tidak ditemukan di /edit.")
     return m.group(1)
+
+
+def _scrap_edit_upload_context(kode_paket: str, cookie: str) -> dict:
+    """Fallback flow baru: form Dokpil tidak lagi ditautkan pada halaman /edit."""
+    url = f"{BASE}/nontender/{kode_paket}/edit"
+    r = requests.get(url, headers={**HDRS, "Cookie": cookie, "Referer": f"{BASE}/admin/pegawai"}, timeout=15)
+    if r.status_code != 200:
+        raise RuntimeError(f"GET /nontender/{kode_paket}/edit fail: HTTP {r.status_code}")
+    soup = BeautifulSoup(r.text, "html.parser")
+    csrf = ""
+    for inp in soup.find_all("input", type="hidden"):
+        if inp.get("name") == "authenticityToken" and inp.get("value"):
+            csrf = inp.get("value")
+            break
+    if not csrf:
+        raise RuntimeError("authenticityToken tidak ditemukan di /edit")
+    return {
+        "csrf": csrf,
+        "ref": url,
+        "kode_paket": kode_paket,
+        "url_submit": f"{BASE}/dokumennontender/{kode_paket}/doknontendersubmit",
+        "url_form": url,
+    }
 
 
 def _scrap_upload_form(id_dokpil: str, cookie: str) -> dict:
@@ -296,23 +351,24 @@ def upload_dokpil_pl(
     """
     nomor_ok, nomor_error = validate_nomor_dokpil(nomor_dokpil)
     if not nomor_ok:
-        return {"ok": False, "error": f"Nomor Dokpil tidak valid: {nomor_error}"}
+        return _dokpil_failure("validasi nomor Dokpil", f"Nomor Dokpil tidak valid: {nomor_error}")
 
     cookie = spse_browser.get_spse_cookies()
     if not cookie:
-        return {"ok": False, "error": "Cookie SPSE kosong."}
+        return _dokpil_failure("session browser", "Cookie SPSE kosong.")
 
-    # Step 0a: resolve id_dokpil dari /nontender/{kode}/edit
+    # Step 0: flow legacy bila link masih tersedia; produksi baru memakai token /edit.
     try:
         id_dokpil = _resolve_id_dokpil(kode_paket, cookie)
-    except Exception as e:
-        return {"ok": False, "error": f"Resolve id_dokpil fail: {e}"}
-
-    # Step 0b: scrap form upload (CSRF + ref + kode_paket dari action)
-    try:
         ctx = _scrap_upload_form(id_dokpil, cookie)
     except Exception as e:
-        return {"ok": False, "error": f"Scrap form fail: {e}"}
+        try:
+            ctx = _scrap_edit_upload_context(kode_paket, cookie)
+        except Exception as fallback_error:
+            return _dokpil_failure(
+                "resolve/upload context Dokpil",
+                f"Flow legacy: {e}; flow terbaru: {fallback_error}",
+            )
 
     # kode_paket override dari action (untuk safety)
     kode_paket = ctx["kode_paket"] or kode_paket
@@ -321,7 +377,7 @@ def upload_dokpil_pl(
     try:
         signed = _get_signed_url(kode_paket, file_name, cookie)
     except Exception as e:
-        return {"ok": False, "error": f"getSignedUrl fail: {e}"}
+        return _dokpil_failure("getSignedUrl", f"getSignedUrl fail: {e}")
 
     # Step 2: otorisasi ACL (opsional — endpoint mungkin tidak ada di semua LPSE)
     _otor_ok, _otor_dbg = _otorisasi_data_pl(kode_paket, cookie)
@@ -329,11 +385,11 @@ def upload_dokpil_pl(
 
     # Step 3: PUT ke GCS
     if not _put_to_gcs(signed["signedUrl"], file_bytes):
-        return {"ok": False, "error": "PUT GCS fail"}
+        return _dokpil_failure("PUT GCS", "PUT GCS fail")
 
     # Step 4: polling status
     if not _check_upload_status(signed["fileId"], cookie):
-        return {"ok": False, "error": "uploadCheckStatus fail"}
+        return _dokpil_failure("uploadCheckStatus", "uploadCheckStatus fail")
 
     # Step 5: submit form Dokpil
     if isinstance(tgl_dokpil, datetime):

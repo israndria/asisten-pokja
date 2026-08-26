@@ -4,6 +4,7 @@ import os
 import re
 from html import unescape
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime
 from config import sb as _sb, SPSE_BASE_URL
 
 
@@ -572,6 +573,220 @@ def scrape_hps_pl_ke_excel(kode_paket: str, excel_path: str, progress_cb=None) -
                 "total_nilai": 0.0, "total_nilai_bulat": 0.0}
 
 
+def tulis_prompt_audit_hps_agy(
+    kode_paket: str,
+    package_path: str,
+    mode: str = "pl",
+) -> str:
+    """Tulis prompt audit HPS read-only untuk Agent Agy di folder paket PL.
+
+    ``package_path`` boleh berupa folder paket atau path workbook ``.xlsm``.
+    Prompt sengaja dibuat terpisah dari ``_HPS_*.md`` supaya tetap tersedia
+    ketika fetch HPS gagal atau bulk-create tidak mengisi Excel.
+    """
+    if mode != "pl":
+        raise ValueError("Prompt audit HPS Agy hanya berlaku untuk mode PL")
+
+    path = os.path.abspath(os.fspath(package_path))
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if not folder or not os.path.isdir(folder):
+        raise FileNotFoundError(f"Folder paket tidak ditemukan: {folder or path}")
+
+    folder_name = os.path.basename(folder)
+    family_match = re.search(r"(?:^|\s)(PLJKK|PLPK)(?:\s*-|\s|$)", folder_name, re.IGNORECASE)
+    family = family_match.group(1).upper() if family_match else "PLJKK/PLPK"
+    nama_paket = re.sub(r"^\d+\.\s*(PLJKK|PLPK)\s*-\s*", "", folder_name, flags=re.IGNORECASE).strip()
+    nama_paket = re.sub(r"\s*\(PL\s*-?\s*Ulang\)\s*$", "", nama_paket, flags=re.IGNORECASE).strip()
+    if not nama_paket:
+        nama_paket = folder_name
+
+    prompt_path = os.path.join(folder, "_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md")
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    lines = [
+        "# PROMPT AGY — AUDIT PERUBAHAN HPS PL",
+        "",
+        "> File ini dibuat otomatis oleh Streamlit. Jalankan instruksi di bawah sebagai Agent Agy.",
+        "> Audit bersifat read-only terhadap workbook dan XML. Jangan mengubah data sumber.",
+        "",
+        "## KONTEKS PAKET",
+        f"- Nama paket: **{nama_paket}**",
+        f"- Kode paket: `{kode_paket}`",
+        f"- Family yang diharapkan: `{family}`",
+        f"- Folder paket: `{folder}`",
+        f"- Prompt dibuat: `{generated_at}`",
+        "",
+        "## TUGAS UTAMA",
+        "",
+        "Periksa apakah HPS terbaru pada paket ini berubah dibandingkan snapshot/XML yang",
+        "sudah tersedia di folder paket. Hasil akhir harus membedakan perubahan angka HPS,",
+        "perubahan rincian BoQ, XML yang tertinggal, konflik identitas, dan bukti yang belum cukup.",
+        "Jangan menganggap adanya file baru otomatis berarti nilai HPS berubah.",
+        "",
+        "## BATASAN KERAS",
+        "",
+        "1. Audit ini **read-only** terhadap sumber. Jangan membuka workbook dalam mode edit.",
+        "2. Jangan menjalankan `openpyxl.save()`, Excel COM Save, macro `LoadDataPL`, atau VBA.",
+        "3. Jangan mengubah atau menghapus `input_data_baseline.xml`.",
+        "4. Jangan mengubah `input_data_snapshot.xml` atau membuat `input_data_proposal.xml`.",
+        "5. Jangan menjalankan `seed-proposal` atau `promote`; command validasi/compare saja.",
+        "6. Jangan menyimpulkan rincian BoQ dari XML. XML snapshot berisi `@ Master Data`,",
+        "   bukan seluruh tabel item HPS. Rincian BoQ harus dibaca dari sheet `5. HPS`,",
+        "   `_HPS_*.md`, dan/atau sumber HPS live yang tersedia.",
+        "7. Jika identitas atau family tidak cocok, berhenti pada status konflik dan jangan",
+        "   memaksakan perbandingan antar-paket.",
+        "",
+        "## SUMBER YANG WAJIB DIPERIKSA",
+        "",
+        "Cari sumber berikut di folder paket. Catat status ada/tidak ada, path, ukuran,",
+        "dan waktu modifikasi setiap sumber dalam laporan:",
+        "",
+        "1. Workbook `.xlsm` di root folder paket; baca sheet `5. HPS` secara read-only.",
+        "   Jika memakai Python, gunakan `openpyxl.load_workbook(..., read_only=True, data_only=True, keep_vba=True)` dan jangan save.",
+        "2. File `_HPS_*.md` di root folder; ini ringkasan HPS yang terakhir diserap dari SPSE.",
+        "3. `input_data_baseline.xml`; snapshot awal dan immutable.",
+        "4. `input_data_snapshot.xml`; current terakhir yang diterima Excel.",
+        "5. `input_data_proposal.xml`, jika ada; hanya proposal tertunda, bukan current.",
+        "6. `input_data_snapshot.bak-*.xml`, jika ada; hanya histori/backup, bukan sumber current.",
+        "7. Dokumen pendukung HPS/RAB/KAK di folder paket bila diperlukan untuk menjelaskan",
+        "   penyebab perbedaan. Sebutkan nama file dan halaman/worksheet sebagai bukti.",
+        "",
+        "## SOP RUJUKAN",
+        "",
+        "Baca SOP yang disalin ke `0. Draft Dokumen PPK` sebelum mengambil kesimpulan:",
+        "",
+        "- `SOP_REKONSILIASI_XML_DOKUMEN_PPK_CORE.md`.",
+        "- `SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLJKK.md` untuk family PLJKK.",
+        "- `SOP_REKONSILIASI_XML_DOKUMEN_PPK_PLPK.md` untuk family PLPK.",
+        "",
+        "Jika SOP paket belum tersedia, gunakan versi kanonik di folder `%POKJA_DRIVE_ROOT%\\_SOP Evaluator`.",
+        "",
+        "## VALIDASI IDENTITAS DAN PROFILE XML",
+        "",
+        "1. Pastikan nama folder menunjukkan `PLJKK` atau `PLPK`. Jika tidak jelas, gunakan",
+        "   `KONFLIK SUMBER` dan jelaskan alasan.",
+        "2. Cocokkan kode paket dari prompt dengan root XML `kode_paket` dan cell `C3`.",
+        "3. Cocokkan nama pekerjaan dengan root XML/cell `C5` dan nama workbook bila tersedia.",
+        "4. Cocokkan family XML dan layout: `PLJKK-MASTER-DATA-v1` atau `PLPK-MASTER-DATA-v1`.",
+        "5. Jalankan validasi lokal berikut dari folder paket (sesuaikan path jika env berbeda):",
+        "",
+        "```powershell",
+        f"$family = '{family}'",
+        f"$kode = '{kode_paket}'",
+        "$cli = Join-Path $env:POKJA_CODE_ROOT 'procurement_core\\pl_snapshot_revision.py'",
+        "if ($env:POKJA_PYTHON) { $py = $env:POKJA_PYTHON } else { $py = 'python' }",
+        "foreach ($xml in @('input_data_baseline.xml', 'input_data_snapshot.xml', 'input_data_proposal.xml')) {",
+        "    if (Test-Path -LiteralPath $xml) {",
+        "        & $py $cli validate $xml --expected-kode-paket $kode --expected-family $family",
+        "    }",
+        "}",
+        "```",
+        "",
+        "Jika baseline dan current tersedia, buat perbandingan XML read-only:",
+        "",
+        "```powershell",
+        "if ((Test-Path -LiteralPath 'input_data_baseline.xml') -and (Test-Path -LiteralPath 'input_data_snapshot.xml')) {",
+        "    & $py $cli compare input_data_baseline.xml input_data_snapshot.xml --output audit_hps_xml_report.md",
+        "}",
+        "```",
+        "",
+        "## PERBANDINGAN HPS YANG WAJIB DILAKUKAN",
+        "",
+        "### A. XML baseline versus XML current",
+        "",
+        "Bandingkan sekurang-kurangnya:",
+        "",
+        "- `C13` = Pagu.",
+        "- `C14` = HPS.",
+        "- identitas `C3`, `C5`, atribut `family`, dan `layout_version`.",
+        "- field lain yang berubah menurut `audit_hps_xml_report.md`, tetapi jangan menyebut",
+        "  perubahan non-HPS sebagai perubahan HPS tanpa bukti terkait.",
+        "",
+        "### B. HPS current dari workbook dan Markdown versus XML current",
+        "",
+        "Baca sheet `5. HPS` dengan mapping standar:",
+        "",
+        "- baris data mulai row 2;",
+        "- kolom A:I = urutan, jenis B/J, satuan, volume, harga, pajak %, total SPSE, total hitung, selisih;",
+        "- baris `TOTAL NILAI (SPSE)`, `TOTAL NILAI (Setelah Pembulatan SPSE)`, dan `TOTAL HITUNG MANUAL` adalah ringkasan;",
+        "- bedakan row divisi dari row item.",
+        "",
+        "Dari `_HPS_*.md`, baca jumlah item, total nilai, total nilai bulat, serta setiap row BoQ.",
+        "Bandingkan dengan workbook dan XML current `C14`. Normalisasi nominal secara numerik",
+        "(format Rupiah, titik ribuan, koma desimal), lalu tetap laporkan nilai raw dan nilai",
+        "setelah pembulatan. Jangan menyamakan total raw dengan total resmi yang sudah dibulatkan.",
+        "",
+        "Bandingkan item-level jika sumber tersedia:",
+        "",
+        "- jumlah item dan row divisi;",
+        "- urutan dan uraian/jenis B/J;",
+        "- satuan;",
+        "- volume;",
+        "- harga satuan;",
+        "- pajak %;",
+        "- total SPSE;",
+        "- total hitung/manual;",
+        "- selisih dan anomali aritmatika.",
+        "",
+        "Jika workbook, `_HPS_*.md`, dan XML current berbeda, jangan memilih salah satu",
+        "secara diam-diam. Jelaskan sumber mana yang lebih baru berdasarkan mtime/metadata",
+        "dan nyatakan XML tertinggal atau bukti tidak cukup bila tidak dapat dipastikan.",
+        "",
+        "## ATURAN VERDICT",
+        "",
+        "Gunakan tepat satu verdict utama berikut:",
+        "",
+        "1. `TIDAK ADA PERUBAHAN TERBUKTI` — baseline/current sama pada field HPS yang relevan,",
+        "   dan sumber HPS current konsisten dengan XML current tanpa perbedaan item yang terbukti.",
+        "2. `ADA PERUBAHAN HPS` — ada perubahan terbukti pada C14, total HPS, atau rincian item",
+        "   (uraian/volume/harga/pajak/total) dengan bukti file yang jelas.",
+        "3. `PERLU SINKRONISASI / BUKTI TIDAK CUKUP` — sumber penting hilang, XML tertinggal,",
+        "   workbook belum pernah di-refresh, atau perbedaan waktu tidak dapat dibuktikan.",
+        "4. `KONFLIK SUMBER` — kode paket, nama pekerjaan, family, layout, atau workbook tidak",
+        "   cocok sehingga perbandingan tidak aman.",
+        "",
+        "## OUTPUT WAJIB AGY",
+        "",
+        "Tulis laporan baru di root folder paket dengan nama:",
+        "",
+        f"`audit_hps_agy_{kode_paket}.md`",
+        "",
+        "Laporan minimal memuat:",
+        "",
+        "- verdict utama di baris pertama setelah judul;",
+        "- identitas paket dan hasil validasi family/kode;",
+        "- tabel inventaris sumber (path, ada/tidak, mtime, peran);",
+        "- tabel perbandingan XML baseline versus current;",
+        "- tabel perbandingan workbook `5. HPS`, `_HPS_*.md`, dan XML current;",
+        "- daftar perubahan item-level atau pernyataan eksplisit bahwa tidak ada perubahan",
+        "  item-level yang terbukti;",
+        "- perbedaan raw versus pembulatan;",
+        "- bukti sumber file/worksheet/baris/field dan halaman jika dokumen PDF dipakai;",
+        "- keterbatasan pemeriksaan;",
+        "- rekomendasi tindakan berikutnya tanpa mengubah file sumber.",
+        "",
+        "## CHECKLIST SEBELUM SELESAI",
+        "",
+        "- [ ] Family PLJKK/PLPK sudah valid.",
+        "- [ ] Kode paket cocok di prompt, XML, dan workbook/sumber HPS.",
+        "- [ ] Baseline tidak diubah.",
+        "- [ ] Current/proposal tidak diubah.",
+        "- [ ] Workbook tidak disimpan.",
+        "- [ ] C13/C14 sudah dibandingkan secara numerik.",
+        "- [ ] Rincian BoQ dibaca dari sumber HPS, bukan ditebak dari XML.",
+        "- [ ] Verdict tepat satu dari empat pilihan.",
+        "- [ ] Laporan `audit_hps_agy_<kode_paket>.md` sudah ditulis.",
+    ]
+
+    # Rapikan item multiline yang sengaja ditulis sebagai satu blok agar hasil
+    # Markdown tetap mudah dibaca tanpa mengubah isi prompt.
+    normalized = []
+    for line in lines:
+        normalized.extend(line.splitlines() or [""])
+    with open(prompt_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(normalized) + "\n")
+    return prompt_path
+
+
 def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = "pl") -> str:
     """Auto-generate file markdown sebagai sumber data HPS untuk AI pra-reviu.
 
@@ -622,6 +837,7 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
         f"- **Total Nilai**: {_rp(total_nilai)}",
         f"- **Total Nilai Bulat**: {_rp(total_bulat)}",
         f"- **Status Paket**: {'🔁 Ulang' if is_ulang else '🆕 Baru'}",
+        "- **Prompt audit Agy**: `_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md`",
         "",
         "## ⚠️ ANOMALI TERDETEKSI",
     ]
@@ -665,6 +881,13 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+    # Prompt audit Agy selalu disegarkan bersama ringkasan HPS PL.
+    if mode == "pl":
+        try:
+            tulis_prompt_audit_hps_agy(kode_paket, folder, mode="pl")
+        except Exception as e:
+            print(f"Warning: Gagal tulis prompt audit HPS Agy: {e}")
 
     # Auto-generate PDF tabel BoQ (tanpa header ringkasan)
     try:

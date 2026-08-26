@@ -13,6 +13,28 @@ from functools import lru_cache
 import pl_engine
 
 
+_PL8_EVALUATION_CHECKBOX_KEYS = (
+    "pl8_do_eval_admin",
+    "pl8_do_eval_teknis",
+    "pl8_do_eval_harga",
+)
+_PL8_EVALUATION_DEFAULTS_VERSION = 1
+
+
+def ensure_pl_evaluation_checkbox_defaults(state) -> None:
+    """Set tiga checklist evaluasi PL aktif sekali, lalu hormati pilihan user."""
+    first_initialization = (
+        state.get("_pl8_evaluation_defaults_version")
+        != _PL8_EVALUATION_DEFAULTS_VERSION
+    )
+    for key in _PL8_EVALUATION_CHECKBOX_KEYS:
+        if first_initialization:
+            state[key] = True
+        else:
+            state.setdefault(key, True)
+    state["_pl8_evaluation_defaults_version"] = _PL8_EVALUATION_DEFAULTS_VERSION
+
+
 def _engine_for_jenis_pl(jenis_pl):
     """Pilih engine downloader/merger sesuai family paket.
 
@@ -210,6 +232,13 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             _emit("❌ gagal buat folder")
             return res
         log("✅ Folder dibuat")
+        # Prompt audit HPS dibuat sejak folder berhasil dibuat, sehingga tetap
+        # tersedia walau fetch HPS/SPSE pada fase berikutnya gagal.
+        try:
+            _prompt_hps = _hps_eng.tulis_prompt_audit_hps_agy(kode, target)
+            log(f"📄 Prompt audit HPS Agy: {os.path.basename(_prompt_hps)}")
+        except Exception as _prompt_e:
+            log(f"⚠ Prompt audit HPS Agy: {_prompt_e}")
         _step("folder", _t_step)
         _emit("📁 folder dibuat")
 
@@ -692,6 +721,16 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
     if not workbook or not os.path.isfile(workbook):
         return {"ok": False, "pesan": "Workbook .xlsm tidak ditemukan", "count": 0}
 
+    # Sediakan prompt audit bahkan bila backup atau fetch HPS berikutnya gagal.
+    hps_prompt_path = ""
+    try:
+        import hps_engine as _hps_prompt_engine
+        hps_prompt_path = _hps_prompt_engine.tulis_prompt_audit_hps_agy(
+            kode_paket, workbook, mode="pl"
+        )
+    except Exception:
+        pass
+
     source = pathlib.Path(workbook)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_candidate = source.with_name(
@@ -706,7 +745,12 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
         backup = pathlib.Path(backup_path)
         shutil.copy2(source, backup)
     except Exception as exc:
-        return {"ok": False, "pesan": f"Backup workbook gagal: {exc}", "count": 0}
+        return {
+            "ok": False,
+            "pesan": f"Backup workbook gagal: {exc}",
+            "count": 0,
+            "hps_prompt_path": hps_prompt_path,
+        }
 
     if progress_cb:
         progress_cb(f"Backup HPS: {backup.name}")
@@ -724,6 +768,8 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
     result.setdefault("pesan", "Tidak ada respons dari writer HPS")
     result.setdefault("count", 0)
     result["backup_path"] = str(backup)
+    if hps_prompt_path:
+        result.setdefault("hps_prompt_path", hps_prompt_path)
     return result
 
 
@@ -913,7 +959,7 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     result = {
         "ok": False, "refresh_ok": not refresh_on, "hps_ok": False,
         "master_data_ok": False, "logs": logs, "xlsm": "",
-        "hps_source": "", "hps_sync_ok": False,
+        "hps_source": "", "hps_sync_ok": False, "hps_prompt_path": "",
     }
 
     # 1. Refresh template DULU (hapus xlsm lama, copy fresh)
@@ -935,6 +981,16 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
         logs.append("WARN Excel dilewati -- tidak ada .xlsm setelah refresh")
         return result
     result["xlsm"] = xlsm
+
+    # Jalur ini dapat dipanggil ulang tanpa worker I/O; pastikan prompt audit
+    # tetap tersedia setiap kali bulk-create memproses workbook paket.
+    try:
+        result["hps_prompt_path"] = _hps_eng2.tulis_prompt_audit_hps_agy(
+            kode_paket, target_dir, mode="pl"
+        )
+        logs.append("Prompt audit HPS Agy: tersedia")
+    except Exception as _prompt_e2:
+        logs.append(f"WARN Prompt audit HPS Agy: {_prompt_e2}")
 
     # 3. Fetch HPS dict (tanpa COM) via scrape_hps_pl
     hps_hasil = None
