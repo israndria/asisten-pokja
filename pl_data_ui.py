@@ -82,6 +82,22 @@ def mark_tahap_spse_sudah_diumumkan(tahap_map: dict) -> int:
     return jumlah
 
 
+def overlay_live_tahap_spse(rows: list[dict]) -> list[dict]:
+    """Timpa tahap lokal dengan tahap live SPSE yang sudah disinkronkan."""
+    status = get_paket_umumkan_status()
+    if not status:
+        return rows or []
+
+    result = []
+    for row in rows or []:
+        current = dict(row)
+        marker = status.get(str(current.get("kode_paket") or "").strip())
+        if isinstance(marker, dict) and marker.get("tahap_spse"):
+            current["tahap_spse"] = marker["tahap_spse"]
+        result.append(current)
+    return result
+
+
 def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> bool:
     """Deteksi paket yang sudah diumumkan dari session atau field SPSE."""
     row = row or {}

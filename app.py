@@ -40,6 +40,7 @@ from pl_data_ui import (
     load_draft_pl_cached as _load_draft_pl_cached,
     load_verifikasi_pl_rows_cached as _load_verifikasi_pl_rows_cached,
     mark_paket_sudah_diumumkan as _mark_paket_sudah_diumumkan,
+    overlay_live_tahap_spse as _overlay_live_tahap_spse,
     parse_jadwal_pl_cached as _parse_jadwal_pl_cached,
     sync_live_paket_umumkan_status as _sync_live_paket_umumkan_status,
 )
@@ -2510,6 +2511,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     restore_selection_from_query("pl_active_tab_jkk", _PL_TAB_LABELS, "pl_jkk_tab")
     _pl_active_tab = st.radio("Tab PL", _PL_TAB_LABELS, horizontal=True, key="pl_active_tab_jkk")
     persist_selection_to_query(_pl_active_tab, _PL_TAB_LABELS, "pl_jkk_tab")
+    if _pl_active_tab in {
+        "7️⃣ Download Kualifikasi",
+        "8️⃣ Evaluasi & Teknis/Biaya",
+        "9️⃣ Kirim Verifikasi",
+        "🔟 Upload BA PL",
+        "1️⃣1️⃣ Penetapan Pemenang",
+    }:
+        _sync_live_paket_umumkan_status("pl_operational_stage_sync_jkk")
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
@@ -5086,6 +5095,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
+        _verif_rows = _overlay_live_tahap_spse(_verif_rows)
         _verif_rows = [r for r in _verif_rows if pl_engine.is_paket_operasional_eligible(r)]
 
         # Load status peserta untuk filter
@@ -5240,6 +5250,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pl8_rows = []
         try:
             _raw8 = _load_draft_pl_cached()
+            _raw8 = _overlay_live_tahap_spse(_raw8)
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_operasional_eligible(r)]
             _pl8_kode_status = []
@@ -5685,6 +5696,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pl7_state_key = "pl7_rows_jkk"
         try:
             _raw7 = _load_draft_pl_cached()
+            _raw7 = _overlay_live_tahap_spse(_raw7)
             _raw7, _pl7_dup_n = pl_engine.buang_duplikat_paket_lama(_raw7)
             _raw7 = _filter_local_pl_rows(_raw7)
             _raw7 = [r for r in _raw7 if pl_engine.is_paket_operasional_eligible(r)]
@@ -5891,6 +5903,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         # Selalu normalisasi daftar di sini. Tab Evaluasi dapat dibuka langsung,
         # tanpa lebih dulu merender Tab Download Kualifikasi.
         _raw8 = _load_draft_pl_cached()
+        _raw8 = _overlay_live_tahap_spse(_raw8)
         _raw8, _pl8_dup_n = pl_engine.buang_duplikat_paket_lama(_raw8)
         _pl8_rows = [r for r in _raw8 if pl_engine.is_paket_operasional_eligible(r)]
         if _pl8_dup_n:
@@ -6185,6 +6198,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     _pl_active_tab = st.radio("Tab PL", PLPK_TAB_LABELS, horizontal=True, key="pl_active_tab_pk")
     persist_selection_to_query(_pl_active_tab, PLPK_TAB_LABELS, "pl_pk_tab")
     _is_plpk_tab6 = _pl_active_tab == "7️⃣ Download Kualifikasi"
+    if _pl_active_tab in {
+        "7️⃣ Download Kualifikasi",
+        "8️⃣ Evaluasi & Teknis/Biaya",
+        "9️⃣ Kirim Verifikasi",
+        "🔟 Upload BA PL",
+        "1️⃣1️⃣ Penetapan Pemenang",
+    }:
+        _sync_live_paket_umumkan_status("pl_operational_stage_sync_pk")
 
     if _pl_active_tab == "📄 Import DPA":
         _render_tab_dpa()
@@ -8573,6 +8594,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
+        _verif_rows = _overlay_live_tahap_spse(_verif_rows)
         _verif_rows = [r for r in _verif_rows if _pl_engine_utils.is_paket_operasional_eligible(r)]
 
         # Load status peserta untuk filter
@@ -8727,6 +8749,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _pl8_rows = []
         try:
             _raw8 = _load_draft_pl_cached("PK")
+            _raw8 = _overlay_live_tahap_spse(_raw8)
             _raw8, _ = pl_engine.buang_duplikat_paket_lama(_raw8)
             _pl8_rows = [r for r in _raw8 if _pl_engine_utils.is_paket_operasional_eligible(r)]
             _pl8_kode_status = []
@@ -9482,6 +9505,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     if _pl_active_tab == "1️⃣1️⃣ Penetapan Pemenang":
         _raw10 = _load_draft_pl_cached("PK")
+        _raw10 = _overlay_live_tahap_spse(_raw10)
         _raw10, _ = pl_engine.buang_duplikat_paket_lama(_raw10)
         _rows10 = [r for r in _raw10 if _pl_engine_utils.is_paket_operasional_eligible(r)]
         _render_tab10_pl(_rows10, "pl10pk")

@@ -1,13 +1,19 @@
 """Regression gate folder lokal/workbook untuk daftar operasional PL."""
 
 from unittest.mock import patch
+from datetime import date
 
 import parse_kak_pl
 import pl_engine
 import pl_data_ui
 import pl_ui_helpers
 import zipfile
-from pl_data_ui import _filter_pl_family, _hydrate_provider_from_excel, filter_local_pl_rows
+from pl_data_ui import (
+    _filter_pl_family,
+    _hydrate_provider_from_excel,
+    filter_local_pl_rows,
+    overlay_live_tahap_spse,
+)
 from ui_pl_pk import active_rows, provider_identity_available
 
 
@@ -35,6 +41,19 @@ def test_pl_operational_gate_excludes_pre_upload_and_ambiguous_stage():
         "tahap_spse": "Upload Dokumen Penawaran",
     }) is False
     assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Upload Dokumen Penawaran",
+        "tgl_pembukaan": "2026-08-26",
+    }, today=date(2026, 8, 26)) is True
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "draft",
+        "tgl_pembukaan": "2026-08-26",
+    }, today=date(2026, 8, 26)) is True
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "draft",
+        "tgl_pembukaan": "2026-08-27",
+    }, today=date(2026, 8, 26)) is False
+    assert pl_engine.is_paket_operasional_eligible({
         "status": "draft",
         "tahap_spse": "",
     }) is False
@@ -43,8 +62,16 @@ def test_pl_operational_gate_excludes_pre_upload_and_ambiguous_stage():
         "tahap_spse": "Tidak Ada Jadwal",
     }) is True
     assert pl_engine.is_paket_operasional_eligible({
+        "status": "draft",
+        "tahap_spse": "Pembukaan Dokumen Penawaran",
+    }) is True
+    assert pl_engine.is_paket_operasional_eligible({
         "status": "paket sedang berjalan",
         "tahap_spse": "Evaluasi Penawaran",
+    }) is True
+    assert pl_engine.is_paket_operasional_eligible({
+        "status": "paket sedang berjalan",
+        "tahap_spse": "Klarifikasi Teknis dan Negosiasi",
     }) is True
     assert pl_engine.is_paket_operasional_eligible({
         "status": "paket sedang berjalan",
@@ -64,6 +91,41 @@ def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
 
     assert [row["kode_paket"] for row in filtered] == ["A"]
     assert duplicate_count == 0
+
+
+def test_live_tahap_overrides_stale_local_stage_before_operational_gate():
+    state = {
+        "pl_umumkan_status": {
+            "10999940000": {
+                "status": "sudah diumumkan",
+                "tahap_spse": "Penandatanganan Kontrak",
+            },
+            "10999940001": {
+                "status": "sudah diumumkan",
+                "tahap_spse": "Evaluasi Penawaran",
+            },
+        }
+    }
+    rows = [
+        {
+            "kode_paket": "10999940000",
+            "status": "paket sedang berjalan",
+            "tahap_spse": "Tidak Ada Jadwal",
+        },
+        {
+            "kode_paket": "10999940001",
+            "status": "paket sedang berjalan",
+            "tahap_spse": "Tidak Ada Jadwal",
+        },
+    ]
+
+    with patch.object(pl_data_ui.st, "session_state", state):
+        live_rows = overlay_live_tahap_spse(rows)
+
+    assert live_rows[0]["tahap_spse"] == "Penandatanganan Kontrak"
+    assert live_rows[1]["tahap_spse"] == "Evaluasi Penawaran"
+    assert pl_engine.is_paket_operasional_eligible(live_rows[0]) is False
+    assert pl_engine.is_paket_operasional_eligible(live_rows[1]) is True
 
 
 def test_provider_identity_allows_name_fallback_without_npwp():

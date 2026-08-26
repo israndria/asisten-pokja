@@ -405,25 +405,58 @@ _PL_PRE_OPERATIONAL_STAGE_MARKERS = (
     "draft",
     "pengumuman",
     "belum dilaksanakan",
-    "upload dokumen penawaran",
 )
 
 
-def is_paket_operasional_eligible(r: dict) -> bool:
-    """Gate paket untuk Tab 7--11: lokal, aktif, dan sudah lewat upload.
+def _pembukaan_sudah_dimulai(r: dict, today: date | None = None) -> bool:
+    """True bila tanggal pembukaan hasil sinkron jadwal sudah tiba."""
+    raw = r.get("tgl_pembukaan") or r.get("tgl_buka_penawaran")
+    if not raw:
+        return False
+    if isinstance(raw, datetime):
+        tanggal = raw.date()
+    elif isinstance(raw, date):
+        tanggal = raw
+    else:
+        text = str(raw).strip()
+        tanggal = None
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+            try:
+                tanggal = datetime.strptime(text[:10], fmt).date()
+                break
+            except ValueError:
+                continue
+        if tanggal is None:
+            try:
+                tanggal = datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+            except ValueError:
+                return False
+    return tanggal <= (today or date.today())
+
+
+def is_paket_operasional_eligible(
+    r: dict,
+    *,
+    today: date | None = None,
+) -> bool:
+    """Gate paket untuk Tab 7--11 mulai Pembukaan Dokumen Penawaran.
 
     ``is_paket_berjalan`` sengaja tetap kompatibel untuk loader lama. Tab
-    operasional membutuhkan gate lebih ketat agar paket Draft/Upload Penawaran
-    tidak bocor ke download, evaluasi, BA, verifikasi, atau penetapan.
-    Tahap kosong ditolak fail-closed; ``Tidak Ada Jadwal`` tetap valid karena
-    SPSE memang mengirimnya untuk paket aktif tertentu.
+    operasional memakai tahap SPSE dan tanggal pembukaan hasil sinkron jadwal.
+    Paket Draft/Upload Penawaran yang tanggal pembukaannya sudah tiba ikut
+    tampil; paket sebelum tanggal itu, tahap kosong tanpa tanggal, dan terminal
+    tetap ditolak.
     """
-    if not is_paket_berjalan(r):
+    if is_paket_ditarik(r) or is_paket_selesai(r):
         return False
     tahap = str(r.get("tahap_spse") or "").strip().lower()
     if not tahap:
+        return _pembukaan_sudah_dimulai(r, today)
+    if any(marker in tahap for marker in _PL_PRE_OPERATIONAL_STAGE_MARKERS):
         return False
-    return not any(marker in tahap for marker in _PL_PRE_OPERATIONAL_STAGE_MARKERS)
+    if "upload dokumen penawaran" in tahap:
+        return _pembukaan_sudah_dimulai(r, today)
+    return is_paket_berjalan(r)
 
 
 def buang_duplikat_paket_lama(rows: list[dict]) -> tuple[list[dict], int]:
