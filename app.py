@@ -69,6 +69,19 @@ _PL_UNDANGAN_DATES_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl
 _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sbu_history.json"
 
 
+def _format_ldk_setup_message(result: dict) -> str:
+    """Ringkas hasil LDK untuk report UI; detail response tidak memenuhi log utama."""
+    status = result.get("status", "?")
+    outcome = "berhasil" if result.get("ok") else "gagal"
+    message = f"HTTP {status} · {outcome}"
+    izin = result.get("ijin_update")
+    if isinstance(izin, dict):
+        message += " · izin OK" if izin.get("ok") else " · izin perlu cek"
+    elif izin:
+        message += " · izin diproses"
+    return message
+
+
 def _render_pl_setup_report(results: list[dict]) -> None:
     """Tampilkan report setup per paket dalam blok teks yang mudah dicopy.
 
@@ -4295,7 +4308,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _all_with_file.append({**_rr, "_dokpil_file": _dokpil_file})
                 if _all_with_file:
                     st.divider()
-                    if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
+                    st.caption(
+                        "ℹ️ Upload hanya memproses paket yang dicentang dan memiliki file Dokpil."
+                    )
+                    _selected_with_file = [
+                        _item for _item in _plsp_selected if _item.get("_dokpil_file")
+                    ]
+                    _all_with_file = _selected_with_file
+                    if st.button(f"📤 Upload Dokpil Terpilih ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary", disabled=not _all_with_file):
                         from config import sb as _sb_upall
                         _cl_upall = _sb_upall()
                         _up_progress = st.progress(0, text=f"Menyiapkan 0/{len(_all_with_file)} paket...")
@@ -4722,10 +4742,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
-                                _ijin_note = f" | ijin HTTP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "LDK",
-                                    "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}{_ijin_note}",
+                                    "ok": _r_ldk["ok"], "pesan": _format_ldk_setup_message(_r_ldk),
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "LDK", "ok": False, "pesan": str(_e)[:80]})
@@ -7738,7 +7757,14 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _all_with_file.append({**_rr, "_dokpil_file": _dokpil_file})
                 if _all_with_file:
                     st.divider()
-                    if st.button(f"📤 Upload Semua Dokpil ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary"):
+                    st.caption(
+                        "ℹ️ Upload hanya memproses paket yang dicentang dan memiliki file Dokpil."
+                    )
+                    _selected_with_file = [
+                        _item for _item in _plsp_selected if _item.get("_dokpil_file")
+                    ]
+                    _all_with_file = _selected_with_file
+                    if st.button(f"📤 Upload Dokpil Terpilih ({len(_all_with_file)} file)", key="plsp_upload_all_dokpil", use_container_width=True, type="primary", disabled=not _all_with_file):
                         from config import sb as _sb_upall
                         _cl_upall = _sb_upall()
                         _up_progress = st.progress(0, text=f"Menyiapkan 0/{len(_all_with_file)} paket...")
@@ -8189,10 +8215,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     teknis_centang_ckm_ids=_ldk_teknis_ckm_ids,
                                     kinerja_text=_ldk_kinerja_text,
                                 )
-                                _ijin_note = f" | ijin HTTP: {_r_ldk.get('ijin_update','—')}" if _r_ldk.get("ijin_update") else ""
                                 _hasil_sp.append({
                                     "paket": _nm, "step": "LDK",
-                                    "ok": _r_ldk["ok"], "pesan": f"HTTP {_r_ldk['status']}{_ijin_note}",
+                                    "ok": _r_ldk["ok"], "pesan": _format_ldk_setup_message(_r_ldk),
                                 })
                             except Exception as _e:
                                 _hasil_sp.append({"paket": _nm, "step": "LDK", "ok": False, "pesan": str(_e)[:80]})
