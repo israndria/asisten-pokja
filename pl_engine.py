@@ -443,14 +443,16 @@ def is_paket_operasional_eligible(
 
     ``is_paket_berjalan`` sengaja tetap kompatibel untuk loader lama. Tab
     operasional memakai tahap SPSE dan tanggal pembukaan hasil sinkron jadwal.
-    Paket Draft/Upload Penawaran yang tanggal pembukaannya sudah tiba ikut
-    tampil; paket sebelum tanggal itu, tahap kosong tanpa tanggal, dan terminal
-    tetap ditolak.
+    Paket Draft hanya ikut tampil setelah punya tahap live dari SPSE. Paket
+    Draft yang tahapnya masih kosong tetap ditolak walau tanggal pembukaan
+    lokal sudah tiba; paket sebelum tanggal itu dan terminal juga ditolak.
     """
     if is_paket_ditarik(r) or is_paket_selesai(r):
         return False
     tahap = str(r.get("tahap_spse") or "").strip().lower()
     if not tahap:
+        if is_paket_draft(r):
+            return False
         return _pembukaan_sudah_dimulai(r, today)
     if any(marker in tahap for marker in _PL_PRE_OPERATIONAL_STAGE_MARKERS):
         return False

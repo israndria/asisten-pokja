@@ -48,7 +48,7 @@ def test_pl_operational_gate_excludes_pre_upload_and_ambiguous_stage():
     assert pl_engine.is_paket_operasional_eligible({
         "status": "draft",
         "tgl_pembukaan": "2026-08-26",
-    }, today=date(2026, 8, 26)) is True
+    }, today=date(2026, 8, 26)) is False
     assert pl_engine.is_paket_operasional_eligible({
         "status": "draft",
         "tgl_pembukaan": "2026-08-27",
