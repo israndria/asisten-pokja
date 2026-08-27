@@ -3875,8 +3875,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pljd_rows = _load_draft_pl_cached("JKK")
         _pljd_rows = _overlay_live_tahap_spse(_pljd_rows)
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
-        # Buat Jadwal hanya menerima paket yang sudah tayang tetapi belum
-        # masuk tahap Upload Dokumen Penawaran.
+        # Buat Jadwal hanya menerima Draft lokal yang belum memiliki tahap
+        # live/publikasi SPSE; paket tayang stale dikeluarkan oleh helper.
         _pljd_rows = _filter_paket_siap_dijadwalkan(_pljd_rows)
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")

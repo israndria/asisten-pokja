@@ -116,17 +116,17 @@ def test_filter_paket_penandatanganan_kontrak_uses_live_stage_or_status():
     ]
 
 
-def test_filter_paket_siap_dijadwalkan_uses_announced_live_stage_not_stale_draft():
+def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang():
     rows = [
         {"kode_paket": "prestart", "status": "draft", "tahap_spse": "Paket Belum Dilaksanakan"},
-        {"kode_paket": "announce", "status": "draft", "tahap_spse": "Pengumuman"},
+        {"kode_paket": "pending", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "announced", "status": "draft", "tahap_spse": "Pengumuman"},
         {"kode_paket": "scheduled", "status": "draft", "tahap_spse": "Upload Dokumen Penawaran"},
-        {"kode_paket": "stale", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "not-draft", "status": "berjalan", "tahap_spse": ""},
     ]
 
     assert [row["kode_paket"] for row in filter_paket_siap_dijadwalkan(rows)] == [
-        "prestart",
-        "announce",
+        "pending",
     ]
 
 

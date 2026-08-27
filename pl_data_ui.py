@@ -129,21 +129,27 @@ def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> b
 def filter_paket_siap_dijadwalkan(
     rows: list[dict], session_status: dict | None = None
 ) -> list[dict]:
-    """Ambil paket tayang yang belum memiliki tahap jadwal aktif.
+    """Ambil paket Draft yang belum tayang untuk dibuat jadwal.
 
-    Tab Buat Jadwal harus memakai status live, bukan ``status=draft`` dari
-    database lokal. Paket yang sudah masuk ``Upload Dokumen Penawaran`` atau
-    tahap setelahnya sudah memiliki jadwal dan ditangani oleh alur existing.
-    Row tanpa ``tahap_spse`` tetap diterima hanya jika session/SPSE sudah
-    memberi bukti paket diumumkan.
+    Status lokal Draft tetap diperlukan sebagai kandidat awal, tetapi tidak
+    dipercaya sendirian: setiap tahap live SPSE atau bukti pengumuman dari
+    session berarti paket sudah tayang dan harus dikeluarkan dari daftar ini.
+    Dengan begitu Draft PLPK/JKK yang belum tayang tetap muncul, sementara
+    Draft stale yang sudah tayang tidak bocor ke selector.
     """
     hasil = []
     for row in rows or []:
-        if not row.get("kode_paket") or not is_paket_sudah_diumumkan(row, session_status):
+        if not row.get("kode_paket"):
             continue
         tahap = str(row.get("tahap_spse") or "").strip().casefold()
-        if not tahap or tahap == _PUBLISH_PRESTART_STAGE or "pengumuman" in tahap:
-            hasil.append(row)
+        if tahap:
+            continue
+        status = str(row.get("status") or "").strip().casefold()
+        if status != "draft":
+            continue
+        if is_paket_sudah_diumumkan(row, session_status):
+            continue
+        hasil.append(row)
     return hasil
 
 
