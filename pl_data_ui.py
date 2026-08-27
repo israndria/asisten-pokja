@@ -126,6 +126,27 @@ def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> b
     return _publish_status_text_is_done(row.get("status"))
 
 
+def filter_paket_siap_dijadwalkan(
+    rows: list[dict], session_status: dict | None = None
+) -> list[dict]:
+    """Ambil paket tayang yang belum memiliki tahap jadwal aktif.
+
+    Tab Buat Jadwal harus memakai status live, bukan ``status=draft`` dari
+    database lokal. Paket yang sudah masuk ``Upload Dokumen Penawaran`` atau
+    tahap setelahnya sudah memiliki jadwal dan ditangani oleh alur existing.
+    Row tanpa ``tahap_spse`` tetap diterima hanya jika session/SPSE sudah
+    memberi bukti paket diumumkan.
+    """
+    hasil = []
+    for row in rows or []:
+        if not row.get("kode_paket") or not is_paket_sudah_diumumkan(row, session_status):
+            continue
+        tahap = str(row.get("tahap_spse") or "").strip().casefold()
+        if not tahap or tahap == _PUBLISH_PRESTART_STAGE or "pengumuman" in tahap:
+            hasil.append(row)
+    return hasil
+
+
 def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) -> dict:
     """Sinkronkan tahap tayang live SPSE secara read-only dengan TTL singkat."""
     now = time.monotonic()

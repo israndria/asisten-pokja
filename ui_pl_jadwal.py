@@ -36,19 +36,68 @@ def _validasi_perubahan_jadwal(current: list[dict], proposed: list[dict]) -> lis
     return errors
 
 
+def filter_paket_penandatanganan_kontrak(
+    rows: list[dict],
+    *,
+    schedule_loader=None,
+    now: datetime | None = None,
+    window_hours: float = 6,
+) -> list[dict]:
+    """Ambil paket kontrak yang T5-nya berada dalam jendela tindak lanjut.
+
+    Tanpa ``schedule_loader`` fungsi tetap menjadi filter tahap/status untuk
+    kompatibilitas caller lama. Jika loader diberikan, hanya T5 mulai dalam
+    rentang ``now - window`` sampai ``now + window`` yang dikembalikan. Jadwal
+    yang gagal dibaca tidak ditebak dan tidak boleh masuk selector.
+    """
+    marker = "penandatanganan kontrak"
+    anchor = now or datetime.now()
+    if anchor.tzinfo is not None:
+        anchor = anchor.replace(tzinfo=None)
+    window = timedelta(hours=max(0, float(window_hours)))
+    hasil = []
+    for row in rows or []:
+        if not any(
+            marker in str(row.get(field) or "").strip().casefold()
+            for field in ("tahap_spse", "status")
+        ):
+            continue
+        if schedule_loader is None:
+            hasil.append(row)
+            continue
+        try:
+            jadwal = schedule_loader(str(row.get("kode_paket") or "").strip())
+            t5 = jadwal[4].get("mulai") if len(jadwal or []) > 4 else None
+            if isinstance(t5, str):
+                t5 = datetime.fromisoformat(t5.replace("Z", "+00:00"))
+            if isinstance(t5, datetime) and t5.tzinfo is not None:
+                t5 = t5.replace(tzinfo=None)
+        except Exception:
+            continue
+        if isinstance(t5, datetime) and anchor - window <= t5 <= anchor + window:
+            hasil.append(row)
+    return hasil
+
+
 def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
-    """Bulk edit jadwal existing; POST hanya setelah konfirmasi."""
+    """Bulk edit jadwal live paket yang sudah Penandatanganan Kontrak."""
     st.markdown("### ✏️ Ubah Jadwal Existing (Bulk)")
-    st.caption("Pilih banyak paket. Tahap yang tidak dipilih tetap memakai jadwal live masing-masing paket.")
+    st.caption(
+        "Daftar hanya paket Penandatanganan Kontrak dengan jadwal mulai T5 "
+        "dalam jendela 6 jam sebelum/sesudah waktu sekarang. "
+        "Pilih banyak paket; tahap yang tidak dipilih tetap memakai jadwal live masing-masing."
+    )
     if not rows:
-        st.info("Belum ada paket PL.")
+        st.info("Belum ada paket kontrak yang perlu ditindaklanjuti dalam jendela 6 jam.")
         return
 
     by_code = {str(p.get("kode_paket")): p for p in rows}
     codes = st.multiselect(
-        "Paket yang diubah",
+        "Paket yang diubah (Penandatanganan Kontrak)",
         list(by_code),
-        format_func=lambda k: f"{k} — {_pl_label(by_code[k])[:70]}",
+        # Kode paket tidak diperlukan untuk identifikasi visual; nomor folder
+        # sudah menjadi prefix pada _pl_label(). Jangan potong nama paket.
+        format_func=lambda k: _pl_label(by_code[k]),
         key=f"{prefix}_codes",
     )
     if not codes:
@@ -79,7 +128,13 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
         st.info("Pilih minimal satu tahap yang diubah.")
         return
 
-    mode = st.radio("Metode perubahan", ["Geser relatif", "Set waktu absolut sama"], horizontal=True, key=f"{prefix}_mode")
+    mode = st.radio(
+        "Metode perubahan",
+        ["Set waktu absolut sama", "Geser relatif"],
+        index=0,
+        horizontal=True,
+        key=f"{prefix}_mode_v2",
+    )
     perubahan = {}
     if mode == "Geser relatif":
         c1, c2 = st.columns(2)

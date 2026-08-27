@@ -1,7 +1,7 @@
 """Regression gate folder lokal/workbook untuk daftar operasional PL."""
 
 from unittest.mock import patch
-from datetime import date
+from datetime import date, datetime
 
 import parse_kak_pl
 import pl_engine
@@ -11,10 +11,12 @@ import zipfile
 from pl_data_ui import (
     _filter_pl_family,
     _hydrate_provider_from_excel,
+    filter_paket_siap_dijadwalkan,
     filter_local_pl_rows,
     overlay_live_tahap_spse,
 )
 from ui_pl_pk import active_rows, provider_identity_available
+from ui_pl_jadwal import filter_paket_penandatanganan_kontrak
 
 
 def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
@@ -100,6 +102,59 @@ def test_pl_operational_gate_excludes_pre_upload_and_ambiguous_stage():
     }) is False
 
 
+def test_filter_paket_penandatanganan_kontrak_uses_live_stage_or_status():
+    rows = [
+        {"kode_paket": "stage", "tahap_spse": "Penandatanganan Kontrak", "status": "berjalan"},
+        {"kode_paket": "status", "tahap_spse": "", "status": "Penandatanganan Kontrak"},
+        {"kode_paket": "done", "tahap_spse": "Paket Sudah Selesai", "status": "selesai"},
+        {"kode_paket": "active", "tahap_spse": "Evaluasi Penawaran", "status": "berjalan"},
+    ]
+
+    assert [row["kode_paket"] for row in filter_paket_penandatanganan_kontrak(rows)] == [
+        "stage",
+        "status",
+    ]
+
+
+def test_filter_paket_siap_dijadwalkan_uses_announced_live_stage_not_stale_draft():
+    rows = [
+        {"kode_paket": "prestart", "status": "draft", "tahap_spse": "Paket Belum Dilaksanakan"},
+        {"kode_paket": "announce", "status": "draft", "tahap_spse": "Pengumuman"},
+        {"kode_paket": "scheduled", "status": "draft", "tahap_spse": "Upload Dokumen Penawaran"},
+        {"kode_paket": "stale", "status": "draft", "tahap_spse": ""},
+    ]
+
+    assert [row["kode_paket"] for row in filter_paket_siap_dijadwalkan(rows)] == [
+        "prestart",
+        "announce",
+    ]
+
+
+def test_filter_paket_penandatanganan_kontrak_limits_t5_to_six_hour_window():
+    now = datetime(2026, 8, 27, 18, 0)
+    rows = [
+        {"kode_paket": "recent", "tahap_spse": "Penandatanganan Kontrak"},
+        {"kode_paket": "upcoming", "status": "Penandatanganan Kontrak"},
+        {"kode_paket": "old", "tahap_spse": "Penandatanganan Kontrak"},
+        {"kode_paket": "unknown", "tahap_spse": "Penandatanganan Kontrak"},
+    ]
+    schedules = {
+        "recent": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 27, 16, 0)}],
+        "upcoming": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 27, 23, 59)}],
+        "old": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 23, 16, 0)}],
+        "unknown": [],
+    }
+
+    result = filter_paket_penandatanganan_kontrak(
+        rows,
+        schedule_loader=lambda code: schedules[code],
+        now=now,
+        window_hours=6,
+    )
+
+    assert [row["kode_paket"] for row in result] == ["recent", "upcoming"]
+
+
 def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
     rows = [
         {"kode_paket": "D", "status": "draft"},
@@ -147,6 +202,30 @@ def test_live_tahap_overrides_stale_local_stage_before_operational_gate():
     assert live_rows[1]["tahap_spse"] == "Evaluasi Penawaran"
     assert pl_engine.is_paket_operasional_eligible(live_rows[0]) is False
     assert pl_engine.is_paket_operasional_eligible(live_rows[1]) is True
+
+
+def test_live_tahap_hides_tayang_from_provider_draft_candidates():
+    state = {
+        "pl_umumkan_status": {
+            "10999940002": {
+                "status": "sudah diumumkan",
+                "tahap_spse": "Upload Dokumen Penawaran",
+            }
+        }
+    }
+    rows = [
+        {
+            "kode_paket": "10999940002",
+            "status": "draft",
+            "tahap_spse": "",
+        }
+    ]
+
+    with patch.object(pl_data_ui.st, "session_state", state):
+        live_rows = overlay_live_tahap_spse(rows)
+
+    assert live_rows[0]["tahap_spse"] == "Upload Dokumen Penawaran"
+    assert [row for row in live_rows if pl_engine.is_paket_draft(row)] == []
 
 
 def test_provider_identity_allows_name_fallback_without_npwp():

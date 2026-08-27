@@ -97,6 +97,40 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
     ]
 
 
+def hitung_jadwal_pl_santai(tgl_mulai: datetime) -> list[dict]:
+    """Mode Santai: pola Normal dengan evaluasi penawaran 2 hari kerja.
+
+    T1 dan T2 tetap memakai perhitungan Normal. T3 diperpanjang dari satu
+    menjadi dua hari kerja; T4 berlangsung dari satu hari kerja sebelum hari
+    selesai T3 sampai hari selesai T3, lalu T5 menyambung satu menit setelah T4.
+    """
+    jadwal = hitung_jadwal_pl(tgl_mulai)
+    t3_mulai = jadwal[2]["mulai"]
+    t3_selesai = _tambah_hari_kerja(t3_mulai, 2).replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+
+    t4_mulai = _tambah_hari_kerja(t3_mulai, 1).replace(
+        hour=9, minute=0, second=0, microsecond=0
+    )
+    t4_selesai = t3_selesai.replace(hour=15, minute=45, second=0, microsecond=0)
+
+    t5_mulai = _mulai_setelah_selesai(t4_selesai)
+    t5_selesai_kand = (t5_mulai + timedelta(days=7)).replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+    t5_selesai = geser_ke_hari_kerja(t5_selesai_kand).replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+
+    jadwal[2:] = [
+        {"nama": jadwal[2]["nama"], "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": jadwal[3]["nama"], "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": jadwal[4]["nama"], "mulai": t5_mulai, "selesai": t5_selesai},
+    ]
+    return jadwal
+
+
 def hitung_jadwal_pl_24_jam(tgl_mulai: datetime) -> list[dict]:
     """Jadwal PL kalender penuh; tidak menggeser ke jam/hari kerja.
 
@@ -375,6 +409,8 @@ def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "norma
     scraped = scrap_hidden_fields_pl(kode_paket)
     if mode == "24_jam":
         jadwal_list = hitung_jadwal_pl_24_jam(tgl_mulai)
+    elif mode == "santai":
+        jadwal_list = hitung_jadwal_pl_santai(tgl_mulai)
     elif mode == "cepat":
         jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
     elif mode == "standar":

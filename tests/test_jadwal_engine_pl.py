@@ -15,6 +15,7 @@ class JadwalEnginePlTest(unittest.TestCase):
             jadwal_engine_pl.hitung_jadwal_pl,
             jadwal_engine_pl.hitung_jadwal_pl_standar,
             jadwal_engine_pl.hitung_jadwal_pl_cepat,
+            jadwal_engine_pl.hitung_jadwal_pl_santai,
         ):
             with self.subTest(mode=mode_fn.__name__):
                 self.assertEqual(mode_fn(tgl_mulai)[0]["mulai"], tgl_mulai)
@@ -77,3 +78,22 @@ class JadwalEnginePlTest(unittest.TestCase):
             )
         ).replace(hour=16, minute=0, second=0, microsecond=0)
         self.assertEqual(tiga_minggu[4]["selesai"], expected_selesai)
+
+    def test_santai_keeps_normal_t1_t2_and_extends_evaluation_to_two_workdays(self):
+        tgl_mulai = datetime(2026, 8, 6, 8, 0)
+        normal = jadwal_engine_pl.hitung_jadwal_pl(tgl_mulai)
+        santai = jadwal_engine_pl.hitung_jadwal_pl_santai(tgl_mulai)
+
+        self.assertEqual(santai[:2], normal[:2])
+        self.assertEqual(santai[2]["mulai"], normal[2]["mulai"])
+        expected_t3_selesai = jadwal_engine_pl._tambah_hari_kerja(
+            santai[2]["mulai"], 2
+        ).replace(hour=16, minute=0, second=0, microsecond=0)
+        self.assertEqual(santai[2]["selesai"], expected_t3_selesai)
+        expected_t4_mulai = jadwal_engine_pl._tambah_hari_kerja(
+            santai[2]["mulai"], 1
+        ).replace(hour=9, minute=0, second=0, microsecond=0)
+        self.assertEqual(santai[3]["mulai"], expected_t4_mulai)
+        self.assertEqual(santai[3]["mulai"].time().isoformat(timespec="minutes"), "09:00")
+        self.assertEqual(santai[3]["selesai"].time().isoformat(timespec="minutes"), "15:45")
+        self.assertEqual(santai[4]["mulai"], santai[3]["selesai"] + timedelta(minutes=1))

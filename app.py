@@ -33,6 +33,7 @@ from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
     filter_local_pl_rows as _filter_local_pl_rows,
+    filter_paket_siap_dijadwalkan as _filter_paket_siap_dijadwalkan,
     get_paket_umumkan_status as _get_paket_umumkan_status,
     is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
     load_status_pilih_penyedia_on_demand as _load_status_pilih_penyedia_on_demand,
@@ -282,7 +283,10 @@ from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
 from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, ensure_pl_evaluation_checkbox_defaults, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
 from tender_hps import update_hps_tender as _update_hps_tender
-from ui_pl_jadwal import _render_ubah_jadwal_pl
+from ui_pl_jadwal import (
+    _render_ubah_jadwal_pl,
+    filter_paket_penandatanganan_kontrak,
+)
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
 
@@ -3855,10 +3859,25 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         import jadwal_engine_pl as _jepl
         _libur_map_pl = _LIBUR_MAP
 
-        _pljd_rows = _load_draft_pl_cached()
+        _sync_schedule_stage_jkk = _sync_live_paket_umumkan_status("pl_schedule_stage_sync_jkk")
+        _pljd_all_rows = _load_draft_pl_cached("JKK", only_local=False)
+        _pljd_all_rows = _overlay_live_tahap_spse(_pljd_all_rows)
+        _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
+        _pljd_contract_rows = filter_paket_penandatanganan_kontrak(
+            _pljd_all_rows,
+            schedule_loader=_parse_jadwal_pl_cached,
+            now=datetime.now(),
+            window_hours=6,
+        )
+        if not _sync_schedule_stage_jkk.get("ok"):
+            st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
+
+        _pljd_rows = _load_draft_pl_cached("JKK")
+        _pljd_rows = _overlay_live_tahap_spse(_pljd_rows)
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
-        # Tab 5 tetap fase setup: hanya paket yang masih Draft.
-        _pljd_rows = [r for r in _pljd_rows if pl_engine.is_paket_draft(r)]
+        # Buat Jadwal hanya menerima paket yang sudah tayang tetapi belum
+        # masuk tahap Upload Dokumen Penawaran.
+        _pljd_rows = _filter_paket_siap_dijadwalkan(_pljd_rows)
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -3955,9 +3974,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _gcal_ok = _gcalpl_g.check_gcal_token()
 
                 st.divider()
-                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_v24")
+                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_v24")
                 if _pljd_mode == "24 Jam":
                     st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
+                elif _pljd_mode == "Santai":
+                    st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -3972,6 +3993,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
                     if _pljd_mode == "24 Jam":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_24_jam(_t1_pv)
+                    elif _pljd_mode == "Santai":
+                        _jadwal_pv = _jepl.hitung_jadwal_pl_santai(_t1_pv)
                     elif _pljd_mode == "Normal 3 Minggu":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
                     elif _pljd_mode == "Cepat":
@@ -4018,7 +4041,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil_row = {
@@ -4090,8 +4113,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("00:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "normal_3_minggu":
+                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                                if _mode_str_prev == "santai":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_santai(_t1_preview)
+                                elif _mode_str_prev == "normal_3_minggu":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
                                 elif _mode_str_prev == "cepat":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
@@ -4184,7 +4209,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
         st.divider()
-        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_jkk")
+        _render_ubah_jadwal_pl(
+            _pljd_contract_rows,
+            _jepl,
+            "pljd_edit_jkk",
+        )
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     if _pl_active_tab == "4️⃣ Setup Paket":
@@ -4816,9 +4845,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if st.button("🔄 Baca Penyedia dari Excel", key="pp_refresh_penyedia_jkk", help="Muat ulang identitas dari @ Master Data workbook: PLJKK C51:C52, PLPK C77:C78"):
             _load_draft_pl_cached.clear()
             st.rerun()
+        _provider_stage_sync_jkk = _sync_live_paket_umumkan_status(
+            "pl_provider_stage_sync_jkk"
+        )
         _pp_rows = _load_draft_pl_cached()
+        _pp_rows = _overlay_live_tahap_spse(_pp_rows)
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_all_rows = list(_pp_rows)
+        if not _provider_stage_sync_jkk.get("ok"):
+            st.caption(
+                "⚠️ Status live SPSE belum tersinkron; daftar paket memakai data terakhir yang tersedia."
+            )
         _pp_umumkan_status = _get_paket_umumkan_status()
         _pp_sudah_diumumkan = [
             r for r in _pp_rows
@@ -7305,9 +7342,23 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         import jadwal_engine_pl as _jepl
         _libur_map_pl = _LIBUR_MAP
 
+        _sync_schedule_stage_pk = _sync_live_paket_umumkan_status("pl_schedule_stage_sync_pk")
+        _pljd_all_rows = _load_draft_pl_cached("PK", only_local=False)
+        _pljd_all_rows = _overlay_live_tahap_spse(_pljd_all_rows)
+        _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
+        _pljd_contract_rows = filter_paket_penandatanganan_kontrak(
+            _pljd_all_rows,
+            schedule_loader=_parse_jadwal_pl_cached,
+            now=datetime.now(),
+            window_hours=6,
+        )
+        if not _sync_schedule_stage_pk.get("ok"):
+            st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
+
         _pljd_rows = _load_draft_pl_cached("PK")
+        _pljd_rows = _overlay_live_tahap_spse(_pljd_rows)
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
-        _pljd_rows = [r for r in _pljd_rows if _pl_engine_utils.is_paket_draft(r)]
+        _pljd_rows = _filter_paket_siap_dijadwalkan(_pljd_rows)
         if not _pljd_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
@@ -7403,9 +7454,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 import gcal_pl_helper as _gcalpl_gpk
                 _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
 
-                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_pk_v24")
+                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_pk_v24")
                 if _pljd_mode == "24 Jam":
                     st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
+                elif _pljd_mode == "Santai":
+                    st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -7420,6 +7473,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
                     if _pljd_mode == "24 Jam":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_24_jam(_t1_pv)
+                    elif _pljd_mode == "Santai":
+                        _jadwal_pv = _jepl.hitung_jadwal_pl_santai(_t1_pv)
                     elif _pljd_mode == "Normal 3 Minggu":
                         _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
                     elif _pljd_mode == "Cepat":
@@ -7467,7 +7522,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
                             _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
                             _sub = _r["submit_result"]
                             _hasil_row = {
@@ -7539,8 +7594,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("00:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "normal_3_minggu":
+                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
+                                if _mode_str_prev == "santai":
+                                    _jadwal_preview = _jepl.hitung_jadwal_pl_santai(_t1_preview)
+                                elif _mode_str_prev == "normal_3_minggu":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
                                 elif _mode_str_prev == "cepat":
                                     _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
@@ -7633,7 +7690,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ]
             st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
         st.divider()
-        _render_ubah_jadwal_pl(_pljd_rows, _jepl, "pljd_edit_pk")
+        _render_ubah_jadwal_pl(
+            _pljd_contract_rows,
+            _jepl,
+            "pljd_edit_pk",
+        )
 
     # ── Tab 3: Setup Paket PL (LDK + Masa Berlaku + Checklist + Upload Dokpil) ─
     if _pl_active_tab == "4️⃣ Setup Paket":
@@ -8291,9 +8352,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         if st.button("🔄 Baca Penyedia dari Excel", key="pp_refresh_penyedia_pk", help="Muat ulang identitas dari @ Master Data workbook: PLPK C77:C78"):
             _load_draft_pl_cached.clear()
             st.rerun()
+        _provider_stage_sync_pk = _sync_live_paket_umumkan_status(
+            "pl_provider_stage_sync_pk"
+        )
         _pp_rows = _load_draft_pl_cached("PK")
+        _pp_rows = _overlay_live_tahap_spse(_pp_rows)
         _pp_rows, _ = pl_engine.buang_duplikat_paket_lama(_pp_rows)
         _pp_all_rows = list(_pp_rows)
+        if not _provider_stage_sync_pk.get("ok"):
+            st.caption(
+                "⚠️ Status live SPSE belum tersinkron; daftar paket memakai data terakhir yang tersedia."
+            )
         _pp_umumkan_status = _get_paket_umumkan_status()
         _pp_sudah_diumumkan = [
             r for r in _pp_rows
