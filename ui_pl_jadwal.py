@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+import jadwal_engine_pl
 import pl_engine
 from pl_ui_helpers import _pl_label
 
@@ -34,6 +35,67 @@ def _validasi_perubahan_jadwal(current: list[dict], proposed: list[dict]) -> lis
         elif proposed_overlap > current_overlap:
             errors.append(f"T{i + 1}–T{i + 2}: overlap makin besar")
     return errors
+
+
+def render_custom_jadwal_pl(
+    *,
+    prefix: str,
+    default_start: datetime | None = None,
+    title: str = "Jadwal Custom",
+) -> list[dict]:
+    """Render input tanggal/jam bebas T1–T5 dan kembalikan nilai mentahnya.
+
+    Nilai awal hanya seed agar form langsung terisi valid; setelah user
+    mengubahnya, setiap tahap berdiri sendiri dan tidak saling menghitung.
+    """
+    if not isinstance(default_start, datetime):
+        default_start = datetime.now().replace(second=0, microsecond=0)
+    else:
+        default_start = default_start.replace(second=0, microsecond=0)
+    seed = jadwal_engine_pl.hitung_jadwal_pl(default_start)
+
+    st.markdown(f"#### {title}")
+    st.caption(
+        "Tentukan tanggal dan jam mulai/selesai tiap tahap secara bebas. "
+        "Nilai awal hanya contoh; perubahan satu tahap tidak mengubah tahap lain."
+    )
+    hasil = []
+    for index, nama in enumerate(jadwal_engine_pl.NAMA_TAHAP_PL):
+        row_seed = seed[index]
+        st.markdown(f"**{nama}**")
+        c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+        with c1:
+            mulai_tanggal = st.date_input(
+                "Mulai — tanggal",
+                value=row_seed["mulai"].date(),
+                format="DD/MM/YYYY",
+                key=f"{prefix}_mulai_tanggal_{index}",
+            )
+        with c2:
+            mulai_jam = st.time_input(
+                "Mulai — jam",
+                value=row_seed["mulai"].time(),
+                key=f"{prefix}_mulai_jam_{index}",
+            )
+        with c3:
+            selesai_tanggal = st.date_input(
+                "Selesai — tanggal",
+                value=row_seed["selesai"].date(),
+                format="DD/MM/YYYY",
+                key=f"{prefix}_selesai_tanggal_{index}",
+            )
+        with c4:
+            selesai_jam = st.time_input(
+                "Selesai — jam",
+                value=row_seed["selesai"].time(),
+                key=f"{prefix}_selesai_jam_{index}",
+            )
+        hasil.append({
+            "nama": nama,
+            "mulai": datetime.combine(mulai_tanggal, mulai_jam),
+            "selesai": datetime.combine(selesai_tanggal, selesai_jam),
+        })
+    return hasil
 
 
 def filter_paket_penandatanganan_kontrak(

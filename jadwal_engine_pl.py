@@ -30,6 +30,14 @@ HDRS = {
     "Referer": BASE + "/admin/pegawai",
 }
 
+NAMA_TAHAP_PL = [
+    "1. Upload Dokumen Penawaran",
+    "2. Pembukaan Dokumen Penawaran",
+    "3. Evaluasi Penawaran",
+    "4. Klarifikasi Teknis dan Negosiasi",
+    "5. Penandatanganan Kontrak",
+]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Hitung jadwal 5 tahap PL
@@ -266,6 +274,57 @@ def hitung_jadwal_pl_standar(tgl_mulai: datetime) -> list[dict]:
     ]
 
 
+def hitung_jadwal_pl_custom(jadwal_list: list[dict]) -> list[dict]:
+    """Validasi dan normalkan jadwal PL yang diisi manual per tahap.
+
+    Mode Custom sengaja tidak menerapkan pola, geser hari kerja, atau
+    koreksi urutan antar-tahap. Yang diwajibkan hanya lima tahap SPSE lengkap
+    dan setiap tahap memiliki waktu mulai yang lebih awal daripada selesai.
+    """
+    if not isinstance(jadwal_list, list) or len(jadwal_list) != len(NAMA_TAHAP_PL):
+        raise ValueError("Jadwal Custom harus berisi tepat 5 tahap (T1–T5).")
+
+    hasil = []
+    for index, row in enumerate(jadwal_list):
+        if not isinstance(row, dict):
+            raise ValueError(f"T{index + 1}: data jadwal tidak valid.")
+        mulai = row.get("mulai")
+        selesai = row.get("selesai")
+        if not isinstance(mulai, datetime) or not isinstance(selesai, datetime):
+            raise ValueError(f"T{index + 1}: tanggal/jam mulai dan selesai wajib diisi.")
+        mulai = mulai.replace(second=0, microsecond=0)
+        selesai = selesai.replace(second=0, microsecond=0)
+        if mulai >= selesai:
+            raise ValueError(f"T{index + 1}: waktu mulai harus sebelum selesai.")
+        hasil.append({
+            "nama": NAMA_TAHAP_PL[index],
+            "mulai": mulai,
+            "selesai": selesai,
+        })
+    return hasil
+
+
+def hitung_jadwal_pl_mode(
+    tgl_mulai: datetime | None,
+    mode: str = "normal",
+    jadwal_custom: list[dict] | None = None,
+) -> list[dict]:
+    """Hitung jadwal sesuai mode UI atau kembalikan input Custom tervalidasi."""
+    mode_key = str(mode or "normal").strip().casefold()
+    if mode_key == "custom":
+        return hitung_jadwal_pl_custom(jadwal_custom or [])
+    if not isinstance(tgl_mulai, datetime):
+        raise ValueError("Tanggal mulai T1 wajib diisi untuk mode jadwal otomatis.")
+    kalkulator = {
+        "24_jam": hitung_jadwal_pl_24_jam,
+        "santai": hitung_jadwal_pl_santai,
+        "normal_3_minggu": hitung_jadwal_pl_3_minggu,
+        "cepat": hitung_jadwal_pl_cepat,
+        "standar": hitung_jadwal_pl_standar,
+    }.get(mode_key, hitung_jadwal_pl)
+    return kalkulator(tgl_mulai)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Scrape form fields PL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -417,27 +476,35 @@ def submit_perubahan_jadwal_pl(kode_paket: str, jadwal_list: list[dict], keteran
     return {"scraped": scraped, "jadwal_list": jadwal_list, "payload": payload, "submit_result": result}
 
 
-def auto_fill_jadwal_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
-    """Full flow: scrap → hitung → build payload."""
+def auto_fill_jadwal_pl(
+    kode_paket: str,
+    tgl_mulai: datetime | None = None,
+    mode: str = "normal",
+    jadwal_custom: list[dict] | None = None,
+) -> dict:
+    """Full flow: scrap → hitung/custom → build payload."""
     scraped = scrap_hidden_fields_pl(kode_paket)
-    if mode == "24_jam":
-        jadwal_list = hitung_jadwal_pl_24_jam(tgl_mulai)
-    elif mode == "santai":
-        jadwal_list = hitung_jadwal_pl_santai(tgl_mulai)
-    elif mode == "cepat":
-        jadwal_list = hitung_jadwal_pl_cepat(tgl_mulai)
-    elif mode == "standar":
-        jadwal_list = hitung_jadwal_pl_standar(tgl_mulai)
-    elif mode == "normal_3_minggu":
-        jadwal_list = hitung_jadwal_pl_3_minggu(tgl_mulai)
-    else:
-        jadwal_list = hitung_jadwal_pl(tgl_mulai)
+    jadwal_list = hitung_jadwal_pl_mode(
+        tgl_mulai,
+        mode=mode,
+        jadwal_custom=jadwal_custom,
+    )
     payload = build_payload_pl(scraped, jadwal_list)
     return {"scraped": scraped, "jadwal_list": jadwal_list, "payload": payload}
 
 
-def submit_full_pl(kode_paket: str, tgl_mulai: datetime, mode: str = "normal") -> dict:
-    result = auto_fill_jadwal_pl(kode_paket, tgl_mulai, mode=mode)
+def submit_full_pl(
+    kode_paket: str,
+    tgl_mulai: datetime | None = None,
+    mode: str = "normal",
+    jadwal_custom: list[dict] | None = None,
+) -> dict:
+    result = auto_fill_jadwal_pl(
+        kode_paket,
+        tgl_mulai,
+        mode=mode,
+        jadwal_custom=jadwal_custom,
+    )
     cookie = result["scraped"].get("cookie")
     sub = submit_jadwal_pl(kode_paket, result["payload"], cookie_str=cookie)
     result["submit_result"] = sub

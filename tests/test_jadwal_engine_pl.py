@@ -1,11 +1,93 @@
 from datetime import datetime, timedelta
 import unittest
+from unittest.mock import patch
 
 import jadwal_engine
 import jadwal_engine_pl
 
 
 class JadwalEnginePlTest(unittest.TestCase):
+    def _custom_schedule(self):
+        return [
+            {
+                "mulai": datetime(2026, 9, 1, 7, 11),
+                "selesai": datetime(2026, 9, 3, 18, 22),
+            },
+            {
+                "mulai": datetime(2026, 9, 8, 13, 5),
+                "selesai": datetime(2026, 9, 8, 13, 7),
+            },
+            {
+                "mulai": datetime(2026, 9, 10, 21, 30),
+                "selesai": datetime(2026, 9, 12, 6, 45),
+            },
+            {
+                "mulai": datetime(2026, 9, 15, 10, 0),
+                "selesai": datetime(2026, 9, 15, 10, 1),
+            },
+            {
+                "mulai": datetime(2026, 9, 20, 23, 59),
+                "selesai": datetime(2026, 9, 30, 0, 1),
+            },
+        ]
+
+    def test_custom_keeps_each_stage_exactly_as_entered(self):
+        custom = self._custom_schedule()
+
+        jadwal = jadwal_engine_pl.hitung_jadwal_pl_custom(custom)
+
+        self.assertEqual(
+            [(row["mulai"], row["selesai"]) for row in jadwal],
+            [(row["mulai"], row["selesai"]) for row in custom],
+        )
+        self.assertEqual(
+            [row["nama"] for row in jadwal],
+            jadwal_engine_pl.NAMA_TAHAP_PL,
+        )
+
+    def test_custom_rejects_incomplete_or_invalid_stage(self):
+        custom = self._custom_schedule()
+
+        with self.assertRaisesRegex(ValueError, "tepat 5"):
+            jadwal_engine_pl.hitung_jadwal_pl_custom(custom[:4])
+
+        custom[2]["selesai"] = custom[2]["mulai"]
+        with self.assertRaisesRegex(ValueError, "T3"):
+            jadwal_engine_pl.hitung_jadwal_pl_custom(custom)
+
+    def test_auto_fill_custom_uses_explicit_schedule_for_payload(self):
+        custom = self._custom_schedule()
+        scraped = {
+            "csrf": "csrf",
+            "id": "paket-id",
+            "rows": [
+                {
+                    "index": index,
+                    "hidden": {f"jadwalList[{index}].dtj_id": str(index)},
+                    "name_mulai": f"jadwalList[{index}].dtj_tglawal",
+                    "name_selesai": f"jadwalList[{index}].dtj_tglakhir",
+                }
+                for index in range(5)
+            ],
+        }
+
+        with patch.object(jadwal_engine_pl, "scrap_hidden_fields_pl", return_value=scraped):
+            result = jadwal_engine_pl.auto_fill_jadwal_pl(
+                "kode-paket",
+                mode="custom",
+                jadwal_custom=custom,
+            )
+
+        self.assertEqual(result["jadwal_list"], jadwal_engine_pl.hitung_jadwal_pl_custom(custom))
+        self.assertEqual(
+            result["payload"]["jadwalList[2].dtj_tglawal"],
+            "10-09-2026 21:30",
+        )
+        self.assertEqual(
+            result["payload"]["jadwalList[4].dtj_tglakhir"],
+            "30-09-2026 00:01",
+        )
+
     def test_exact_seventeen_is_valid_start_time(self):
         tgl_mulai = datetime(2026, 8, 13, 17, 0)
 

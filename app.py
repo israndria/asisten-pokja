@@ -315,9 +315,30 @@ from tender_hps import update_hps_tender as _update_hps_tender
 from ui_pl_jadwal import (
     _render_ubah_jadwal_pl,
     filter_paket_penandatanganan_kontrak,
+    render_custom_jadwal_pl,
 )
 from ui_pl_penetapan import _render_tab10_pl
 from ui_sidebar import _get_dark_css, _get_light_css, _sidebar_login_form
+
+_PL_JADWAL_MODE_MAP = {
+    "Custom": "custom",
+    "24 Jam": "24_jam",
+    "Normal 3 Minggu": "normal_3_minggu",
+    "Santai": "santai",
+    "Cepat": "cepat",
+    "Standar": "standar",
+    "Normal": "normal",
+}
+
+
+def _hitung_jadwal_pl_ui(engine, mode_label: str, tgl_mulai: datetime, jadwal_custom=None):
+    """Satu dispatcher agar preview, submit, dan detail memakai aturan sama."""
+    mode = _PL_JADWAL_MODE_MAP.get(mode_label, "normal")
+    return mode, engine.hitung_jadwal_pl_mode(
+        tgl_mulai,
+        mode=mode,
+        jadwal_custom=jadwal_custom,
+    )
 
 # Suppress Playwright/CDP/Node stderr noise di console Streamlit
 import io as _io
@@ -4032,11 +4053,39 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _gcal_ok = _gcalpl_g.check_gcal_token()
 
                 st.divider()
-                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_v24")
+                _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_v25")
                 if _pljd_mode == "24 Jam":
                     st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
                 elif _pljd_mode == "Santai":
                     st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
+
+                _pljd_custom_global = None
+                _pljd_custom_by_code = {}
+                if _pljd_mode == "Custom" and _pljd_selected:
+                    if _pljd_beda:
+                        for _p in _pljd_selected:
+                            _custom_tgl = st.session_state.get(
+                                f"pljd_tgl_{_p['kode_paket']}", datetime.now().date()
+                            )
+                            _custom_jam = st.session_state.get(
+                                f"pljd_jam_{_p['kode_paket']}",
+                                datetime.strptime("17:00", "%H:%M").time(),
+                            )
+                            with st.expander(
+                                f"Jadwal Custom — {_pl_label(_p)}",
+                                expanded=len(_pljd_selected) == 1,
+                            ):
+                                _pljd_custom_by_code[_p["kode_paket"]] = render_custom_jadwal_pl(
+                                    prefix=f"pljd_custom_{_p['kode_paket']}_v19",
+                                    default_start=datetime.combine(_custom_tgl, _custom_jam),
+                                    title="Input per tahap",
+                                )
+                    else:
+                        _pljd_custom_global = render_custom_jadwal_pl(
+                            prefix="pljd_custom_global_v19",
+                            default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
+                            title="Jadwal Custom (berlaku untuk semua paket terpilih)",
+                        )
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -4049,18 +4098,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
                     _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("00:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
-                    if _pljd_mode == "24 Jam":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_24_jam(_t1_pv)
-                    elif _pljd_mode == "Santai":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_santai(_t1_pv)
-                    elif _pljd_mode == "Normal 3 Minggu":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
-                    elif _pljd_mode == "Cepat":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv)
-                    elif _pljd_mode == "Standar":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_standar(_t1_pv)
-                    else:
-                        _jadwal_pv = _jepl.hitung_jadwal_pl(_t1_pv)
+                    _custom_pv = (
+                        _pljd_custom_by_code.get(_pk_prev["kode_paket"])
+                        if _pljd_mode == "Custom" and _pljd_beda
+                        else _pljd_custom_global
+                    )
+                    try:
+                        _, _jadwal_pv = _hitung_jadwal_pl_ui(
+                            _jepl, _pljd_mode, _t1_pv, _custom_pv
+                        )
+                    except ValueError as _custom_pv_error:
+                        _jadwal_pv = []
+                        st.error(f"Jadwal Custom belum valid: {_custom_pv_error}")
                     for _jd in _jadwal_pv:
                         _m, _s = _jd["mulai"], _jd["selesai"]
                         _sama_hari = _m.date() == _s.date()
@@ -4070,13 +4119,31 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.write(f"**{_jd['nama']}**  \n{_txt_mulai} → {_txt_selesai}")
                     st.divider()
 
+                _pljd_custom_validation_errors = []
+                if _pljd_mode == "Custom":
+                    for _custom_package in _pljd_selected:
+                        _custom_code = _custom_package.get("kode_paket")
+                        _custom_schedule = (
+                            _pljd_custom_by_code.get(_custom_code)
+                            if _pljd_beda
+                            else _pljd_custom_global
+                        )
+                        try:
+                            _jepl.hitung_jadwal_pl_custom(_custom_schedule or [])
+                        except ValueError as _custom_error:
+                            _pljd_custom_validation_errors.append(
+                                f"{_pl_label(_custom_package)}: {_custom_error}"
+                            )
+                    for _custom_error_text in _pljd_custom_validation_errors:
+                        st.error(f"Jadwal Custom belum valid — {_custom_error_text}")
+
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
                 _pljd_submit = st.button(
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0,
+                    disabled=len(_pljd_selected) == 0 or bool(_pljd_custom_validation_errors),
                     key="pljd_submit_btn",
                 )
 
@@ -4099,8 +4166,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                            _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
+                            _mode_str = _PL_JADWAL_MODE_MAP.get(_pljd_mode, "normal")
+                            _custom_submit = (
+                                _pljd_custom_by_code.get(_kp)
+                                if _pljd_mode == "Custom" and _pljd_beda
+                                else _pljd_custom_global
+                            )
+                            if _mode_str == "custom":
+                                # Validasi sebelum scrape/POST agar kesalahan form
+                                # tidak mengirim sebagian batch ke SPSE.
+                                _jepl.hitung_jadwal_pl_custom(_custom_submit or [])
+                            _r = _jepl.submit_full_pl(
+                                _kp,
+                                _t1,
+                                mode=_mode_str,
+                                jadwal_custom=_custom_submit,
+                            )
                             _sub = _r["submit_result"]
                             _hasil_row = {
                                 "paket":  _pl_label(_p),
@@ -4171,17 +4252,17 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("00:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "santai":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_santai(_t1_preview)
-                                elif _mode_str_prev == "normal_3_minggu":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
-                                elif _mode_str_prev == "cepat":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
-                                elif _mode_str_prev == "standar":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
-                                else:
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                _custom_detail = (
+                                    _pljd_custom_by_code.get(_pk_match["kode_paket"])
+                                    if _pljd_mode == "Custom" and _pljd_beda
+                                    else _pljd_custom_global
+                                )
+                                try:
+                                    _, _jadwal_preview = _hitung_jadwal_pl_ui(
+                                        _jepl, _pljd_mode, _t1_preview, _custom_detail
+                                    )
+                                except ValueError:
+                                    continue
                                 st.markdown(f"**{_pl_label(_pk_match)}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []
@@ -7544,11 +7625,39 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 import gcal_pl_helper as _gcalpl_gpk
                 _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
 
-                _pljd_mode = st.radio("Mode Jadwal", ["24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], horizontal=True, key="pljd_mode_pk_v24")
+                _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_pk_v25")
                 if _pljd_mode == "24 Jam":
                     st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
                 elif _pljd_mode == "Santai":
                     st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
+
+                _pljd_custom_global = None
+                _pljd_custom_by_code = {}
+                if _pljd_mode == "Custom" and _pljd_selected:
+                    if _pljd_beda:
+                        for _p in _pljd_selected:
+                            _custom_tgl = st.session_state.get(
+                                f"pljd_tgl_{_p['kode_paket']}", datetime.now().date()
+                            )
+                            _custom_jam = st.session_state.get(
+                                f"pljd_jam_{_p['kode_paket']}",
+                                datetime.strptime("17:00", "%H:%M").time(),
+                            )
+                            with st.expander(
+                                f"Jadwal Custom — {_pl_label(_p)}",
+                                expanded=len(_pljd_selected) == 1,
+                            ):
+                                _pljd_custom_by_code[_p["kode_paket"]] = render_custom_jadwal_pl(
+                                    prefix=f"pljd_custom_{_p['kode_paket']}_vpk",
+                                    default_start=datetime.combine(_custom_tgl, _custom_jam),
+                                    title="Input per tahap",
+                                )
+                    else:
+                        _pljd_custom_global = render_custom_jadwal_pl(
+                            prefix="pljd_custom_global_vpk",
+                            default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
+                            title="Jadwal Custom (berlaku untuk semua paket terpilih)",
+                        )
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -7561,18 +7670,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _tgl_pv = st.session_state.get(f"pljd_tgl_{_pk_prev['kode_paket']}", datetime.now().date()) if _pljd_beda else _pljd_tgl_global
                     _jam_pv = st.session_state.get(f"pljd_jam_{_pk_prev['kode_paket']}", datetime.strptime("00:00", "%H:%M").time()) if _pljd_beda else _pljd_jam_global
                     _t1_pv = datetime.combine(_tgl_pv, _jam_pv)
-                    if _pljd_mode == "24 Jam":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_24_jam(_t1_pv)
-                    elif _pljd_mode == "Santai":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_santai(_t1_pv)
-                    elif _pljd_mode == "Normal 3 Minggu":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_3_minggu(_t1_pv)
-                    elif _pljd_mode == "Cepat":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_cepat(_t1_pv)
-                    elif _pljd_mode == "Standar":
-                        _jadwal_pv = _jepl.hitung_jadwal_pl_standar(_t1_pv)
-                    else:
-                        _jadwal_pv = _jepl.hitung_jadwal_pl(_t1_pv)
+                    _custom_pv = (
+                        _pljd_custom_by_code.get(_pk_prev["kode_paket"])
+                        if _pljd_mode == "Custom" and _pljd_beda
+                        else _pljd_custom_global
+                    )
+                    try:
+                        _, _jadwal_pv = _hitung_jadwal_pl_ui(
+                            _jepl, _pljd_mode, _t1_pv, _custom_pv
+                        )
+                    except ValueError as _custom_pv_error:
+                        _jadwal_pv = []
+                        st.error(f"Jadwal Custom belum valid: {_custom_pv_error}")
                     for _jd in _jadwal_pv:
                         _m, _s = _jd["mulai"], _jd["selesai"]
                         _sama_hari = _m.date() == _s.date()
@@ -7583,13 +7692,31 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     st.divider()
 
                 st.divider()
+                _pljd_custom_validation_errors = []
+                if _pljd_mode == "Custom":
+                    for _custom_package in _pljd_selected:
+                        _custom_code = _custom_package.get("kode_paket")
+                        _custom_schedule = (
+                            _pljd_custom_by_code.get(_custom_code)
+                            if _pljd_beda
+                            else _pljd_custom_global
+                        )
+                        try:
+                            _jepl.hitung_jadwal_pl_custom(_custom_schedule or [])
+                        except ValueError as _custom_error:
+                            _pljd_custom_validation_errors.append(
+                                f"{_pl_label(_custom_package)}: {_custom_error}"
+                            )
+                    for _custom_error_text in _pljd_custom_validation_errors:
+                        st.error(f"Jadwal Custom belum valid — {_custom_error_text}")
+
                 st.caption("⚠️ Akan menimpa jadwal yang sudah ada di SPSE.")
 
                 _pljd_submit = st.button(
                     f"🚀 Push Jadwal ke SPSE ({len(_pljd_selected)} paket)",
                     type="primary",
                     use_container_width=True,
-                    disabled=len(_pljd_selected) == 0,
+                    disabled=len(_pljd_selected) == 0 or bool(_pljd_custom_validation_errors),
                     key="pljd_submit_btn_pk",
                 )
 
@@ -7612,8 +7739,22 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _hasil.append({"paket": _pl_label(_p), "ok": False, "pesan": "kode_paket kosong"})
                             continue
                         try:
-                            _mode_str = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                            _r = _jepl.submit_full_pl(_kp, _t1, mode=_mode_str)
+                            _mode_str = _PL_JADWAL_MODE_MAP.get(_pljd_mode, "normal")
+                            _custom_submit = (
+                                _pljd_custom_by_code.get(_kp)
+                                if _pljd_mode == "Custom" and _pljd_beda
+                                else _pljd_custom_global
+                            )
+                            if _mode_str == "custom":
+                                # Validasi sebelum scrape/POST agar kesalahan form
+                                # tidak mengirim sebagian batch ke SPSE.
+                                _jepl.hitung_jadwal_pl_custom(_custom_submit or [])
+                            _r = _jepl.submit_full_pl(
+                                _kp,
+                                _t1,
+                                mode=_mode_str,
+                                jadwal_custom=_custom_submit,
+                            )
                             _sub = _r["submit_result"]
                             _hasil_row = {
                                 "paket":  _pl_label(_p),
@@ -7684,17 +7825,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_preview = st.session_state.get(f"pljd_tgl_{_pk_match['kode_paket']}", _pljd_tgl_global if not _pljd_beda else datetime.now().date())
                                 _jam_preview = st.session_state.get(f"pljd_jam_{_pk_match['kode_paket']}", _pljd_jam_global if not _pljd_beda else datetime.strptime("00:00", "%H:%M").time())
                                 _t1_preview = datetime.combine(_tgl_preview, _jam_preview)
-                                _mode_str_prev = {"24 Jam": "24_jam", "Normal 3 Minggu": "normal_3_minggu", "Santai": "santai", "Cepat": "cepat", "Standar": "standar"}.get(_pljd_mode, "normal")
-                                if _mode_str_prev == "santai":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_santai(_t1_preview)
-                                elif _mode_str_prev == "normal_3_minggu":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_3_minggu(_t1_preview)
-                                elif _mode_str_prev == "cepat":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_cepat(_t1_preview)
-                                elif _mode_str_prev == "standar":
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl_standar(_t1_preview)
-                                else:
-                                    _jadwal_preview = _jepl.hitung_jadwal_pl(_t1_preview)
+                                _custom_detail = (
+                                    _pljd_custom_by_code.get(_pk_match["kode_paket"])
+                                    if _pljd_mode == "Custom" and _pljd_beda
+                                    else _pljd_custom_global
+                                )
+                                try:
+                                    _, _jadwal_preview = _hitung_jadwal_pl_ui(
+                                        _jepl, _pljd_mode, _t1_preview, _custom_detail
+                                    )
+                                except ValueError:
+                                    continue
                                 st.markdown(f"**{_pl_label(_pk_match)}**")
                                 import pandas as _pd_jad
                                 _jad_rows = []
