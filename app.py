@@ -33,7 +33,9 @@ from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
     filter_local_pl_rows as _filter_local_pl_rows,
+    filter_paket_kirim_undangan_dpp as _filter_paket_kirim_undangan_dpp,
     filter_paket_siap_dijadwalkan as _filter_paket_siap_dijadwalkan,
+    get_reviu_full_pdf_path as _get_reviu_full_pdf_path,
     get_paket_umumkan_status as _get_paket_umumkan_status,
     is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
     load_status_pilih_penyedia_on_demand as _load_status_pilih_penyedia_on_demand,
@@ -120,6 +122,33 @@ def _format_dokpil_upload_failure(result: dict) -> str:
     status_text = str(status) if status not in (None, "", "?") else "tidak tersedia"
     detail = str(result.get("error") or result.get("body") or "detail tidak dikembalikan SPSE").strip()
     stage = str(result.get("stage") or "upload Dokpil")
+    return f"{stage}; HTTP {status_text}; {detail[:500]}"
+
+
+def _format_ba_upload_result(result: object) -> str:
+    """Tampilkan hasil upload BA tanpa fallback samar ke tanda '?'."""
+    if not isinstance(result, dict):
+        return f"Upload BA Reviu gagal; hasil tidak valid: {type(result).__name__}"
+    status = result.get("status")
+    status_text = str(status) if status not in (None, "", "?") else "tidak tersedia"
+    if result.get("ok"):
+        deleted = len(result.get("delete_results") or [])
+        message = f"HTTP {status_text} — {deleted} BA lama diganti"
+        attempts = result.get("attempts")
+        if isinstance(attempts, int) and attempts > 1:
+            message += f" — selesai pada percobaan {attempts}"
+        if result.get("verified_after_timeout"):
+            message += " — state live terverifikasi setelah timeout"
+        if result.get("warning"):
+            message += f" — catatan: {str(result['warning'])[:300]}"
+        return message
+    detail = str(
+        result.get("error")
+        or result.get("body")
+        or result.get("redirect")
+        or "detail tidak dikembalikan SPSE"
+    ).strip()
+    stage = str(result.get("stage") or "upload BA Reviu")
     return f"{stage}; HTTP {status_text}; {detail[:500]}"
 
 
@@ -3618,11 +3647,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
 
-            _pl_rows_kd = _load_draft_pl_cached()
+            _sync_kd = _sync_live_paket_umumkan_status("pl_invitation_stage_sync_jkk")
+            _pl_rows_kd = _load_draft_pl_cached("JKK")
+            _pl_rows_kd = _overlay_live_tahap_spse(_pl_rows_kd)
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
-            _pl_rows_kd = [r for r in _pl_rows_kd if pl_engine.is_paket_draft(r)]
+            _kd_all_codes = {str(r.get("kode_paket")) for r in _pl_rows_kd if r.get("kode_paket")}
+            _pl_rows_kd = _filter_paket_kirim_undangan_dpp(_pl_rows_kd, live_status_ok=_sync_kd.get("ok"))
+            for _kd_code in _kd_all_codes - {str(r.get("kode_paket")) for r in _pl_rows_kd}:
+                st.session_state.pop(f"kd_chk_{_kd_code}_v19", None)
+            if not _sync_kd.get("ok"):
+                st.error("⚠️ Status tayang live SPSE gagal diverifikasi; daftar Tab 3 dikosongkan sementara agar paket tayang tidak bocor.")
             _kd_selected = []
-            if not _pl_rows_kd:
+            if not _pl_rows_kd and _sync_kd.get("ok"):
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
                 _kd_sel_col1, _kd_sel_col2 = st.columns(2)
@@ -3645,11 +3681,25 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     for _i, _p in enumerate(paket_list):
                         prog.progress((_i + 1) / len(paket_list), text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...")
                         _tgl_ba = _p.get("_tgl_acara") or tgl or datetime.now().date()
-                        _res = _ubrpl.upload_ba_reviu_pl(
-                            kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(),
-                            file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"),
-                        )
-                        hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
+                        try:
+                            _res = _ubrpl.upload_ba_reviu_pl_with_retry(
+                                kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(),
+                                file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"),
+                                replace_existing=True,
+                            )
+                        except Exception as _upload_exc:
+                            _res = {
+                                "ok": False,
+                                "stage": "upload BA Reviu",
+                                "error": f"Exception tak tertangani: {_upload_exc}",
+                            }
+                        _sukses = bool(_res.get("ok")) if isinstance(_res, dict) else False
+                        hasil.append({
+                            "kode": _p["kode_paket"],
+                            "nama": _p["nama_paket"],
+                            "sukses": _sukses,
+                            "pesan": _format_ba_upload_result(_res),
+                        })
                     prog.empty()
                     _ok = sum(1 for h in hasil if h["sukses"])
                     if _ok == len(hasil):
@@ -3687,9 +3737,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.caption(f"⚠️ {_LIBUR_MAP[_kd_tgl_acara]}")
                     with _col_ba:
                         _ba_fkey = f"plba_file_{_rr['kode_paket']}"
-                        _ba_up = st.file_uploader("BA Reviu PDF (opsional)", type=["pdf"], key=_ba_fkey)
+                        _ba_up = st.file_uploader("BA Reviu PDF (manual override, opsional)", type=["pdf"], key=_ba_fkey)
+                        _ba_auto_path = _get_reviu_full_pdf_path(_rr)
+                        if _ba_auto_path:
+                            st.caption(f"✅ Auto-detect: `{_ba_auto_path.name}`")
+                        elif not _ba_up:
+                            st.caption("⚠️ Isi Reviu Fix Full tidak ditemukan; pilih PDF manual.")
+                    _ba_file = _ba_up
+                    if _ba_file is None and _ba_auto_path:
+                        _ba_file = _io.BytesIO(_ba_auto_path.read_bytes())
+                        _ba_file.name = _ba_auto_path.name
                     if _kd_chk:
-                        _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara})
+                        _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara, "_ba_file": _ba_file})
 
                 st.caption(f"**{len(_kd_selected)}** dari **{len(_pl_rows_kd)}** paket dipilih")
 
@@ -3837,11 +3896,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
             # BA memakai tanggal acara masing-masing paket; unggah setelah
             # memilih paket dan/atau mengirim undangan.
-            _ba_pl_valid = [
-                {**_pp, "_ba_file": st.session_state.get(f"plba_file_{_pp['kode_paket']}")}
-                for _pp in _kd_selected
-                if st.session_state.get(f"plba_file_{_pp['kode_paket']}")
-            ]
+            _ba_pl_valid = [p for p in _kd_selected if p.get("_ba_file")]
+            st.warning("Upload ulang akan menghapus seluruh BA Reviu DPP lama pada paket terpilih, lalu menyisakan file baru saja.")
             if st.button(
                 f"📄 Upload BA Reviu DPP ({len(_ba_pl_valid)} file)",
                 key="plba_upload_selected",
@@ -3872,7 +3928,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if not _sync_schedule_stage_jkk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
-        _pljd_rows = _load_draft_pl_cached("JKK")
+        # Penjadwalan tidak membutuhkan folder/workbook lokal; jangan hilangkan
+        # kandidat valid hanya karena folder belum ter-resolve di perangkat ini.
+        _pljd_rows = _load_draft_pl_cached("JKK", only_local=False)
         _pljd_rows = _overlay_live_tahap_spse(_pljd_rows)
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         # Buat Jadwal hanya menerima Draft lokal yang belum memiliki tahap
@@ -7107,11 +7165,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         with _kd_col_list:
             st.markdown("### 1. Pilih Paket")
 
+            _sync_kd = _sync_live_paket_umumkan_status("pl_invitation_stage_sync_pk")
             _pl_rows_kd = _load_draft_pl_cached("PK")
+            _pl_rows_kd = _overlay_live_tahap_spse(_pl_rows_kd)
             _pl_rows_kd, _ = pl_engine.buang_duplikat_paket_lama(_pl_rows_kd)
-            _pl_rows_kd = [r for r in _pl_rows_kd if _pl_engine_utils.is_paket_draft(r)]
+            _kd_all_codes = {str(r.get("kode_paket")) for r in _pl_rows_kd if r.get("kode_paket")}
+            _pl_rows_kd = _filter_paket_kirim_undangan_dpp(_pl_rows_kd, live_status_ok=_sync_kd.get("ok"))
+            for _kd_code in _kd_all_codes - {str(r.get("kode_paket")) for r in _pl_rows_kd}:
+                st.session_state.pop(f"kd_chk_{_kd_code}_v19", None)
+            if not _sync_kd.get("ok"):
+                st.error("⚠️ Status tayang live SPSE gagal diverifikasi; daftar Tab 3 dikosongkan sementara agar paket tayang tidak bocor.")
             _kd_selected = []
-            if not _pl_rows_kd:
+            if not _pl_rows_kd and _sync_kd.get("ok"):
                 st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
             else:
                 _kd_sel_col1, _kd_sel_col2 = st.columns(2)
@@ -7134,8 +7199,25 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     for _i, _p in enumerate(paket_list):
                         prog.progress((_i + 1) / len(paket_list), text=f"Upload {_p['kode_paket']} ({_i+1}/{len(paket_list)})...")
                         _tgl_ba = _p.get("_tgl_acara") or tgl or datetime.now().date()
-                        _res = _ubrpl.upload_ba_reviu_pl(kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(), file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"))
-                        hasil.append({"kode": _p["kode_paket"], "nama": _p["nama_paket"], "sukses": _res["ok"], "pesan": f"HTTP {_res.get('status','?')}" if _res["ok"] else _res.get("error", "?")})
+                        try:
+                            _res = _ubrpl.upload_ba_reviu_pl_with_retry(
+                                kode_paket=_p["kode_paket"], file_bytes=_p["_ba_file"].getvalue(),
+                                file_name=_p["_ba_file"].name, tgl_ba=_tgl_ba.strftime("%d-%m-%Y"),
+                                replace_existing=True,
+                            )
+                        except Exception as _upload_exc:
+                            _res = {
+                                "ok": False,
+                                "stage": "upload BA Reviu",
+                                "error": f"Exception tak tertangani: {_upload_exc}",
+                            }
+                        _sukses = bool(_res.get("ok")) if isinstance(_res, dict) else False
+                        hasil.append({
+                            "kode": _p["kode_paket"],
+                            "nama": _p["nama_paket"],
+                            "sukses": _sukses,
+                            "pesan": _format_ba_upload_result(_res),
+                        })
                     prog.empty()
                     _ok = sum(1 for h in hasil if h["sukses"])
                     if _ok == len(hasil):
@@ -7172,9 +7254,18 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             st.caption(f"⚠️ {_LIBUR_MAP[_kd_tgl_acara]}")
                     with _col_ba:
                         _ba_fkey = f"plba_file_{_rr['kode_paket']}"
-                        _ba_up = st.file_uploader("BA Reviu PDF (opsional)", type=["pdf"], key=_ba_fkey)
+                        _ba_up = st.file_uploader("BA Reviu PDF (manual override, opsional)", type=["pdf"], key=_ba_fkey)
+                        _ba_auto_path = _get_reviu_full_pdf_path(_rr)
+                        if _ba_auto_path:
+                            st.caption(f"✅ Auto-detect: `{_ba_auto_path.name}`")
+                        elif not _ba_up:
+                            st.caption("⚠️ Isi Reviu Fix Full tidak ditemukan; pilih PDF manual.")
+                    _ba_file = _ba_up
+                    if _ba_file is None and _ba_auto_path:
+                        _ba_file = _io.BytesIO(_ba_auto_path.read_bytes())
+                        _ba_file.name = _ba_auto_path.name
                     if _kd_chk:
-                        _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara})
+                        _kd_selected.append({**_rr, "_tgl_acara": _kd_tgl_acara, "_ba_file": _ba_file})
 
                 st.caption(f"**{len(_kd_selected)}** dari **{len(_pl_rows_kd)}** paket dipilih")
 
@@ -7320,11 +7411,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.session_state["kd_konfirmasi"] = False
                         st.rerun()
 
-            _ba_pl_valid = [
-                {**_pp, "_ba_file": st.session_state.get(f"plba_file_{_pp['kode_paket']}")}
-                for _pp in _kd_selected
-                if st.session_state.get(f"plba_file_{_pp['kode_paket']}")
-            ]
+            _ba_pl_valid = [p for p in _kd_selected if p.get("_ba_file")]
+            st.warning("Upload ulang akan menghapus seluruh BA Reviu DPP lama pada paket terpilih, lalu menyisakan file baru saja.")
             if st.button(
                 f"📄 Upload BA Reviu DPP ({len(_ba_pl_valid)} file)",
                 key="plba_upload_selected",
@@ -7355,7 +7443,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         if not _sync_schedule_stage_pk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
-        _pljd_rows = _load_draft_pl_cached("PK")
+        # Penjadwalan tidak membutuhkan folder/workbook lokal; jangan hilangkan
+        # kandidat valid hanya karena folder belum ter-resolve di perangkat ini.
+        _pljd_rows = _load_draft_pl_cached("PK", only_local=False)
         _pljd_rows = _overlay_live_tahap_spse(_pljd_rows)
         _pljd_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_rows)
         _pljd_rows = _filter_paket_siap_dijadwalkan(_pljd_rows)

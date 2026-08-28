@@ -97,3 +97,11 @@ class JadwalEnginePlTest(unittest.TestCase):
         self.assertEqual(santai[3]["mulai"].time().isoformat(timespec="minutes"), "09:00")
         self.assertEqual(santai[3]["selesai"].time().isoformat(timespec="minutes"), "15:45")
         self.assertEqual(santai[4]["mulai"], santai[3]["selesai"] + timedelta(minutes=1))
+
+    def test_santai_preserves_evening_input_time(self):
+        mulai = datetime(2026, 8, 27, 19, 0)
+        jadwal = jadwal_engine_pl.hitung_jadwal_pl_santai(mulai)
+
+        self.assertEqual(jadwal[0]["mulai"], mulai)
+        self.assertEqual(jadwal[0]["selesai"], datetime(2026, 9, 1, 19, 0))
+        self.assertEqual(jadwal[1]["mulai"], datetime(2026, 9, 1, 19, 1))

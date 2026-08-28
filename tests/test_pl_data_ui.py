@@ -12,6 +12,8 @@ from pl_data_ui import (
     _filter_pl_family,
     _hydrate_provider_from_excel,
     filter_paket_siap_dijadwalkan,
+    filter_paket_kirim_undangan_dpp,
+    get_reviu_full_pdf_path,
     filter_local_pl_rows,
     overlay_live_tahap_spse,
 )
@@ -128,6 +130,50 @@ def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang(
     assert [row["kode_paket"] for row in filter_paket_siap_dijadwalkan(rows)] == [
         "pending",
     ]
+
+
+def test_filter_paket_kirim_undangan_dpp_hides_live_tayang_from_draft_cache():
+    rows = [
+        {"kode_paket": "pending", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "live", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "stage", "status": "draft", "tahap_spse": "Upload Dokumen Penawaran"},
+        {"kode_paket": "running", "status": "berjalan", "tahap_spse": ""},
+    ]
+
+    assert [row["kode_paket"] for row in filter_paket_kirim_undangan_dpp(
+        rows, {"live": {"status": "sudah diumumkan"}}
+    )] == ["pending"]
+
+
+def test_filter_paket_kirim_undangan_dpp_fails_closed_when_live_sync_fails():
+    rows = [{"kode_paket": "draft-local", "status": "draft", "tahap_spse": ""}]
+    assert filter_paket_kirim_undangan_dpp(rows, live_status_ok=False) == []
+
+
+def test_filter_paket_kirim_undangan_dpp_hides_exact_local_reviu_full(tmp_path):
+    folder = tmp_path / "36. PLPK - Paket Jalan"
+    full_dir = folder / "6. BA Reviu Lengkap"
+    full_dir.mkdir(parents=True)
+    full = full_dir / "2. Isi Reviu Fix Full - PLPK36.pdf"
+    full.write_bytes(b"%PDF-1.7\n")
+    row = {
+        "kode_paket": "36",
+        "jenis_pl": "PK",
+        "status": "draft",
+        "tahap_spse": "",
+        "_folder_lokal": str(folder),
+    }
+
+    assert get_reviu_full_pdf_path(row) == full
+    # Keberadaan Isi Reviu Full hanya bukti lokal/indikator; bukan gate
+    # undangan. Gate daftar tetap status tayang live SPSE.
+    assert filter_paket_kirim_undangan_dpp([row]) == [row]
+
+    wrong = full_dir / "2. Isi Reviu Fix Full - PLPK999.pdf"
+    full.unlink()
+    wrong.write_bytes(b"%PDF-1.7\n")
+    assert get_reviu_full_pdf_path(row) is None
+    assert filter_paket_kirim_undangan_dpp([row]) == [row]
 
 
 def test_filter_paket_penandatanganan_kontrak_limits_t5_to_six_hour_window():

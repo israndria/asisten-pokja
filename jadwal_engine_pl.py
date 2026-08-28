@@ -100,12 +100,24 @@ def hitung_jadwal_pl(tgl_mulai: datetime) -> list[dict]:
 def hitung_jadwal_pl_santai(tgl_mulai: datetime) -> list[dict]:
     """Mode Santai: pola Normal dengan evaluasi penawaran 2 hari kerja.
 
-    T1 dan T2 tetap memakai perhitungan Normal. T3 diperpanjang dari satu
-    menjadi dua hari kerja; T4 berlangsung dari satu hari kerja sebelum hari
-    selesai T3 sampai hari selesai T3, lalu T5 menyambung satu menit setelah T4.
+    T1 mempertahankan jam input (termasuk sore/malam), sedangkan checkpoint
+    berikutnya mengikuti pola Normal. T3 diperpanjang dari satu menjadi dua
+    hari kerja; T4 berlangsung dari satu hari kerja sebelum hari selesai T3
+    sampai hari selesai T3, lalu T5 menyambung satu menit setelah T4.
     """
-    jadwal = hitung_jadwal_pl(tgl_mulai)
-    t3_mulai = jadwal[2]["mulai"]
+    # Mode Santai memang menerima jam mulai custom. Jangan memakai
+    # hitung_jadwal_pl() sebagai basis karena fungsi Normal menggeser jam
+    # selain jam kerja ke 08:00 (contoh input 19:00).
+    t1_mulai = tgl_mulai.replace(second=0, microsecond=0)
+    t1_selesai_kand = (t1_mulai + timedelta(days=5)).replace(
+        hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
+    )
+    t1_selesai = geser_ke_hari_kerja(t1_selesai_kand).replace(
+        hour=t1_mulai.hour, minute=t1_mulai.minute, second=0, microsecond=0
+    )
+    t2_mulai = t1_selesai + timedelta(minutes=1)
+    t2_selesai = t1_selesai + timedelta(minutes=65)
+    t3_mulai = t2_selesai + timedelta(minutes=1)
     t3_selesai = _tambah_hari_kerja(t3_mulai, 2).replace(
         hour=16, minute=0, second=0, microsecond=0
     )
@@ -123,12 +135,13 @@ def hitung_jadwal_pl_santai(tgl_mulai: datetime) -> list[dict]:
         hour=16, minute=0, second=0, microsecond=0
     )
 
-    jadwal[2:] = [
-        {"nama": jadwal[2]["nama"], "mulai": t3_mulai, "selesai": t3_selesai},
-        {"nama": jadwal[3]["nama"], "mulai": t4_mulai, "selesai": t4_selesai},
-        {"nama": jadwal[4]["nama"], "mulai": t5_mulai, "selesai": t5_selesai},
+    return [
+        {"nama": "1. Upload Dokumen Penawaran",         "mulai": t1_mulai, "selesai": t1_selesai},
+        {"nama": "2. Pembukaan Dokumen Penawaran",      "mulai": t2_mulai, "selesai": t2_selesai},
+        {"nama": "3. Evaluasi Penawaran",               "mulai": t3_mulai, "selesai": t3_selesai},
+        {"nama": "4. Klarifikasi Teknis dan Negosiasi", "mulai": t4_mulai, "selesai": t4_selesai},
+        {"nama": "5. Penandatanganan Kontrak",          "mulai": t5_mulai, "selesai": t5_selesai},
     ]
-    return jadwal
 
 
 def hitung_jadwal_pl_24_jam(tgl_mulai: datetime) -> list[dict]:

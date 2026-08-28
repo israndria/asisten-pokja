@@ -153,12 +153,75 @@ def filter_paket_siap_dijadwalkan(
     return hasil
 
 
+def filter_paket_kirim_undangan_dpp(
+    rows: list[dict], session_status: dict | None = None,
+    *, live_status_ok: bool | None = None,
+) -> list[dict]:
+    """Ambil hanya Draft yang belum tayang untuk Tab Kirim Undangan DPP.
+
+    Status lokal Draft tidak cukup: tahap live SPSE/session menjadi veto.
+    Fail-closed untuk tahap/status non-Draft agar paket yang sudah tayang tidak
+    muncul lagi walau cache Supabase belum ikut berubah.
+    """
+    # Status lokal Draft tidak boleh menjadi fallback ketika verifikasi live
+    # gagal. Jika endpoint SPSE timeout/error, lebih aman menampilkan nol
+    # kandidat daripada membiarkan paket tayang masuk kembali.
+    if live_status_ok is False:
+        return []
+
+    hasil = []
+    for row in rows or []:
+        if not row.get("kode_paket"):
+            continue
+        if is_paket_sudah_diumumkan(row, session_status):
+            continue
+        if str(row.get("status") or "").strip().casefold() != "draft":
+            continue
+        if str(row.get("tahap_spse") or "").strip():
+            continue
+        hasil.append(row)
+    return hasil
+
+
+def get_reviu_full_pdf_path(row: dict):
+    """Resolve bukti lokal Isi Reviu Full secara ketat.
+
+    Hanya nama canonical yang cocok dengan nomor folder dan family paket yang
+    diterima; file PDF lain/duplikat tidak boleh menjadi bukti selesai.
+    """
+    from pathlib import Path
+    import re
+
+    folder = Path(str((row or {}).get("_folder_lokal") or ""))
+    if not folder.is_dir():
+        return None
+    match = re.match(r"^\s*(\d+)\.", folder.name)
+    if not match:
+        return None
+    family = str((row or {}).get("jenis_pl") or "").strip().upper()
+    prefix = "PLPK" if family in {"PK", "PLPK"} else "PLJKK" if family in {"JKK", "PLJKK"} else ""
+    if not prefix:
+        return None
+    candidate = folder / "6. BA Reviu Lengkap" / f"2. Isi Reviu Fix Full - {prefix}{match.group(1)}.pdf"
+    try:
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            with candidate.open("rb") as stream:
+                if stream.read(5) == b"%PDF-":
+                    return candidate
+    except OSError:
+        pass
+    return None
+
+
 def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) -> dict:
     """Sinkronkan tahap tayang live SPSE secara read-only dengan TTL singkat."""
     now = time.monotonic()
     last_sync = st.session_state.get(state_key)
+    cached_result = st.session_state.get(f"{state_key}:result")
     if isinstance(last_sync, (int, float)) and now - last_sync < ttl_seconds:
-        return {"ok": True, "cached": True, "count": 0}
+        if isinstance(cached_result, dict):
+            return {**cached_result, "cached": True, "count": 0}
+        return {"ok": False, "cached": True, "count": 0, "error": "Status live belum pernah berhasil diverifikasi"}
 
     st.session_state[state_key] = now
     try:
@@ -171,9 +234,13 @@ def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) ->
             return {"ok": False, "cached": False, "count": 0, "error": "Cookie SPSE kosong"}
         tahap_map = _live_pl_engine._fetch_tahap_spse(cookie, SPSE_BASE_URL)
         count = mark_tahap_spse_sudah_diumumkan(tahap_map)
-        return {"ok": True, "cached": False, "count": count}
+        result = {"ok": True, "cached": False, "count": count}
+        st.session_state[f"{state_key}:result"] = result
+        return result
     except Exception as exc:
-        return {"ok": False, "cached": False, "count": 0, "error": str(exc)}
+        result = {"ok": False, "cached": False, "count": 0, "error": str(exc)}
+        st.session_state[f"{state_key}:result"] = result
+        return result
 
 
 def _filter_pl_family(rows: list[dict], engine_kind: str) -> list[dict]:
