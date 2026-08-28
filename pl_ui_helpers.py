@@ -413,6 +413,20 @@ def _pl_hint_ulang(row: dict) -> str:
     return " (PL - Ulang)" if _pl_paket_ulang(row) else ""
 
 
+def _pl_folder_number(row: dict) -> str:
+    """Ambil nomor folder dari metadata/path bila nomor DB belum terisi."""
+    candidates = (
+        row.get("_folder_lokal"),
+        row.get("folder_dibuat") if isinstance(row.get("folder_dibuat"), str) else None,
+    )
+    for candidate in candidates:
+        name = os.path.basename(os.fspath(candidate)) if candidate else ""
+        match = re.match(r"^\s*(\d+)\.", name)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def _pl_label(row: dict) -> str:
     """Label tampilan paket PL yang konsisten di seluruh tab.
 
@@ -420,7 +434,7 @@ def _pl_label(row: dict) -> str:
     resolusi folder, payload SPSE, dan pencocokan database.
     """
     nama = str(row.get("nama_paket") or row.get("kode_paket") or "-").strip()
-    nomor = str(row.get("nomor_urut") or "").strip()
+    nomor = str(row.get("nomor_urut") or "").strip() or _pl_folder_number(row)
     if nomor and not nama.startswith(f"{nomor}."):
         nama = f"{nomor}. {nama}"
     return nama + _pl_hint_ulang(row)

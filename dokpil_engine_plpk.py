@@ -50,6 +50,17 @@ def _http_post_result(response, operation: str) -> dict:
     }
 
 
+def _sort_ckm(values) -> list[str]:
+    """Urutkan ID checklist numerik tanpa gagal saat verifikasi exception."""
+    return sorted(
+        (str(value) for value in values),
+        key=lambda value: (
+            not value.isdigit(),
+            int(value) if value.isdigit() else value,
+        ),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: ambil form context (CSRF + ckm_id list)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -618,9 +629,6 @@ def submit_checklist_pl(
             str(value) for value in verified_ctx.get("checked_ckm_ids", set())
         }
         missing_ckm_ids = expected_ckm_ids - verified_ckm_ids
-
-        def _sort_ckm(values):
-            return sorted(values, key=lambda value: (not str(value).isdigit(), int(value) if str(value).isdigit() else str(value)))
 
         result["verified_ckm_ids"] = _sort_ckm(expected_ckm_ids & verified_ckm_ids)
         result["missing_ckm_ids"] = _sort_ckm(missing_ckm_ids)

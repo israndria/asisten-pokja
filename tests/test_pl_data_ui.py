@@ -13,11 +13,17 @@ from pl_data_ui import (
     _hydrate_provider_from_excel,
     filter_paket_siap_dijadwalkan,
     filter_paket_kirim_undangan_dpp,
+    format_pl_announce_log,
     get_reviu_full_pdf_path,
     filter_local_pl_rows,
     overlay_live_tahap_spse,
 )
-from ui_pl_pk import active_rows, provider_identity_available
+from ui_pl_pk import (
+    PLPK_TAB_LABELS,
+    active_rows,
+    provider_identity_available,
+    provider_selection_status_caption,
+)
 from ui_pl_jadwal import filter_paket_penandatanganan_kontrak
 
 
@@ -278,6 +284,63 @@ def test_provider_identity_allows_name_fallback_without_npwp():
     assert provider_identity_available({"npwp_penyedia": "123"}) is True
     assert provider_identity_available({"nama_penyedia": "CV. Nama Penyedia"}) is True
     assert provider_identity_available({"npwp_penyedia": "", "nama_penyedia": ""}) is False
+
+
+def test_provider_selection_existing_other_is_still_success_caption():
+    caption = provider_selection_status_caption(
+        {"kode_paket": "PK-56"},
+        {"PK-56": {"ok": True, "status": "sudah_terpilih_lain", "nama": "CAKRAWALA BANUA"}},
+    )
+
+    assert caption == "✅ Penyedia sudah dipilih: CAKRAWALA BANUA"
+
+
+def test_format_pl_announce_log_contains_code_stage_http_and_outcome():
+    lines = format_pl_announce_log(
+        [
+            {
+                "kode_paket": "PK-56",
+                "paket": "56. Paket Rabat Beton",
+                "ok": True,
+                "status_code": 302,
+                "pesan": "Berhasil diumumkan",
+                "stage": "GET /edit + POST /pengumumanpp",
+            },
+            {
+                "kode_paket": "PK-57",
+                "paket": "57. Paket Drainase",
+                "ok": False,
+                "status_code": 404,
+                "error": "GET edit paket gagal",
+                "stage": "GET /edit",
+            },
+        ],
+        family="PK",
+        started_at=datetime(2026, 8, 28, 10, 30),
+    )
+
+    text = "\n".join(lines)
+    assert "Family: PK" in text
+    assert "PK-56" in text and "HTTP  : 302" in text and "BERHASIL" in text
+    assert "PK-57" in text and "HTTP  : 404" in text and "GAGAL" in text
+    assert "GET /edit" in text
+
+
+def test_plpk_tab_five_and_six_are_swapped():
+    assert PLPK_TAB_LABELS[4] == "5️⃣ Buat Jadwal"
+    assert PLPK_TAB_LABELS[5] == "6️⃣ Pilih Penyedia & Umumkan"
+
+
+def test_pl_label_falls_back_to_number_in_physical_folder(tmp_path):
+    folder = tmp_path / "56. PLPK - Paket Rabat Beton"
+    folder.mkdir()
+
+    label = pl_ui_helpers._pl_label({
+        "nama_paket": "Paket Rabat Beton",
+        "_folder_lokal": str(folder),
+    })
+
+    assert label == "56. Paket Rabat Beton"
 
 
 def test_pl_family_loader_isolated_and_fail_closed():

@@ -7,8 +7,8 @@ PLPK_TAB_LABELS = [
     "2️⃣ Monitor Dokumen PPK",
     "3️⃣ Kirim Undangan DPP",
     "4️⃣ Setup Paket",
-    "5️⃣ Pilih Penyedia & Umumkan",
-    "6️⃣ Buat Jadwal",
+    "5️⃣ Buat Jadwal",
+    "6️⃣ Pilih Penyedia & Umumkan",
     "7️⃣ Download Kualifikasi",
     "8️⃣ Evaluasi & Teknis/Biaya",
     "9️⃣ Kirim Verifikasi",
@@ -111,12 +111,9 @@ def provider_selection_status_caption(row: dict, selection_status: dict) -> str:
         return "⏳ Status pilihan SPSE belum disinkronkan"
 
     status = result.get("status")
-    if status == "sudah_terpilih":
+    if status in {"sudah_terpilih", "sudah_terpilih_lain"}:
         nama = str(result.get("nama") or "").strip()
         return f"✅ Penyedia sudah dipilih{': ' + nama if nama else ''}"
-    if status == "sudah_terpilih_lain":
-        nama = str(result.get("nama") or "").strip()
-        return f"⚠️ Sudah ada penyedia lain{': ' + nama if nama else ''}"
     if status == "belum_terpilih":
         return "⬜ Belum ada penyedia terpilih di SPSE"
     pesan = str(result.get("pesan") or "status tidak dapat diverifikasi").strip()

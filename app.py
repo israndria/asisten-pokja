@@ -35,6 +35,7 @@ from pl_data_ui import (
     filter_local_pl_rows as _filter_local_pl_rows,
     filter_paket_kirim_undangan_dpp as _filter_paket_kirim_undangan_dpp,
     filter_paket_siap_dijadwalkan as _filter_paket_siap_dijadwalkan,
+    format_pl_announce_log as _format_pl_announce_log,
     get_reviu_full_pdf_path as _get_reviu_full_pdf_path,
     get_paket_umumkan_status as _get_paket_umumkan_status,
     is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
@@ -73,7 +74,7 @@ _PL_SBU_HISTORY_PATH = pathlib.Path(__file__).resolve().parent / "data" / "pl_sb
 
 
 def _format_ldk_setup_message(result: dict) -> str:
-    """Ringkas hasil LDK untuk report UI; detail response tidak memenuhi log utama."""
+    """Ringkas hasil LDK sambil mempertahankan detail error yang bisa didiagnosis."""
     status = result.get("status", "?")
     outcome = "berhasil" if result.get("ok") else "gagal"
     message = f"HTTP {status} · {outcome}"
@@ -82,6 +83,13 @@ def _format_ldk_setup_message(result: dict) -> str:
         message += " · izin OK" if izin.get("ok") else " · izin perlu cek"
     elif izin:
         message += " · izin diproses"
+    detail = re.sub(
+        r"\s+",
+        " ",
+        str(result.get("error") or result.get("pesan") or result.get("body") or ""),
+    ).strip()
+    if detail:
+        message += f" · {detail[:500]}"
     return message
 
 
@@ -114,6 +122,15 @@ def _render_pl_setup_report(results: list[dict]) -> None:
                 lines.append(f"{status} {item.get('step', '-')}")
                 lines.append(f"   {item.get('pesan', '-')}")
             st.code("\n".join(lines), language=None, wrap_lines=True)
+
+
+def _render_pl_announce_log(state_key: str) -> None:
+    """Tampilkan log pengumuman terakhir secara persisten dan mudah dicopy."""
+    lines = st.session_state.get(state_key) or []
+    if not lines:
+        return
+    with st.expander("📋 Log proses pengumuman terakhir", expanded=True):
+        st.code("\n".join(str(line) for line in lines), language=None, wrap_lines=True)
 
 
 def _format_dokpil_upload_failure(result: dict) -> str:
@@ -243,12 +260,16 @@ def _save_last_pl_invitation_date(kode_paket: str, tanggal: date) -> None:
 
 
 def _migrate_pl_tab_selection(state_key: str) -> None:
-    """Pindahkan pilihan radio PL lama setelah Tab 2 monitor disisipkan."""
+    """Migrasikan pilihan radio PL setelah monitor dan swap Tab 5/6."""
     old_to_new = {
         "2️⃣ Kirim Undangan DPP": "3️⃣ Kirim Undangan DPP",
         "3️⃣ Setup Paket": "4️⃣ Setup Paket",
-        "4️⃣ Pilih Penyedia & Umumkan": "5️⃣ Pilih Penyedia & Umumkan",
-        "5️⃣ Buat Jadwal": "6️⃣ Buat Jadwal",
+        # Sebelum Monitor Dokumen PPK disisipkan.
+        "4️⃣ Pilih Penyedia & Umumkan": "6️⃣ Pilih Penyedia & Umumkan",
+        "5️⃣ Buat Jadwal": "5️⃣ Buat Jadwal",
+        # State/query dari versi tepat sebelum swap Tab 5/6.
+        "5️⃣ Pilih Penyedia & Umumkan": "6️⃣ Pilih Penyedia & Umumkan",
+        "6️⃣ Buat Jadwal": "5️⃣ Buat Jadwal",
         "6️⃣ Download Kualifikasi": "7️⃣ Download Kualifikasi",
         "7️⃣ Evaluasi & Teknis/Biaya": "8️⃣ Evaluasi & Teknis/Biaya",
         "8️⃣ Kirim Verifikasi": "9️⃣ Kirim Verifikasi",
@@ -2605,8 +2626,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "2️⃣ Monitor Dokumen PPK",
         "3️⃣ Kirim Undangan DPP",
         "4️⃣ Setup Paket",
-        "5️⃣ Pilih Penyedia & Umumkan",
-        "6️⃣ Buat Jadwal",
+        "5️⃣ Buat Jadwal",
+        "6️⃣ Pilih Penyedia & Umumkan",
         "7️⃣ Download Kualifikasi",
         "8️⃣ Evaluasi & Teknis/Biaya",
         "9️⃣ Kirim Verifikasi",
@@ -3928,8 +3949,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ):
                 _do_upload_ba_pl(_ba_pl_valid)
 
-    # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "6️⃣ Buat Jadwal":
+    # ── Tab 5: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
+    if _pl_active_tab == "5️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -4405,13 +4426,16 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             st.session_state[_plsp_chk_key] = True
                         _chk = st.checkbox("", key=_plsp_chk_key, label_visibility="collapsed")
                         st.markdown(f"**{_pl_label(_rr)}** ({_rr.get('jenis_pl','?')})")
-                    with _col_file: # JKK tab3 marker
+                    with _col_file:  # JKK Tab 4 marker
                         _dokpil_detected = _find_dokpil_pdf_root(_rr.get("_folder_lokal"))
                         if _dokpil_detected["status"] == "found":
-                            st.caption(f"✅ Auto root: `{os.path.basename(_dokpil_detected['path'])}`")
+                            _dokpil_auto_detected = True
                         elif _dokpil_detected["status"] == "ambiguous":
+                            _dokpil_auto_detected = False
                             _names = ", ".join(os.path.basename(p) for p in _dokpil_detected["candidates"])
                             st.warning(f"⚠️ Dokpil root ambigu: {_names}. Pilih manual.")
+                        else:
+                            _dokpil_auto_detected = False
                         _dokpil_up = st.file_uploader(
                             "Dokpil PDF (manual override, opsional)",
                             type=["pdf"],
@@ -4434,7 +4458,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_prev = datetime.now().date()
                             _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
                             if _no_prev:
-                                st.caption(f"📄 {_dokpil_file.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                                _auto_note = " · otomatis" if _dokpil_auto_detected and not _dokpil_up else ""
+                                st.caption(
+                                    f"📄 {_dokpil_file.name} · 📋 `{_no_prev}` · "
+                                    f"📅 {_tgl_prev.strftime('%d-%m-%Y')}{_auto_note}"
+                                )
                             else:
                                 st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
@@ -4973,7 +5001,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _render_pl_setup_report(_hasil_sp)
 
 
-    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -5167,9 +5195,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
-    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    # ── Tab 3 Section: Umumkan Paket Non Tender (PL JKK) ─────────────────────
-    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
+    # ── Tab 6 Section 1: Pilih Penyedia ke SPSE ─────────────────────────────
+    # ── Tab 6 Section 2: Umumkan Paket Non Tender (PL JKK) ───────────────────
+    if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -5213,6 +5241,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.success(f"✅ {_flash_jkk['paket'][:60]} — {_flash_jkk.get('pesan', 'Berhasil diumumkan')}")
             else:
                 st.error(f"❌ {_flash_jkk['paket'][:60]} — {_flash_jkk.get('pesan', 'Gagal diumumkan')}")
+        _render_pl_announce_log("pl_announce_log_jkk")
         _pp_umum_semua = _pp_rows + _pp_sudah_diumumkan
         _paket_sudah_umum = [
             r for r in _pp_umum_semua
@@ -5265,19 +5294,53 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _cookie_umum = None
                 if _cookie_umum:
                     _umum_hasil_jkk = []
+                    _umum_started_jkk = datetime.now()
                     for _kp_umum in _pilih_umum:
                         _r_umum = next((r for r in _paket_belum_umum if r["kode_paket"] == _kp_umum), {"nama_paket": _kp_umum})
                         _nm_umum = _pl_label(_r_umum)
-                        _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
-                        _umum_hasil_jkk.append({"paket": _nm_umum, **_ru})
-                        if _ru["ok"]:
+                        try:
+                            _ru = pl_engine.umumkan_paket_pl(_kp_umum, _cookie_umum)
+                        except Exception as _e_umum:
+                            _ru = {
+                                "ok": False,
+                                "status_code": 0,
+                                "pesan": f"Exception saat pengumuman: {_e_umum}",
+                            }
+                        _umum_hasil_jkk.append({
+                            **_ru,
+                            "kode_paket": _kp_umum,
+                            "paket": _nm_umum,
+                            "stage": f"GET /nontender/{_kp_umum}/edit + POST /pengumumanpp",
+                        })
+                        if _ru.get("ok"):
                             _mark_paket_sudah_diumumkan(_kp_umum, _ru)
                         else:
-                            st.error(f"❌ {_nm_umum[:60]} — {_ru['pesan']}")
+                            st.error(f"❌ {_nm_umum[:60]} — {_ru.get('pesan', 'pengumuman gagal')}")
+                    st.session_state["pl_announce_log_jkk"] = _format_pl_announce_log(
+                        _umum_hasil_jkk,
+                        family="JKK",
+                        started_at=_umum_started_jkk,
+                    )
                     if any(row.get("ok") for row in _umum_hasil_jkk):
                         st.session_state["pl_umumkan_flash_jkk"] = _umum_hasil_jkk
                         _load_draft_pl_cached.clear()
                         st.rerun()
+                    st.rerun()
+                else:
+                    st.session_state["pl_announce_log_jkk"] = _format_pl_announce_log(
+                        [
+                            {
+                                "kode_paket": kode,
+                                "paket": _pl_label(next((r for r in _paket_belum_umum if r["kode_paket"] == kode), {})),
+                                "ok": False,
+                                "stage": "Ambil cookie sesi SPSE",
+                                "error": "Cookie SPSE kosong; batch tidak dikirim.",
+                            }
+                            for kode in _pilih_umum
+                        ],
+                        family="JKK",
+                    )
+                    st.rerun()
 
     if _pl_active_tab == "9️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl
@@ -7503,8 +7566,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ):
                 _do_upload_ba_pl(_ba_pl_valid)
 
-    # ── Tab 4: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "6️⃣ Buat Jadwal":
+    # ── Tab 5: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
+    if _pl_active_tab == "5️⃣ Buat Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -7981,10 +8044,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     with _col_file:
                         _dokpil_detected = _find_dokpil_pdf_root(_rr.get("_folder_lokal"))
                         if _dokpil_detected["status"] == "found":
-                            st.caption(f"✅ Auto root: `{os.path.basename(_dokpil_detected['path'])}`")
+                            _dokpil_auto_detected = True
                         elif _dokpil_detected["status"] == "ambiguous":
+                            _dokpil_auto_detected = False
                             _names = ", ".join(os.path.basename(p) for p in _dokpil_detected["candidates"])
                             st.warning(f"⚠️ Dokpil root ambigu: {_names}. Pilih manual.")
+                        else:
+                            _dokpil_auto_detected = False
                         _dokpil_up = st.file_uploader(
                             "Dokpil PDF (manual override, opsional)",
                             type=["pdf"],
@@ -8007,7 +8073,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_prev = datetime.now().date()
                             _no_prev, _no_prev_error = _nomor_dokpil_pl_row(_rr)
                             if _no_prev:
-                                st.caption(f"📄 {_dokpil_file.name}  \n📋 `{_no_prev}`  \n📅 {_tgl_prev.strftime('%d-%m-%Y')}")
+                                _auto_note = " · otomatis" if _dokpil_auto_detected and not _dokpil_up else ""
+                                st.caption(
+                                    f"📄 {_dokpil_file.name} · 📋 `{_no_prev}` · "
+                                    f"📅 {_tgl_prev.strftime('%d-%m-%Y')}{_auto_note}"
+                                )
                             else:
                                 st.warning(f"⚠️ Nomor Dokpil tidak valid dari Excel: {_no_prev_error}")
                             if st.button("📤 Upload Dokpil", key=f"plsp_upload_only_{_kp_key}", use_container_width=True, disabled=not _no_prev):
@@ -8571,7 +8641,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _render_pl_setup_report(_hasil_sp)
 
 
-    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
+    if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 🏢 Pilih Penyedia ke SPSE")
         st.caption(
@@ -8761,9 +8831,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 )
 
     # ── Tab 7: Kirim Verifikasi Penyedia ─────────────────────────────────────
-    # ── Tab 4 Section 2: Pilih Penyedia ke SPSE ─────────────────────────────
-    # ── Tab 3 Section: Umumkan Paket Non Tender (PL PK) ─────────────────────
-    if _pl_active_tab == "5️⃣ Pilih Penyedia & Umumkan":
+    # ── Tab 6 Section 1: Pilih Penyedia ke SPSE ─────────────────────────────
+    # ── Tab 6 Section 2: Umumkan Paket Non Tender (PL PK) ───────────────────
+    if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
         st.markdown("### 📢 Umumkan Paket Non Tender")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
@@ -8807,6 +8877,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.success(f"✅ {_flash_pk['paket'][:60]} — {_flash_pk.get('pesan', 'Berhasil diumumkan')}")
             else:
                 st.error(f"❌ {_flash_pk['paket'][:60]} — {_flash_pk.get('pesan', 'Gagal diumumkan')}")
+        _render_pl_announce_log("pl_announce_log_pk")
         _pp_umum_semua_pk = _pp_rows + _pp_sudah_diumumkan
         _paket_sudah_umum_pk = [
             r for r in _pp_umum_semua_pk
@@ -8859,19 +8930,53 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _cookie_umum_pk = None
                 if _cookie_umum_pk:
                     _umum_hasil_pk = []
+                    _umum_started_pk = datetime.now()
                     for _kp_umum_pk in _pilih_umum_pk:
                         _r_umum_pk = next((r for r in _paket_belum_umum_pk if r["kode_paket"] == _kp_umum_pk), {"nama_paket": _kp_umum_pk})
                         _nm_umum_pk = _pl_label(_r_umum_pk)
-                        _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
-                        _umum_hasil_pk.append({"paket": _nm_umum_pk, **_ru_pk})
-                        if _ru_pk["ok"]:
+                        try:
+                            _ru_pk = pl_engine.umumkan_paket_pl(_kp_umum_pk, _cookie_umum_pk)
+                        except Exception as _e_umum_pk:
+                            _ru_pk = {
+                                "ok": False,
+                                "status_code": 0,
+                                "pesan": f"Exception saat pengumuman: {_e_umum_pk}",
+                            }
+                        _umum_hasil_pk.append({
+                            **_ru_pk,
+                            "kode_paket": _kp_umum_pk,
+                            "paket": _nm_umum_pk,
+                            "stage": f"GET /nontender/{_kp_umum_pk}/edit + POST /pengumumanpp",
+                        })
+                        if _ru_pk.get("ok"):
                             _mark_paket_sudah_diumumkan(_kp_umum_pk, _ru_pk)
                         else:
-                            st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk['pesan']}")
+                            st.error(f"❌ {_nm_umum_pk[:60]} — {_ru_pk.get('pesan', 'pengumuman gagal')}")
+                    st.session_state["pl_announce_log_pk"] = _format_pl_announce_log(
+                        _umum_hasil_pk,
+                        family="PK",
+                        started_at=_umum_started_pk,
+                    )
                     if any(row.get("ok") for row in _umum_hasil_pk):
                         st.session_state["pl_umumkan_flash_pk"] = _umum_hasil_pk
                         _load_draft_pl_cached.clear()
                         st.rerun()
+                    st.rerun()
+                else:
+                    st.session_state["pl_announce_log_pk"] = _format_pl_announce_log(
+                        [
+                            {
+                                "kode_paket": kode,
+                                "paket": _pl_label(next((r for r in _paket_belum_umum_pk if r["kode_paket"] == kode), {})),
+                                "ok": False,
+                                "stage": "Ambil cookie sesi SPSE",
+                                "error": "Cookie SPSE kosong; batch tidak dikirim.",
+                            }
+                            for kode in _pilih_umum_pk
+                        ],
+                        family="PK",
+                    )
+                    st.rerun()
 
     if _pl_active_tab == "9️⃣ Kirim Verifikasi":
         import verifikasi_penyedia_pl as _verif_pl

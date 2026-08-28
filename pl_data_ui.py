@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 
 import streamlit as st
 
@@ -80,6 +81,54 @@ def mark_tahap_spse_sudah_diumumkan(tahap_map: dict) -> int:
     if jumlah:
         st.session_state[_PL_UMUMKAN_STATUS_KEY] = status
     return jumlah
+
+
+def format_pl_announce_log(
+    results: list[dict],
+    *,
+    family: str = "PL",
+    started_at: datetime | None = None,
+) -> list[str]:
+    """Buat log announce yang terstruktur, persisten, dan mudah dicopy."""
+    rows = list(results or [])
+    started = started_at if isinstance(started_at, datetime) else datetime.now()
+    ok_count = sum(bool(row.get("ok")) for row in rows)
+    lines = [
+        "LOG PENGUMUMAN PAKET PL",
+        f"Mulai : {started.strftime('%d-%m-%Y %H:%M:%S')}",
+        f"Family: {str(family or 'PL').upper()}",
+        f"Total : {len(rows)} paket | Berhasil: {ok_count} | Gagal: {len(rows) - ok_count}",
+        "",
+    ]
+    for index, row in enumerate(rows, 1):
+        code = str(row.get("kode_paket") or "-").strip()
+        package = str(row.get("paket") or row.get("nama") or code).strip()
+        message = str(
+            row.get("error") or row.get("pesan") or row.get("body") or "-"
+        ).strip().replace("\r", " ").replace("\n", " ")
+        status = row.get("status_code", row.get("status", "-"))
+        status_text = str(status if status not in (None, "") else "-")
+        stage = str(row.get("stage") or "").strip()
+        if not stage:
+            lower = message.casefold()
+            stage = (
+                f"GET /nontender/{code}/edit + CSRF"
+                if "get edit" in lower or status_text in {"0", "404"}
+                else f"POST /nontender/{code}/pengumumanpp"
+            )
+        outcome = "BERHASIL" if row.get("ok") else "GAGAL"
+        lines.extend(
+            [
+                f"[{index}] {package}",
+                f"     Kode  : {code}",
+                f"     Tahap : {stage}",
+                f"     HTTP  : {status_text}",
+                f"     Hasil : {outcome}",
+                f"     Detail: {message[:1000]}",
+                "",
+            ]
+        )
+    return lines
 
 
 def overlay_live_tahap_spse(rows: list[dict]) -> list[dict]:

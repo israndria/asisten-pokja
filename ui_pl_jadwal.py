@@ -63,7 +63,8 @@ def render_custom_jadwal_pl(
     for index, nama in enumerate(jadwal_engine_pl.NAMA_TAHAP_PL):
         row_seed = seed[index]
         st.markdown(f"**{nama}**")
-        c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+        st.caption("Mulai")
+        c1, c2 = st.columns([3, 2])
         with c1:
             mulai_tanggal = st.date_input(
                 "Mulai — tanggal",
@@ -77,6 +78,8 @@ def render_custom_jadwal_pl(
                 value=row_seed["mulai"].time(),
                 key=f"{prefix}_mulai_jam_{index}",
             )
+        st.caption("Selesai")
+        c3, c4 = st.columns([3, 2])
         with c3:
             selesai_tanggal = st.date_input(
                 "Selesai — tanggal",

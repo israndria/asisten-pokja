@@ -212,6 +212,43 @@ def test_checklist_302_without_checked_rows_is_not_success(monkeypatch):
     assert "belum menyimpan" in result["error"].lower()
 
 
+def test_checklist_verification_error_keeps_original_error(monkeypatch):
+    context = {
+        "csrf": "csrf-checklist",
+        "cookie": "cookie",
+        "admin_items": [],
+        "syarat_items": [{"chk_id": "t1", "ckm_id": "341"}],
+        "harga_items": [],
+        "disabled_ckm_ids": set(),
+        "checked_ckm_ids": set(),
+        "url_submit": "https://spse.test/checklistsubmit",
+        "url_form": "https://spse.test/checklist",
+    }
+    calls = iter((context,))
+
+    def fake_context(_kode):
+        try:
+            return next(calls)
+        except StopIteration as exc:
+            raise RuntimeError("SPSE timeout saat verifikasi") from exc
+
+    monkeypatch.setattr(engine, "scrap_checklist_context", fake_context)
+    monkeypatch.setattr(
+        engine.requests,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=302, text="", headers={"Location": "/checklist"}
+        ),
+    )
+
+    result = engine.submit_checklist_pl("PK-1", selected_ckm_ids=("341",))
+
+    assert result["ok"] is False
+    assert result["missing_ckm_ids"] == ["341"]
+    assert "SPSE timeout" in result["error"]
+    assert "_sort_ckm" not in result["error"]
+
+
 def test_jkk_sbu_update_also_uses_direct_http(monkeypatch):
     html = """
     <form action="/tapinkab/dokumennontender/JKK-1/ldksubmitbaru" method="post">
