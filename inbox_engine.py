@@ -17,6 +17,7 @@ import platform as _platform_top
 
 import spse_browser
 from config import sb as _sb
+from spse_retry import request_with_retry
 
 # Windows: set sekali per proses, bukan per-thread — ganti policy berulang
 # dari thread berbeda bikin Proactor child-watcher/pipe global rusak,
@@ -39,7 +40,10 @@ def _headers(referer: str = "") -> dict:
 
 
 def _get(url: str, referer: str = "", timeout: int = 10) -> requests.Response:
-    return requests.get(url, headers=_headers(referer), timeout=timeout)
+    return request_with_retry(
+        lambda: requests.get(url, headers=_headers(referer), timeout=max(timeout, 30)),
+        label=url.rsplit("/", 1)[-1],
+    )
 
 
 # ── Scrape list inbox ──────────────────────────────────────────────────────────
@@ -81,11 +85,12 @@ def ambil_list_inbox() -> list[dict]:
         "authenticityToken": token,
     }
 
-    r = requests.post(
-        f"{BASE_URL}/dt/inbox-nonpenyedia",
-        headers=headers,
-        data=payload,
-        timeout=30,
+    r = request_with_retry(
+        lambda: requests.post(
+            f"{BASE_URL}/dt/inbox-nonpenyedia", headers=headers,
+            data=payload, timeout=30,
+        ),
+        label="inbox DataTables",
     )
     r.raise_for_status()
 
@@ -336,6 +341,14 @@ def serap_inbox_pl(progress_cb=None, tahap_map: dict | None = None) -> dict:
                 errors.append(f"{kode_paket}: HPS live gagal — {_hps_e}")
             matched += 1
             log(prog, f"  OK {kode_paket} ({detail.get('nama_paket', '')[:30]}) - MAK {detail.get('mak', '')[:30]}")
+        except requests.HTTPError as e:
+            # Pesan inbox lama kadang masih muncul pada DataTables, tetapi
+            # detailnya sudah dihapus SPSE. Ini bukan kegagalan paket.
+            if getattr(e.response, "status_code", None) == 404:
+                skipped += 1
+                log(prog, f"  Skip pesan {p['id_pesan']} — detail inbox sudah tidak tersedia (HTTP 404)")
+            else:
+                errors.append(f"Pesan {p['id_pesan']}: {e}")
         except Exception as e:
             errors.append(f"Pesan {p['id_pesan']}: {e}")
 

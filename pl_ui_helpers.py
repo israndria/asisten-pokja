@@ -434,7 +434,11 @@ def _pl_label(row: dict) -> str:
     resolusi folder, payload SPSE, dan pencocokan database.
     """
     nama = str(row.get("nama_paket") or row.get("kode_paket") or "-").strip()
-    nomor = str(row.get("nomor_urut") or "").strip() or _pl_folder_number(row)
+    nomor = (
+        str(row.get("nomor_urut") or "").strip()
+        or str(row.get("_display_nomor_urut") or "").strip()
+        or _pl_folder_number(row)
+    )
     if nomor and not nama.startswith(f"{nomor}."):
         nama = f"{nomor}. {nama}"
     return nama + _pl_hint_ulang(row)

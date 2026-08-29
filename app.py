@@ -2765,6 +2765,26 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             for r in _pl_rows_local if r.get("kode_paket")
         }
 
+        # Nomor calon ditampilkan sejak paket masih di DB; filesystem tetap
+        # tidak disentuh sampai user menekan Buat Folder.
+        _pl_rows_belum_display = [
+            r for r in _pl_rows
+            if r.get("nama_paket")
+            and str(r.get("kode_paket") or "") not in _pl_local_by_kode
+        ]
+        _pl_display_plan = plan_nomor_folder_pl(
+            _pl_rows_belum_display, (_PL_DIR_JKK, _PL_DIR_PK)
+        )
+        for _pl_display_row in _pl_rows_belum_display:
+            _pl_display_code = str(_pl_display_row.get("kode_paket") or "")
+            _pl_display_number = (
+                _pl_display_plan.get("assignments", {})
+                .get(_pl_display_code, {})
+                .get("nomor_urut")
+            )
+            if _pl_display_number:
+                _pl_display_row["_display_nomor_urut"] = _pl_display_number
+
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
         # ══════════════════════════════════════════════════════
@@ -3245,8 +3265,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 for row in _pl_rows_belum
                 if (info := _pl_number_by_kode.get(str(row.get('kode_paket') or "")))
             ]
-            if _pl_preview:
-                st.caption("Preview nomor folder: " + " · ".join(_pl_preview))
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")
@@ -6589,6 +6607,31 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             for r in _pl_rows_local if r.get("kode_paket")
         }
 
+        # Nomor calon ditampilkan sejak paket masih di DB; filesystem tetap
+        # tidak disentuh sampai user menekan Buat Folder.
+        _pl_rows_belum_display = [
+            r for r in _pl_rows
+            if r.get("nama_paket")
+            and str(r.get("kode_paket") or "") not in _pl_local_by_kode
+        ]
+        _pl_display_plan = plan_nomor_folder_pl(
+            _pl_rows_belum_display,
+            (_PL_DIR_JKK, _PL_DIR_PK),
+            use_backup=False,
+            use_database=False,
+            start_number=35,
+            allocation_base=_PL_DIR_PK,
+        )
+        for _pl_display_row in _pl_rows_belum_display:
+            _pl_display_code = str(_pl_display_row.get("kode_paket") or "")
+            _pl_display_number = (
+                _pl_display_plan.get("assignments", {})
+                .get(_pl_display_code, {})
+                .get("nomor_urut")
+            )
+            if _pl_display_number:
+                _pl_display_row["_display_nomor_urut"] = _pl_display_number
+
         _pl_col_kiri, _pl_col_kanan = st.columns(2)
 
         # ══════════════════════════════════════════════════════
@@ -7003,8 +7046,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 for row in _pl_rows_belum
                 if (info := _pl_number_by_kode.get(str(row.get('kode_paket') or "")))
             ]
-            if _pl_preview:
-                st.caption("Preview nomor folder: " + " · ".join(_pl_preview))
             _pl_bulk_plan = []
             for _bi0, _br0 in enumerate(_pl_rows_belum, 1):
                 _bnm0  = _br0.get("nama_paket", "")

@@ -942,8 +942,16 @@ def _resolve_dokid_hps_pl(kode_paket: str, cookie_str: str) -> str:
     """Resolve DOKID dokumen HPS dari kode_paket via link /surveyhargappk di halaman nontender.
     Return DOKID string, atau '' jika tidak ketemu."""
     import requests
+    from spse_retry import request_with_retry
     url = f"{SPSE_BASE_URL}nontender/{kode_paket}"
-    r = requests.get(url, headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"}, timeout=15)
+    r = request_with_retry(
+        lambda: requests.get(
+            url,
+            headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        ),
+        label=f"resolve HPS {kode_paket}",
+    )
     if r.status_code != 200:
         return ""
     m = re.search(r'dokumennontender/(\d+)/surveyhargappk', r.text)
@@ -954,18 +962,22 @@ def _fetch_hps_page_pl(kode_paket: str) -> dict:
     """Ambil rincian HPS + TOTAL PAGU non-tender via requests + cookie PP."""
     import requests
     import spse_browser
+    from spse_retry import request_with_retry
 
     cookie_str = spse_browser.get_spse_cookies()
     if not cookie_str:
         return {"items": [], "nilai_pagu": ""}
 
     # Resolve DOKID dulu — id_nontender di DB adalah ID peserta, bukan DOKID HPS
-    dokid = _resolve_dokid_hps_pl(kode_paket, cookie_str)
+    dokid = request_with_retry(
+        lambda: _resolve_dokid_hps_pl(kode_paket, cookie_str),
+        label=f"resolve HPS {kode_paket}",
+    )
     if not dokid:
         return {"items": [], "nilai_pagu": ""}
 
     url = f"{SPSE_BASE_URL}dokumennontender/{dokid}/hps"
-    r = requests.get(
+    r = request_with_retry(lambda: requests.get(
         url,
         headers={
             "Cookie": cookie_str,
@@ -973,8 +985,8 @@ def _fetch_hps_page_pl(kode_paket: str) -> dict:
             # Referer wajib — tanpa ini server return 500
             "Referer": f"{SPSE_BASE_URL}nontender/{kode_paket}",
         },
-        timeout=15,
-    )
+        timeout=30,
+    ), label=f"HPS {kode_paket}")
     if r.status_code != 200:
         return {"items": [], "nilai_pagu": ""}
     page = _parse_hps_page(r.text)
@@ -985,15 +997,15 @@ def _fetch_hps_page_pl(kode_paket: str) -> dict:
     # otoritatif itu bila tersedia; rincian item tetap dipertahankan untuk
     # audit dan rekonsiliasi.
     try:
-        edit = requests.get(
+        edit = request_with_retry(lambda: requests.get(
             f"{SPSE_BASE_URL}nontender/{kode_paket}/edit",
             headers={
                 "Cookie": cookie_str,
                 "User-Agent": "Mozilla/5.0",
                 "Referer": f"{SPSE_BASE_URL}nontender/{kode_paket}",
             },
-            timeout=15,
-        )
+            timeout=30,
+        ), label=f"HPS resmi {kode_paket}")
         if edit.status_code == 200:
             official = _parse_official_hps_summary(edit.text)
             if official is not None:

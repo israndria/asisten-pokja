@@ -297,6 +297,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     Returns    : {"ok": True, "scraped": N, "errors": [...]}
     """
     import requests
+    from spse_retry import request_with_retry
 
     def log(msg):
         if log_fn:
@@ -306,7 +307,11 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
     # 1. Fetch daftar paket
     try:
-        resp = requests.get(f"{base_url}dt/paketpp", headers=headers, timeout=15)
+        resp = request_with_retry(
+            lambda: requests.get(f"{base_url}dt/paketpp", headers=headers, timeout=30),
+            log=log, label="daftar paket PK",
+        )
+        resp.raise_for_status()
         payload = resp.json()
         rows = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(rows, list):
@@ -394,10 +399,11 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         )
         try:
             import re as _re
-            r_eval = requests.get(
-                f"{base_url}evaluasinontender/{kode_paket}",
-                headers=headers, timeout=15
+            r_eval = request_with_retry(
+                lambda: requests.get(f"{base_url}evaluasinontender/{kode_paket}", headers=headers, timeout=30),
+                log=log, label=f"evaluasi {kode_paket}",
             )
+            r_eval.raise_for_status()
             ids_peserta = _re.findall(
                 r'/evaluasinontender/(\d+)/kirimundanganverifikasi', r_eval.text
             )
@@ -417,10 +423,11 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         viewdraft = {}
         edit_html = ""
         try:
-            r_edit = requests.get(
-                f"{base_url}nontender/{kode_paket}/edit",
-                headers=headers, timeout=15
+            r_edit = request_with_retry(
+                lambda: requests.get(f"{base_url}nontender/{kode_paket}/edit", headers=headers, timeout=30),
+                log=log, label=f"edit {kode_paket}",
             )
+            r_edit.raise_for_status()
             edit_html = r_edit.text
             jenis_kontrak = _parse_jenis_kontrak_dari_edit(edit_html)
             metode_pengadaan = _parse_metode_pengadaan_dari_edit(edit_html)
@@ -438,10 +445,11 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         nama_ppk = ""
         try:
             from pl_engine import _lookup_nama_ppk_lengkap, _parse_nama_ppk_dari_view
-            r_view = requests.get(
-                f"{base_url}nontender/{kode_paket}",
-                headers=headers, timeout=15,
+            r_view = request_with_retry(
+                lambda: requests.get(f"{base_url}nontender/{kode_paket}", headers=headers, timeout=30),
+                log=log, label=f"view {kode_paket}",
             )
+            r_view.raise_for_status()
             nama_ppk = _parse_nama_ppk_dari_view(r_view.text)
             if nama_ppk:
                 nama_ppk = _lookup_nama_ppk_lengkap(nama_ppk)
@@ -514,7 +522,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         if "draft" not in status or any(k in tahap for k in _TAHAP_SELESAI_KEYWORDS):
             log(f"  Skip kualifikasi {kode}: status={status or '-'}, tahap={tahap or '-'}")
             continue
-        ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
+        ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url, log_fn=log)
         log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
 
     return {
@@ -526,21 +534,23 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     }
 
 
-def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str) -> bool:
+def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str, log_fn=None) -> bool:
     """
     Set kualifikasi usaha ke Kecil (kualifikasiId=21) via POST /nontender/{kode}/simpan.
     headers: dict Cookie+User-Agent (sudah siap dari serap).
     Return True jika 302 redirect (sukses), False jika gagal.
     """
     import requests
+    from spse_retry import request_with_retry
     from bs4 import BeautifulSoup
 
     try:
         # Ambil authenticityToken dari halaman edit
-        r_edit = requests.get(
-            f"{base_url}nontender/{kode_paket}/edit",
-            headers=headers, timeout=15,
+        r_edit = request_with_retry(
+            lambda: requests.get(f"{base_url}nontender/{kode_paket}/edit", headers=headers, timeout=30),
+            log=log_fn, label=f"usaha kecil {kode_paket}",
         )
+        r_edit.raise_for_status()
         soup = BeautifulSoup(r_edit.text, "html.parser")
         token_input = soup.find("input", {"name": "authenticityToken"})
         if not token_input:
@@ -554,12 +564,12 @@ def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str) -> b
             "kualifikasiId": "21",   # 21 = Kecil
             "pl.oap": "1",
         }
-        r_post = requests.post(
-            f"{base_url}nontender/{kode_paket}/simpan",
-            headers=post_headers,
-            data=payload,
-            timeout=15,
-            allow_redirects=False,
+        r_post = request_with_retry(
+            lambda: requests.post(
+                f"{base_url}nontender/{kode_paket}/simpan", headers=post_headers,
+                data=payload, timeout=30, allow_redirects=False,
+            ),
+            log=log_fn, label=f"simpan usaha kecil {kode_paket}",
         )
         return r_post.status_code in (301, 302)
     except Exception:

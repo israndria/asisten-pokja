@@ -464,6 +464,15 @@ def test_pl_label_falls_back_to_number_in_physical_folder(tmp_path):
     assert label == "56. Paket Rabat Beton"
 
 
+def test_pl_label_uses_planned_number_before_folder_exists():
+    label = pl_ui_helpers._pl_label({
+        "nama_paket": "Belanja Modal Bangunan Gedung",
+        "_display_nomor_urut": 80,
+    })
+
+    assert label == "80. Belanja Modal Bangunan Gedung"
+
+
 def test_pl_family_loader_isolated_and_fail_closed():
     rows = [
         {"kode_paket": "PK-1", "jenis_pl": "PK"},
