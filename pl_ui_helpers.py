@@ -444,6 +444,12 @@ def _pl_label(row: dict) -> str:
     return nama + _pl_hint_ulang(row)
 
 
+def _pl_checkbox_label(row: dict) -> str:
+    """Label checkbox Streamlit; lindungi nomor awal dari parser ordered list."""
+    label = _pl_label(row)
+    return re.sub(r"^(\d+)\.(\s+)", r"\1\\.\2", label, count=1)
+
+
 _PL_FOLDER_RE = re.compile(
     r"^\s*(\d+)\.\s*PL(?:JKK|PK)\s*-\s*(.+?)\s*$",
     re.IGNORECASE,

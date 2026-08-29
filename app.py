@@ -333,7 +333,7 @@ def _render_manual_selected_provider_info(
 
 from ui_dpa import render_tab_dpa as _render_tab_dpa
 # Display labels are numbered from the physical package folders.
-from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, ensure_pl_evaluation_checkbox_defaults, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
+from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _cari_xlsm_pl, _engine_for_jenis_pl, ensure_pl_evaluation_checkbox_defaults, _find_dokpil_pdf_root, _fmt_elapsed, _fmt_step_seconds, _pl_checkbox_label, _pl_hint_ulang, _pl_label, _pl_paket_ulang, _pl_proses_io_satu_paket, _proses_excel_paket_pl, _resolve_dokpil_file_root, _sinkronkan_identitas_penyedia_pl, _template_dir_pl_jkk, _pl_workflow, mark_workflow_applied, migrate_pl_workflow, plan_nomor_folder_pl, update_hps_paket_pl
 from tender_hps import update_hps_tender as _update_hps_tender
 from ui_pl_jadwal import (
     _render_ubah_jadwal_pl,
@@ -3321,7 +3321,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     if _chk_num_info.get("nomor_urut"):
                         _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
                     st.checkbox(
-                        f"{_pl_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_pl_checkbox_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
@@ -6620,10 +6620,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _pl_display_plan = plan_nomor_folder_pl(
             _pl_rows_belum_display,
             (_PL_DIR_JKK, _PL_DIR_PK),
-            use_backup=False,
-            use_database=False,
-            start_number=35,
-            allocation_base=_PL_DIR_PK,
         )
         for _pl_display_row in _pl_rows_belum_display:
             _pl_display_code = str(_pl_display_row.get("kode_paket") or "")
@@ -7035,10 +7031,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             _pl_number_plan = plan_nomor_folder_pl(
                 _pl_rows_belum,
                 (_PL_DIR_JKK, _PL_DIR_PK),
-                use_backup=False,
-                use_database=False,
-                start_number=35,
-                allocation_base=_PL_DIR_PK,
             )
             _pl_number_by_kode = _pl_number_plan["assignments"]
             _pl_number_conflicts = _pl_number_plan["conflicts"]
@@ -7100,7 +7092,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     if _chk_num_info.get("nomor_urut"):
                         _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
                     st.checkbox(
-                        f"{_pl_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
+                        f"{_pl_checkbox_label(_chk_display)} — {(_br_chk.get('jenis_pl') or '').upper()}",
                         key=_plf_chk_key,
                     )
                 # Hitung yang dicentang untuk label tombol
