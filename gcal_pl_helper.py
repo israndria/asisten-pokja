@@ -508,7 +508,13 @@ def _auto_enroll_folder_pl() -> None:
 
 
 def _load_owned_pl_rows() -> list[dict]:
-    """Ambil PL hanya bila kodenya ada di allowlist aktif."""
+    """Ambil semua target PL aktif dari registry.
+
+    Registry adalah allowlist eksplisit untuk kalender. Data
+    ``draft_paket_pl`` dipakai sebagai enrichment/status bila tersedia, tetapi
+    ketiadaan row di tabel tersebut tidak boleh membuat target registry yang
+    sah hilang dari backfill GCal.
+    """
     from config import sb as _sb
 
     _auto_enroll_folder_pl()
@@ -524,18 +530,24 @@ def _load_owned_pl_rows() -> list[dict]:
     for target in targets:
         code = str(target.get("kode_paket") or "").strip()
         row = by_code.get(code)
-        if not row:
-            continue
+        target_folder = str(target.get("folder_name") or "").strip()
+        # Folder numbering/names can change after a package is moved or
+        # archived. If the recorded folder still exists, validate its
+        # workbook identity; if it is stale/missing, keep the explicit
+        # allowlisted code so existing GCal events can still be backfilled.
+        # A missing local folder is not proof that the SPSE package is invalid.
         if (
             str(target.get("source") or "").strip() == "folder-auto"
-            and not _pl_folder_identity_valid(target.get("folder_name", ""), code)
+            and target_folder
+            and os.path.isdir(target_folder)
+            and not _pl_folder_identity_valid(target_folder, code)
         ):
             continue
-        if str(row.get("tahap_spse") or "").strip() == "Paket Sudah Selesai":
+        if str((row or {}).get("tahap_spse") or "").strip() == "Paket Sudah Selesai":
             continue
         result.append({
             "kode_paket": code,
-            "nama_paket": target.get("nama_paket") or row.get("nama_paket") or code,
+            "nama_paket": target.get("nama_paket") or (row or {}).get("nama_paket") or code,
         })
     return result
 

@@ -90,7 +90,7 @@ class GcalPlHelperTest(unittest.TestCase):
                     gcal_pl_helper._pl_folder_identity_valid("Paket PL", "999999")
                 )
 
-    def test_pl_sync_uses_only_allowlisted_active_rows(self):
+    def test_pl_sync_uses_registry_targets_even_when_db_row_is_missing(self):
         class _Query:
             def select(self, *_columns):
                 return self
@@ -110,11 +110,16 @@ class GcalPlHelperTest(unittest.TestCase):
                 return _Query()
 
         with patch.object(gcal_pl_helper, "load_targets", return_value=[
-            {"kode_paket": "1"}, {"kode_paket": "2"}, {"kode_paket": "3"}
+            {"kode_paket": "1"}, {"kode_paket": "2"}, {"kode_paket": "3"},
+            {"kode_paket": "4", "source": "folder-auto", "folder_name": "Z:\\stale-package"},
         ]), patch.object(config, "sb", return_value=_Client()):
             rows = gcal_pl_helper._load_owned_pl_rows()
 
-        self.assertEqual(rows, [{"kode_paket": "1", "nama_paket": "Target"}])
+        self.assertEqual(rows, [
+            {"kode_paket": "1", "nama_paket": "Target"},
+            {"kode_paket": "3", "nama_paket": "3"},
+            {"kode_paket": "4", "nama_paket": "4"},
+        ])
 
     def test_auto_enroll_pl_resolves_boolean_folder_status(self):
         expected_folder = r"D:\PL\30. PLPK - Paket Aktif"
