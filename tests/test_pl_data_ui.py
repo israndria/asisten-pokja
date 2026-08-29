@@ -25,7 +25,12 @@ from ui_pl_pk import (
     provider_identity_available,
     provider_selection_status_caption,
 )
-from ui_pl_jadwal import filter_paket_penandatanganan_kontrak, filter_paket_sudah_tayang
+from ui_pl_jadwal import (
+    filter_paket_penandatanganan_kontrak,
+    filter_paket_sudah_tayang,
+    filter_paket_upload_terlambat,
+    is_late_upload_scan_current,
+)
 
 
 def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
@@ -139,6 +144,68 @@ def test_filter_paket_sudah_tayang_is_independent_and_keeps_prestart_until_t5():
     assert [row["kode_paket"] for row in filter_paket_sudah_tayang(
         rows, {"session": {"status": "sudah diumumkan"}}
     )] == ["prestart", "upload", "contract", "announced", "session"]
+
+
+def test_filter_paket_upload_terlambat_requires_zero_participant_and_past_t1():
+    now = datetime(2026, 8, 29, 16, 30)
+    rows = [
+        {"kode_paket": "past-zero", "nama_paket": "Past zero"},
+        {"kode_paket": "past-one", "nama_paket": "Past one"},
+        {"kode_paket": "future-zero", "nama_paket": "Future zero"},
+        {"kode_paket": "error-zero", "nama_paket": "Error zero"},
+        {"kode_paket": "short-zero", "nama_paket": "Short zero"},
+    ]
+    schedule = lambda deadline: [
+        {"mulai": now.replace(hour=8), "selesai": deadline},
+        {"mulai": deadline, "selesai": deadline},
+        {"mulai": deadline, "selesai": deadline},
+        {"mulai": deadline, "selesai": deadline},
+        {"mulai": deadline, "selesai": deadline},
+    ]
+    schedules = {
+        "past-zero": schedule(datetime(2026, 8, 29, 12, 0)),
+        "past-one": schedule(datetime(2026, 8, 29, 12, 0)),
+        "future-zero": schedule(datetime(2026, 8, 29, 18, 0)),
+        "error-zero": schedule(datetime(2026, 8, 29, 12, 0)),
+        "short-zero": schedule(datetime(2026, 8, 29, 12, 0))[:4],
+    }
+    statuses = {
+        "past-zero": {"jumlah": 0, "error": None},
+        "past-one": {"jumlah": 1, "error": None},
+        "future-zero": {"jumlah": 0, "error": None},
+        "error-zero": {"jumlah": 0, "error": "timeout"},
+        "short-zero": {"jumlah": 0, "error": None},
+    }
+
+    result = filter_paket_upload_terlambat(
+        rows, statuses, schedules, now=now
+    )
+
+    assert [row["kode_paket"] for row in result] == ["past-zero"]
+    assert result[0]["_upload_deadline"] == datetime(2026, 8, 29, 12, 0)
+
+
+def test_filter_paket_upload_terlambat_accepts_spse_datetime_string():
+    now = datetime(2026, 8, 29, 16, 30)
+    schedule = [
+        {"mulai": "29-08-2026 08:00", "selesai": "29-08-2026 12:00"}
+        for _ in range(5)
+    ]
+    result = filter_paket_upload_terlambat(
+        [{"kode_paket": "P-1"}],
+        {"P-1": {"jumlah": "0", "error": None}},
+        {"P-1": schedule},
+        now=now,
+    )
+
+    assert [row["kode_paket"] for row in result] == ["P-1"]
+
+
+def test_late_upload_scan_rejects_legacy_session_state():
+    assert is_late_upload_scan_current({"schema_version": 2}) is True
+    assert is_late_upload_scan_current({"schema_version": 1}) is False
+    assert is_late_upload_scan_current({"errors": {}}) is False
+    assert is_late_upload_scan_current(None) is False
 
 def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang():
     rows = [

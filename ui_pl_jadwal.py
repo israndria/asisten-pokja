@@ -9,6 +9,20 @@ import pl_engine
 from pl_ui_helpers import _pl_label
 
 
+# Naikkan saat bentuk/semantik hasil scan berubah. Session Streamlit dapat
+# bertahan melewati hot-reload, sehingga hasil scan dari kode lama tidak boleh
+# ditampilkan atau dipakai lagi.
+_LATE_UPLOAD_SCAN_SCHEMA_VERSION = 2
+
+
+def is_late_upload_scan_current(scan: dict | None) -> bool:
+    """True jika hasil scan bulk masih kompatibel dengan renderer saat ini."""
+    return (
+        isinstance(scan, dict)
+        and scan.get("schema_version") == _LATE_UPLOAD_SCAN_SCHEMA_VERSION
+    )
+
+
 def _validasi_perubahan_jadwal(current: list[dict], proposed: list[dict]) -> list[str]:
     """Validasi perubahan tanpa memblokir overlap lama yang tidak diperparah.
 
@@ -133,6 +147,78 @@ def filter_paket_sudah_tayang(
     return hasil
 
 
+def _jadwal_datetime(value) -> datetime | None:
+    """Normalisasi nilai tanggal jadwal dari parser live/test fixture."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    for parser in (
+        lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")),
+        lambda text: datetime.strptime(text, "%d-%m-%Y %H:%M"),
+    ):
+        try:
+            parsed = parser(raw)
+            return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _jumlah_peserta(value) -> int | None:
+    """Ambil jumlah peserta non-negatif; ``None`` berarti data invalid."""
+    if isinstance(value, bool):
+        return None
+    try:
+        jumlah = int(value)
+    except (TypeError, ValueError):
+        return None
+    return jumlah if jumlah >= 0 else None
+
+
+def filter_paket_upload_terlambat(
+    rows: list[dict],
+    participant_status: dict,
+    schedules: dict,
+    *,
+    now: datetime | None = None,
+) -> list[dict]:
+    """Pilih paket tayang dengan peserta valid 0 dan deadline T1 terlewati.
+
+    ``rows`` harus sudah berasal dari ``filter_paket_sudah_tayang``. Status
+    peserta/jadwal yang hilang atau error ditolak (fail-closed), karena angka
+    nol hasil timeout tidak boleh dianggap sebagai paket tanpa peserta.
+    Jadwal harus lengkap T1-T5 agar hasil aman langsung dipakai form perubahan.
+    """
+    anchor = now or datetime.now()
+    if anchor.tzinfo is not None:
+        anchor = anchor.replace(tzinfo=None)
+    result = []
+    for row in rows or []:
+        code = str(row.get("kode_paket") or "").strip()
+        status = (participant_status or {}).get(code)
+        if not code or not isinstance(status, dict) or status.get("error"):
+            continue
+        jumlah = _jumlah_peserta(status.get("jumlah"))
+        if jumlah is None:
+            continue
+        if jumlah != 0:
+            continue
+        jadwal = (schedules or {}).get(code)
+        if not isinstance(jadwal, list) or len(jadwal) != 5:
+            continue
+        deadline = _jadwal_datetime(jadwal[0].get("selesai"))
+        if deadline is None or deadline >= anchor:
+            continue
+        enriched = dict(row)
+        enriched["_jumlah_peserta"] = jumlah
+        enriched["_upload_deadline"] = deadline
+        enriched["_jadwal_live"] = jadwal
+        result.append(enriched)
+    return result
+
+
 def filter_paket_penandatanganan_kontrak(
     rows: list[dict],
     *,
@@ -188,6 +274,194 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
         return
 
     by_code = {str(p.get("kode_paket")): p for p in rows}
+    scan_key = f"{prefix}_late_upload_scan"
+    scan_button_key = f"{prefix}_late_upload_scan_button"
+    with st.expander(
+        "⚠️ Bulk Perpanjang Upload Penawaran — peserta 0 & deadline lewat",
+        expanded=False,
+    ):
+        st.caption(
+            "Scan live SPSE hanya memasukkan paket tayang dengan jumlah peserta "
+            "valid 0 dan batas akhir T1 sudah lewat. Paket dengan timeout/error "
+            "tidak dimasukkan. Hasil dapat dimuat ke form perubahan di bawah."
+        )
+        if st.button(
+            "🔎 Scan peserta + deadline upload",
+            key=scan_button_key,
+            use_container_width=True,
+        ):
+            from pl_data_ui import fetch_status_semua_paket_cached
+
+            codes_to_scan = tuple(by_code)
+            with st.spinner(
+                f"Membaca status peserta dan jadwal {len(codes_to_scan)} paket..."
+            ):
+                fetch_status_semua_paket_cached.clear()
+                participant_status = fetch_status_semua_paket_cached(codes_to_scan)
+                schedules = {}
+                scan_errors = {}
+                monitor_rows = []
+                loaded = {}
+                scan_now = datetime.now()
+                for code in codes_to_scan:
+                    package = by_code[code]
+                    status = participant_status.get(code)
+                    if not isinstance(status, dict):
+                        reason = "Status peserta tidak dikembalikan."
+                        scan_errors[code] = reason
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": "?",
+                            "Batas akhir Upload": "-",
+                            "Status": f"Tidak terverifikasi: {reason}",
+                        })
+                        continue
+                    if status.get("error"):
+                        reason = str(status["error"])
+                        scan_errors[code] = reason
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": "?",
+                            "Batas akhir Upload": "-",
+                            "Status": f"Tidak terverifikasi: {reason}",
+                        })
+                        continue
+                    jumlah = _jumlah_peserta(status.get("jumlah"))
+                    if jumlah is None:
+                        reason = "Jumlah peserta tidak valid."
+                        scan_errors[code] = reason
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": "?",
+                            "Batas akhir Upload": "-",
+                            "Status": f"Tidak terverifikasi: {reason}",
+                        })
+                        continue
+                    if jumlah != 0:
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": jumlah,
+                            "Batas akhir Upload": "-",
+                            "Status": "Sudah ada penawaran",
+                        })
+                        continue
+                    try:
+                        scraped = engine.scrap_hidden_fields_pl(code)
+                        jadwal = engine.parse_jadwal_aktual_pl(scraped)
+                        if len(jadwal) != 5:
+                            raise ValueError(
+                                f"SPSE mengembalikan {len(jadwal)}/5 tahap."
+                            )
+                        schedules[code] = jadwal
+                        loaded[code] = {"scraped": scraped, "jadwal": jadwal}
+                        deadline = _jadwal_datetime(jadwal[0].get("selesai"))
+                        if deadline is None:
+                            raise ValueError("deadline T1 tidak terbaca")
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": jumlah,
+                            "Batas akhir Upload": deadline.strftime("%d-%m-%Y %H:%M"),
+                            "Status": (
+                                "Siap diperpanjang"
+                                if deadline < scan_now
+                                else "Deadline belum lewat"
+                            ),
+                        })
+                    except Exception as exc:
+                        reason = f"Jadwal live gagal dibaca: {exc}"
+                        scan_errors[code] = reason
+                        monitor_rows.append({
+                            "Paket": _pl_label(package),
+                            "Peserta": jumlah,
+                            "Batas akhir Upload": "-",
+                            "Status": f"Tidak terverifikasi: {reason}",
+                        })
+                eligible = filter_paket_upload_terlambat(
+                    rows,
+                    participant_status,
+                    schedules,
+                    now=scan_now,
+                )
+                st.session_state[scan_key] = {
+                    "schema_version": _LATE_UPLOAD_SCAN_SCHEMA_VERSION,
+                    "eligible": eligible,
+                    "errors": scan_errors,
+                    "monitor": monitor_rows,
+                    "scanned_at": datetime.now(),
+                }
+                st.session_state[f"{prefix}_loaded"] = loaded
+            st.rerun()
+
+        scan = st.session_state.get(scan_key)
+        if scan is not None and not is_late_upload_scan_current(scan):
+            # Hasil lama bisa berisi exception dari implementasi sebelum retry.
+            # Hapus diam-diam agar UI tidak menampilkan 404 stale sebagai hasil
+            # scan live terbaru.
+            st.session_state.pop(scan_key, None)
+            scan = None
+        if isinstance(scan, dict):
+            eligible = scan.get("eligible") or []
+            errors = scan.get("errors") or {}
+            monitor = scan.get("monitor") or []
+            if monitor:
+                import pandas as _pd_monitor
+
+                st.markdown("#### Monitoring status peserta")
+                st.dataframe(
+                    _pd_monitor.DataFrame(monitor),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if eligible:
+                st.success(
+                    f"{len(eligible)} paket memenuhi kriteria peserta 0 + deadline terlewati."
+                )
+                import pandas as _pd_late
+
+                st.dataframe(
+                    _pd_late.DataFrame([
+                        {
+                            "Paket": _pl_label(item),
+                            "Peserta": item.get("_jumlah_peserta", 0),
+                            "Batas akhir Upload": item["_upload_deadline"].strftime(
+                                "%d-%m-%Y %H:%M"
+                            ),
+                        }
+                        for item in eligible
+                    ]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                eligible_codes = [str(item["kode_paket"]) for item in eligible]
+                selected_late = st.multiselect(
+                    "Paket hasil scan yang dimasukkan ke form perubahan",
+                    eligible_codes,
+                    format_func=lambda code: _pl_label(by_code.get(code, {"kode_paket": code})),
+                    key=f"{prefix}_late_upload_codes",
+                )
+                if st.button(
+                    f"➡️ Gunakan paket terpilih ({len(selected_late)}) di form perubahan",
+                    key=f"{prefix}_late_upload_apply",
+                    disabled=not selected_late,
+                    use_container_width=True,
+                ):
+                    st.session_state[f"{prefix}_codes"] = list(selected_late)
+                    st.rerun()
+            else:
+                st.info("Tidak ada paket yang memenuhi kriteria saat scan terakhir.")
+            if errors:
+                st.warning(
+                    f"⚠️ {len(errors)} paket ditahan karena gagal diverifikasi; "
+                    "detail ditampilkan di bawah."
+                )
+                st.code(
+                    "\n".join(
+                        f"{_pl_label(by_code.get(code, {'kode_paket': code}))}: {message}"
+                        for code, message in errors.items()
+                    ),
+                    language=None,
+                )
+
     codes = st.multiselect(
         "Paket yang diubah (semua paket tayang)",
         list(by_code),

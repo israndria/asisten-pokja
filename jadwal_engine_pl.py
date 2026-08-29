@@ -16,6 +16,7 @@ Catatan: id endpoint = kode_paket (kolom 5 dt/paketpp), BUKAN id_nontender (kolo
 Verified: /jadwalnontender/{kode_paket}/list → 200, /jadwalnontender/{id_nontender}/list → 500.
 """
 import requests
+import time
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
@@ -29,6 +30,9 @@ HDRS = {
     "Accept": "text/html,application/xhtml+xml",
     "Referer": BASE + "/admin/pegawai",
 }
+_RETRYABLE_STATUS = {404, 408, 425, 429, 500, 502, 503, 504}
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = 0.75
 
 NAMA_TAHAP_PL = [
     "1. Upload Dokumen Penawaran",
@@ -336,9 +340,36 @@ def scrap_hidden_fields_pl(kode_paket: str) -> dict:
         raise RuntimeError("Cookie SPSE kosong — login PP di Brave dulu.")
 
     url = f"{BASE}/jadwalnontender/{kode_paket}/list"
-    r = requests.get(url, headers={**HDRS, "Cookie": cookie_str}, timeout=20)
-    if r.status_code != 200:
-        raise RuntimeError(f"GET jadwalnontender gagal: HTTP {r.status_code}")
+    response = None
+    last_error = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            response = requests.get(
+                url,
+                headers={**HDRS, "Cookie": cookie_str},
+                timeout=20,
+            )
+            if response.status_code == 200:
+                break
+            last_error = f"HTTP {response.status_code}"
+            if response.status_code not in _RETRYABLE_STATUS:
+                break
+        except requests.RequestException as exc:
+            last_error = str(exc)
+        if attempt + 1 < _RETRY_ATTEMPTS:
+            time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+            try:
+                refreshed = spse_browser.get_spse_cookies(force=True)
+                if refreshed:
+                    cookie_str = refreshed
+            except Exception:
+                pass
+    if response is None or response.status_code != 200:
+        raise RuntimeError(
+            f"GET jadwalnontender gagal setelah {_RETRY_ATTEMPTS} percobaan: "
+            f"{last_error or 'respons kosong'}"
+        )
+    r = response
 
     soup = BeautifulSoup(r.text, "html.parser")
 

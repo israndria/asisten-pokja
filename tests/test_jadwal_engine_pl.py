@@ -88,6 +88,41 @@ class JadwalEnginePlTest(unittest.TestCase):
             "30-09-2026 00:01",
         )
 
+    def test_scrap_schedule_retries_transient_404(self):
+        html = [
+            "<form action='/tapinkab/simpanjadwalnontender' method='post'>",
+            "<input name='authenticityToken' value='csrf'>",
+            "<input name='id' value='P-1'>",
+        ]
+        for index in range(5):
+            html.extend([
+                f"<input type='hidden' name='jadwalList[{index}].dtj_id' value='{index}'>",
+                f"<input name='jadwalList[{index}].dtj_tglawal' value='01-09-2026 08:00'>",
+                f"<input name='jadwalList[{index}].dtj_tglakhir' value='01-09-2026 09:00'>",
+            ])
+        html.append("</form>")
+        body = "".join(html)
+
+        class _Response:
+            def __init__(self, status_code):
+                self.status_code = status_code
+                self.text = body
+
+        responses = iter([_Response(404), _Response(200)])
+        with patch.object(
+            jadwal_engine_pl.spse_browser,
+            "get_spse_cookies",
+            side_effect=lambda force=False: "cookie",
+        ), patch.object(
+            jadwal_engine_pl.requests,
+            "get",
+            side_effect=lambda *args, **kwargs: next(responses),
+        ) as request, patch.object(jadwal_engine_pl.time, "sleep"):
+            result = jadwal_engine_pl.scrap_hidden_fields_pl("P-1")
+
+        self.assertEqual(len(result["rows"]), 5)
+        self.assertEqual(request.call_count, 2)
+
     def test_exact_seventeen_is_valid_start_time(self):
         tgl_mulai = datetime(2026, 8, 13, 17, 0)
 
