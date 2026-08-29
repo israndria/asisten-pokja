@@ -15,6 +15,11 @@ def test_parse_official_hps_summary_from_input_value():
     assert hps_engine._parse_official_hps_summary(html) == Decimal("313292000")
 
 
+def test_parse_official_hps_summary_preserves_cents():
+    html = '<div>Nilai HPS Rp. 199.984.583,13</div>'
+    assert hps_engine._parse_official_hps_summary(html) == Decimal("199984583.13")
+
+
 def test_scrape_hps_pl_prefers_official_summary_and_preserves_raw_sum(monkeypatch):
     monkeypatch.setattr(
         hps_engine,

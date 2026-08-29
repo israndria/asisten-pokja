@@ -335,6 +335,24 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             except Exception as _id_e:
                 log(f"⚠ Identitas penyedia: {_id_e}")
                 _step("identitas", _t_step, " error")
+            # Lengkapi personel dari PDF/DOCX dan metadata parser sekarang,
+            # sebelum macro Excel membaca row Supabase. Ini mencegah workbook
+            # pertama kali dibuka dalam keadaan personel kosong.
+            try:
+                _t_step = _tm.perf_counter()
+                _full_logs = []
+                _full_res = _pkpl.serap_penyedia_pl(
+                    kode_paket_filter=kode,
+                    progress_cb=lambda _p, _m: _full_logs.append(_m),
+                )
+                if _full_res.get("errors"):
+                    log(f"⚠ Parser lengkap: {_full_res['errors'][0]}")
+                else:
+                    log("👥 Parser lengkap: personel/metadata disinkronkan")
+                _step("parser lengkap", _t_step)
+            except Exception as _full_e:
+                log(f"⚠ Parser lengkap: {_full_e}")
+                _step("parser lengkap", _t_step, " error")
         # NOTE: Serap penyedia full SENGAJA tidak dijalankan di sini.
         # Personil 3-layer tetap di tahap "Download Dokumen Kualifikasi" (Tab 6).
 

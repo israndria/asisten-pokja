@@ -48,8 +48,19 @@ def _extract_jangka_waktu(teks: str) -> str:
     Cari pola 'X hari / Y bulan kalender' → kembalikan string "X hari / Y bulan kalender".
     Fallback: cari pola 'X (kata) hari kalender' saja.
     """
-    # Prioritaskan window yang memiliki label pelaksanaan. Ini mencegah angka
-    # masa pemeliharaan, tahun anggaran, atau nomor pasal terbaca sebagai durasi.
+    # Pola eksplisit lebih kuat daripada label umum. KAK sering memuat
+    # "Masa Pemeliharaan 180 hari" sebelum/bersamaan dengan durasi 90 hari.
+    # Jangan pernah mengambil angka dari masa pemeliharaan.
+    for pattern in (
+        r"PELAKSANAAN(?:\s+KEGIATAN|\s+PEKERJAAN)?\s+(?:DILAKUKAN\s+SELAMA|SELAMA)\s+(\d{1,4})\s*(?:\([^)]*\)\s*)?hari",
+        r"JANGKA\s+WAKTU\s+PELAKSANAAN\s*(?:ADALAH|:|-)??\s*(\d{1,4})\s*(?:\([^)]*\)\s*)?hari",
+        r"MASA\s+PELAKSANAAN\s+PEKERJAAN\s*(?:ADALAH|:|-)??\s*(\d{1,4})\s*(?:\([^)]*\)\s*)?hari",
+    ):
+        hit = re.search(pattern, teks, re.IGNORECASE)
+        if hit:
+            return f"{hit.group(1)} hari kalender"
+
+    # Fallback label umum; potong window sebelum label pemeliharaan.
     for label in (r"JANGKA\s+WAKTU(?:\s+PELAKSANAAN)?", r"WAKTU\s+PELAKSANAAN"):
         labeled = re.search(label, teks, re.IGNORECASE)
         if labeled:
@@ -80,7 +91,7 @@ def _extract_jangka_waktu(teks: str) -> str:
     return ""
 
 
-def _extract_sbu(teks: str) -> tuple[str, str]:
+def _extract_sbu(teks: str, konteks: str = "") -> tuple[str, str]:
     """Kode SBU + nama lengkap dari master_sbu Supabase.
 
     Returns: (sbu_baru_lengkap, sbu_lama_lengkap)
@@ -90,6 +101,19 @@ def _extract_sbu(teks: str) -> tuple[str, str]:
     """
     m = re.search(r"\b(RK\d{3}|AR\d{3}|SI\d{3}|BG\d{3}|SP\d{3}|EL\d{3}|MK\d{3})\b", teks)
     if not m:
+        # KAK PUPR sering tidak mencetak kode SBU. Fallback hanya untuk
+        # domain konstruksi jalan/drainase/jembatan; jangan menerapkannya pada
+        # paket gedung/perdagangan yang memiliki BGxxx sendiri.
+        up = (str(konteks) + "\n" + teks).upper()
+        title_up = str(konteks).upper()
+        if re.search(r"JEMBATAN|BOX\s*CULVERT|FLY\s*OVER|UNDERPASS", title_up):
+            return ("SBU BS002 Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass KBLI 42102", "")
+        if re.search(r"JALAN|DRAINASE|RABAT\s+BETON|ASPAL|LATASIR|MAKADAM", title_up):
+            return ("SBU BS001 Konstruksi Bangunan Sipil Jalan atau Konstruksi Jalan Pada Permukaan Tanah KBLI 42101", "")
+        if re.search(r"JEMBATAN|BOX\s*CULVERT|FLY\s*OVER|UNDERPASS", up) and not re.search(r"JALAN|DRAINASE|RABAT\s+BETON|ASPAL|LATASIR|MAKADAM", up):
+            return ("SBU BS002 Bangunan Sipil Jembatan, Jalan Layang, Fly Over, dan Underpass KBLI 42102", "")
+        if re.search(r"JALAN|DRAINASE|RABAT\s+BETON|ASPAL|LATASIR|MAKADAM", up):
+            return ("SBU BS001 Konstruksi Bangunan Sipil Jalan atau Konstruksi Jalan Pada Permukaan Tanah KBLI 42101", "")
         return ("", "")
 
     kode = m.group(1)
@@ -188,15 +212,31 @@ def _extract_lokasi(teks: str) -> str:
 
 
 def _extract_sub_kegiatan_dari_kak(teks: str) -> str:
-    """Extract Sub Kegiatan dari KAK PDF (header halaman cover KAK)."""
-    # KAK tulis: "SUB KEGITAN\nPENYEDIAAN SARANA..." (typo: KEGITAN bukan KEGIATAN)
-    m = re.search(
-        r"SUB\s+KEGITA?N\s*\n(.+?)(?=\n[A-Z]{3,}|\nPEKERJAAN|\Z)",
-        teks, re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        return re.sub(r"\s+", " ", m.group(1)).strip()
-    return ""
+    """Ambil kegiatan/sub-kegiatan KAK; jika dua-duanya ada pilih terpendek."""
+    lines = [re.sub(r"\s+", " ", x).strip() for x in teks.splitlines()]
+    def _value(label: str) -> str:
+        rx = re.compile(rf"^(?:NAMA\s+)?{label}(?:\s*[:=-]\s*|\s+)(.+)$", re.IGNORECASE)
+        label_only = re.compile(rf"^(?:NAMA\s+)?{label}\s*$", re.IGNORECASE)
+        for i, line in enumerate(lines):
+            m = rx.match(line)
+            if m:
+                value = m.group(1).strip(" .:-")
+                if len(value) >= 4 and value.upper() not in {"KEGIATAN", "SUB KEGIATAN"}:
+                    return value
+            if label_only.match(line) and i + 1 < len(lines):
+                value = lines[i + 1].strip(" .:-")
+                if len(value) >= 4:
+                    return value
+        return ""
+
+    sub = _value(r"SUB\s+KEGITA?N")
+    keg = _value(r"KEGIATAN")
+    values = [v for v in (sub, keg) if v]
+    if values:
+        return min(values, key=len)
+    # Cover KAK lama: label di satu baris, nilai di baris berikutnya.
+    m = re.search(r"SUB\s+KEGITA?N\s*\n([^\n]+)", teks, re.IGNORECASE)
+    return re.sub(r"\s+", " ", m.group(1)).strip(" .:-") if m else ""
 
 
 def parse_kak(pdf_path: str) -> dict:
@@ -208,7 +248,7 @@ def parse_kak(pdf_path: str) -> dict:
     if not teks:
         return {}
 
-    sbu_baru, sbu_lama = _extract_sbu(teks)
+    sbu_baru, sbu_lama = _extract_sbu(teks, os.path.basename(pdf_path))
     return {
         "nama_ppk":     _extract_nama_ppk(teks),
         "jangka_waktu": _extract_jangka_waktu(teks),
@@ -346,7 +386,19 @@ def parse_nd_penyedia(pdf_path: str) -> dict:
     if not teks:
         return {}
 
-    out = {"nama_penyedia": "", "npwp_penyedia": ""}
+    out = {"nama_penyedia": "", "npwp_penyedia": "", "nomor_nota_dinas": "", "tgl_nota_dinas": ""}
+
+    # Format Nota Dinas PUPR: Nomor berada di kepala surat, tanggal pada
+    # baris kota/tanggal. Batasi pembacaan ke bagian awal agar nomor surat
+    # rekomendasi di halaman berikutnya tidak tertukar.
+    awal = teks[:1800]
+    m_no = re.search(r"\bNomor\s*:\s*([^\n]+)", awal, re.IGNORECASE)
+    if m_no:
+        out["nomor_nota_dinas"] = m_no.group(1).strip()
+    bulan = {"januari": "01", "februari": "02", "maret": "03", "april": "04", "mei": "05", "juni": "06", "juli": "07", "agustus": "08", "september": "09", "oktober": "10", "november": "11", "desember": "12"}
+    m_tgl = re.search(r"(?:^|\n)[A-Za-z .-]+,\s*(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", awal)
+    if m_tgl and m_tgl.group(2).lower() in bulan:
+        out["tgl_nota_dinas"] = f"{m_tgl.group(3)}-{bulan[m_tgl.group(2).lower()]}-{int(m_tgl.group(1)):02d}"
 
     # Nama: coba "Nama Calon Penyedia" dulu, fallback "Nama Perusahaan"
     m_nama = re.search(r"Nama\s*Calon\s*Penyedia\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
@@ -354,6 +406,11 @@ def parse_nd_penyedia(pdf_path: str) -> dict:
         m_nama = re.search(r"Nama\s*Perusahaan\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
     if m_nama:
         out["nama_penyedia"] = m_nama.group(1).strip()
+
+    if not out["nama_penyedia"]:
+        m_jasa = re.search(r"Penyedia\s+Jasa\s*:\s*(.+?)(?:\n|$)", teks, re.IGNORECASE)
+        if m_jasa:
+            out["nama_penyedia"] = m_jasa.group(1).strip()
 
     # NPWP: coba "Nomor NPWP" (inline/baris pisah), fallback "NPWP Perusahaan"
     # Format angka dengan/tanpa titik-strip: 72.112.192.9-731.000 atau 0826618548735000
@@ -428,6 +485,32 @@ def serap_identitas_penyedia_pl(kode_paket_filter: str = None, progress_cb=None)
             errors.append(f"{kode}: {e}")
 
     return {"ok": True, "updated": updated, "not_found": not_found, "no_data": no_data, "errors": errors}
+
+
+def parse_jenis_kontrak_dari_draft_pl(pdf_path: str) -> str:
+    """Ambil jenis kontrak dari baris eksplisit Draft PPK.
+
+    Draft PPK adalah sumber lokal yang lebih spesifik daripada nilai template
+    atau cache database. Hanya kembalikan nilai bila label dan nilainya benar-
+    benar terbaca; jangan menebak dari jenis pekerjaan.
+    """
+    teks = _text_dari_pdf(pdf_path)
+    if not teks:
+        return ""
+    m = re.search(r"JENIS\s+KONTRAK\s*:\s*([^\n\r]+)", teks, re.IGNORECASE)
+    if not m:
+        return ""
+    value = re.sub(r"\s+", " ", m.group(1)).strip(" .:-")
+    if re.match(r"harga\s+satuan$", value, re.IGNORECASE):
+        return "Harga Satuan"
+    if re.match(r"lumsum$", value, re.IGNORECASE):
+        return "Lumsum"
+    if re.match(r"gabungan\s+lumsum\s+dan\s+harga\s+satuan$", value, re.IGNORECASE):
+        # PLPK hanya mengenal Lumsum atau Harga Satuan. Frasa gabungan
+        # merupakan boilerplate/artefak tender yang kadang ikut terbawa ke
+        # Draft PPK; default aman untuk pola HPS PLPK ini adalah Harga Satuan.
+        return "Harga Satuan"
+    return value
 
 
 def parse_draft_pl(pdf_path: str) -> dict:
@@ -596,14 +679,14 @@ def parse_sub_kegiatan_dari_draft_pl(pdf_path: str) -> str:
 
 
 def cari_daftar_personil_di_folder(folder: str) -> str | None:
-    """Cari PDF 'Daftar Personil*.pdf' di folder paket atau subfolder '1. KAK*' (case-insensitive)."""
+    """Cari daftar personel PDF/DOCX di folder paket atau subfolder KAK."""
     if not os.path.isdir(folder):
         return None
 
     def _cari_di(d: str):
         for f in os.listdir(d):
             fl = f.lower()
-            if fl.endswith(".pdf") and ("daftar personil" in fl or "personil" in fl):
+            if fl.endswith((".pdf", ".docx")) and ("daftar personil" in fl or "personil" in fl or "personel" in fl):
                 if fl.startswith("draft_pl"):
                     continue
                 return os.path.join(d, f)
@@ -897,6 +980,38 @@ def parse_personil_daftar(pdf_path: str) -> list[dict]:
 
     Max 3 slot (slot Excel R32-R40 — praktisnya JKK biasanya 1-2 Tenaga Ahli).
     """
+    # DOCX ListPersonil PK memiliki tabel native dengan kolom yang jelas.
+    if str(pdf_path).lower().endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(pdf_path)
+            for table in doc.tables:
+                raw_rows = [[re.sub(r"\s+", " ", c.text or "").strip() for c in row.cells] for row in table.rows]
+                rows = [[v.lower() for v in row] for row in raw_rows]
+                if not rows:
+                    continue
+                header = rows[0]
+                def col(*names):
+                    return next((i for i, v in enumerate(header) if any(n in v for n in names)), -1)
+                c_jab, c_exp, c_ket = col("jabatan"), col("pengalaman"), col("ket")
+                if c_jab < 0:
+                    continue
+                result = []
+                for raw_row, row in zip(raw_rows[1:], rows[1:]):
+                    if c_jab >= len(row) or not row[c_jab]:
+                        continue
+                    jab = raw_row[c_jab]
+                    exp = raw_row[c_exp] if c_exp >= 0 and c_exp < len(raw_row) else ""
+                    # Kolom KET pertama sering hanya berisi "S K K"; kolom
+                    # KET terakhir berisi nama sertifikat yang sebenarnya.
+                    cert_candidates = [v for i, v in enumerate(raw_row) if i != c_jab and i != c_exp and v and not re.fullmatch(r"\d+[.]?", v)]
+                    ket = cert_candidates[-1] if cert_candidates else ""
+                    result.append({"jabatan": jab, "pengalaman": exp or "0 Tahun", "sertifikat": ket, "jumlah_orang": 1})
+                if result:
+                    return result[:3]
+        except Exception:
+            pass
+
     # PDF ListPersonil PK memiliki tabel native dengan kolom yang jelas.
     # Ambil berdasarkan posisi tabel agar sertifikat yang terpotong newline
     # tidak bergabung ke jabatan/pengalaman.
@@ -1254,6 +1369,11 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
 
             personil = []
 
+            # KAK paket adalah sumber authoritative untuk field parser yang
+            # sering konflik dengan template Draft_PL/RK3K lama.
+            kak_pdf = cari_kak_di_folder(folder)
+            kak_data = parse_kak(kak_pdf) if kak_pdf else {}
+
             nd_pdf = cari_nd_di_folder(folder)
             if nd_pdf:
                 data = parse_nd_penyedia(nd_pdf)
@@ -1292,6 +1412,13 @@ def serap_penyedia_pl(progress_cb=None, kode_paket_filter: str = None) -> dict:
             )
             if personil:
                 data["personil_json"] = personil  # supabase-py auto-encode list ke JSONB
+
+            for key in ("sub_kegiatan", "jangka_waktu", "sbu_baru", "sbu_lama", "jabatan_teknis", "jabatan_k3"):
+                if kak_data.get(key):
+                    data[key] = kak_data[key]
+            if data.get("tgl_nota_dinas") and not data.get("tgl_rekomendasi"):
+                data["tgl_rekomendasi"] = data["tgl_nota_dinas"]
+            data.pop("tgl_nota_dinas", None)
 
             update = {k: v for k, v in data.items() if v}
             if not update:

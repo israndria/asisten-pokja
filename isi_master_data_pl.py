@@ -10,6 +10,136 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 import os
 
 
+K3_CERT_FALLBACK = "SKK Petugas K3 Konstruksi / Keselamatan Konstruksi"
+
+
+def _normalize_k3_certificate(value: str) -> str:
+    """Pertahankan hanya sertifikat K3 eksplisit; selain itu fallback aman."""
+    import re
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    explicit = re.search(r"\bSKK\b", text, re.IGNORECASE) and re.search(
+        r"petugas\s+k3|keselamatan\s+konstruksi", text, re.IGNORECASE
+    )
+    return text if explicit else K3_CERT_FALLBACK
+
+
+def _parse_local_enrichment(folder: str) -> dict:
+    """Ambil field yang memang bersumber dari artefak lokal paket.
+
+    Field ini tidak bergantung schema Supabase: alat, uraian HPS, dan ringkasan
+    RK3 langsung ditulis ke workbook setelah macro master-data selesai.
+    """
+    import re
+    out = {"personil": [], "alat": [], "uraian": [], "uraian_rk3": [], "risiko": "", "risiko_tertinggi": "", "contract_type": "", "provider": {},}
+    try:
+        import parse_kak_pl as pk
+        person = pk.cari_daftar_personil_di_folder(folder)
+        if person:
+            out["personil"] = pk.parse_personil_daftar(person)
+        nd = pk.cari_nd_di_folder(folder)
+        if nd:
+            out["provider"] = pk.parse_nd_penyedia(nd)
+        draft = pk.cari_draft_pl_di_folder(folder)
+        if draft:
+            out["contract_type"] = pk.parse_jenis_kontrak_dari_draft_pl(draft)
+    except Exception:
+        pass
+    try:
+        from docx import Document
+        for root, _, files in os.walk(folder):
+            for name in files:
+                low = name.lower()
+                path = os.path.join(root, name)
+                if low.endswith(".docx") and ("peralatan" in low or low.startswith("i.")):
+                    doc = Document(path)
+                    for table in doc.tables:
+                        for row in table.rows[1:]:
+                            vals = [re.sub(r"\s+", " ", c.text or "").replace("\ufffd", " ").replace("\u2019", "'").strip() for c in row.cells]
+                            if len(vals) >= 5 and re.match(r"^\d+", vals[0]) and vals[1]:
+                                out["alat"].append({"nama": vals[1], "kapasitas": vals[3], "jumlah": vals[4]})
+                if low.endswith(".docx") and low.startswith("rk3"):
+                    doc = Document(path)
+                    for table in doc.tables:
+                        for row in table.rows:
+                            vals = [re.sub(r"\s+", " ", c.text or "").replace("\ufffd", " ").replace("\u2019", "'").strip() for c in row.cells]
+                            if len(vals) >= 3 and re.match(r"^\d+", vals[0]) and vals[1] not in {"2", "Uraian Pekerjaan"}:
+                                if vals[1] and vals[1] not in out["uraian_rk3"]:
+                                    out["uraian_rk3"].append(vals[1])
+                                if len(vals) >= 8 and "resiko paling tinggi" in vals[-1].lower():
+                                    out["risiko_tertinggi"] = vals[2].lstrip("-• ").strip() or out["risiko_tertinggi"]
+    except Exception:
+        pass
+    for name in os.listdir(folder):
+        if name.lower().startswith("_hps_") and name.lower().endswith(".md"):
+            try:
+                for line in open(os.path.join(folder, name), encoding="utf-8"):
+                    m = re.match(r"^\d+\s*\|\s*\*\*(.+?)\*\*\s*\|\s*-", line.strip())
+                    if m and not m.group(1).startswith(("Jumlah", "Total", "Status", "Prompt")):
+                        value = m.group(1).strip()
+                        if value not in out["uraian"]:
+                            out["uraian"].append(value)
+            except Exception:
+                pass
+    if out["uraian_rk3"]:
+        out["risiko"] = ", ".join(out["uraian_rk3"][:6])
+    return out
+
+
+def _write_local_enrichment(ws, enrichment: dict) -> None:
+    """Tulis enrichment ke posisi Master Data PLPK yang stabil."""
+    person = enrichment.get("personil") or []
+    # Jangan sisakan alat/risiko dari template atau percobaan sebelumnya.
+    for row in range(39, 57):
+        ws.Cells(row, 3).ClearContents()
+    ws.Cells(63, 3).ClearContents()
+    ws.Cells(64, 3).ClearContents()
+    if enrichment.get("contract_type"):
+        ws.Cells(18, 3).Value = enrichment["contract_type"]
+    for i, item in enumerate(person[:2]):
+        base = 33 + i * 3
+        ws.Cells(base, 3).Value = item.get("jabatan", "")
+        ws.Cells(base + 1, 3).Value = item.get("pengalaman", "") or "0 Tahun"
+        cert = item.get("sertifikat", "")
+        jab = item.get("jabatan", "")
+        if "k3" in jab.lower():
+            cert = _normalize_k3_certificate(cert)
+        elif cert and "sk" not in cert.lower() and "pelaksana" in jab.lower():
+            cert = "SKK " + cert
+        ws.Cells(base + 2, 3).Value = cert
+    for i, item in enumerate((enrichment.get("alat") or [])[:6]):
+        ws.Cells(39 + i, 3).Value = item.get("nama", "")
+        ws.Cells(45 + i, 3).Value = item.get("kapasitas", "")
+        ws.Cells(51 + i, 3).Value = item.get("jumlah", "")
+    for row in range(66, 76):
+        ws.Cells(row, 3).ClearContents()
+    for i, value in enumerate((enrichment.get("uraian") or [])[:10]):
+        ws.Cells(66 + i, 3).Value = value
+    if enrichment.get("risiko"):
+        ws.Cells(63, 3).Value = enrichment["risiko"]
+    if enrichment.get("risiko_tertinggi"):
+        ws.Cells(64, 3).Value = enrichment["risiko_tertinggi"]
+    provider = enrichment.get("provider") or {}
+    if provider.get("nama_penyedia"):
+        ws.Cells(77, 3).Value = provider["nama_penyedia"]
+    if provider.get("npwp_penyedia"):
+        ws.Cells(78, 3).NumberFormat = "@"
+        ws.Cells(78, 3).Value = provider["npwp_penyedia"]
+    if provider.get("nomor_nota_dinas"):
+        ws.Cells(87, 3).NumberFormat = "@"
+        ws.Cells(87, 3).Value = provider["nomor_nota_dinas"]
+    if provider.get("tgl_nota_dinas"):
+        ws.Cells(88, 3).NumberFormat = "@"
+        raw_date = str(provider["tgl_nota_dinas"])
+        try:
+            from datetime import date
+            y, m, d = [int(x) for x in raw_date[:10].split("-")]
+            months = ("", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
+            raw_date = f"{d} {months[m]} {y}"
+        except Exception:
+            pass
+        ws.Cells(88, 3).Value = raw_date
+
+
 def _find_master_data_v2_root() -> str:
     """Cari clone ``procurement_core`` yang berisi modul snapshot V2.
 
@@ -332,6 +462,16 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                 md_res = {"ok": True, "pesan": "@ Master Data terisi otomatis"}
             except pywintypes.com_error as ce:
                 md_res = {"ok": False, "pesan": f"Macro IsiDataPLByKode gagal: {ce}"}
+
+            # Enrichment lokal wajib dilakukan setelah macro: Supabase hanya
+            # membawa field inti, sedangkan alat/uraian/RK3 berada di paket.
+            if md_res["ok"]:
+                try:
+                    enrichment = _parse_local_enrichment(os.path.dirname(excel_path))
+                    _write_local_enrichment(wb.Sheets("@ Master Data"), enrichment)
+                    _log("Data lokal: personel, alat, uraian, risiko, ND disinkronkan.")
+                except Exception as local_e:
+                    _log(f"WARN data lokal: {local_e}")
 
             # Refresh @ Evaluasi setelah Master Data terisi
             if md_res["ok"]:

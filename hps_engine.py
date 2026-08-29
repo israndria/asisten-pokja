@@ -69,7 +69,9 @@ def _parse_official_hps_summary(html: str) -> Decimal | None:
         if match:
             parsed = _parse_amount_decimal(match.group(1))
             if parsed is not None:
-                return parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+                # Nilai resmi SPSE dapat memiliki pecahan sen; pertahankan
+                # sampai 2 desimal agar tidak berubah menjadi bilangan bulat.
+                return parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Fallback untuk form yang menaruh nominal pada input bernama nilai_hps.
     for tag in re.findall(r"<input\b[^>]*>", decoded, re.IGNORECASE):
@@ -79,7 +81,7 @@ def _parse_official_hps_summary(html: str) -> Decimal | None:
         if match:
             parsed = _parse_amount_decimal(match.group(1))
             if parsed is not None:
-                return parsed.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+                return parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return None
 
 
@@ -1080,7 +1082,9 @@ def scrape_hps_pl(kode_paket: str) -> dict:
 
     official = page.get("nilai_hps_official")
     if official is not None:
-        total_nilai_bulat_decimal = official.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        # Untuk sumber resmi /edit, "bulat" mengikuti nominal resmi apa adanya;
+        # pecahan sen tidak boleh hilang sebelum ditulis ke Master Data.
+        total_nilai_bulat_decimal = official.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         nilai_hps_source = "official_edit_page"
     else:
         # Backward-compatible fallback, tetapi eksplisit sebagai hasil
