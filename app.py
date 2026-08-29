@@ -3313,7 +3313,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _plf_chk_key = f"plf_chk_{_bkp_chk}"
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
-                    _chk_num_info = _pl_number_by_kode.get(str(_bkp_chk), {})
+                    _chk_num_info = (
+                        _pl_number_by_kode.get(str(_bkp_chk), {})
+                        or _pl_display_plan.get("assignments", {}).get(str(_bkp_chk), {})
+                    )
                     _chk_display = dict(_br_chk)
                     if _chk_num_info.get("nomor_urut"):
                         _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
@@ -7089,7 +7092,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _plf_chk_key = f"plf_chk_{_bkp_chk}"
                     if _plf_chk_key not in st.session_state:
                         st.session_state[_plf_chk_key] = True
-                    _chk_num_info = _pl_number_by_kode.get(str(_bkp_chk), {})
+                    _chk_num_info = (
+                        _pl_number_by_kode.get(str(_bkp_chk), {})
+                        or _pl_display_plan.get("assignments", {}).get(str(_bkp_chk), {})
+                    )
                     _chk_display = dict(_br_chk)
                     if _chk_num_info.get("nomor_urut"):
                         _chk_display["nomor_urut"] = _chk_num_info["nomor_urut"]
