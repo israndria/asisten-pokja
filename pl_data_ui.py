@@ -147,6 +147,56 @@ def overlay_live_tahap_spse(rows: list[dict]) -> list[dict]:
     return result
 
 
+def get_live_tahap_map(state_key: str) -> dict:
+    """Ambil snapshot tahap live yang berhasil diverifikasi untuk ``state_key``."""
+    tahap_map = st.session_state.get(f"{state_key}:tahap_map", {})
+    return tahap_map if isinstance(tahap_map, dict) else {}
+
+
+def filter_paket_draft_live(
+    rows: list[dict],
+    live_tahap_map: dict | None,
+    *,
+    live_status_ok: bool,
+    session_status: dict | None = None,
+) -> list[dict]:
+    """Kembalikan kandidat Draft setelah diverifikasi terhadap status live SPSE.
+
+    Endpoint ``dt/pengadaan-pp?status=1`` hanya mengembalikan paket yang sudah
+    melewati Draft. Karena itu row lokal berstatus Draft dipakai sebagai
+    kandidat, sedangkan setiap kode yang muncul pada map live (termasuk tahap
+    ``Paket Belum Dilaksanakan``) menjadi veto. Jika verifikasi live gagal,
+    jangan mengambil keputusan dari cache lokal: hasil harus kosong.
+    """
+    if live_status_ok is not True:
+        return []
+
+    from pl_engine import is_paket_draft
+
+    active_codes = {
+        str(kode or "").strip()
+        for kode in (live_tahap_map or {})
+        if str(kode or "").strip()
+    }
+    session_status = (
+        session_status if isinstance(session_status, dict) else get_paket_umumkan_status()
+    )
+    result = []
+    for row in rows or []:
+        code = str(row.get("kode_paket") or "").strip()
+        if not code or code in active_codes or not is_paket_draft(row):
+            continue
+        # Marker POST lokal tetap menjadi pengaman untuk rerun sebelum daftar
+        # live SPSE menampilkan tahap paket yang baru diumumkan.
+        if code in session_status and is_paket_sudah_diumumkan(
+            {"kode_paket": code, "status": "draft", "tahap_spse": ""},
+            session_status,
+        ):
+            continue
+        result.append(row)
+    return result
+
+
 def is_paket_sudah_diumumkan(row: dict, session_status: dict | None = None) -> bool:
     """Deteksi paket yang sudah diumumkan dari session atau field SPSE."""
     row = row or {}
@@ -267,10 +317,18 @@ def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) ->
     now = time.monotonic()
     last_sync = st.session_state.get(state_key)
     cached_result = st.session_state.get(f"{state_key}:result")
+    live_map_key = f"{state_key}:tahap_map"
     if isinstance(last_sync, (int, float)) and now - last_sync < ttl_seconds:
-        if isinstance(cached_result, dict):
+        if isinstance(cached_result, dict) and isinstance(
+            st.session_state.get(live_map_key), dict
+        ):
             return {**cached_result, "cached": True, "count": 0}
-        return {"ok": False, "cached": True, "count": 0, "error": "Status live belum pernah berhasil diverifikasi"}
+        return {
+            "ok": False,
+            "cached": True,
+            "count": 0,
+            "error": "Status live belum pernah berhasil diverifikasi",
+        }
 
     st.session_state[state_key] = now
     try:
@@ -280,13 +338,22 @@ def sync_live_paket_umumkan_status(state_key: str, ttl_seconds: float = 60.0) ->
 
         cookie = spse_browser.get_spse_cookies()
         if not cookie:
+            st.session_state.pop(live_map_key, None)
             return {"ok": False, "cached": False, "count": 0, "error": "Cookie SPSE kosong"}
-        tahap_map = _live_pl_engine._fetch_tahap_spse(cookie, SPSE_BASE_URL)
+        tahap_map = _live_pl_engine._fetch_tahap_spse(
+            cookie, SPSE_BASE_URL, strict=True
+        )
+        st.session_state[live_map_key] = {
+            str(kode).strip(): str(tahap or "").strip()
+            for kode, tahap in (tahap_map or {}).items()
+            if str(kode or "").strip()
+        }
         count = mark_tahap_spse_sudah_diumumkan(tahap_map)
         result = {"ok": True, "cached": False, "count": count}
         st.session_state[f"{state_key}:result"] = result
         return result
     except Exception as exc:
+        st.session_state.pop(live_map_key, None)
         result = {"ok": False, "cached": False, "count": 0, "error": str(exc)}
         st.session_state[f"{state_key}:result"] = result
         return result

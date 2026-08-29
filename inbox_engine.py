@@ -240,7 +240,7 @@ def parse_detail_pesan_pl(id_pesan: str) -> dict:
     }
 
 
-def serap_inbox_pl(progress_cb=None) -> dict:
+def serap_inbox_pl(progress_cb=None, tahap_map: dict | None = None) -> dict:
     """Serap pesan Delegasi PP (inbox non-tender PL), upsert metadata non-HPS.
 
     Field Inbox yang di-update: mak, kode_rup.
@@ -261,16 +261,23 @@ def serap_inbox_pl(progress_cb=None) -> dict:
 
     log(0.25, f"Ditemukan {len(pesan_pl)} pesan Delegasi PP")
 
-    # Snapshot daftar paket PL aktif (bukan selesai) untuk match
-    from pl_engine import _TAHAP_SELESAI_KEYWORDS
-    existing = _sb().table("draft_paket_pl").select("kode_paket,tahap_spse").execute().data or []
-    existing_kode = {
-        r["kode_paket"] for r in existing
-        if not any(k in (r.get("tahap_spse") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS)
+    # Snapshot lokal dipakai setelah kode dari detail inbox terbaca. Jangan
+    # update ulang paket yang sudah dikerjakan atau sudah melewati Draft.
+    from pl_engine import _is_paket_ulang_serap, _serap_flag_true
+    existing = _sb().table("draft_paket_pl").select(
+        "kode_paket,status,tahap_spse,is_ulang,folder_dibuat"
+    ).execute().data or []
+    existing_by_code = {
+        str(row.get("kode_paket") or "").strip(): row
+        for row in existing
+        if str(row.get("kode_paket") or "").strip()
     }
+    tahap_map = tahap_map if isinstance(tahap_map, dict) else {}
 
     scraped = 0
     matched = 0
+    skipped = 0
+    processed_codes = set()
     errors = []
     total = len(pesan_pl)
     for i, p in enumerate(pesan_pl):
@@ -282,8 +289,36 @@ def serap_inbox_pl(progress_cb=None) -> dict:
                 errors.append(f"Pesan {p['id_pesan']}: kode_paket kosong")
                 continue
             scraped += 1
-            if kode_paket not in existing_kode:
+            kode_paket = str(kode_paket).strip()
+            if kode_paket in processed_codes:
+                skipped += 1
+                log(prog, f"  Skip {kode_paket} — pesan inbox duplikat")
+                continue
+            processed_codes.add(kode_paket)
+
+            local = existing_by_code.get(kode_paket)
+            live_stage = str(tahap_map.get(kode_paket) or "").strip()
+            repeat = _is_paket_ulang_serap(detail, local)
+            local_stage = str((local or {}).get("tahap_spse") or "").strip()
+            if live_stage:
+                skipped += 1
+                log(prog, f"  Skip {kode_paket} — sudah tayang: {live_stage}")
+                continue
+            if local_stage and not repeat:
+                skipped += 1
+                log(prog, f"  Skip {kode_paket} — tahap lokal: {local_stage}")
+                continue
+            if local and _serap_flag_true(local.get("folder_dibuat")) and not repeat:
+                skipped += 1
+                log(prog, f"  Skip {kode_paket} — sudah terdefinisi/ada folder kerja")
+                continue
+            if local and str(local.get("status") or "").strip() and "draft" not in str(local.get("status") or "").casefold() and not repeat:
+                skipped += 1
+                log(prog, f"  Skip {kode_paket} — status lokal bukan Draft")
+                continue
+            if local is None:
                 log(prog, f"  ⚠ {kode_paket} tidak ada di draft_paket_pl — skip")
+                skipped += 1
                 continue
             update_data = {
                 "mak": detail.get("mak") or None,
@@ -304,8 +339,14 @@ def serap_inbox_pl(progress_cb=None) -> dict:
         except Exception as e:
             errors.append(f"Pesan {p['id_pesan']}: {e}")
 
-    log(1.0, f"Selesai: {scraped} pesan diparse, {matched} paket di-update, {len(errors)} error")
-    return {"ok": True, "scraped": scraped, "matched": matched, "errors": errors}
+    log(1.0, f"Selesai: {scraped} pesan diparse, {matched} paket di-update, {skipped} dilewati, {len(errors)} error")
+    return {
+        "ok": True,
+        "scraped": scraped,
+        "matched": matched,
+        "skipped": skipped,
+        "errors": errors,
+    }
 
 
 # ── Scrape anggota pokja dari halaman /lelang/{kode_tender}/edit ───────────────

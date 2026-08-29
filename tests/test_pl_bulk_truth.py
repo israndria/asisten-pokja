@@ -18,7 +18,42 @@ from pl_ui_helpers import (
     _pl_download_success,
     _pl_io_success,
 )
-from pl_engine import _safe_download_name_for_folder
+from pl_engine import _safe_download_name_for_folder, filter_rows_for_serap
+
+
+def test_filter_rows_for_serap_skips_defined_and_live_packages_before_detail_fetch():
+    rows = [
+        ["id-new", "Paket Baru", "Draft", "", "Satker", "new"],
+        ["id-defined", "Paket Sudah Dikerjakan", "Draft", "", "Satker", "defined"],
+        ["id-live", "Paket Tayang", "Draft", "", "Satker", "live"],
+        ["id-prestart", "Paket Belum Dilaksanakan", "Draft", "", "Satker", "prestart"],
+        ["id-running", "Paket Berjalan", "Berjalan", "", "Satker", "running"],
+        ["id-repeat", "Paket Ulang", "Draft", "", "Satker", "repeat"],
+    ]
+    existing = [
+        {"kode_paket": "defined", "status": "draft", "folder_dibuat": True},
+        {"kode_paket": "repeat", "status": "draft", "folder_dibuat": True, "is_ulang": True},
+    ]
+    live = {
+        "live": "Upload Dokumen Penawaran",
+        "prestart": "Paket Belum Dilaksanakan",
+    }
+
+    selected, skipped = filter_rows_for_serap(rows, existing, live)
+
+    assert [row[5] for row in selected] == ["new", "repeat"]
+    assert {item["kode_paket"] for item in skipped} == {
+        "defined", "live", "prestart", "running",
+    }
+    assert any("sudah terdefinisi" in item["reason"] for item in skipped)
+    assert any("Paket Belum Dilaksanakan" in item["reason"] for item in skipped)
+
+
+def test_filter_rows_for_serap_rejects_malformed_rows():
+    selected, skipped = filter_rows_for_serap([None, ["short"]], [], {})
+
+    assert selected == []
+    assert len(skipped) == 2
 
 
 def test_ubah_metode_cdp_includes_submit_field_and_retries_transient_503(monkeypatch):
@@ -232,6 +267,11 @@ def test_revision_folder_is_provisioned_idempotently_for_both_pl_families(tmp_pa
     assert (package_dir / revision).is_dir()
     assert revision in first
     assert revision not in second
+    xml_data = package_dir / "11. XML Data"
+    assert xml_data.is_dir()
+    assert "11. XML Data" in first
+    assert "11. XML Data" not in second
+    assert list(xml_data.iterdir()) == []
 
 
 @pytest.mark.parametrize("family", ["PLJKK", "PLPK"])

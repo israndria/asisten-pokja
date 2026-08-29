@@ -32,12 +32,14 @@ from tender_package_filters import filter_tender_candidates, is_draft, package_c
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
+    filter_paket_draft_live as _filter_paket_draft_live,
     filter_local_pl_rows as _filter_local_pl_rows,
     filter_paket_kirim_undangan_dpp as _filter_paket_kirim_undangan_dpp,
     filter_paket_siap_dijadwalkan as _filter_paket_siap_dijadwalkan,
     format_pl_announce_log as _format_pl_announce_log,
     get_reviu_full_pdf_path as _get_reviu_full_pdf_path,
     get_paket_umumkan_status as _get_paket_umumkan_status,
+    get_live_tahap_map as _get_live_tahap_map,
     is_paket_sudah_diumumkan as _is_paket_sudah_diumumkan,
     load_status_pilih_penyedia_on_demand as _load_status_pilih_penyedia_on_demand,
     load_status_peserta_on_demand as _load_status_peserta_on_demand,
@@ -335,7 +337,7 @@ from pl_ui_helpers import _baca_master_data_pl, _baca_identitas_penyedia_pl, _ca
 from tender_hps import update_hps_tender as _update_hps_tender
 from ui_pl_jadwal import (
     _render_ubah_jadwal_pl,
-    filter_paket_penandatanganan_kontrak,
+    filter_paket_sudah_tayang,
     render_custom_jadwal_pl,
 )
 from ui_pl_penetapan import _render_tab10_pl
@@ -445,6 +447,67 @@ def _render_gcal_push_log(results: list[dict]) -> None:
             else:
                 status = f"❌ Gagal: {row.get('gcal_error') or 'error tidak diketahui'}"
             st.write(f"**{row.get('paket', row.get('kode_paket', '-'))}** — {status}")
+
+
+def _render_pl_calendar_sync_button(rows: list[dict], key: str) -> None:
+    """Render satu tombol sync GCal ringkas di bawah aksi jadwal SPSE."""
+    import gcal_pl_helper as _gcalpl
+
+    if not _gcalpl.check_gcal_token():
+        st.caption("🔐 Google Calendar belum login/ token kedaluwarsa.")
+        if st.button("🔑 Login Ulang Google Calendar", key=f"{key}_reauth", use_container_width=True):
+            import gcal_helper as _gcalh
+            try:
+                _gcalh.generate_token()
+                st.success("✅ Token diperbarui. Klik sync jadwal lagi.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"❌ Gagal login ulang Google Calendar: {exc}")
+        return
+
+    if not st.button("🔄 Sync Jadwal ke Google Calendar", key=key, use_container_width=True):
+        return
+
+    target_errors = _gcalpl.register_pl_calendar_targets(rows or [])
+    if target_errors:
+        st.warning("⚠️ Allowlist GCal belum diperbarui: " + " | ".join(target_errors))
+    progress = st.progress(0.0, text="Memulai sync jadwal...")
+    try:
+        results = _gcalpl.sync_semua_paket_pl(
+            progress_cb=lambda fraction, message: progress.progress(fraction, text=message)
+        )
+    except _gcalpl.TargetRegistryError as exc:
+        results = []
+        st.error(f"❌ Allowlist target GCal belum siap: {exc}")
+    finally:
+        progress.empty()
+
+    ok_count = sum(1 for row in results if row.get("ok"))
+    skip_count = sum(
+        1 for row in results
+        if not row.get("ok") and "kosong" in str(row.get("error") or "")
+    )
+    error_count = len(results) - ok_count - skip_count
+    if error_count:
+        st.warning(f"⚠️ Sync GCal: {ok_count} OK, {skip_count} skip, {error_count} error.")
+    else:
+        st.success(f"✅ Sync GCal: {ok_count} OK, {skip_count} skip.")
+    if results:
+        with st.expander(f"📋 Detail sync GCal ({len(results)} paket)", expanded=bool(error_count)):
+            st.dataframe(
+                [
+                    {
+                        "Paket": _pl_label(row),
+                        "Status": "✅" if row.get("ok") else ("⏭ Skip" if "kosong" in str(row.get("error") or "") else "❌"),
+                        "GCal +": row.get("gcal_inserted", 0),
+                        "GCal -": row.get("gcal_deleted", 0),
+                        "Error": str(row.get("error") or "")[:120],
+                    }
+                    for row in results
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def _get_paket_gabungan(filter_selesai: bool = True) -> list[dict]:
@@ -2665,6 +2728,13 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
+        _pl_live_draft_sync = _sync_live_paket_umumkan_status("pl_draft_stage_sync_jkk")
+        if not _pl_live_draft_sync.get("ok"):
+            st.warning(
+                "⚠️ Status live SPSE belum berhasil diverifikasi; daftar Draft disembunyikan "
+                "agar cache lokal stale tidak dipakai."
+            )
+        _pl_live_draft_map = _get_live_tahap_map("pl_draft_stage_sync_jkk")
         _pl_rows = _load_draft_pl_cached("JKK", only_local=False)
         _pl_rows = [
             r for r in _pl_rows
@@ -2676,11 +2746,19 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if _pl_dup_n:
             st.caption(f"♻️ {_pl_dup_n} row lama duplikat (paket ulang) disembunyikan otomatis.")
 
-        # Tab 1–3 adalah fase setup awal: hanya paket yang masih Draft.
-        _pl_non_draft_n = sum(1 for r in _pl_rows if not pl_engine.is_paket_draft(r))
-        _pl_rows = [r for r in _pl_rows if pl_engine.is_paket_draft(r)]
-        if _pl_non_draft_n:
-            st.caption(f"🔒 {_pl_non_draft_n} paket aktif/berjalan disembunyikan dari fase setup awal.")
+        # Tab 1–3 adalah fase setup awal: hanya Draft yang lolos verifikasi
+        # live. Tahap aktif SPSE, termasuk Paket Belum Dilaksanakan, menjadi veto.
+        _pl_before_live_filter = len(_pl_rows)
+        _pl_rows = _filter_paket_draft_live(
+            _pl_rows,
+            _pl_live_draft_map,
+            live_status_ok=bool(_pl_live_draft_sync.get("ok")),
+        )
+        if _pl_before_live_filter != len(_pl_rows):
+            st.caption(
+                f"🔒 {_pl_before_live_filter - len(_pl_rows)} paket non-Draft/tayang "
+                "disembunyikan dari fase setup awal."
+            )
         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
         _pl_local_by_kode = {
             str(r.get("kode_paket")): r
@@ -2718,9 +2796,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             _pl_cookie, _SPSE_BASE, log_fn=_pl_log
                         )
                         _pl_pb.progress(1.0)
-                        _pl_c1, _pl_c2 = st.columns(2)
+                        _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
                         _pl_c1.metric("✅ Tersimpan", _pl_hasil.get("scraped", 0))
                         _pl_c2.metric("❌ Error", len(_pl_hasil.get("errors", [])))
+                        _pl_c3.metric("⏭️ Dilewati", _pl_hasil.get("skipped", 0))
                         if _pl_hasil.get("errors"):
                             with st.expander("Detail Error SPSE"):
                                 for _e in _pl_hasil["errors"]:
@@ -2736,7 +2815,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             r for r in _pl_rows
                             if str(r.get("jenis_pl") or "").upper() == "JKK"
                         ]
-                        _pl_rows = [r for r in _pl_rows if pl_engine.is_paket_draft(r)]
+                        _pl_rows = _filter_paket_draft_live(
+                            _pl_rows,
+                            _pl_live_draft_map,
+                            live_status_ok=bool(_pl_live_draft_sync.get("ok")),
+                        )
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
                         _pl_local_by_kode = {
                             str(r.get("kode_paket")): r
@@ -2754,11 +2837,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _logs_mak.append(m)
                         _st_mak.info(m)
                     try:
-                        _r_mak = _ibe.serap_inbox_pl(progress_cb=_cb_mak)
-                        _c1, _c2, _c3 = st.columns(3)
+                        _r_mak = _ibe.serap_inbox_pl(
+                            progress_cb=_cb_mak,
+                            tahap_map=_pl_live_draft_map,
+                        )
+                        _c1, _c2, _c3, _c4 = st.columns(4)
                         _c1.metric("Pesan parse", _r_mak.get("scraped", 0))
                         _c2.metric("Paket update", _r_mak.get("matched", 0))
-                        _c3.metric("Error", len(_r_mak.get("errors", [])))
+                        _c3.metric("⏭️ Dilewati", _r_mak.get("skipped", 0))
+                        _c4.metric("Error", len(_r_mak.get("errors", [])))
                         if _r_mak.get("errors"):
                             with st.expander("Detail Error MAK"):
                                 for _e in _r_mak["errors"]:
@@ -3961,12 +4048,9 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pljd_all_rows = _load_draft_pl_cached("JKK", only_local=False)
         _pljd_all_rows = _overlay_live_tahap_spse(_pljd_all_rows)
         _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
-        _pljd_contract_rows = filter_paket_penandatanganan_kontrak(
-            _pljd_all_rows,
-            schedule_loader=_parse_jadwal_pl_cached,
-            now=datetime.now(),
-            window_hours=6,
-        )
+        # Seksi 3 berdiri independen dari daftar Draft Seksi 1. Semua paket
+        # tayang masuk selector; renderer akan membaca jadwal live T1-T5.
+        _pljd_published_rows = filter_paket_sudah_tayang(_pljd_all_rows)
         if not _sync_schedule_stage_jkk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
@@ -4074,11 +4158,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _gcal_ok = _gcalpl_g.check_gcal_token()
 
                 st.divider()
-                _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_v25")
-                if _pljd_mode == "24 Jam":
-                    st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
-                elif _pljd_mode == "Santai":
-                    st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
+                with st.expander("⚙️ Mode jadwal", expanded=False):
+                    _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_v25")
+                    if _pljd_mode == "24 Jam":
+                        st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
+                    elif _pljd_mode == "Santai":
+                        st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
 
                 _pljd_custom_global = None
                 _pljd_custom_by_code = {}
@@ -4094,7 +4179,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                             )
                             with st.expander(
                                 f"Jadwal Custom — {_pl_label(_p)}",
-                                expanded=len(_pljd_selected) == 1,
+                                expanded=False,
                             ):
                                 _pljd_custom_by_code[_p["kode_paket"]] = render_custom_jadwal_pl(
                                     prefix=f"pljd_custom_{_p['kode_paket']}_v19",
@@ -4102,11 +4187,12 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     title="Input per tahap",
                                 )
                     else:
-                        _pljd_custom_global = render_custom_jadwal_pl(
-                            prefix="pljd_custom_global_v19",
-                            default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
-                            title="Jadwal Custom (berlaku untuk semua paket terpilih)",
-                        )
+                        with st.expander("⚙️ Input Jadwal Custom", expanded=False):
+                            _pljd_custom_global = render_custom_jadwal_pl(
+                                prefix="pljd_custom_global_v19",
+                                default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
+                                title="Jadwal Custom (berlaku untuk semua paket terpilih)",
+                            )
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -4133,9 +4219,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         st.error(f"Jadwal Custom belum valid: {_custom_pv_error}")
                     for _jd in _jadwal_pv:
                         _m, _s = _jd["mulai"], _jd["selesai"]
-                        _sama_hari = _m.date() == _s.date()
                         _txt_mulai = f"{_HARI_NAMA[_m.weekday()]}, {_m.day} {_BULAN_NAMA[_m.month-1]} {_m.strftime('%H:%M')}"
-                        _txt_selesai = _s.strftime('%H:%M') if _sama_hari else f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
+                        _txt_selesai = f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
                         with st.container(border=True):
                             st.write(f"**{_jd['nama']}**  \n{_txt_mulai} → {_txt_selesai}")
                     st.divider()
@@ -4310,67 +4395,15 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     })
                                 st.dataframe(_pd_jad.DataFrame(_jad_rows), use_container_width=True, hide_index=True)
 
+                _render_pl_calendar_sync_button(_pljd_all_rows, "sync_gcal_pl_btn_jkk")
                 with st.expander("ℹ️ Libur Nasional Tersisa"):
                     _hari_ini = datetime.now().date()
                     _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
                     for d in _sisa[:15]:
                         st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_libur_map_pl[d]}")
 
-        st.divider()
-        st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
-        st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        import gcal_pl_helper as _gcalpl_tc
-        _sync_gcal_pl_btn = False
-        if not _gcalpl_tc.check_gcal_token():
-            st.warning("🔐 Token Google Calendar tidak valid atau expired.")
-            if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_jkk", type="primary", use_container_width=True):
-                import gcal_helper as _gcalh_ra
-                try:
-                    _gcalh_ra.generate_token()
-                    st.success("✅ Token diperbarui! Klik Sync untuk melanjutkan.")
-                    st.rerun()
-                except Exception as _e_ra:
-                    st.error(f"❌ Gagal reauth: {_e_ra}")
-        else:
-            _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_jkk", use_container_width=True, type="primary")
-        if _sync_gcal_pl_btn:
-            import gcal_pl_helper as _gcalpl
-            _target_errors = _gcalpl.register_pl_calendar_targets(_pljd_rows)
-            if _target_errors:
-                st.warning("⚠️ Allowlist GCal PL belum diperbarui: " + " | ".join(_target_errors))
-            _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
-            try:
-                _gcalpl_results = _gcalpl.sync_semua_paket_pl(
-                    progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
-                )
-            except _gcalpl.TargetRegistryError as _e_registry:
-                _gcalpl_results = []
-                st.error(f"❌ Allowlist target GCal belum siap: {_e_registry}")
-            _gcalpl_prog.empty()
-            _gcalpl_ok = sum(1 for r in _gcalpl_results if r["ok"])
-            _gcalpl_skip = sum(1 for r in _gcalpl_results if not r["ok"] and "kosong" in r.get("error", ""))
-            _gcalpl_err = len(_gcalpl_results) - _gcalpl_ok - _gcalpl_skip
-            if _gcalpl_err == 0:
-                st.success(f"✅ {_gcalpl_ok} paket sync OK, {_gcalpl_skip} skip (jadwal belum diisi SPSE).")
-            else:
-                st.warning(f"⚠️ {_gcalpl_ok} OK, {_gcalpl_skip} skip, {_gcalpl_err} error.")
-            _gcalpl_display = [
-                {
-                    "Paket": _pl_label(r),
-                    "Status": "✅" if r["ok"] else ("⏭ Skip" if "kosong" in r.get("error","") else "❌"),
-                    "GCal +": r["gcal_inserted"],
-                    "GCal -": r["gcal_deleted"],
-                    "Tgl Evaluasi": r["tgl_evaluasi"],
-                    "Tgl Negosiasi": r["tgl_negosiasi"],
-                    "Tgl Penetapan": r["tgl_penetapan"],
-                    "Error": r["error"][:60] if r["error"] else "",
-                }
-                for r in _gcalpl_results
-            ]
-            st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
-        st.divider()
         _render_ubah_jadwal_pl(
-            _pljd_contract_rows,
+            _pljd_published_rows,
             _jepl,
             "pljd_edit_jkk",
         )
@@ -4396,10 +4429,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
-            _plsp_col_list, _plsp_col_kanan = st.columns([2, 3])
+            # Konfigurasi di kiri (lebih ringkas), upload Dokpil di kanan.
+            _plsp_col_kanan, _plsp_col_list = st.columns([2, 3])
 
             with _plsp_col_list:
-                st.markdown("### 1. Pilih Paket + Upload Dokpil")
+                st.markdown("### 2. Pilih Paket + Upload Dokpil")
                 _plsp_sel_all, _plsp_sel_none = st.columns(2)
                 with _plsp_sel_all:
                     if st.button("✅ Semua", key="plsp_sel_all", use_container_width=True):
@@ -4563,7 +4597,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
-                st.markdown("### 2. Konfigurasi Setup Paket")
+                st.markdown("### 1. Konfigurasi Setup Paket")
 
                 if not _plsp_selected:
                     st.info("Pilih paket di sebelah kiri.")
@@ -5003,7 +5037,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
     if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
-        st.markdown("### 🏢 Pilih Penyedia ke SPSE")
+        st.markdown("### 1. 🏢 Pilih Penyedia ke SPSE")
         st.caption(
             "Cari penyedia by NPWP → klik pilih ke SPSE (prioritas kabupaten Tapin, "
             "fallback semua kabupaten Kalsel propinsi 22)."
@@ -5199,7 +5233,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
     # ── Tab 6 Section 2: Umumkan Paket Non Tender (PL JKK) ───────────────────
     if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
-        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.markdown("### 2. 📢 Umumkan Paket PL")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
         if st.button(
             "🔄 Sinkronkan status pengumuman dari SPSE",
@@ -5284,7 +5318,36 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 )
                 if _umum_chk:
                     _pilih_umum.append(_r["kode_paket"])
-            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_jkk", disabled=not _pilih_umum):
+            if _pilih_umum:
+                _reminder_lookup_jkk = {
+                    r["kode_paket"]: r for r in _paket_belum_umum
+                }
+                st.warning(
+                    "⚠️ FASE KRUSIAL: pengumuman ke SPSE bersifat final dan "
+                    "tidak dapat dibatalkan dari aplikasi. Periksa ulang paket "
+                    "dan penyedia sebelum melanjutkan."
+                )
+                with st.expander(
+                    f"📌 Reminder paket yang akan diumumkan ({len(_pilih_umum)})",
+                    expanded=True,
+                ):
+                    for _kode_reminder_jkk in _pilih_umum:
+                        st.write(f"• {_pl_label(_reminder_lookup_jkk[_kode_reminder_jkk])}")
+                _reminder_signature_jkk = tuple(_pilih_umum)
+                if st.session_state.get("umum_konfirmasi_jkk_signature") != _reminder_signature_jkk:
+                    st.session_state["umum_konfirmasi_jkk"] = False
+                    st.session_state["umum_konfirmasi_jkk_signature"] = _reminder_signature_jkk
+                _umum_konfirmasi_jkk = st.checkbox(
+                    "Saya memahami pengumuman tidak dapat dibatalkan dan sudah memeriksa daftar di atas.",
+                    key="umum_konfirmasi_jkk",
+                )
+            else:
+                _umum_konfirmasi_jkk = False
+            if st.button(
+                "📢 Umumkan Paket Terpilih",
+                key="btn_umumkan_pl_jkk",
+                disabled=not _pilih_umum or not _umum_konfirmasi_jkk,
+            ):
                 try:
                     import spse_browser as _spse_br_umum
                     _spse_br_umum.buka_browser(navigate=False)
@@ -6488,6 +6551,13 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _PL_SCRIPT = str(pathlib.Path(_V19_ROOT) / "setup_paket_baru.py")
         _PL_NO_WIN = 0x08000000
 
+        _pl_live_draft_sync = _sync_live_paket_umumkan_status("pl_draft_stage_sync_pk")
+        if not _pl_live_draft_sync.get("ok"):
+            st.warning(
+                "⚠️ Status live SPSE belum berhasil diverifikasi; daftar Draft disembunyikan "
+                "agar cache lokal stale tidak dipakai."
+            )
+        _pl_live_draft_map = _get_live_tahap_map("pl_draft_stage_sync_pk")
         _pl_rows = _load_draft_pl_cached("PK", only_local=False)
         _pl_rows = [
             r for r in _pl_rows
@@ -6501,7 +6571,17 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         # ── #4: Filter paket selesai (penandatanganan kontrak) ──────────────────
         # Tab 1–5 adalah fase setup awal: hanya paket yang masih Draft.
-        _pl_rows = [r for r in _pl_rows if _pl_engine_utils.is_paket_draft(r)]
+        _pl_before_live_filter = len(_pl_rows)
+        _pl_rows = _filter_paket_draft_live(
+            _pl_rows,
+            _pl_live_draft_map,
+            live_status_ok=bool(_pl_live_draft_sync.get("ok")),
+        )
+        if _pl_before_live_filter != len(_pl_rows):
+            st.caption(
+                f"🔒 {_pl_before_live_filter - len(_pl_rows)} paket non-Draft/tayang "
+                "disembunyikan dari fase setup awal."
+            )
 
         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
         _pl_local_by_kode = {
@@ -6540,10 +6620,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             _pl_cookie, _SPSE_BASE, log_fn=_pl_log
                         )
                         _pl_pb.progress(1.0)
-                        _pl_c1, _pl_c2, _pl_c3 = st.columns(3)
+                        _pl_c1, _pl_c2, _pl_c3, _pl_c4 = st.columns(4)
                         _pl_c1.metric("✅ Tersimpan", _pl_hasil.get("scraped", 0))
                         _pl_c2.metric("❌ Error", len(_pl_hasil.get("errors", [])))
                         _pl_c3.metric("↩️ Ditarik dari SPSE", _pl_hasil.get("withdrawn", 0))
+                        _pl_c4.metric("⏭️ Dilewati", _pl_hasil.get("skipped", 0))
                         if _pl_hasil.get("errors"):
                             with st.expander("Detail Error SPSE"):
                                 for _e in _pl_hasil["errors"]:
@@ -6558,7 +6639,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             r for r in _pl_rows
                             if str(r.get("jenis_pl") or "").upper() == "PK"
                         ]
-                        _pl_rows = [r for r in _pl_rows if _pl_engine_utils.is_paket_draft(r)]
+                        _pl_rows = _filter_paket_draft_live(
+                            _pl_rows,
+                            _pl_live_draft_map,
+                            live_status_ok=bool(_pl_live_draft_sync.get("ok")),
+                        )
                         _pl_rows_local = _filter_local_pl_rows(_pl_rows)
                         _pl_local_by_kode = {
                             str(r.get("kode_paket")): r
@@ -6576,11 +6661,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _logs_mak.append(m)
                         _st_mak.info(m)
                     try:
-                        _r_mak = _ibe.serap_inbox_pl(progress_cb=_cb_mak)
-                        _c1, _c2, _c3 = st.columns(3)
+                        _r_mak = _ibe.serap_inbox_pl(
+                            progress_cb=_cb_mak,
+                            tahap_map=_pl_live_draft_map,
+                        )
+                        _c1, _c2, _c3, _c4 = st.columns(4)
                         _c1.metric("Pesan parse", _r_mak.get("scraped", 0))
                         _c2.metric("Paket update", _r_mak.get("matched", 0))
-                        _c3.metric("Error", len(_r_mak.get("errors", [])))
+                        _c3.metric("⏭️ Dilewati", _r_mak.get("skipped", 0))
+                        _c4.metric("Error", len(_r_mak.get("errors", [])))
                         if _r_mak.get("errors"):
                             with st.expander("Detail Error MAK"):
                                 for _e in _r_mak["errors"]:
@@ -7578,12 +7667,9 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _pljd_all_rows = _load_draft_pl_cached("PK", only_local=False)
         _pljd_all_rows = _overlay_live_tahap_spse(_pljd_all_rows)
         _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
-        _pljd_contract_rows = filter_paket_penandatanganan_kontrak(
-            _pljd_all_rows,
-            schedule_loader=_parse_jadwal_pl_cached,
-            now=datetime.now(),
-            window_hours=6,
-        )
+        # Seksi 3 berdiri independen dari daftar Draft Seksi 1. Semua paket
+        # tayang masuk selector; renderer akan membaca jadwal live T1-T5.
+        _pljd_published_rows = filter_paket_sudah_tayang(_pljd_all_rows)
         if not _sync_schedule_stage_pk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
@@ -7688,11 +7774,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 import gcal_pl_helper as _gcalpl_gpk
                 _gcal_ok_pk = _gcalpl_gpk.check_gcal_token()
 
-                _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_pk_v25")
-                if _pljd_mode == "24 Jam":
-                    st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
-                elif _pljd_mode == "Santai":
-                    st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
+                with st.expander("⚙️ Mode jadwal", expanded=False):
+                    _pljd_mode = st.radio("Mode Jadwal", ["Custom", "24 Jam", "Normal", "Santai", "Normal 3 Minggu", "Standar", "Cepat"], index=0, horizontal=True, key="pljd_mode_pk_v25")
+                    if _pljd_mode == "24 Jam":
+                        st.caption("Mode 24 Jam: mulai minimal 17:00; T1 start sore/malam selesai H+5 pukul 10:00, T4 maksimal 17:00, T5 berlangsung 10 hari kalender.")
+                    elif _pljd_mode == "Santai":
+                        st.caption("Mode Santai: Evaluasi Penawaran 2 hari kerja; Klarifikasi Teknis dan Negosiasi berlangsung 2 hari, mulai H-1 pukul 09:00 sampai hari selesai evaluasi pukul 15:45.")
 
                 _pljd_custom_global = None
                 _pljd_custom_by_code = {}
@@ -7708,7 +7795,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                             )
                             with st.expander(
                                 f"Jadwal Custom — {_pl_label(_p)}",
-                                expanded=len(_pljd_selected) == 1,
+                                expanded=False,
                             ):
                                 _pljd_custom_by_code[_p["kode_paket"]] = render_custom_jadwal_pl(
                                     prefix=f"pljd_custom_{_p['kode_paket']}_vpk",
@@ -7716,11 +7803,12 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     title="Input per tahap",
                                 )
                     else:
-                        _pljd_custom_global = render_custom_jadwal_pl(
-                            prefix="pljd_custom_global_vpk",
-                            default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
-                            title="Jadwal Custom (berlaku untuk semua paket terpilih)",
-                        )
+                        with st.expander("⚙️ Input Jadwal Custom", expanded=False):
+                            _pljd_custom_global = render_custom_jadwal_pl(
+                                prefix="pljd_custom_global_vpk",
+                                default_start=datetime.combine(_pljd_tgl_global, _pljd_jam_global),
+                                title="Jadwal Custom (berlaku untuk semua paket terpilih)",
+                            )
 
                 if _pljd_selected:
                     st.markdown(f"**📅 Preview Jadwal — cek dulu sebelum push**")
@@ -7747,9 +7835,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         st.error(f"Jadwal Custom belum valid: {_custom_pv_error}")
                     for _jd in _jadwal_pv:
                         _m, _s = _jd["mulai"], _jd["selesai"]
-                        _sama_hari = _m.date() == _s.date()
                         _txt_mulai = f"{_HARI_NAMA[_m.weekday()]}, {_m.day} {_BULAN_NAMA[_m.month-1]} {_m.strftime('%H:%M')}"
-                        _txt_selesai = _s.strftime('%H:%M') if _sama_hari else f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
+                        _txt_selesai = f"{_HARI_NAMA[_s.weekday()]}, {_s.day} {_BULAN_NAMA[_s.month-1]} {_s.strftime('%H:%M')}"
                         with st.container(border=True):
                             st.write(f"**{_jd['nama']}**  \n{_txt_mulai} → {_txt_selesai}")
                     st.divider()
@@ -7925,67 +8012,15 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     })
                                 st.dataframe(_pd_jad.DataFrame(_jad_rows), use_container_width=True, hide_index=True)
 
+                _render_pl_calendar_sync_button(_pljd_all_rows, "sync_gcal_pl_btn_pk")
                 with st.expander("ℹ️ Libur Nasional Tersisa"):
                     _hari_ini = datetime.now().date()
                     _sisa = sorted(d for d in _libur_map_pl if d >= _hari_ini)
                     for d in _sisa[:15]:
                         st.write(f"• {_HARI_NAMA[d.weekday()]}, {d.day} {_BULAN_NAMA[d.month-1]} {d.year} — {_libur_map_pl[d]}")
 
-        st.divider()
-        st.markdown("#### 🔄 Sync Jadwal ke Google Calendar")
-        st.caption("Baca jadwal aktual dari SPSE → update GCal + Supabase tgl_evaluasi/tgl_negosiasi/tgl_penetapan. Jalankan setelah ada perubahan jadwal di SPSE.")
-        import gcal_pl_helper as _gcalpl_tc
-        _sync_gcal_pl_btn = False
-        if not _gcalpl_tc.check_gcal_token():
-            st.warning("🔐 Token Google Calendar tidak valid atau expired.")
-            if st.button("🔑 Login Ulang ke Google Calendar", key="reauth_gcal_btn_pk", type="primary", use_container_width=True):
-                import gcal_helper as _gcalh_ra
-                try:
-                    _gcalh_ra.generate_token()
-                    st.success("✅ Token diperbarui! Klik Sync untuk melanjutkan.")
-                    st.rerun()
-                except Exception as _e_ra:
-                    st.error(f"❌ Gagal reauth: {_e_ra}")
-        else:
-            _sync_gcal_pl_btn = st.button("🔄 Sync Jadwal ke GCal", key="sync_gcal_pl_btn_pk", use_container_width=True, type="primary")
-        if _sync_gcal_pl_btn:
-            import gcal_pl_helper as _gcalpl
-            _target_errors = _gcalpl.register_pl_calendar_targets(_pljd_rows)
-            if _target_errors:
-                st.warning("⚠️ Allowlist GCal PL belum diperbarui: " + " | ".join(_target_errors))
-            _gcalpl_prog = st.progress(0.0, text="Memulai sync...")
-            try:
-                _gcalpl_results = _gcalpl.sync_semua_paket_pl(
-                    progress_cb=lambda f, m: _gcalpl_prog.progress(f, text=m)
-                )
-            except _gcalpl.TargetRegistryError as _e_registry:
-                _gcalpl_results = []
-                st.error(f"❌ Allowlist target GCal belum siap: {_e_registry}")
-            _gcalpl_prog.empty()
-            _gcalpl_ok = sum(1 for r in _gcalpl_results if r["ok"])
-            _gcalpl_skip = sum(1 for r in _gcalpl_results if not r["ok"] and "kosong" in r.get("error", ""))
-            _gcalpl_err = len(_gcalpl_results) - _gcalpl_ok - _gcalpl_skip
-            if _gcalpl_err == 0:
-                st.success(f"✅ {_gcalpl_ok} paket sync OK, {_gcalpl_skip} skip (jadwal belum diisi SPSE).")
-            else:
-                st.warning(f"⚠️ {_gcalpl_ok} OK, {_gcalpl_skip} skip, {_gcalpl_err} error.")
-            _gcalpl_display = [
-                {
-                    "Paket": _pl_label(r),
-                    "Status": "✅" if r["ok"] else ("⏭ Skip" if "kosong" in r.get("error","") else "❌"),
-                    "GCal +": r["gcal_inserted"],
-                    "GCal -": r["gcal_deleted"],
-                    "Tgl Evaluasi": r["tgl_evaluasi"],
-                    "Tgl Negosiasi": r["tgl_negosiasi"],
-                    "Tgl Penetapan": r["tgl_penetapan"],
-                    "Error": r["error"][:60] if r["error"] else "",
-                }
-                for r in _gcalpl_results
-            ]
-            st.dataframe(_gcalpl_display, use_container_width=True, hide_index=True)
-        st.divider()
         _render_ubah_jadwal_pl(
-            _pljd_contract_rows,
+            _pljd_published_rows,
             _jepl,
             "pljd_edit_pk",
         )
@@ -8011,10 +8046,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         if not _plsp_rows:
             st.info("⚠️ Belum ada paket PL. Serap dari SPSE di Tab 1 terlebih dahulu.")
         else:
-            _plsp_col_list, _plsp_col_kanan = st.columns([2, 3])
+            # Konfigurasi di kiri (lebih ringkas), upload Dokpil di kanan.
+            _plsp_col_kanan, _plsp_col_list = st.columns([2, 3])
 
             with _plsp_col_list:
-                st.markdown("### 1. Pilih Paket + Upload Dokpil")
+                st.markdown("### 2. Pilih Paket + Upload Dokpil")
                 _plsp_sel_all, _plsp_sel_none = st.columns(2)
                 with _plsp_sel_all:
                     if st.button("✅ Semua", key="plsp_sel_all", use_container_width=True):
@@ -8177,7 +8213,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _load_draft_pl_cached.clear()
 
             with _plsp_col_kanan:
-                st.markdown("### 2. Konfigurasi Setup Paket")
+                st.markdown("### 1. Konfigurasi Setup Paket")
 
                 if not _plsp_selected:
                     st.info("Pilih paket di sebelah kiri.")
@@ -8643,7 +8679,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
     if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
-        st.markdown("### 🏢 Pilih Penyedia ke SPSE")
+        st.markdown("### 1. 🏢 Pilih Penyedia ke SPSE")
         st.caption(
             "Cari penyedia by NPWP → klik pilih ke SPSE (prioritas kabupaten Tapin, "
             "fallback semua kabupaten Kalsel propinsi 22)."
@@ -8835,7 +8871,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
     # ── Tab 6 Section 2: Umumkan Paket Non Tender (PL PK) ───────────────────
     if _pl_active_tab == "6️⃣ Pilih Penyedia & Umumkan":
         st.divider()
-        st.markdown("### 📢 Umumkan Paket Non Tender")
+        st.markdown("### 2. 📢 Umumkan Paket PL")
         st.caption("Setujui Pakta Integritas dan umumkan paket ke SPSE. Pastikan browser SPSE sudah terhubung.")
         if st.button(
             "🔄 Sinkronkan status pengumuman dari SPSE",
@@ -8920,7 +8956,36 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 )
                 if _umum_chk_pk:
                     _pilih_umum_pk.append(_r["kode_paket"])
-            if st.button("📢 Umumkan Paket Terpilih", key="btn_umumkan_pl_pk", disabled=not _pilih_umum_pk):
+            if _pilih_umum_pk:
+                _reminder_lookup_pk = {
+                    r["kode_paket"]: r for r in _paket_belum_umum_pk
+                }
+                st.warning(
+                    "⚠️ FASE KRUSIAL: pengumuman ke SPSE bersifat final dan "
+                    "tidak dapat dibatalkan dari aplikasi. Periksa ulang paket "
+                    "dan penyedia sebelum melanjutkan."
+                )
+                with st.expander(
+                    f"📌 Reminder paket yang akan diumumkan ({len(_pilih_umum_pk)})",
+                    expanded=True,
+                ):
+                    for _kode_reminder_pk in _pilih_umum_pk:
+                        st.write(f"• {_pl_label(_reminder_lookup_pk[_kode_reminder_pk])}")
+                _reminder_signature_pk = tuple(_pilih_umum_pk)
+                if st.session_state.get("umum_konfirmasi_pk_signature") != _reminder_signature_pk:
+                    st.session_state["umum_konfirmasi_pk"] = False
+                    st.session_state["umum_konfirmasi_pk_signature"] = _reminder_signature_pk
+                _umum_konfirmasi_pk = st.checkbox(
+                    "Saya memahami pengumuman tidak dapat dibatalkan dan sudah memeriksa daftar di atas.",
+                    key="umum_konfirmasi_pk",
+                )
+            else:
+                _umum_konfirmasi_pk = False
+            if st.button(
+                "📢 Umumkan Paket Terpilih",
+                key="btn_umumkan_pl_pk",
+                disabled=not _pilih_umum_pk or not _umum_konfirmasi_pk,
+            ):
                 try:
                     import spse_browser as _spse_br_umum_pk
                     _spse_br_umum_pk.buka_browser(navigate=False)

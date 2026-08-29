@@ -10,6 +10,7 @@ import pl_ui_helpers
 import zipfile
 from pl_data_ui import (
     _filter_pl_family,
+    filter_paket_draft_live,
     _hydrate_provider_from_excel,
     filter_paket_siap_dijadwalkan,
     filter_paket_kirim_undangan_dpp,
@@ -24,7 +25,7 @@ from ui_pl_pk import (
     provider_identity_available,
     provider_selection_status_caption,
 )
-from ui_pl_jadwal import filter_paket_penandatanganan_kontrak
+from ui_pl_jadwal import filter_paket_penandatanganan_kontrak, filter_paket_sudah_tayang
 
 
 def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
@@ -124,6 +125,21 @@ def test_filter_paket_penandatanganan_kontrak_uses_live_stage_or_status():
     ]
 
 
+def test_filter_paket_sudah_tayang_is_independent_and_keeps_prestart_until_t5():
+    rows = [
+        {"kode_paket": "prestart", "status": "draft", "tahap_spse": "Paket Belum Dilaksanakan"},
+        {"kode_paket": "upload", "status": "draft", "tahap_spse": "Upload Dokumen Penawaran"},
+        {"kode_paket": "contract", "status": "berjalan", "tahap_spse": "Penandatanganan Kontrak"},
+        {"kode_paket": "announced", "status": "draft", "tahap_spse": "Pengumuman"},
+        {"kode_paket": "session", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "draft", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "done", "status": "selesai", "tahap_spse": "Paket Sudah Selesai"},
+    ]
+
+    assert [row["kode_paket"] for row in filter_paket_sudah_tayang(
+        rows, {"session": {"status": "sudah diumumkan"}}
+    )] == ["prestart", "upload", "contract", "announced", "session"]
+
 def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang():
     rows = [
         {"kode_paket": "prestart", "status": "draft", "tahap_spse": "Paket Belum Dilaksanakan"},
@@ -136,6 +152,44 @@ def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang(
     assert [row["kode_paket"] for row in filter_paket_siap_dijadwalkan(rows)] == [
         "pending",
     ]
+
+
+def test_filter_paket_draft_live_hides_published_and_prestart_live_stage():
+    rows = [
+        {"kode_paket": "draft", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "published", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "prestart", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "running", "status": "berjalan", "tahap_spse": ""},
+    ]
+    live_tahap = {
+        "published": "Upload Dokumen Penawaran",
+        "prestart": "Paket Belum Dilaksanakan",
+    }
+
+    assert [row["kode_paket"] for row in filter_paket_draft_live(
+        rows,
+        live_tahap,
+        live_status_ok=True,
+    )] == ["draft"]
+
+
+def test_filter_paket_draft_live_vetoes_live_code_even_when_stage_is_blank():
+    rows = [
+        {"kode_paket": "live-blank-stage", "status": "draft", "tahap_spse": ""},
+        {"kode_paket": "draft", "status": "draft", "tahap_spse": ""},
+    ]
+
+    assert [row["kode_paket"] for row in filter_paket_draft_live(
+        rows,
+        {"live-blank-stage": ""},
+        live_status_ok=True,
+    )] == ["draft"]
+
+
+def test_filter_paket_draft_live_fails_closed_when_live_verification_fails():
+    rows = [{"kode_paket": "draft-local", "status": "draft", "tahap_spse": ""}]
+
+    assert filter_paket_draft_live(rows, {}, live_status_ok=False) == []
 
 
 def test_filter_paket_kirim_undangan_dpp_hides_live_tayang_from_draft_cache():
@@ -915,4 +969,32 @@ def test_sync_live_paket_umumkan_status_marks_and_throttles(monkeypatch):
     assert first == {"ok": True, "cached": False, "count": 1}
     assert second == {"ok": True, "cached": True, "count": 0}
     assert len(calls) == 1
+    assert state["test_tayang:tahap_map"] == {"74": "Upload Dokumen Penawaran"}
     assert pl_data_ui.is_paket_sudah_diumumkan({"kode_paket": "74", "status": "draft"}) is True
+
+
+def test_sync_live_paket_umumkan_status_fails_closed_on_fetch_error(monkeypatch):
+    state = {}
+
+    monkeypatch.setattr(pl_data_ui.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(pl_data_ui.st, "session_state", state)
+
+    import pl_engine
+    import spse_browser
+
+    monkeypatch.setattr(spse_browser, "get_spse_cookies", lambda: "cookie")
+    monkeypatch.setattr(
+        pl_engine,
+        "_fetch_tahap_spse",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("SPSE timeout")),
+    )
+
+    result = pl_data_ui.sync_live_paket_umumkan_status("test_tayang_error")
+
+    assert result["ok"] is False
+    assert "tahap_map" not in state
+    assert filter_paket_draft_live(
+        [{"kode_paket": "draft-local", "status": "draft", "tahap_spse": ""}],
+        {},
+        live_status_ok=result["ok"],
+    ) == []

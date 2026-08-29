@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone, timedelta
 from config import sb as _sb
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
+XML_DATA_SUBFOLDER = "11. XML Data"
 
 SATKER_LIST = [
     "Dinas Perdagangan",
@@ -388,6 +389,98 @@ def is_paket_draft(r: dict) -> bool:
     return status == "draft"
 
 
+_SERAP_REPEAT_MARKERS = (
+    "paket ulang",
+    "pengadaan langsung ulang",
+    "(pl - ulang)",
+    "(pl-ulang)",
+    "pl ulang",
+)
+
+
+def _serap_flag_true(value) -> bool:
+    """Baca flag Supabase yang dapat berupa bool atau teks legacy."""
+    if isinstance(value, str):
+        return value.strip().casefold() not in {"", "0", "false", "no", "none", "null"}
+    return bool(value)
+
+
+def _is_paket_ulang_serap(row: dict, existing: dict | None = None) -> bool:
+    """Deteksi paket ulang tanpa membuka halaman detail SPSE terlebih dahulu."""
+    if isinstance(existing, dict) and _serap_flag_true(existing.get("is_ulang")):
+        return True
+    text = " ".join(
+        str((row or {}).get(key) or "")
+        for key in ("nama_paket", "status", "tahap_spse")
+    ).casefold()
+    return any(marker in text for marker in _SERAP_REPEAT_MARKERS)
+
+
+def filter_rows_for_serap(
+    rows: list,
+    existing_rows: list[dict] | None = None,
+    tahap_map: dict | None = None,
+) -> tuple[list, list[dict]]:
+    """Pilih row SPSE yang memang perlu diserap.
+
+    Serapan detail adalah operasi mahal (evaluasi, edit, viewdraft, PPK, HPS,
+    dan update kualifikasi). Paket yang sudah punya folder kerja, sudah masuk
+    tahap live SPSE termasuk ``Paket Belum Dilaksanakan``, atau statusnya bukan
+    Draft tidak perlu membuka endpoint detail lagi. Paket baru, paket ulang,
+    dan Draft yang belum dibuatkan folder tetap diproses.
+
+    Return ``(eligible_rows, skipped)``. ``skipped`` berisi kode dan alasan
+    agar UI dapat menampilkan audit singkat tanpa mengubah data.
+    """
+    existing_by_code = {
+        str(item.get("kode_paket") or "").strip(): item
+        for item in (existing_rows or [])
+        if isinstance(item, dict) and str(item.get("kode_paket") or "").strip()
+    }
+    live_by_code = {
+        str(code or "").strip(): str(stage or "").strip()
+        for code, stage in (tahap_map or {}).items()
+        if str(code or "").strip()
+    }
+    eligible = []
+    skipped = []
+    for row in rows or []:
+        if not isinstance(row, (list, tuple)) or len(row) <= 5:
+            skipped.append({"kode_paket": "?", "reason": "row SPSE tidak valid"})
+            continue
+        code = str(row[5] or "").strip()
+        if not code:
+            skipped.append({"kode_paket": "?", "reason": "kode paket kosong"})
+            continue
+
+        local = existing_by_code.get(code)
+        repeat = _is_paket_ulang_serap(
+            {"nama_paket": row[1] if len(row) > 1 else "", "status": row[2] if len(row) > 2 else ""},
+            local,
+        )
+        live_stage = live_by_code.get(code, "")
+        if live_stage:
+            skipped.append({"kode_paket": code, "reason": f"sudah tayang: {live_stage}"})
+            continue
+
+        # Bila endpoint status live sedang tidak mengembalikan kode, tahap
+        # lokal tetap menjadi pengaman untuk row yang sudah pernah diproses.
+        local_stage = str((local or {}).get("tahap_spse") or "").strip()
+        if local_stage and not repeat:
+            skipped.append({"kode_paket": code, "reason": f"tahap lokal: {local_stage}"})
+            continue
+        if local and _serap_flag_true(local.get("folder_dibuat")) and not repeat:
+            skipped.append({"kode_paket": code, "reason": "sudah terdefinisi/ada folder kerja"})
+            continue
+
+        status = str(row[2] or "").strip().casefold() if len(row) > 2 else ""
+        if "draft" not in status and not repeat:
+            skipped.append({"kode_paket": code, "reason": f"status bukan Draft: {status or '-'}"})
+            continue
+        eligible.append(row)
+    return eligible, skipped
+
+
 def is_paket_berjalan(r: dict) -> bool:
     """True hanya untuk paket aktif/berjalan pada tab operasional.
 
@@ -695,7 +788,13 @@ def _derive_jenis_pl_dari_metode(metode: str, nama_paket: str) -> str:
     return "PK"
 
 
-def _fetch_tahap_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
+def _fetch_tahap_spse(
+    cookie_str: str,
+    base_url: str,
+    log_fn=None,
+    *,
+    strict: bool = False,
+) -> dict:
     """
     Fetch status TAHAPAN paket dari dashboard /home → dt/pengadaan-pp?status=1.
     Berbeda dgn dt/paketpp (status PP basi: Draft/Berjalan), endpoint ini
@@ -719,14 +818,19 @@ def _fetch_tahap_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     # 1. Ambil authenticityToken dari HTML /home
     try:
         r_home = requests.get(f"{base}/home", headers=headers, timeout=15)
+        r_home.raise_for_status()
         m = _re.search(r"authenticityToken\s*=\s*'([0-9a-f]+)'", r_home.text)
         token = m.group(1) if m else ""
     except Exception as e:
         log(f"  [tahap] gagal fetch /home: {e}")
+        if strict:
+            raise RuntimeError(f"Fetch status live SPSE gagal: GET /home: {e}") from e
         return {}
 
     if not token:
         log("  [tahap] authenticityToken tidak ditemukan — lewati status tahapan")
+        if strict:
+            raise RuntimeError("Fetch status live SPSE gagal: authenticityToken tidak ditemukan")
         return {}
 
     # 2. POST dt/pengadaan-pp?status=1
@@ -741,15 +845,20 @@ def _fetch_tahap_spse(cookie_str: str, base_url: str, log_fn=None) -> dict:
     tahap_map = {}
     try:
         r = requests.post(f"{base}/dt/pengadaan-pp?status=1", headers=hdr, data=payload, timeout=20)
+        r.raise_for_status()
         data = r.json().get("data", [])
         for row in data:
             kode  = str(row[0])   # col[0] = kode_paket
             tahap = str(row[2]) if len(row) > 2 else ""   # col[2] = tahap/status
-            if kode and tahap:
+            if kode:
                 tahap_map[kode] = tahap
         log(f"  [tahap] {len(tahap_map)} paket punya status tahapan (dt/pengadaan-pp)")
     except Exception as e:
         log(f"  [tahap] gagal POST dt/pengadaan-pp: {e}")
+        if strict:
+            raise RuntimeError(
+                f"Fetch status live SPSE gagal: POST /dt/pengadaan-pp: {e}"
+            ) from e
 
     return tahap_map
 
@@ -948,18 +1057,35 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     # 1b. Fetch status TAHAPAN (Penandatanganan Kontrak dll) dari dt/pengadaan-pp
     tahap_map = _fetch_tahap_spse(cookie_str, base_url, log_fn)
 
-    # 1c. Ambil kode_paket yang sudah selesai dari DB (fallback jika tidak muncul di tahap_map)
-    _selesai_db = set()
+    # 1c. Snapshot lokal dipakai sebagai pre-filter sebelum endpoint detail
+    # mahal dibuka. Folder kerja yang sudah ada tidak diserap ulang.
+    _existing_rows = []
     try:
-        _res = _sb().table("draft_paket_pl").select("kode_paket,tahap_spse").execute()
-        for _r in (_res.data or []):
-            if any(k in (_r.get("tahap_spse") or "").lower() for k in _TAHAP_SELESAI_KEYWORDS):
-                _selesai_db.add(str(_r["kode_paket"]))
-    except Exception:
-        pass
+        _res = _sb().table("draft_paket_pl").select(
+            "kode_paket,status,tahap_spse,is_ulang,folder_dibuat"
+        ).eq("jenis_pl", "JKK").execute()
+        _existing_rows = _res.data or []
+    except Exception as _existing_error:
+        # Tidak boleh menganggap semua paket baru ketika snapshot lokal gagal
+        # dibaca; itu justru menghilangkan manfaat pre-filter dan berisiko
+        # menyentuh paket yang sedang dikerjakan.
+        return {
+            "ok": False,
+            "scraped": 0,
+            "skipped": 0,
+            "errors": [f"Gagal baca snapshot paket lokal: {_existing_error}"],
+        }
+
+    rows, _skipped_rows = filter_rows_for_serap(rows, _existing_rows, tahap_map)
+    for _skip in _skipped_rows:
+        log(f"  Skip { _skip['kode_paket'] } — { _skip['reason'] }")
 
     errors = []
     scraped = 0
+
+    if not rows:
+        log(f"Tidak ada paket yang perlu diserap; {len(_skipped_rows)} paket dilewati.")
+        return {"ok": True, "scraped": 0, "skipped": len(_skipped_rows), "errors": []}
 
     for row in rows:
         id_paket_internal = str(row[0])  # ID paket-level (kolom 0), bukan untuk kirim verifikasi
@@ -967,18 +1093,6 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         status_spse  = row[2]
         satker       = row[4]
         kode_paket   = str(row[5])   # kode resmi non-tender
-
-        # Paket selesai — skip scrape detail sama sekali (sudah tidak relevan)
-        _tahap_skrg = (tahap_map.get(kode_paket) or "").lower()
-        if any(k in _tahap_skrg for k in _TAHAP_SELESAI_KEYWORDS) or kode_paket in _selesai_db:
-            log(f"  Skip detail {kode_paket} — sudah Penandatanganan Kontrak, update tahap saja")
-            try:
-                _sb().table("draft_paket_pl").update(
-                    {"tahap_spse": tahap_map.get(kode_paket)}
-                ).eq("kode_paket", kode_paket).execute()
-            except Exception:
-                pass
-            continue
 
         log(f"  Scraping {kode_paket} — {nama_paket[:40]}...")
 
@@ -1101,13 +1215,10 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
     log("Auto set Usaha Kecil untuk paket aktif...")
     for row in rows:
         kode = str(row[5])
-        _tahap = (tahap_map.get(kode) or "").lower()
-        if any(k in _tahap for k in _TAHAP_SELESAI_KEYWORDS) or kode in _selesai_db:
-            continue
         ok_kual = set_kualifikasi_usaha_pl(kode, headers, base_url)
         log(f"  Set Usaha Kecil {kode}: {'OK' if ok_kual else 'GAGAL'}")
 
-    return {"ok": True, "scraped": scraped, "errors": errors}
+    return {"ok": True, "scraped": scraped, "skipped": len(_skipped_rows), "errors": errors}
 
 
 def set_kualifikasi_usaha_pl(kode_paket: str, headers: dict, base_url: str) -> bool:
@@ -1363,6 +1474,7 @@ def buat_subfolder_dokumen(folder_paket: str) -> list:
         "8. Dokumen Kualifikasi",
         "9. Dokumen Teknis Biaya",
         "10. Revisi Uploadan PPK",
+        XML_DATA_SUBFOLDER,
     ]
     for sub in _semua_subfolder:
         p = os.path.join(folder_paket, sub)

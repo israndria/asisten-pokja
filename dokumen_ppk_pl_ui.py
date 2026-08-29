@@ -173,13 +173,12 @@ def _render_result(st, engine, row: dict, result: dict, state_key: str, results:
 
 def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     """Render checklist paket Draft + cek dokumen PPK secara on-demand."""
-    import pl_engine
     from pl_data_ui import (
-        get_paket_umumkan_status,
-        is_paket_sudah_diumumkan,
+        filter_paket_draft_live,
         filter_local_pl_rows,
+        get_live_tahap_map,
         load_draft_pl_cached,
-        mark_tahap_spse_sudah_diumumkan,
+        sync_live_paket_umumkan_status,
     )
     from ui_pl_common import render_package_selection
     import dokumen_ppk_pl as engine
@@ -191,50 +190,40 @@ def render_tab_dokumen_ppk_pl(st, jenis_pl: str, label_fn) -> None:
     st.markdown(f"## Monitor Dokumen PPK — PL {family}")
     st.caption(
         "Hanya paket berstatus Draft yang ditampilkan. Pemeriksaan SPSE berjalan "
-        "saat tombol ditekan, tidak otomatis ketika tab dibuka."
+        "otomatis saat tab dibuka/di-refresh; kegagalan verifikasi menutup daftar."
     )
 
     if st.button(
-        "🔄 Sinkronkan status tayang dari SPSE",
+        "🔄 Paksa sinkronkan status tayang dari SPSE",
         key=f"{prefix}_sync_status",
         use_container_width=True,
         help="Read-only: paket yang sudah diumumkan/disetujui tidak dimonitor lagi.",
     ):
-        try:
-            import spse_browser
+        sync_key = f"pl_draft_stage_sync_{family.casefold()}"
+        st.session_state.pop(sync_key, None)
+        st.session_state.pop(f"{sync_key}:result", None)
+        st.session_state.pop(f"{sync_key}:tahap_map", None)
+        load_draft_pl_cached.clear()
+        st.rerun()
 
-            cookie = spse_browser.get_spse_cookies()
-            if not cookie:
-                st.error("Browser SPSE tidak terhubung atau session kosong.")
-            else:
-                with st.spinner("Membaca status tayang dari SPSE..."):
-                    tahap_map = pl_engine._fetch_tahap_spse(cookie, pl_engine.BASE_URL)
-                count = mark_tahap_spse_sudah_diumumkan(tahap_map)
-                load_draft_pl_cached.clear()
-                if count:
-                    st.session_state[f"{prefix}_status_flash"] = (
-                        f"✅ {count} status paket berhasil disinkronkan dari SPSE."
-                    )
-                    st.rerun()
-                st.warning("Tidak ada tahap paket aktif yang terbaca dari SPSE.")
-        except Exception as exc:
-            st.error(f"Sinkronisasi status SPSE gagal: {exc}")
-
-    status_flash = st.session_state.pop(f"{prefix}_status_flash", "")
-    if status_flash:
-        st.success(status_flash)
+    sync_key = f"pl_draft_stage_sync_{family.casefold()}"
+    live_sync = sync_live_paket_umumkan_status(sync_key)
+    if not live_sync.get("ok"):
+        st.warning(
+            "⚠️ Status live SPSE belum berhasil diverifikasi; daftar paket disembunyikan "
+            "agar cache lokal stale tidak dipakai."
+        )
 
     try:
         rows = load_draft_pl_cached(family, only_local=False)
         kind_engine = __import__("pl_engine_plpk" if family == "PK" else "pl_engine")
         rows, duplicate_count = kind_engine.buang_duplikat_paket_lama(rows)
         rows = filter_local_pl_rows(rows)
-        rows = [row for row in rows if pl_engine.is_paket_draft(row)]
         sebelum_filter = len(rows)
-        rows = _filter_unannounced_rows(
+        rows = filter_paket_draft_live(
             rows,
-            get_paket_umumkan_status(),
-            is_paket_sudah_diumumkan,
+            get_live_tahap_map(sync_key),
+            live_status_ok=bool(live_sync.get("ok")),
         )
     except Exception as exc:
         st.error(f"Gagal memuat paket Draft PL {family}: {exc}")

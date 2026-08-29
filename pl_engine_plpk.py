@@ -8,7 +8,14 @@ import os
 import re
 from datetime import datetime, timezone
 from config import sb as _sb
-from pl_engine import is_paket_ditarik, _safe_download_name_for_folder, _spse_retry_call
+from pl_engine import (
+    is_paket_ditarik,
+    _safe_download_name_for_folder,
+    _spse_retry_call,
+    _is_paket_ulang_serap,
+    filter_rows_for_serap,
+    XML_DATA_SUBFOLDER,
+)
 
 BASE_URL = "https://spse.inaproc.id/tapinkab"
 
@@ -336,6 +343,41 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         tahap_map = {}
         log(f"  [WARN] Tahap real SPSE tidak terbaca: {exc}")
 
+    # Snapshot lokal dipakai sebagai pre-filter agar paket yang sudah dibuatkan
+    # folder/ditangani tidak membuka rangkaian endpoint detail yang mahal.
+    try:
+        _existing_rows = _sb().table("draft_paket_pl").select(
+            "kode_paket,status,tahap_spse,is_ulang,folder_dibuat"
+        ).eq("jenis_pl", "PK").execute().data or []
+    except Exception as _existing_error:
+        errors.append(f"Gagal baca snapshot paket lokal: {_existing_error}")
+        return {
+            "ok": False,
+            "scraped": 0,
+            "withdrawn": reconciliation.get("withdrawn", 0),
+            "skipped": 0,
+            "errors": errors,
+        }
+
+    _existing_by_code = {
+        str(item.get("kode_paket") or "").strip(): item
+        for item in _existing_rows
+        if isinstance(item, dict) and str(item.get("kode_paket") or "").strip()
+    }
+    rows, _skipped_rows = filter_rows_for_serap(rows, _existing_rows, tahap_map)
+    for _skip in _skipped_rows:
+        log(f"  Skip {_skip['kode_paket']} — {_skip['reason']}")
+
+    if not rows:
+        log(f"Tidak ada paket yang perlu diserap; {len(_skipped_rows)} paket dilewati.")
+        return {
+            "ok": not errors,
+            "scraped": 0,
+            "withdrawn": reconciliation.get("withdrawn", 0),
+            "skipped": len(_skipped_rows),
+            "errors": errors,
+        }
+
     for row in rows:
         id_paket_internal = str(row[0])  # ID paket-level (kolom 0), bukan untuk kirim verifikasi
         nama_paket   = row[1]
@@ -347,6 +389,9 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
 
         # Ambil ID peserta dari halaman evaluasi (untuk kirimundanganverifikasi)
         id_nontender = id_paket_internal  # fallback jika belum ada peserta
+        is_ulang = _is_paket_ulang_serap(
+            {"nama_paket": nama_paket}, _existing_by_code.get(kode_paket)
+        )
         try:
             import re as _re
             r_eval = requests.get(
@@ -358,6 +403,9 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             )
             if ids_peserta:
                 id_nontender = ids_peserta[0]
+            is_ulang = is_ulang or _is_paket_ulang_serap(
+                {"nama_paket": nama_paket, "status": r_eval.text}
+            )
         except Exception:
             pass
 
@@ -421,6 +469,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
             "jenis_kontrak":     jenis_kontrak,
             "metode_pengadaan":  metode_pengadaan,
             "status":            status_spse.lower() if status_spse else "draft",
+            "is_ulang":          is_ulang,
             "tahap_spse":        tahap_map.get(kode_paket),
             "diambil_pada":      datetime.now(timezone.utc).isoformat(),
         }
@@ -472,6 +521,7 @@ def serap_paket_pl_dari_spse(cookie_str: str, base_url: str, log_fn=None) -> dic
         "ok": not errors,
         "scraped": scraped,
         "withdrawn": reconciliation.get("withdrawn", 0),
+        "skipped": len(_skipped_rows),
         "errors": errors,
     }
 
@@ -702,6 +752,7 @@ def buat_subfolder_dokumen(folder_paket: str) -> list:
     for extra in [
         "5. Evaluator Kualifikasi & Teknis",
         "10. Revisi Uploadan PPK",
+        XML_DATA_SUBFOLDER,
     ]:
         p = os.path.join(folder_paket, extra)
         if not os.path.isdir(p):

@@ -40,6 +40,7 @@ class _FakeEvents:
         self.items = items or []
         self.update_count = 0
         self.delete_count = 0
+        self.updated_bodies = []
 
     def insert(self, *, calendarId, body):
         self.insert_index += 1
@@ -50,6 +51,7 @@ class _FakeEvents:
 
     def update(self, *, eventId, body, **kwargs):
         self.update_count += 1
+        self.updated_bodies.append(body)
         return _FakeRequest(payload={"id": eventId})
 
     def delete(self, *, eventId, **kwargs):
@@ -224,6 +226,26 @@ class GcalPlHelperTest(unittest.TestCase):
         self.assertEqual(result["inserted"], 4)
         self.assertEqual(result["deleted"], 0)
         self.assertEqual(service.events_api.update_count, 1)
+
+    def test_stage_number_is_removed_from_new_and_updated_event_title(self):
+        jadwal = _jadwal_lima_tahap()
+        jadwal[0]["nama"] = "1. Upload Dokumen Penawaran"
+        existing = [{
+            "id": "old-event",
+            "summary": "1. Upload Dokumen Penawaran - Paket Uji",
+            "description": "Paket PL: 789\nPaket Uji",
+            "extendedProperties": {"private": {
+                "source_pl": "789", "source_stage_index": "1",
+            }},
+        }]
+        service = _FakeService(items=existing)
+        with patch.object(gcal_pl_helper, "_build_service", return_value=service):
+            result = gcal_pl_helper.push_jadwal_pl_ke_gcal(
+                "789", "Paket Uji", jadwal
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(service.events_api.updated_bodies[0]["summary"], "Upload Dokumen Penawaran - Paket Uji")
 
 
 if __name__ == "__main__":

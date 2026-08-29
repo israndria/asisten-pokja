@@ -62,6 +62,11 @@ _TOKEN_CHECK_CACHE = {"key": None, "until": 0.0, "ok": False}
 _SPSE_SESSION = None
 
 
+def _gcal_stage_name(value: str) -> str:
+    """Samakan judul event PLJKK/PLPK tanpa nomor urut di depan."""
+    return re.sub(r"^\s*\d+\s*[.)]\s*", "", str(value or "").strip())
+
+
 def _get_spse_session():
     global _SPSE_SESSION
     if _SPSE_SESSION is not None:
@@ -307,7 +312,7 @@ def push_jadwal_pl_ke_gcal(
             mulai: datetime = tahap["mulai"]
             selesai: datetime = tahap["selesai"]
             evt = {
-                "summary": f"{tahap['nama']} - {nama_paket}",
+                "summary": f"{_gcal_stage_name(tahap.get('nama'))} - {nama_paket}",
                 "description": f"Paket PL: {kode_paket}\n{nama_paket}",
                 "start": {"dateTime": mulai.isoformat(), "timeZone": TZ},
                 "end":   {"dateTime": selesai.isoformat(), "timeZone": TZ},

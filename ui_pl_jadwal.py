@@ -101,6 +101,38 @@ def render_custom_jadwal_pl(
     return hasil
 
 
+def filter_paket_sudah_tayang(
+    rows: list[dict], session_status: dict | None = None
+) -> list[dict]:
+    """Ambil semua paket yang sudah tayang dan belum terminal.
+
+    Daftar ini sengaja independen dari daftar Draft pada Seksi 1. Paket yang
+    sudah masuk ``Paket Belum Dilaksanakan`` tetap termasuk karena sudah
+    diumumkan, sedangkan ``Paket Sudah Selesai``/ditarik tidak lagi dapat
+    diubah. Pembacaan jadwal T1-T5 dilakukan setelah user memilih paket.
+    """
+    from pl_data_ui import is_paket_sudah_diumumkan
+
+    terminal_markers = (
+        "paket sudah selesai",
+        "sudah selesai",
+        "ditarik",
+        "withdrawn",
+        "retired",
+    )
+    hasil = []
+    for row in rows or []:
+        text = " ".join(
+            str(row.get(field) or "").strip().casefold()
+            for field in ("tahap_spse", "status")
+        )
+        if any(marker in text for marker in terminal_markers):
+            continue
+        if is_paket_sudah_diumumkan(row, session_status):
+            hasil.append(row)
+    return hasil
+
+
 def filter_paket_penandatanganan_kontrak(
     rows: list[dict],
     *,
@@ -145,20 +177,19 @@ def filter_paket_penandatanganan_kontrak(
 
 
 def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
-    """Bulk edit jadwal live paket yang sudah Penandatanganan Kontrak."""
-    st.markdown("### ✏️ Ubah Jadwal Existing (Bulk)")
+    """Bulk edit jadwal semua paket tayang dengan lima tahap lengkap."""
+    st.markdown("### 3. Perubahan Jadwal")
     st.caption(
-        "Daftar hanya paket Penandatanganan Kontrak dengan jadwal mulai T5 "
-        "dalam jendela 6 jam sebelum/sesudah waktu sekarang. "
-        "Pilih banyak paket; tahap yang tidak dipilih tetap memakai jadwal live masing-masing."
+        "Daftar independen dari Seksi 1: semua paket yang sudah tayang. "
+        "Trace dan ubah T1–T5; tahap yang tidak dipilih tetap memakai jadwal live masing-masing."
     )
     if not rows:
-        st.info("Belum ada paket kontrak yang perlu ditindaklanjuti dalam jendela 6 jam.")
+        st.info("Belum ada paket tayang yang dapat diperiksa.")
         return
 
     by_code = {str(p.get("kode_paket")): p for p in rows}
     codes = st.multiselect(
-        "Paket yang diubah (Penandatanganan Kontrak)",
+        "Paket yang diubah (semua paket tayang)",
         list(by_code),
         # Kode paket tidak diperlukan untuk identifikasi visual; nomor folder
         # sudah menjadi prefix pada _pl_label(). Jangan potong nama paket.
@@ -175,15 +206,30 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
             for code in codes:
                 try:
                     scraped = engine.scrap_hidden_fields_pl(code)
-                    _loaded[code] = {"scraped": scraped, "jadwal": engine.parse_jadwal_aktual_pl(scraped)}
+                    jadwal = engine.parse_jadwal_aktual_pl(scraped)
+                    if len(jadwal) != 5:
+                        raise ValueError(
+                            f"SPSE mengembalikan {len(jadwal)}/5 tahap; "
+                            "perubahan ditahan sampai T1–T5 lengkap."
+                        )
+                    _loaded[code] = {"scraped": scraped, "jadwal": jadwal}
                 except Exception as e:
-                    st.error(f"{code}: gagal ambil jadwal — {e}")
+                    _loaded[code] = {"error": str(e)}
         st.session_state[f"{prefix}_loaded"] = _loaded
         st.rerun()
 
     loaded = st.session_state.get(f"{prefix}_loaded", {})
     if any(c not in loaded for c in codes):
         st.info("Klik **Ambil Jadwal Live** setelah memilih paket.")
+        return
+    load_errors = {
+        code: str(loaded[code].get("error") or "gagal membaca jadwal")
+        for code in codes
+        if loaded[code].get("error")
+    }
+    if load_errors:
+        for code, error in load_errors.items():
+            st.error(f"{code}: {error}")
         return
 
     tahap = ["T1 Upload", "T2 Pembukaan", "T3 Evaluasi", "T4 Klarifikasi+Nego", "T5 Kontrak"]
