@@ -13,6 +13,22 @@ import os
 K3_CERT_FALLBACK = "SKK Petugas K3 Konstruksi / Keselamatan Konstruksi"
 
 
+def _normalize_contract_type(value: str) -> str:
+    """PLPK hanya memakai Lumsum atau Harga Satuan."""
+    import re
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    lowered = text.lower()
+    if "gabungan" in lowered or (
+        "lumsum" in lowered and "harga satuan" in lowered
+    ):
+        return "Harga Satuan"
+    if "harga satuan" in lowered:
+        return "Harga Satuan"
+    if lowered == "lumsum":
+        return "Lumsum"
+    return text
+
+
 def _normalize_k3_certificate(value: str) -> str:
     """Pertahankan hanya sertifikat K3 eksplisit; selain itu fallback aman."""
     import re
@@ -472,6 +488,20 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                     _log("Data lokal: personel, alat, uraian, risiko, ND disinkronkan.")
                 except Exception as local_e:
                     _log(f"WARN data lokal: {local_e}")
+
+            # Macro membaca cache Supabase lebih dulu. Normalisasi di boundary
+            # workbook memastikan boilerplate tender "gabungan" tidak masuk
+            # ke Excel PLPK, termasuk saat sumber lokal tidak memuat field ini.
+            if md_res["ok"]:
+                try:
+                    ws_master = wb.Sheets("@ Master Data")
+                    current_contract = ws_master.Cells(18, 3).Value
+                    normalized_contract = _normalize_contract_type(current_contract)
+                    if normalized_contract and normalized_contract != current_contract:
+                        ws_master.Cells(18, 3).Value = normalized_contract
+                        _log("Jenis kontrak PLPK dinormalisasi: Harga Satuan.")
+                except Exception as contract_e:
+                    _log(f"WARN normalisasi jenis kontrak: {contract_e}")
 
             # Refresh @ Evaluasi setelah Master Data terisi
             if md_res["ok"]:

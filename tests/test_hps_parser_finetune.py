@@ -3,6 +3,63 @@ from decimal import Decimal
 import hps_engine
 
 
+def test_parse_hps_md_validates_code_and_rebuilds_boq(tmp_path):
+    path = tmp_path / "_HPS_demo.md"
+    path.write_text(
+        """# DATA HPS — Demo
+Kode Paket: `ABC123`
+## RINGKASAN
+- **Total Nilai**: Rp 1.234,50
+- **Total Nilai Bulat**: Rp 1.235
+## TABEL BoQ LENGKAP
+No | Jenis B/J | Satuan | Vol | Harga | Pajak% | Total SPSE | Total Hitung | Selisih OK
+---|---|---|---|---|---|---|---|---
+1 | **DIVISI 1. UMUM** | - | - | - | - | - | - | -
+2 | Mobilisasi | LS | 1 | Rp 1.234,50 | 0% | Rp 1.234,50 | Rp 1.234,50 | OK
+""",
+        encoding="utf-8",
+    )
+    result = hps_engine.parse_hps_md(str(path), expected_kode="ABC123")
+    assert len(result["items"]) == 2
+    assert result["items"][0]["is_divisi"] is True
+    assert result["items"][1]["harga"] == 1234.5
+    assert result["total_nilai_bulat"] == 1235.0
+    assert result["nilai_hps_source"] == "local_hps_md_fallback"
+    assert hps_engine.parse_hps_md(str(path), expected_kode="WRONG") == {}
+
+
+def test_parse_amount_decimal_distinguishes_rupiah_thousands_and_cents():
+    assert hps_engine._parse_amount_decimal("Rp 1.235") == Decimal("1235")
+    assert hps_engine._parse_amount_decimal("Rp 1.234,50") == Decimal("1234.50")
+    assert hps_engine._parse_amount_decimal("199984583.13") == Decimal("199984583.13")
+
+
+def test_hps_markdown_preserves_cents(tmp_path):
+    path = tmp_path / "0. BAPLPK- Uji.xlsm"
+    result = {
+        "items": [{
+            "urutan": 1,
+            "jenis_bj": "Mobilisasi",
+            "satuan": "LS",
+            "vol": 1.0,
+            "harga": 1234.50,
+            "pajak_pct": 0.0,
+            "total_spse": 1234.50,
+            "total_hitung": 1234.50,
+            "is_divisi": False,
+            "selisih": 0.0,
+            "selisih_ok": True,
+        }],
+        "total_nilai": 1234.50,
+        "total_nilai_bulat": 1234.50,
+        "nilai_pagu": "Rp. 2.000,00",
+    }
+    md_path = hps_engine._tulis_hps_ke_md("ABC123", str(path), result)
+    content = open(md_path, encoding="utf-8").read()
+    assert "Rp 1.234,50" in content
+    assert hps_engine.parse_hps_md(md_path, "ABC123")["total_nilai_bulat"] == 1234.5
+
+
 def test_parse_official_hps_summary_from_edit_page():
     html = """
     <label>Nilai HPS</label><span>Rp. 313.292.000,00</span>

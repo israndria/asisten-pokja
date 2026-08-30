@@ -41,6 +41,13 @@ def _parse_amount_decimal(value) -> Decimal | None:
         text = text.replace(".", "").replace(",", ".")
     elif text.count(".") > 1:
         text = text.replace(".", "")
+    elif "." in text:
+        # Markdown/HTML kadang menulis nominal Rupiah bulat sebagai
+        # ``Rp 1.235``. Satu titik dengan tepat tiga digit di belakangnya
+        # adalah pemisah ribuan; dua digit tetap dianggap pecahan resmi.
+        whole, fraction = text.split(".", 1)
+        if len(fraction) == 3 and whole.isdigit() and fraction.isdigit():
+            text = whole + fraction
     try:
         return Decimal(text)
     except Exception:
@@ -807,8 +814,11 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
     total_nilai = hasil.get("total_nilai", 0)
     total_bulat = hasil.get("total_nilai_bulat", 0)
 
-    # Helper format Rp ribuan titik
-    def _rp(n): return f"Rp {int(round(n)):,}".replace(",", ".")
+    # Helper format Rp: pertahankan pecahan sen resmi dari /viewdraft/edit.
+    def _rp(n):
+        amount = Decimal(str(n or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        formatted = f"{amount:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+        return f"Rp {formatted}"
 
     non_divisi = [it for it in items if not it["is_divisi"]]
     divisi = [it for it in items if it["is_divisi"]]
@@ -932,6 +942,91 @@ def _tulis_hps_ke_md(kode_paket: str, excel_path: str, hasil: dict, mode: str = 
         pass  # best-effort, jangan block HPS flow
 
     return md_path
+
+
+def parse_hps_md(md_path: str, expected_kode: str = "") -> dict:
+    """Baca ulang ringkasan ``_HPS_*.md`` sebagai fallback offline.
+
+    Fallback hanya menerima file yang memiliki tabel BoQ dan, bila diminta,
+    kode paket yang sama. Nilai ini dipakai untuk menyelesaikan finalisasi
+    Excel ketika fetch live gagal sesaat; tidak dipromosikan sebagai HPS resmi
+    baru dan tidak menimpa summary SPSE.
+    """
+    if not md_path or not os.path.isfile(md_path):
+        return {}
+    with open(md_path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    if expected_kode:
+        code_match = None
+        for line in lines:
+            code_match = re.search(r"Kode Paket:\s*`([^`]+)`", line, re.IGNORECASE)
+            if code_match:
+                break
+        if not code_match or code_match.group(1).strip() != str(expected_kode).strip():
+            return {}
+
+    def _summary(label):
+        for line in lines:
+            m = re.search(rf"^[-*]\s*\*\*{label}\*\*:\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                parsed = _parse_amount_decimal(m.group(1))
+                if parsed is not None:
+                    return float(parsed)
+        return 0.0
+
+    table_start = next((i for i, line in enumerate(lines) if line.startswith("No | Jenis B/J |")), -1)
+    if table_start < 0:
+        return {}
+
+    items = []
+    for line in lines[table_start + 2:]:
+        if not line.strip() or "|" not in line:
+            continue
+        fields = [part.strip() for part in line.split("|")]
+        if len(fields) < 9:
+            continue
+        try:
+            urutan = int(fields[0])
+        except ValueError:
+            continue
+        jenis = fields[1].replace("**", "").strip()
+        is_divisi = all(fields[i] == "-" for i in (2, 3, 4, 5, 6, 7, 8))
+        if is_divisi:
+            items.append({
+                "urutan": urutan, "jenis_bj": jenis, "satuan": "", "vol": 0.0,
+                "harga": 0.0, "pajak_pct": 0.0, "total_spse": 0.0,
+                "total_hitung": 0.0, "kbki": "", "is_divisi": True,
+                "selisih": 0.0, "selisih_ok": True,
+            })
+            continue
+        vol = _parse_amount_decimal(fields[3]) or Decimal("0")
+        harga = _parse_amount_decimal(fields[4]) or Decimal("0")
+        pajak = _parse_amount_decimal(fields[5].replace("%", "")) or Decimal("0")
+        total_spse = _parse_amount_decimal(fields[6]) or Decimal("0")
+        total_hitung = _parse_amount_decimal(fields[7]) or Decimal("0")
+        selisih = abs(total_spse - total_hitung).quantize(Decimal("0.01"))
+        items.append({
+            "urutan": urutan, "jenis_bj": jenis, "satuan": fields[2],
+            "vol": float(vol), "harga": float(harga), "pajak_pct": float(pajak),
+            "total_spse": float(total_spse), "total_hitung": float(total_hitung),
+            "kbki": "", "is_divisi": False, "selisih": float(selisih),
+            "selisih_ok": selisih <= Decimal("1.00"),
+        })
+
+    if not items:
+        return {}
+    total_nilai = _summary("Total Nilai")
+    total_bulat = _summary("Total Nilai Bulat") or total_nilai
+    return {
+        "items": items,
+        "total_nilai": total_nilai,
+        "total_nilai_bulat": total_bulat,
+        "nilai_pagu": "",
+        "nilai_hps": _format_rp(total_bulat),
+        "nilai_hps_official": "",
+        "nilai_hps_source": "local_hps_md_fallback",
+    }
 
 
 # ============================================================

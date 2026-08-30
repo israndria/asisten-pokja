@@ -254,7 +254,17 @@ def _parse_jenis_kontrak_dari_edit(html: str) -> str:
     teks = soup.get_text(" ", strip=True)
     m = re.search(r"Jenis Kontrak\s+([\w\s]+?)(?:Dokumen|Jadwal|Survey|\Z)", teks)
     if m:
-        return m.group(1).strip()
+        value = re.sub(r"\s+", " ", m.group(1)).strip()
+        lowered = value.lower()
+        if "gabungan" in lowered or (
+            "lumsum" in lowered and "harga satuan" in lowered
+        ):
+            return "Harga Satuan"
+        if "harga satuan" in lowered:
+            return "Harga Satuan"
+        if lowered == "lumsum":
+            return "Lumsum"
+        return value
     return ""
 
 

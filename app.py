@@ -3450,6 +3450,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    _pl_res.get("hps_hasil"),
                                 )
                                 for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (
@@ -7224,6 +7225,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _pl_target_b, _pl_kp_b,
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
+                                    _pl_res.get("hps_hasil"),
                                 )
                                 for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (

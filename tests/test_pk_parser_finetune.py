@@ -87,3 +87,10 @@ def test_k3_certificate_normalizer_keeps_clear_skk_and_falls_back_otherwise():
     assert isi_master_data_pl._normalize_k3_certificate("Sertifikat K3") == (
         "SKK Petugas K3 Konstruksi / Keselamatan Konstruksi"
     )
+
+
+def test_workbook_contract_normalizer_reduces_combined_plpk_to_price_unit():
+    assert isi_master_data_pl._normalize_contract_type(
+        "Gabungan Lumsum dan Harga Satuan"
+    ) == "Harga Satuan"
+    assert isi_master_data_pl._normalize_contract_type("Lumsum") == "Lumsum"

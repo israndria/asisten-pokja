@@ -98,6 +98,25 @@ def _pl_output_dasar_valid(target_dir):
     return True, ""
 
 
+def _local_hps_fallback(target_dir, kode_paket):
+    """Ambil HPS terakhir yang sudah tersimpan lokal bila SPSE timeout."""
+    import hps_engine
+
+    candidates = sorted(
+        pathlib.Path(target_dir).glob("_HPS_*.md"),
+        key=lambda p: p.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for candidate in candidates:
+        try:
+            parsed = hps_engine.parse_hps_md(str(candidate), expected_kode=kode_paket)
+        except Exception:
+            continue
+        if parsed.get("items"):
+            return parsed, str(candidate)
+    return None, ""
+
+
 def _pl_io_success(res, download_requested):
     """Predikat murni status I/O, dapat diuji tanpa SPSE/network."""
     if not res.get("setup_ok") or not res.get("output_ok") or not res.get("hps_ok"):
@@ -195,7 +214,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
            "jenis_pl": jenis_pl, "workflow": item.get("workflow", ""), "target": target, "template_dir": item.get("template_dir", ""),
            "ok": False, "setup_ok": False, "output_ok": False,
            "download_ok": not bool(cfg.get("dl_dokumen")), "hps_ok": False,
-           "log": [], "files_ok": []}
+           "log": [], "files_ok": [], "hps_hasil": None}
     log = res["log"].append
 
     def _step(label, t0, suffix=""):
@@ -364,13 +383,26 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
             if _hps and _hps.get("items") and _xlsm:
                 _hps_eng._tulis_hps_ke_md(kode, _xlsm, _hps)
                 res["hps_ok"] = True
+                res["hps_hasil"] = _hps
                 log(f"📄 HPS.md: {len(_hps['items'])} item")
                 _emit(f"📄 HPS {len(_hps['items'])} item")
             else:
-                log("⚠ HPS.md: tidak ada item HPS")
+                _local_hps, _local_path = _local_hps_fallback(target, kode)
+                if _local_hps:
+                    res["hps_ok"] = True
+                    res["hps_hasil"] = _local_hps
+                    log(f"⚠ HPS live kosong; memakai fallback lokal: {os.path.basename(_local_path)}")
+                else:
+                    log("⚠ HPS.md: tidak ada item HPS")
             _step("HPS.md", _t_step)
         except Exception as _hps_e:
-            log(f"⚠ HPS.md: {_hps_e}")
+            _local_hps, _local_path = _local_hps_fallback(target, kode)
+            if _local_hps:
+                res["hps_ok"] = True
+                res["hps_hasil"] = _local_hps
+                log(f"⚠ HPS live gagal; memakai fallback lokal: {os.path.basename(_local_path)}")
+            else:
+                log(f"⚠ HPS.md: {_hps_e}")
             _step("HPS.md", _t_step, " error")
 
         res["ok"] = _pl_io_success(res, bool(cfg.get("dl_dokumen")))
@@ -988,7 +1020,7 @@ def _resolve_nomor_dokpil_excel_pl(row: dict) -> dict:
     }
 
 def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
-                            template_dir_jkk, template_dir_pk):
+                            template_dir_jkk, template_dir_pk, hps_hasil_preloaded=None):
     """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->
     1 sesi COM gabungan (HPS + Master Data). Return status terstruktur.
     Urutan BENAR: Refresh dulu (hapus xlsm lama, copy fresh), baru
@@ -1034,29 +1066,51 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     except Exception as _prompt_e2:
         logs.append(f"WARN Prompt audit HPS Agy: {_prompt_e2}")
 
-    # 3. Fetch HPS dict (tanpa COM) via scrape_hps_pl
-    hps_hasil = None
-    try:
-        hps_hasil = _hps_eng2.scrape_hps_pl(kode_paket)
-        if not hps_hasil.get("items"):
-            logs.append("WARN HPS: tidak ada item (fetch gagal/kosong)")
-            hps_hasil = None
+    # 3. Gunakan hasil worker bila sudah tersedia; bila tidak, fetch live lalu
+    # fallback ke _HPS_*.md yang identitas kodenya sudah diverifikasi.
+    hps_hasil = hps_hasil_preloaded if (hps_hasil_preloaded or {}).get("items") else None
+    if hps_hasil:
+        result["hps_ok"] = True
+        result["hps_source"] = hps_hasil.get("nilai_hps_source") or "worker_live"
+        if result["hps_source"] == "local_hps_md_fallback":
+            result["hps_sync_ok"] = True
+            logs.append("HPS summary: dipertahankan dari fallback lokal")
         else:
-            result["hps_ok"] = True
-            result["hps_source"] = hps_hasil.get("nilai_hps_source", "")
-
-            # VBA membaca nilai_hps dari Supabase. Sinkronkan summary resmi
-            # sebelum macro dijalankan agar C14 tidak mengambil angka raw lama.
             try:
-                result["hps_sync_ok"] = bool(
-                    _hps_eng2._sync_pl_summary(kode_paket, hps_hasil)
-                )
+                result["hps_sync_ok"] = bool(_hps_eng2._sync_pl_summary(kode_paket, hps_hasil))
                 if not result["hps_sync_ok"]:
                     logs.append("WARN HPS summary: gagal sinkron ke Supabase")
             except Exception as _hps_sync_e:
                 logs.append(f"WARN HPS summary: {_hps_sync_e}")
-    except Exception as _hps_e2:
-        logs.append(f"WARN HPS fetch: {_hps_e2}")
+        logs.append(f"HPS: {len(hps_hasil['items'])} baris dari worker")
+    else:
+        try:
+            hps_hasil = _hps_eng2.scrape_hps_pl(kode_paket)
+            if not hps_hasil.get("items"):
+                logs.append("WARN HPS: tidak ada item (fetch gagal/kosong)")
+                hps_hasil, _local_path = _local_hps_fallback(target_dir, kode_paket)
+                if hps_hasil:
+                    result["hps_ok"] = True
+                    result["hps_source"] = "local_hps_md_fallback"
+                    result["hps_sync_ok"] = True
+                    logs.append(f"HPS: fallback lokal {_local_path}")
+            else:
+                result["hps_ok"] = True
+                result["hps_source"] = hps_hasil.get("nilai_hps_source", "")
+                try:
+                    result["hps_sync_ok"] = bool(_hps_eng2._sync_pl_summary(kode_paket, hps_hasil))
+                    if not result["hps_sync_ok"]:
+                        logs.append("WARN HPS summary: gagal sinkron ke Supabase")
+                except Exception as _hps_sync_e:
+                    logs.append(f"WARN HPS summary: {_hps_sync_e}")
+        except Exception as _hps_e2:
+            logs.append(f"WARN HPS fetch: {_hps_e2}")
+            hps_hasil, _local_path = _local_hps_fallback(target_dir, kode_paket)
+            if hps_hasil:
+                result["hps_ok"] = True
+                result["hps_source"] = "local_hps_md_fallback"
+                result["hps_sync_ok"] = True
+                logs.append(f"HPS: fallback lokal {_local_path}")
 
     # 4. 1 sesi COM: tulis HPS + IsiDataPLByKode
     try:

@@ -7,6 +7,7 @@ import requests
 
 import pl_engine
 import hps_engine
+import isi_master_data_pl
 import pl_engine_plpk
 import pl_ui_helpers
 import ppk_upload_engine
@@ -203,6 +204,46 @@ def test_io_does_not_require_download_when_phase_skipped():
 def test_io_false_when_hps_phase_failed():
     result = {"setup_ok": True, "output_ok": True, "download_ok": True, "hps_ok": False}
     assert _pl_io_success(result, download_requested=True) is False
+
+
+def test_excel_finalization_uses_preloaded_hps_without_second_live_fetch(
+    monkeypatch, tmp_path
+):
+    workbook = tmp_path / "0. BAPLPK- Paket.xlsm"
+    workbook.write_bytes(b"placeholder")
+    hps = {
+        "items": [{"urutan": 1, "jenis_bj": "Mobilisasi"}],
+        "nilai_hps_source": "official_edit_page",
+    }
+
+    monkeypatch.setattr(pl_ui_helpers, "_cari_xlsm_pl", lambda _target: str(workbook))
+    monkeypatch.setattr(
+        hps_engine,
+        "tulis_prompt_audit_hps_agy",
+        lambda *_args, **_kwargs: str(tmp_path / "prompt.md"),
+    )
+    monkeypatch.setattr(hps_engine, "_sync_pl_summary", lambda *_args: True)
+    monkeypatch.setattr(hps_engine, "_tulis_hps_ke_md", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        hps_engine,
+        "scrape_hps_pl",
+        lambda *_args, **_kwargs: pytest.fail("finalisasi melakukan fetch HPS kedua"),
+    )
+    monkeypatch.setattr(
+        isi_master_data_pl,
+        "proses_hps_dan_master_data",
+        lambda *_args, **_kwargs: {
+            "hps": {"ok": True, "count": 1},
+            "md": {"ok": True, "pesan": "ok"},
+        },
+    )
+
+    result = pl_ui_helpers._proses_excel_paket_pl(
+        str(tmp_path), "X", "PK", False, "", "", hps
+    )
+
+    assert result["ok"] is True
+    assert result["hps_source"] == "official_edit_page"
 
 
 @pytest.mark.parametrize(
