@@ -1114,7 +1114,9 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
 
     # 4. 1 sesi COM: tulis HPS + IsiDataPLByKode
     try:
-        _res2 = _imd2.proses_hps_dan_master_data(kode_paket, xlsm, hps_hasil)
+        _res2 = _imd2.proses_hps_dan_master_data(
+            kode_paket, xlsm, hps_hasil, jenis_pl=jenis_pl
+        )
         _hps_r2 = _res2.get("hps", {})
         _md_r2  = _res2.get("md", {})
         if hps_hasil:

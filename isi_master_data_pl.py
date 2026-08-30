@@ -10,7 +10,58 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 import os
 
 
-K3_CERT_FALLBACK = "SKK Petugas K3 Konstruksi / Keselamatan Konstruksi"
+K3_CERT_FALLBACK = "SKK Petugas K3 Konstruksi/Keselamatan Konstruksi"
+PAYMENT_METHOD_MC = (
+    "Monthly Certificate/MC dimana pembayaran prestasi pekerjaan dilakukan "
+    "secara bulanan berdasarkan prestasi pekerjaan yang telah dicapai, yang "
+    "dibuktikan dengan hasil pengukuran bersama dan Berita Acara Pemeriksaan "
+    "Hasil Pekerjaan"
+)
+PAYMENT_METHOD_TERMIN = "Termin"
+
+
+def _is_plpk_workbook(excel_path: str, family: str = "") -> bool:
+    """True hanya untuk workbook PLPK; enrichment tidak boleh masuk PLJKK."""
+    normalized_family = str(family or "").strip().upper()
+    if normalized_family in {"JKK", "PLJKK"}:
+        return False
+    if normalized_family in {"PK", "PLPK"}:
+        return True
+    workbook_name = os.path.basename(str(excel_path or "")).upper()
+    parent_name = os.path.basename(os.path.dirname(os.path.abspath(str(excel_path or "")))).upper()
+    return "BAPLPK" in workbook_name or "PLPK" in parent_name
+
+
+def infer_cara_pembayaran_plpk(folder: str, package_title: str = "") -> str:
+    """Tentukan default cara pembayaran PLPK dari konteks paket lokal.
+
+    Infrastruktur PUPR (atau judul pekerjaan jalan, drainase, box culvert,
+    jembatan, dan pekerjaan sejenis) memakai Monthly Certificate/MC. Paket
+    lain memakai Termin. Resolver hanya membaca nama folder/file, sehingga
+    tidak menambah fetch jaringan atau bergantung pada cache Supabase.
+    """
+    import re
+
+    context_parts = [str(package_title or ""), os.path.basename(os.path.normpath(folder or ""))]
+    if folder and os.path.isdir(folder):
+        try:
+            for root, dirs, files in os.walk(folder):
+                context_parts.extend(dirs)
+                context_parts.extend(files)
+        except OSError:
+            pass
+    context = " ".join(context_parts).casefold()
+
+    is_pupr = bool(re.search(
+        r"\b(?:dpupr|pupr|bina\s+marga|pekerjaan\s+umum|dinas\s+pu)\b",
+        context,
+    ))
+    is_infrastructure = bool(re.search(
+        r"\b(?:jalan|jembatan|drainase|box\s*culvert|rabat\s+beton|"
+        r"aspal|latasir|makadam)\b",
+        context,
+    ))
+    return PAYMENT_METHOD_MC if is_pupr or is_infrastructure else PAYMENT_METHOD_TERMIN
 
 
 def _normalize_contract_type(value: str) -> str:
@@ -29,10 +80,20 @@ def _normalize_contract_type(value: str) -> str:
     return text
 
 
-def _normalize_k3_certificate(value: str) -> str:
-    """Pertahankan hanya sertifikat K3 eksplisit; selain itu fallback aman."""
+def _normalize_k3_certificate(value: str, jabatan: str = "") -> str:
+    """Selaraskan sertifikat dengan bunyi jabatan K3 pada sumber paket."""
     import re
     text = re.sub(r"\s+", " ", str(value or "")).strip()
+    role = re.sub(r"\s+", " ", str(jabatan or "")).strip()
+    if role:
+        if re.search(r"\bpetugas\s+k3\s+konstruksi\b", role, re.IGNORECASE):
+            if re.search(r"\bSKK\s+Petugas\s+K3\s+Konstruksi\b", text, re.IGNORECASE) and not re.search(
+                r"keselamatan\s+konstruksi", text, re.IGNORECASE
+            ):
+                return text
+            return "SKK Petugas K3 Konstruksi"
+        if re.search(r"\bpetugas\s+k3\b", role, re.IGNORECASE):
+            return K3_CERT_FALLBACK
     explicit = re.search(r"\bSKK\b", text, re.IGNORECASE) and re.search(
         r"petugas\s+k3|keselamatan\s+konstruksi", text, re.IGNORECASE
     )
@@ -46,7 +107,7 @@ def _parse_local_enrichment(folder: str) -> dict:
     RK3 langsung ditulis ke workbook setelah macro master-data selesai.
     """
     import re
-    out = {"personil": [], "alat": [], "uraian": [], "uraian_rk3": [], "risiko": "", "risiko_tertinggi": "", "contract_type": "", "provider": {},}
+    out = {"personil": [], "alat": [], "uraian": [], "uraian_rk3": [], "risiko": "", "risiko_tertinggi": "", "contract_type": "", "provider": {}, "cara_pembayaran": infer_cara_pembayaran_plpk(folder),}
     try:
         import parse_kak_pl as pk
         person = pk.cari_daftar_personil_di_folder(folder)
@@ -111,6 +172,8 @@ def _write_local_enrichment(ws, enrichment: dict) -> None:
     ws.Cells(64, 3).ClearContents()
     if enrichment.get("contract_type"):
         ws.Cells(18, 3).Value = enrichment["contract_type"]
+    if enrichment.get("cara_pembayaran"):
+        ws.Cells(28, 3).Value = enrichment["cara_pembayaran"]
     for i, item in enumerate(person[:2]):
         base = 33 + i * 3
         ws.Cells(base, 3).Value = item.get("jabatan", "")
@@ -118,7 +181,7 @@ def _write_local_enrichment(ws, enrichment: dict) -> None:
         cert = item.get("sertifikat", "")
         jab = item.get("jabatan", "")
         if "k3" in jab.lower():
-            cert = _normalize_k3_certificate(cert)
+            cert = _normalize_k3_certificate(cert, jab)
         elif cert and "sk" not in cert.lower() and "pelaksana" in jab.lower():
             cert = "SKK " + cert
         ws.Cells(base + 2, 3).Value = cert
@@ -154,6 +217,13 @@ def _write_local_enrichment(ws, enrichment: dict) -> None:
         except Exception:
             pass
         ws.Cells(88, 3).Value = raw_date
+
+
+def _apply_post_macro_enrichment(wb, excel_path: str, log) -> None:
+    """Terapkan data lokal setelah macro inti selesai, untuk semua flow PLPK."""
+    enrichment = _parse_local_enrichment(os.path.dirname(os.path.abspath(excel_path)))
+    _write_local_enrichment(wb.Sheets("@ Master Data"), enrichment)
+    log("Data lokal: personel, alat, uraian, risiko, pembayaran, ND disinkronkan.")
 
 
 def _find_master_data_v2_root() -> str:
@@ -343,6 +413,14 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
         except pywintypes.com_error as ce:
             return {"ok": False, "pesan": f"Macro IsiDataPLByKode gagal: {ce}"}
 
+        # Jalur tombol "Isi Excel" harus identik dengan bulk-create untuk
+        # PLPK. Jangan menerapkan mapping PLPK pada workbook PLJKK.
+        if _is_plpk_workbook(excel_path):
+            try:
+                _apply_post_macro_enrichment(wb, excel_path, _log)
+            except Exception as local_e:
+                _log(f"[WARN] Data lokal: {local_e}")
+
         # Refresh sheet @ Evaluasi (tgl_pembukaan, nomor BA, dll) — 1 sesi COM
         try:
             xl.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
@@ -385,7 +463,8 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
 def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                                 hps_hasil: dict = None,
                                 progress_cb=None,
-                                timeout: int = 90) -> dict:
+                                timeout: int = 90,
+                                jenis_pl: str = "") -> dict:
     """1 sesi COM: tulis HPS (jika ada) lalu IsiDataPLByKode — 1x DispatchEx.
 
     Dipakai oleh _proses_excel_paket_pl() di app.py (bulk-create folder PL).
@@ -481,11 +560,9 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
 
             # Enrichment lokal wajib dilakukan setelah macro: Supabase hanya
             # membawa field inti, sedangkan alat/uraian/RK3 berada di paket.
-            if md_res["ok"]:
+            if md_res["ok"] and _is_plpk_workbook(excel_path, jenis_pl):
                 try:
-                    enrichment = _parse_local_enrichment(os.path.dirname(excel_path))
-                    _write_local_enrichment(wb.Sheets("@ Master Data"), enrichment)
-                    _log("Data lokal: personel, alat, uraian, risiko, ND disinkronkan.")
+                    _apply_post_macro_enrichment(wb, excel_path, _log)
                 except Exception as local_e:
                     _log(f"WARN data lokal: {local_e}")
 

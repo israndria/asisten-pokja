@@ -85,8 +85,20 @@ def test_k3_certificate_normalizer_keeps_clear_skk_and_falls_back_otherwise():
         "SKK Petugas K3 Konstruksi (Jenjang 3)"
     ) == "SKK Petugas K3 Konstruksi (Jenjang 3)"
     assert isi_master_data_pl._normalize_k3_certificate("Sertifikat K3") == (
-        "SKK Petugas K3 Konstruksi / Keselamatan Konstruksi"
+        "SKK Petugas K3 Konstruksi/Keselamatan Konstruksi"
     )
+
+
+def test_k3_certificate_normalizer_follows_explicit_role():
+    assert isi_master_data_pl._normalize_k3_certificate(
+        "Sertifikat K3", "Petugas K3 Konstruksi"
+    ) == "SKK Petugas K3 Konstruksi"
+    assert isi_master_data_pl._normalize_k3_certificate(
+        "SKK Petugas K3 Konstruksi (Jenjang 3)", "Petugas K3 Konstruksi"
+    ) == "SKK Petugas K3 Konstruksi (Jenjang 3)"
+    assert isi_master_data_pl._normalize_k3_certificate(
+        "SKK Petugas K3 Konstruksi", "Petugas K3"
+    ) == "SKK Petugas K3 Konstruksi/Keselamatan Konstruksi"
 
 
 def test_workbook_contract_normalizer_reduces_combined_plpk_to_price_unit():
@@ -94,3 +106,37 @@ def test_workbook_contract_normalizer_reduces_combined_plpk_to_price_unit():
         "Gabungan Lumsum dan Harga Satuan"
     ) == "Harga Satuan"
     assert isi_master_data_pl._normalize_contract_type("Lumsum") == "Lumsum"
+
+
+def test_plpk_payment_defaults_to_monthly_certificate_for_infrastructure_title(tmp_path):
+    package = tmp_path / "89. PLPK - Peningkatan Jalan Lingkungan Hidup"
+    package.mkdir()
+    assert isi_master_data_pl.infer_cara_pembayaran_plpk(str(package)) == (
+        isi_master_data_pl.PAYMENT_METHOD_MC
+    )
+
+
+def test_plpk_payment_defaults_to_termin_for_non_infrastructure_package(tmp_path):
+    package = tmp_path / "80. PLPK - Rehab Wc Pasar"
+    package.mkdir()
+    assert isi_master_data_pl.infer_cara_pembayaran_plpk(str(package)) == (
+        isi_master_data_pl.PAYMENT_METHOD_TERMIN
+    )
+
+
+def test_plpk_payment_detects_pupr_from_local_document_name(tmp_path):
+    package = tmp_path / "PLPK - Pekerjaan Fasilitas Umum"
+    info = package / "4. Informasi Lainnya"
+    info.mkdir(parents=True)
+    (info / "Nota Dinas DPUPR-BM.pdf").write_bytes(b"placeholder")
+    assert isi_master_data_pl.infer_cara_pembayaran_plpk(str(package)) == (
+        isi_master_data_pl.PAYMENT_METHOD_MC
+    )
+
+
+def test_plpk_enrichment_guard_does_not_match_jkk_workbook(tmp_path):
+    jkk = tmp_path / "12. PLJKK - Konsultansi" / "0. BAPLJKK- Paket.xlsm"
+    pk = tmp_path / "12. PLPK - Konstruksi" / "0. BAPLPK- Paket.xlsm"
+    assert not isi_master_data_pl._is_plpk_workbook(str(jkk))
+    assert isi_master_data_pl._is_plpk_workbook(str(pk))
+    assert not isi_master_data_pl._is_plpk_workbook(str(pk), "JKK")
