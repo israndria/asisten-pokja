@@ -1,6 +1,8 @@
 """Komponen UI yang dipakai bersama mode PLJKK dan PLPK."""
 
+import json
 import re
+from pathlib import Path
 
 
 _PL7_ACTION_KEYS = ("download", "parse", "hps")
@@ -9,6 +11,51 @@ _PL7_ACTION_LABELS = {
     "parse": "Parse & Populate",
     "hps": "Update HPS",
 }
+_PL7_BACKFILL_PATH = Path(__file__).resolve().parent / "data" / "pl7_action_status_backfill.json"
+
+
+def _load_pl7_action_backfill(path: Path = _PL7_BACKFILL_PATH) -> dict:
+    """Baca daftar backfill historis yang sengaja dibatasi pada kode terverifikasi."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def apply_pl7_historical_backfill(state, family: str, rows: list[dict]) -> int:
+    """Pulihkan status aksi historis tanpa menandai paket baru otomatis.
+
+    Backfill hanya berlaku jika kode paket ada di daftar versioned dan sedang
+    tampil pada keluarga yang sama. Idempoten; status sukses yang sudah ada
+    tidak diturunkan atau ditimpa.
+    """
+    family_key = str(family or "PL").strip().upper()
+    row_codes = {
+        str(row.get("kode_paket") or "").strip()
+        for row in (rows or [])
+        if isinstance(row, dict)
+    }
+    records = _load_pl7_action_backfill().get(family_key) or {}
+    if not row_codes or not isinstance(records, dict):
+        return 0
+
+    status_by_code = state.setdefault(f"pl7_action_status_{family_key}", {})
+    changed = 0
+    for kode, record in records.items():
+        kode = str(kode or "").strip()
+        if not kode or kode not in row_codes or not isinstance(record, dict):
+            continue
+        entry = dict(status_by_code.get(kode) or {})
+        entry_changed = False
+        for action in _PL7_ACTION_KEYS:
+            if record.get(action) is True and entry.get(action) is not True:
+                entry[action] = True
+                entry_changed = True
+        if entry_changed:
+            status_by_code[kode] = entry
+            changed += 1
+    return changed
 
 
 def mark_pl7_action_success(
@@ -61,6 +108,7 @@ def summarize_pl7_action_status(
 
 def render_pl7_action_summary(st, rows: list[dict], state, family: str, label_fn) -> None:
     """Tampilkan paket terproses dan belum diproses di bawah aksi Tab 7."""
+    apply_pl7_historical_backfill(state, family, rows)
     summary = summarize_pl7_action_status(rows, state, family, label_fn)
     if not summary:
         return
@@ -70,8 +118,8 @@ def render_pl7_action_summary(st, rows: list[dict], state, family: str, label_fn
     st.divider()
     st.markdown("### Status Aksi Paket")
     st.caption(
-        "Status hanya dicatat setelah aksi berhasil. Tanda ✅ menunjukkan aksi "
-        "yang sudah sukses pada sesi ini."
+        "Status berasal dari aksi sukses atau backfill historis terverifikasi. "
+        "Tanda ✅ menunjukkan aksi yang sudah sukses."
     )
     metric_done, metric_todo = st.columns(2)
     metric_done.metric("Sudah ada aksi sukses", len(processed))

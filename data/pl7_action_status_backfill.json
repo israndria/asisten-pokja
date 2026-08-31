@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "version": 1,
+    "tanggal": "2026-08-31",
+    "keterangan": "Backfill historis aksi Tab 7 untuk paket konsultan pengawasan yang sebelumnya sudah selesai diproses. Paket 11, 19, dan 20 sengaja tidak dimasukkan karena sebelumnya belum diproses."
+  },
+  "JKK": {
+    "10999962000": {"download": true, "parse": true, "hps": true},
+    "10999967000": {"download": true, "parse": true, "hps": true},
+    "10999968000": {"download": true, "parse": true, "hps": true},
+    "10999969000": {"download": true, "parse": true, "hps": true},
+    "10999971000": {"download": true, "parse": true, "hps": true},
+    "10999972000": {"download": true, "parse": true, "hps": true},
+    "10999974000": {"download": true, "parse": true, "hps": true},
+    "10999979000": {"download": true, "parse": true, "hps": true},
+    "10999985000": {"download": true, "parse": true, "hps": true},
+    "10999988000": {"download": true, "parse": true, "hps": true}
+  }
+}

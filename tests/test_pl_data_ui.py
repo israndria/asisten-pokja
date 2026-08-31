@@ -35,7 +35,11 @@ from ui_pl_jadwal import (
     filter_paket_upload_terlambat,
     is_late_upload_scan_current,
 )
-from ui_pl_common import mark_pl7_action_success, summarize_pl7_action_status
+from ui_pl_common import (
+    apply_pl7_historical_backfill,
+    mark_pl7_action_success,
+    summarize_pl7_action_status,
+)
 
 
 def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
@@ -552,6 +556,28 @@ def test_pl7_action_status_is_per_package_and_family_specific():
     assert pk_summary[1]["Status Paket"] == "Belum diproses"
     assert jkk_summary[0]["Status Paket"] == "Belum diproses"
     assert jkk_summary[1]["Update HPS"] == "✅"
+
+
+def test_pl7_historical_backfill_is_explicit_idempotent_and_does_not_touch_new_or_excluded_packages():
+    state = {}
+    rows = [
+        {"kode_paket": "10999962000", "nama_paket": "Konsultan Pengawasan Paket 10"},
+        {"kode_paket": "10999965000", "nama_paket": "Konsultan Pengawasan Paket 11"},
+        {"kode_paket": "10999980000", "nama_paket": "Konsultan Pengawasan Paket 19"},
+        {"kode_paket": "10999983000", "nama_paket": "Konsultan Pengawasan Paket 20"},
+        {"kode_paket": "JKK-NEW", "nama_paket": "Konsultan Pengawasan Paket Baru"},
+    ]
+
+    assert apply_pl7_historical_backfill(state, "JKK", rows) == 1
+    assert apply_pl7_historical_backfill(state, "JKK", rows) == 0
+
+    summary = summarize_pl7_action_status(
+        state=state, rows=rows, family="JKK", label_fn=pl_ui_helpers._pl_label
+    )
+    assert all(summary[0][key] == "✅" for key in (
+        "Download Kualifikasi", "Parse & Populate", "Update HPS"
+    ))
+    assert all(row["Status Paket"] == "Belum diproses" for row in summary[1:])
 
 
 def test_pl_label_falls_back_to_number_in_physical_folder(tmp_path):
