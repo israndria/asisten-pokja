@@ -26,6 +26,10 @@ from ui_pl_pk import (
     provider_selection_status_caption,
 )
 from ui_pl_jadwal import (
+    _absolute_schedule_seed_for_selection,
+    _absolute_schedule_seed_signature,
+    _format_jadwal_submit_result,
+    _validasi_perubahan_jadwal,
     filter_paket_penandatanganan_kontrak,
     filter_paket_sudah_tayang,
     filter_paket_upload_terlambat,
@@ -207,6 +211,80 @@ def test_late_upload_scan_rejects_legacy_session_state():
     assert is_late_upload_scan_current({"schema_version": 1}) is False
     assert is_late_upload_scan_current({"errors": {}}) is False
     assert is_late_upload_scan_current(None) is False
+
+
+def _schedule_for_test(t3_finish, t4_start):
+    return [
+        {"mulai": datetime(2026, 8, 26, 21, 45), "selesai": datetime(2026, 9, 2, 10, 0)},
+        {"mulai": datetime(2026, 9, 2, 10, 1), "selesai": datetime(2026, 9, 2, 11, 5)},
+        {"mulai": datetime(2026, 9, 2, 11, 6), "selesai": t3_finish},
+        {"mulai": t4_start, "selesai": datetime(2026, 9, 3, 16, 15)},
+        {"mulai": datetime(2026, 9, 3, 16, 30), "selesai": datetime(2026, 9, 11, 17, 1)},
+    ]
+
+
+def test_absolute_schedule_seed_uses_first_selected_code_not_stale_loaded_entry():
+    stale = _schedule_for_test(
+        datetime(2026, 9, 3, 9, 0), datetime(2026, 9, 3, 9, 0)
+    )
+    selected = _schedule_for_test(
+        datetime(2026, 9, 3, 16, 0), datetime(2026, 9, 3, 9, 0)
+    )
+
+    loaded = {
+        "stale-package": {"jadwal": stale},
+        "selected-package": {"jadwal": selected},
+    }
+
+    assert _absolute_schedule_seed_for_selection(["selected-package"], loaded) is selected
+
+
+def test_validation_accepts_unchanged_existing_t3_t4_overlap():
+    schedule = _schedule_for_test(
+        datetime(2026, 9, 3, 16, 0), datetime(2026, 9, 3, 9, 0)
+    )
+
+    assert _validasi_perubahan_jadwal(schedule, schedule) == []
+
+
+def test_validation_leaves_cross_stage_overlap_to_spse_warning():
+    current = _schedule_for_test(
+        datetime(2026, 9, 3, 9, 0), datetime(2026, 9, 3, 9, 0)
+    )
+    proposed = _schedule_for_test(
+        datetime(2026, 9, 3, 16, 0), datetime(2026, 9, 3, 9, 0)
+    )
+
+    assert _validasi_perubahan_jadwal(current, proposed) == []
+
+
+def test_absolute_seed_signature_changes_only_for_new_selection_or_live_schedule():
+    schedule = _schedule_for_test(
+        datetime(2026, 9, 3, 16, 0), datetime(2026, 9, 3, 9, 0)
+    )
+    same = _absolute_schedule_seed_signature(["selected-package"], schedule)
+
+    assert same == _absolute_schedule_seed_signature(["selected-package"], schedule)
+    assert same != _absolute_schedule_seed_signature(["other-package"], schedule)
+    changed = [dict(row) for row in schedule]
+    changed[4]["selesai"] = datetime(2026, 9, 11, 17, 2)
+    assert same != _absolute_schedule_seed_signature(["selected-package"], changed)
+
+
+def test_successful_schedule_result_uses_folder_label_not_code_or_http_status():
+    result = _format_jadwal_submit_result(
+        {
+            "kode_paket": "10999983000",
+            "nomor_urut": 66,
+            "nama_paket": "Konsultan Pengawasan Paket 20",
+        },
+        True,
+        "HTTP 302",
+    )
+
+    assert result == "✅ 66. Konsultan Pengawasan Paket 20 — Berhasil"
+    assert "10999983000" not in result
+    assert "HTTP 302" not in result
 
 def test_filter_paket_siap_dijadwalkan_keeps_unpublished_draft_and_hides_tayang():
     rows = [

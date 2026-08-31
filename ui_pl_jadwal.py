@@ -24,31 +24,59 @@ def is_late_upload_scan_current(scan: dict | None) -> bool:
 
 
 def _validasi_perubahan_jadwal(current: list[dict], proposed: list[dict]) -> list[str]:
-    """Validasi perubahan tanpa memblokir overlap lama yang tidak diperparah.
+    """Validasi hard-error lokal; overlap antar-tahap ditangani oleh SPSE.
 
-    Beberapa jadwal PL yang sudah tersimpan di SPSE memang memiliki tahap
-    evaluasi dan klarifikasi yang berjalan tumpang tindih. Ubah jadwal existing
-    harus tetap bisa mengubah satu field (misalnya selesai T4) tanpa dipaksa
-    membetulkan seluruh histori jadwal sekaligus. Overlap baru atau overlap yang
-    makin besar tetap ditolak sebelum POST.
+    Jadwal PL dapat sengaja membuat T3 Evaluasi dan T4 Klarifikasi+Nego
+    berjalan beririsan. SPSE adalah validator otoritatif untuk aturan lintas
+    tahap dan dapat menerima jadwal tersebut sambil menampilkan warning.
+    Karena itu client hanya menahan tahap yang durasinya sendiri mustahil;
+    ``current`` dipertahankan pada signature untuk kompatibilitas caller.
     """
     errors = []
     for i, row in enumerate(proposed):
         if row["mulai"] >= row["selesai"]:
             errors.append(f"T{i + 1}: waktu mulai harus sebelum selesai")
-
-    for i in range(min(len(current), len(proposed)) - 1):
-        current_overlap = current[i]["selesai"] - current[i + 1]["mulai"]
-        proposed_overlap = proposed[i]["selesai"] - proposed[i + 1]["mulai"]
-        if proposed_overlap <= timedelta(0):
-            continue
-        # Jadwal lama valid tetapi usulan membuat overlap baru.
-        if current_overlap <= timedelta(0):
-            errors.append(f"T{i + 1}–T{i + 2}: overlap baru")
-        # Jadwal lama sudah overlap; hanya izinkan jika tidak makin besar.
-        elif proposed_overlap > current_overlap:
-            errors.append(f"T{i + 1}–T{i + 2}: overlap makin besar")
     return errors
+
+
+def _absolute_schedule_seed_for_selection(
+    codes: list[str], loaded: dict
+) -> list[dict]:
+    """Ambil seed waktu absolut dari paket pertama yang sedang dipilih.
+
+    ``loaded`` dapat menyimpan jadwal paket dari pilihan sebelumnya. Seed
+    tidak boleh diambil dari urutan dictionary tersebut karena bisa membuat
+    form menampilkan jadwal paket lain dan memicu deteksi overlap palsu.
+    """
+    if not codes:
+        raise ValueError("Belum ada paket yang dipilih.")
+    code = str(codes[0])
+    entry = loaded.get(code) if isinstance(loaded, dict) else None
+    schedule = entry.get("jadwal") if isinstance(entry, dict) else None
+    if not isinstance(schedule, list) or len(schedule) != 5:
+        raise ValueError(f"Jadwal live paket {code} tidak lengkap.")
+    return schedule
+
+
+def _absolute_schedule_seed_signature(
+    codes: list[str], schedule: list[dict]
+) -> tuple:
+    """Bentuk signature untuk mendeteksi pergantian seed form absolut."""
+    return (
+        tuple(str(code) for code in codes),
+        tuple(
+            (str(row.get("mulai")), str(row.get("selesai")))
+            for row in schedule
+        ),
+    )
+
+
+def _format_jadwal_submit_result(
+    package: dict, ok: bool, message: str = ""
+) -> str:
+    """Format hasil submit untuk user tanpa membocorkan kode internal."""
+    label = _pl_label(package)
+    return f"✅ {label} — Berhasil" if ok else f"❌ {label} — {message}"
 
 
 def render_custom_jadwal_pl(
@@ -507,53 +535,41 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
         return
 
     tahap = ["T1 Upload", "T2 Pembukaan", "T3 Evaluasi", "T4 Klarifikasi+Nego", "T5 Kontrak"]
-    selected_tahap = st.multiselect("Tahap yang diubah", tahap, key=f"{prefix}_stages")
-    idx_tahap = {x: i for i, x in enumerate(tahap)}
-    if not selected_tahap:
-        st.info("Pilih minimal satu tahap yang diubah.")
-        return
-
-    mode = st.radio(
-        "Metode perubahan",
-        ["Set waktu absolut sama", "Geser relatif"],
-        index=0,
-        horizontal=True,
-        key=f"{prefix}_mode_v2",
+    st.caption(
+        "Tahap yang diubah: T1–T5 (seluruh tahap selalu disinkronkan). "
+        "Metode perubahan: Set waktu absolut sama."
     )
+    seed_schedule = _absolute_schedule_seed_for_selection(codes, loaded)
+    seed_signature_key = f"{prefix}_absolute_seed_signature"
+    seed_signature = _absolute_schedule_seed_signature(codes, seed_schedule)
+    if st.session_state.get(seed_signature_key) != seed_signature:
+        # Widget Streamlit mempertahankan nilai berdasarkan key walau pilihan
+        # paket berubah. Hapus hanya saat seed live memang berganti agar
+        # tanggal/jam yang sedang diedit tidak reset pada setiap rerun.
+        for index in range(len(tahap)):
+            for suffix in ("sd", "td", "ss", "ts"):
+                st.session_state.pop(f"{prefix}_abs_{suffix}_{index}", None)
+        st.session_state[seed_signature_key] = seed_signature
     perubahan = {}
-    if mode == "Geser relatif":
-        c1, c2 = st.columns(2)
+    for i, label in enumerate(tahap):
+        c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
+        sample = seed_schedule[i]
         with c1:
-            hari = st.number_input("Geser hari", min_value=-365, max_value=365, value=0, step=1, key=f"{prefix}_days")
+            d1 = st.date_input(f"{label} mulai", value=sample["mulai"].date(), format="DD/MM/YYYY", key=f"{prefix}_abs_sd_{i}")
         with c2:
-            jam = st.number_input("Geser jam", min_value=-23, max_value=23, value=0, step=1, key=f"{prefix}_hours")
-        delta = timedelta(days=hari, hours=jam)
-    else:
-        for label in selected_tahap:
-            i = idx_tahap[label]
-            c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
-            sample = next(iter(loaded.values()))["jadwal"][i]
-            with c1:
-                d1 = st.date_input(f"{label} mulai", value=sample["mulai"].date(), format="DD/MM/YYYY", key=f"{prefix}_abs_sd_{i}")
-            with c2:
-                t1 = st.time_input("Jam", value=sample["mulai"].time(), key=f"{prefix}_abs_td_{i}")
-            with c3:
-                d2 = st.date_input(f"{label} selesai", value=sample["selesai"].date(), format="DD/MM/YYYY", key=f"{prefix}_abs_ss_{i}")
-            with c4:
-                t2 = st.time_input("Jam", value=sample["selesai"].time(), key=f"{prefix}_abs_ts_{i}")
-            perubahan[i] = (datetime.combine(d1, t1), datetime.combine(d2, t2))
+            t1 = st.time_input("Jam", value=sample["mulai"].time(), key=f"{prefix}_abs_td_{i}")
+        with c3:
+            d2 = st.date_input(f"{label} selesai", value=sample["selesai"].date(), format="DD/MM/YYYY", key=f"{prefix}_abs_ss_{i}")
+        with c4:
+            t2 = st.time_input("Jam", value=sample["selesai"].time(), key=f"{prefix}_abs_ts_{i}")
+        perubahan[i] = (datetime.combine(d1, t1), datetime.combine(d2, t2))
 
     semua_usulan = {}
     preview = []
     for code in codes:
         usulan = []
-        for i, current in enumerate(loaded[code]["jadwal"]):
-            mulai, selesai = current["mulai"], current["selesai"]
-            if tahap[i] in selected_tahap:
-                if mode == "Geser relatif":
-                    mulai, selesai = mulai + delta, selesai + delta
-                else:
-                    mulai, selesai = perubahan[i]
+        for i, _current in enumerate(loaded[code]["jadwal"]):
+            mulai, selesai = perubahan[i]
             usulan.append({"nama": i + 1, "mulai": mulai, "selesai": selesai})
             preview.append({"Paket": _pl_label(by_code[code]), "Tahap": tahap[i], "Mulai": mulai.strftime("%d-%m-%Y %H:%M"), "Selesai": selesai.strftime("%d-%m-%Y %H:%M")})
         semua_usulan[code] = usulan
@@ -619,4 +635,7 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
             except Exception as e:
                 hasil.append((code, False, str(e)[:180]))
         for code, ok, msg in hasil:
-            st.success(f"✅ {code} — {msg}") if ok else st.error(f"❌ {code} — {msg}")
+            feedback = _format_jadwal_submit_result(
+                by_code.get(code, {"kode_paket": code}), ok, msg
+            )
+            st.success(feedback) if ok else st.error(feedback)
