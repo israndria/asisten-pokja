@@ -411,6 +411,57 @@ def test_filter_paket_penandatanganan_kontrak_limits_t5_to_six_hour_window():
     assert [row["kode_paket"] for row in result] == ["recent", "upcoming"]
 
 
+def test_filter_paket_sudah_tayang_hides_packages_with_t5_started_over_three_days_ago():
+    rows = [
+        {
+            "kode_paket": "old-disdag",
+            "tahap_spse": "Penandatanganan Kontrak",
+            "status": "paket sedang berjalan",
+            "satker": "Dinas Perdagangan",
+        },
+        {
+            "kode_paket": "boundary",
+            "tahap_spse": "Penandatanganan Kontrak",
+            "status": "paket sedang berjalan",
+        },
+        {
+            "kode_paket": "recent",
+            "tahap_spse": "Penandatanganan Kontrak",
+            "status": "paket sedang berjalan",
+        },
+        {
+            "kode_paket": "future",
+            "tahap_spse": "Paket Belum Dilaksanakan",
+            "status": "draft",
+        },
+        {
+            "kode_paket": "unreadable",
+            "tahap_spse": "Penandatanganan Kontrak",
+            "status": "paket sedang berjalan",
+        },
+    ]
+    schedules = {
+        "old-disdag": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 27, 16, 45)}],
+        "boundary": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 28, 21, 30)}],
+        "recent": [{}, {}, {}, {}, {"mulai": datetime(2026, 8, 30, 16, 45)}],
+        "future": [{}, {}, {}, {}, {"mulai": datetime(2026, 9, 2, 15, 46)}],
+        "unreadable": [],
+    }
+
+    result = filter_paket_sudah_tayang(
+        rows,
+        schedule_loader=lambda code: schedules[code],
+        now=datetime(2026, 8, 31, 21, 30),
+    )
+
+    assert [row["kode_paket"] for row in result] == [
+        "boundary",
+        "recent",
+        "future",
+        "unreadable",
+    ]
+
+
 def test_plpk_active_rows_excludes_draft_ambiguous_and_completed():
     rows = [
         {"kode_paket": "D", "status": "draft"},
@@ -1202,3 +1253,30 @@ def test_sync_live_paket_umumkan_status_fails_closed_on_fetch_error(monkeypatch)
         {},
         live_status_ok=result["ok"],
     ) == []
+
+
+def test_verifikasi_package_label_uses_folder_number_and_name_only():
+    row = {
+        "kode_paket": "10999967000",
+        "kode_unik": "KODE-INTERNAL-67",
+        "nomor_urut": 67,
+        "nama_paket": "Konsultan Pengawasan Paket 12",
+    }
+
+    assert pl_ui_helpers._pl_label(row) == "67. Konsultan Pengawasan Paket 12"
+    assert pl_ui_helpers._pl_checkbox_label(row) == r"67\. Konsultan Pengawasan Paket 12"
+    assert "10999967000" not in pl_ui_helpers._pl_checkbox_label(row)
+    assert "KODE-INTERNAL-67" not in pl_ui_helpers._pl_checkbox_label(row)
+
+
+def test_provider_verification_location_is_short_and_dpp_location_stays_detailed():
+    from pl_kirimpesan_engine import TEMPAT_OPTIONS
+    from verifikasi_penyedia_pl import TEMPAT_DEFAULT
+
+    assert TEMPAT_DEFAULT == (
+        "Kantor UKPBJ Kabupaten Tapin, Jl. Datu Suban RT. 01, "
+        "Kelurahan Rangda Malingkung, Kecamatan Tapin Utara, Rantau, "
+        "Kabupaten Tapin"
+    )
+    assert "Ruang Aula Rapat Lantai 2" not in TEMPAT_DEFAULT
+    assert "Ruang Aula Rapat Lantai 2" in TEMPAT_OPTIONS["Kantor UKPBJ Kabupaten Tapin"]

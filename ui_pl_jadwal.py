@@ -144,17 +144,29 @@ def render_custom_jadwal_pl(
 
 
 def filter_paket_sudah_tayang(
-    rows: list[dict], session_status: dict | None = None
+    rows: list[dict],
+    session_status: dict | None = None,
+    *,
+    schedule_loader=None,
+    now: datetime | None = None,
+    t5_grace_days: float = 3,
 ) -> list[dict]:
-    """Ambil semua paket yang sudah tayang dan belum terminal.
+    """Ambil paket tayang yang masih relevan untuk perubahan jadwal.
 
     Daftar ini sengaja independen dari daftar Draft pada Seksi 1. Paket yang
     sudah masuk ``Paket Belum Dilaksanakan`` tetap termasuk karena sudah
     diumumkan, sedangkan ``Paket Sudah Selesai``/ditarik tidak lagi dapat
-    diubah. Pembacaan jadwal T1-T5 dilakukan setelah user memilih paket.
+    diubah. Jika ``schedule_loader`` tersedia, paket dengan T5 mulai lebih
+    dari ``t5_grace_days`` hari sebelum ``now`` disembunyikan. Jadwal yang
+    gagal dibaca tetap dipertahankan agar kegagalan jaringan tidak diam-diam
+    menghilangkan paket dari daftar kerja.
     """
     from pl_data_ui import is_paket_sudah_diumumkan
 
+    anchor = now or datetime.now()
+    if anchor.tzinfo is not None:
+        anchor = anchor.replace(tzinfo=None)
+    cutoff = anchor - timedelta(days=max(0, float(t5_grace_days)))
     terminal_markers = (
         "paket sudah selesai",
         "sudah selesai",
@@ -171,6 +183,18 @@ def filter_paket_sudah_tayang(
         if any(marker in text for marker in terminal_markers):
             continue
         if is_paket_sudah_diumumkan(row, session_status):
+            if schedule_loader is not None:
+                t5_mulai = None
+                try:
+                    jadwal = schedule_loader(str(row.get("kode_paket") or "").strip())
+                    t5 = jadwal[4].get("mulai") if len(jadwal or []) > 4 else None
+                    t5_mulai = _jadwal_datetime(t5)
+                except Exception:
+                    # Fail-open: tanpa tanggal live yang valid, jangan buang
+                    # paket. User tetap dapat memeriksa jadwal secara manual.
+                    t5_mulai = None
+                if t5_mulai is not None and t5_mulai < cutoff:
+                    continue
             hasil.append(row)
     return hasil
 
@@ -294,7 +318,8 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
     """Bulk edit jadwal semua paket tayang dengan lima tahap lengkap."""
     st.markdown("### 3. Perubahan Jadwal")
     st.caption(
-        "Daftar independen dari Seksi 1: semua paket yang sudah tayang. "
+        "Daftar independen dari Seksi 1: paket yang sudah tayang dan masih relevan. "
+        "Paket dengan T5 mulai lebih dari 3 hari lalu disembunyikan. "
         "Trace dan ubah T1–T5; tahap yang tidak dipilih tetap memakai jadwal live masing-masing."
     )
     if not rows:
@@ -304,6 +329,22 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
     by_code = {str(p.get("kode_paket")): p for p in rows}
     scan_key = f"{prefix}_late_upload_scan"
     scan_button_key = f"{prefix}_late_upload_scan_button"
+    available_codes = list(by_code)
+    current_codes = set(available_codes)
+    old_scan = st.session_state.get(scan_key)
+    if isinstance(old_scan, dict):
+        old_scan_codes = {
+            str(item.get("kode_paket") or "").strip()
+            for item in (old_scan.get("eligible") or []) + (old_scan.get("monitor") or [])
+            if isinstance(item, dict)
+        }
+        old_scan_codes.update(
+            str(code or "").strip()
+            for code in (old_scan.get("errors") or {})
+            if str(code or "").strip()
+        )
+        if old_scan_codes - current_codes:
+            st.session_state.pop(scan_key, None)
     with st.expander(
         "⚠️ Bulk Perpanjang Upload Penawaran — peserta 0 & deadline lewat",
         expanded=False,
@@ -490,13 +531,20 @@ def _render_ubah_jadwal_pl(rows: list[dict], engine, prefix: str):
                     language=None,
                 )
 
+    selection_key = f"{prefix}_codes"
+    if selection_key in st.session_state:
+        selected_state = st.session_state[selection_key]
+        if isinstance(selected_state, (list, tuple)):
+            st.session_state[selection_key] = [
+                str(code) for code in selected_state if str(code) in current_codes
+            ]
     codes = st.multiselect(
         "Paket yang diubah (semua paket tayang)",
-        list(by_code),
+        available_codes,
         # Kode paket tidak diperlukan untuk identifikasi visual; nomor folder
         # sudah menjadi prefix pada _pl_label(). Jangan potong nama paket.
         format_func=lambda k: _pl_label(by_code[k]),
-        key=f"{prefix}_codes",
+        key=selection_key,
     )
     if not codes:
         st.info("Pilih satu atau beberapa paket.")

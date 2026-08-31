@@ -891,11 +891,27 @@ import hasil_evaluasi_plpk_engine as _he_pl_pk
 import sbu_picker as _sp_global
 
 
-def _render_pl_tempat_selector(key: str) -> str:
-    """Pilih lokasi acara PL dan kembalikan alamat final untuk payload."""
-    _options = pl_kirimpesan_engine.TEMPAT_OPTIONS
+def _render_pl_tempat_selector(key: str, purpose: str = "dpp") -> str:
+    """Pilih lokasi acara PL sesuai jenis undangan.
+
+    Undangan reviu DPP memakai alamat ruang rapat lengkap. Undangan
+    verifikasi penyedia memakai alamat Kantor UKPBJ singkat.
+    """
+    if purpose == "verifikasi":
+        from verifikasi_penyedia_pl import TEMPAT_DEFAULT as _tempat_verifikasi
+
+        _options = {"Kantor UKPBJ Kabupaten Tapin": _tempat_verifikasi}
+        _label_text = "Tempat / alamat verifikasi penyedia"
+    else:
+        _options = pl_kirimpesan_engine.TEMPAT_OPTIONS
+        _label_text = "Tempat / alamat acara"
+
+    # Selector lama dapat meninggalkan pilihan DPP (mis. alamat Aula) di
+    # session state. Hapus hanya nilai yang tidak tersedia pada selector baru.
+    if key in st.session_state and st.session_state[key] not in _options:
+        st.session_state.pop(key, None)
     _label = st.selectbox(
-        "Tempat / alamat acara",
+        _label_text,
         list(_options),
         key=key,
     )
@@ -4076,7 +4092,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
         # Seksi 3 berdiri independen dari daftar Draft Seksi 1. Semua paket
         # tayang masuk selector; renderer akan membaca jadwal live T1-T5.
-        _pljd_published_rows = filter_paket_sudah_tayang(_pljd_all_rows)
+        _pljd_published_rows = filter_paket_sudah_tayang(
+            _pljd_all_rows,
+            schedule_loader=_parse_jadwal_pl_cached,
+        )
         if not _sync_schedule_stage_jkk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
@@ -5443,7 +5462,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
-        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi")
+        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi", purpose="verifikasi")
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
@@ -5519,7 +5538,6 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     _batch_selected = []
                     _bc1, _bc2 = st.columns(2)
                     for _bi, _br in enumerate(_batch_tampil):
-                        _ku = _br.get('kode_unik') or _br['kode_paket']
                         _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                         _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
                         _kontrak = _br.get("tahap_spse") == "Penandatanganan Kontrak"
@@ -5529,11 +5547,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                             except Exception:
                                 _tgl_fmt = _tgl_kirim[:10]
-                            _label = f"{_ku} — {_pl_label(_br)} ✅ {_tgl_fmt}"
+                            _label = f"{_pl_checkbox_label(_br)} ✅ {_tgl_fmt}"
                         elif _kontrak:
-                            _label = f"{_ku} — {_pl_label(_br)} 🔒 Kontrak"
+                            _label = f"{_pl_checkbox_label(_br)} 🔒 Kontrak"
                         else:
-                            _label = f"{_ku} — {_pl_label(_br)}"
+                            _label = _pl_checkbox_label(_br)
                         _col = _bc1 if _bi % 2 == 0 else _bc2
                         _default_chk = _centang_semua or (not _sudah and not _kontrak)
                         if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -5550,7 +5568,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _hasil_batch = []
                                 _prog = st.progress(0, text="Mengirim...")
                                 for _bi2, _bp2 in enumerate(_batch_selected):
-                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
+                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_pl_label(_bp2)}...")
                                     _peserta_res = _eval_verif_batch.scrape_peserta_evaluasi(_bp2["kode_paket"])
                                     if not _peserta_res.get("ok") or not _peserta_res.get("peserta"):
                                         _res = {"ok": False, "msg": _peserta_res.get("pesan", "Peserta tidak ditemukan")}
@@ -5569,7 +5587,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             "msg": "; ".join(_r.get("msg", "") for _r in _hasil_peserta),
                                         }
                                     _hasil_batch.append({
-                                        "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
+                                        "paket": _pl_label(_bp2),
                                         "nama": _pl_label(_bp2),
                                         "ok": _res["ok"],
                                         "msg": _res["msg"],
@@ -7747,7 +7765,10 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         _pljd_all_rows, _ = pl_engine.buang_duplikat_paket_lama(_pljd_all_rows)
         # Seksi 3 berdiri independen dari daftar Draft Seksi 1. Semua paket
         # tayang masuk selector; renderer akan membaca jadwal live T1-T5.
-        _pljd_published_rows = filter_paket_sudah_tayang(_pljd_all_rows)
+        _pljd_published_rows = filter_paket_sudah_tayang(
+            _pljd_all_rows,
+            schedule_loader=_parse_jadwal_pl_cached,
+        )
         if not _sync_schedule_stage_pk.get("ok"):
             st.caption("⚠️ Status tahap live SPSE belum tersinkron; daftar kontrak memakai data terakhir yang tersedia.")
 
@@ -9133,7 +9154,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
 
         st.markdown("## 📨 Kirim Undangan Verifikasi Penyedia")
         st.caption("Centang paket yang ingin dikirim. Hanya paket dengan peserta terdaftar yang tampil.")
-        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi")
+        _verif_tempat = _render_pl_tempat_selector("pl_tempat_verifikasi", purpose="verifikasi")
 
         # Buang duplikat row lama (paket di-ulang → kode baru, row lama nyangkut)
         _verif_rows, _verif_dup_n = pl_engine.buang_duplikat_paket_lama(_verif_rows)
@@ -9209,7 +9230,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                     _batch_selected = []
                     _bc1, _bc2 = st.columns(2)
                     for _bi, _br in enumerate(_batch_tampil):
-                        _ku = _br.get('kode_unik') or _br['kode_paket']
                         _tgl_kirim = _br.get("tgl_undangan_verifikasi")
                         _sudah = _br.get("status_undangan_verifikasi") == "terkirim"
                         _kontrak = _br.get("tahap_spse") == "Penandatanganan Kontrak"
@@ -9219,11 +9239,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _tgl_fmt = _dtlb.datetime.fromisoformat(_tgl_kirim.replace("Z","+00:00")).strftime("%d-%m-%Y")
                             except Exception:
                                 _tgl_fmt = _tgl_kirim[:10]
-                            _label = f"{_ku} — {_pl_label(_br)} ✅ {_tgl_fmt}"
+                            _label = f"{_pl_checkbox_label(_br)} ✅ {_tgl_fmt}"
                         elif _kontrak:
-                            _label = f"{_ku} — {_pl_label(_br)} 🔒 Kontrak"
+                            _label = f"{_pl_checkbox_label(_br)} 🔒 Kontrak"
                         else:
-                            _label = f"{_ku} — {_pl_label(_br)}"
+                            _label = _pl_checkbox_label(_br)
                         _col = _bc1 if _bi % 2 == 0 else _bc2
                         _default_chk = _centang_semua or (not _sudah and not _kontrak)
                         if _col.checkbox(_label, value=_default_chk, key=f"batch_chk_{_br['kode_paket']}"):
@@ -9240,7 +9260,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                 _hasil_batch = []
                                 _prog = st.progress(0, text="Mengirim...")
                                 for _bi2, _bp2 in enumerate(_batch_selected):
-                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_bp2.get('kode_unik') or _bp2['kode_paket']}...")
+                                    _prog.progress((_bi2 + 1) / len(_batch_selected), text=f"Kirim ke {_pl_label(_bp2)}...")
                                     _peserta_res = _eval_verif_batch.scrape_peserta_evaluasi(_bp2["kode_paket"])
                                     if not _peserta_res.get("ok") or not _peserta_res.get("peserta"):
                                         _res = {"ok": False, "msg": _peserta_res.get("pesan", "Peserta tidak ditemukan")}
@@ -9259,7 +9279,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             "msg": "; ".join(_r.get("msg", "") for _r in _hasil_peserta),
                                         }
                                     _hasil_batch.append({
-                                        "paket": _bp2.get("kode_unik") or _bp2["kode_paket"],
+                                        "paket": _pl_label(_bp2),
                                         "nama": _pl_label(_bp2),
                                         "ok": _res["ok"],
                                         "msg": _res["msg"],
