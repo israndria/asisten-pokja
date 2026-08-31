@@ -31,6 +31,7 @@ from ui_pl_jadwal import (
     filter_paket_upload_terlambat,
     is_late_upload_scan_current,
 )
+from ui_pl_common import mark_pl7_action_success, summarize_pl7_action_status
 
 
 def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
@@ -448,8 +449,31 @@ def test_format_pl_announce_log_contains_code_stage_http_and_outcome():
 
 
 def test_plpk_tab_five_and_six_are_swapped():
-    assert PLPK_TAB_LABELS[4] == "5️⃣ Buat Jadwal"
+    assert PLPK_TAB_LABELS[4] == "5️⃣ Buat & Monitor Jadwal"
     assert PLPK_TAB_LABELS[5] == "6️⃣ Pilih Penyedia & Umumkan"
+
+
+def test_pl7_action_status_is_per_package_and_family_specific():
+    state = {}
+    rows = [
+        {"kode_paket": "PK-1", "nama_paket": "Paket Jalan", "nomor_urut": 81},
+        {"kode_paket": "PK-2", "nama_paket": "Paket Jembatan", "nomor_urut": 82},
+    ]
+
+    mark_pl7_action_success(state, "PK", "PK-1", "download")
+    mark_pl7_action_success(state, "PK", "PK-1", "parse")
+    mark_pl7_action_success(state, "JKK", "PK-2", "hps")
+
+    pk_summary = summarize_pl7_action_status(state=state, rows=rows, family="PK", label_fn=pl_ui_helpers._pl_label)
+    jkk_summary = summarize_pl7_action_status(state=state, rows=rows, family="JKK", label_fn=pl_ui_helpers._pl_label)
+
+    assert pk_summary[0]["Download Kualifikasi"] == "✅"
+    assert pk_summary[0]["Parse & Populate"] == "✅"
+    assert pk_summary[0]["Update HPS"] == "—"
+    assert pk_summary[0]["Status Paket"] == "Sudah ada aksi sukses"
+    assert pk_summary[1]["Status Paket"] == "Belum diproses"
+    assert jkk_summary[0]["Status Paket"] == "Belum diproses"
+    assert jkk_summary[1]["Update HPS"] == "✅"
 
 
 def test_pl_label_falls_back_to_number_in_physical_folder(tmp_path):

@@ -62,7 +62,11 @@ from ui_pl_pk import (
     provider_status_caption as _provider_status_caption,
     render_skp_gate as render_plpk_skp_gate,
 )
-from ui_pl_common import render_package_selection
+from ui_pl_common import (
+    mark_pl7_action_success,
+    render_package_selection,
+    render_pl7_action_summary,
+)
 from dokumen_ppk_pl_ui import render_tab_dokumen_ppk_pl
 from sbu_history import load_sbu_history as _load_shared_sbu_history
 from sbu_history import save_sbu_history as _save_shared_sbu_history
@@ -268,10 +272,10 @@ def _migrate_pl_tab_selection(state_key: str) -> None:
         "3️⃣ Setup Paket": "4️⃣ Setup Paket",
         # Sebelum Monitor Dokumen PPK disisipkan.
         "4️⃣ Pilih Penyedia & Umumkan": "6️⃣ Pilih Penyedia & Umumkan",
-        "5️⃣ Buat Jadwal": "5️⃣ Buat Jadwal",
+        "5️⃣ Buat Jadwal": "5️⃣ Buat & Monitor Jadwal",
         # State/query dari versi tepat sebelum swap Tab 5/6.
         "5️⃣ Pilih Penyedia & Umumkan": "6️⃣ Pilih Penyedia & Umumkan",
-        "6️⃣ Buat Jadwal": "5️⃣ Buat Jadwal",
+        "6️⃣ Buat Jadwal": "5️⃣ Buat & Monitor Jadwal",
         "6️⃣ Download Kualifikasi": "7️⃣ Download Kualifikasi",
         "7️⃣ Evaluasi & Teknis/Biaya": "8️⃣ Evaluasi & Teknis/Biaya",
         "8️⃣ Kirim Verifikasi": "9️⃣ Kirim Verifikasi",
@@ -2689,7 +2693,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         "2️⃣ Monitor Dokumen PPK",
         "3️⃣ Kirim Undangan DPP",
         "4️⃣ Setup Paket",
-        "5️⃣ Buat Jadwal",
+        "5️⃣ Buat & Monitor Jadwal",
         "6️⃣ Pilih Penyedia & Umumkan",
         "7️⃣ Download Kualifikasi",
         "8️⃣ Evaluasi & Teknis/Biaya",
@@ -4058,8 +4062,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
             ):
                 _do_upload_ba_pl(_ba_pl_valid)
 
-    # ── Tab 5: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "5️⃣ Buat Jadwal":
+    # ── Tab 5: Buat & Monitor Jadwal PL (5 tahap, push langsung ke SPSE) ──
+    if _pl_active_tab == "5️⃣ Buat & Monitor Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -6109,6 +6113,10 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _lcb7("--- Update HPS ke sheet 5. HPS ---")
                                     _hps7 = update_hps_paket_pl(_kpl7, _he_pl, _lcb7)
                                     if _hps7.get("ok"):
+                                        mark_pl7_action_success(
+                                            st.session_state, "JKK", _kpl7, "hps",
+                                            f"{_hps7.get('count', 0)} item",
+                                        )
                                         _lcb7(f"[OK] HPS: {_hps7.get('count', 0)} item ditulis")
                                     else:
                                         _lcb7(f"[GAGAL] HPS: {_hps7.get('pesan', '-')}")
@@ -6133,6 +6141,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         expanded=False,
                                     )
                                     continue
+
+                                _download_ok7 = None
 
                                 # Fetch peserta
                                 _lcb7(f"[{_i7+1}/{_n_paket7}] Fetch peserta SPSE...")
@@ -6164,11 +6174,22 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 # Download kualifikasi
                                 if _do_download7:
                                     _pb7.progress((_i7 + 0.3) / _n_paket7, text=f"{_nama7} — download kualifikasi")
+                                    _download_results7 = []
                                     for _ui7, _p7 in enumerate(_peserta7, 1):
                                         _lcb7(f"--- Download [{_ui7}/{len(_peserta7)}] {_p7['nama']} ---")
-                                        _ke_pl.download_kualifikasi_peserta_pl(
+                                        _download_results7.append(_ke_pl.download_kualifikasi_peserta_pl(
                                             _p7, _folder_kual7, _ui7, len(_peserta7), _lcb7,
+                                        ))
+                                    _download_ok7 = bool(_peserta7) and all(
+                                        bool(_result.get("ok")) for _result in _download_results7
+                                    )
+                                    if _download_ok7:
+                                        mark_pl7_action_success(
+                                            st.session_state, "JKK", _kpl7, "download",
+                                            f"{len(_peserta7)} peserta",
                                         )
+                                    else:
+                                        _lcb7("[GAGAL] Download kualifikasi tidak selesai untuk semua peserta")
 
                                     # Serap penyedia (dipindah dari create folder — di sini peserta sudah
                                     # terdaftar & Draft_PL/ND.pdf ada, jadi parse berhasil bukan timeout).
@@ -6187,6 +6208,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _lcb7("--- Populate sheet Hasil Evaluasi ---")
                                     _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
                                     _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
+                                    if _hasil7.get("ok"):
+                                        mark_pl7_action_success(
+                                            st.session_state, "JKK", _kpl7, "parse",
+                                            _hasil7.get("pesan", ""),
+                                        )
 
                                     # Refresh @ Master Data agar tgl_pembukaan benar
                                     # (penting untuk paket ulang: kode_paket baru → tanggal baru dari Supabase)
@@ -6205,7 +6231,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
 
                                     _ringkasan7.append({
                                         "nama"  : _nama7,
-                                        "status": "ok" if _hasil7.get("ok") and not (_hps7 and not _hps7.get("ok")) else "gagal",
+                                        "status": "ok" if (
+                                            (not _do_download7 or bool(_download_ok7))
+                                            and _hasil7.get("ok")
+                                            and (not _do_hps7 or bool(_hps7 and _hps7.get("ok")))
+                                        ) else "gagal",
                                         "detail": "; ".join(
                                             part for part in (_hasil7.get("pesan", ""), _hps7_summary) if part
                                         ),
@@ -6214,13 +6244,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     # Tidak ada parse → anggap OK (hanya download)
                                     _ringkasan7.append({
                                         "nama": _nama7,
-                                        "status": "gagal" if _hps7 and not _hps7.get("ok") else "ok",
+                                        "status": "ok" if (
+                                            (not _do_download7 or bool(_download_ok7))
+                                            and (not _do_hps7 or bool(_hps7 and _hps7.get("ok")))
+                                        ) else "gagal",
                                         "detail": "; ".join(
                                             part for part in ("download saja", _hps7_summary) if part
                                         ),
                                     })
 
-                            _paket7_ok = (not _do_parse7 or bool(_hasil7 and _hasil7.get("ok"))) and (
+                            _paket7_ok = (not _do_download7 or bool(_download_ok7)) and (
+                                not _do_parse7 or bool(_hasil7 and _hasil7.get("ok"))
+                            ) and (
                                 not _do_hps7 or bool(_hps7 and _hps7.get("ok"))
                             )
                             _status7.update(
@@ -6238,6 +6273,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                         _pb7.progress(1.0, text="Semua paket selesai.")
                         from batch_summary import render_ringkasan_batch as _rrb7
                         _rrb7(st, _ringkasan7)
+
+            render_pl7_action_summary(st, _pl7_rows, st.session_state, "JKK", _pl_label)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
     if _pl_active_tab == "8️⃣ Evaluasi & Teknis/Biaya":
@@ -7696,8 +7733,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
             ):
                 _do_upload_ba_pl(_ba_pl_valid)
 
-    # ── Tab 5: Buat Jadwal PL (5 tahap, push langsung ke SPSE) ─────────────
-    if _pl_active_tab == "5️⃣ Buat Jadwal":
+    # ── Tab 5: Buat & Monitor Jadwal PL (5 tahap, push langsung ke SPSE) ──
+    if _pl_active_tab == "5️⃣ Buat & Monitor Jadwal":
         st.markdown("### Buat Jadwal Pengadaan Langsung")
         st.caption("5 tahap PL: Upload Penawaran → Pembukaan → Evaluasi → Klarifikasi+Nego → Tanda Tangan Kontrak. Push langsung ke SPSE.")
 
@@ -9719,6 +9756,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                         _pb7.progress(1.0, text="Semua paket selesai.")
                         from batch_summary import render_ringkasan_batch as _rrb7
                         _rrb7(st, _ringkasan7)
+
+            render_pl7_action_summary(st, _pl7_rows, st.session_state, "PK", _pl_label)
 
     # ── Tab 6: Evaluasi SPSE + Download Teknis/Biaya ─────────────────────────
     if _pl_active_tab == "8️⃣ Evaluasi & Teknis/Biaya":
