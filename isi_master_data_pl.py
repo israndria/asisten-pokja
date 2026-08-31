@@ -100,6 +100,97 @@ def _normalize_k3_certificate(value: str, jabatan: str = "") -> str:
     return text if explicit else K3_CERT_FALLBACK
 
 
+def _clean_docx_cell(value: str) -> str:
+    """Normalisasi teks sel DOCX tanpa mengubah makna isinya."""
+    import re
+
+    return (
+        re.sub(r"\s+", " ", str(value or ""))
+        .replace("\ufffd", " ")
+        .replace("\u2019", "'")
+        .strip()
+    )
+
+
+def _equipment_header(table):
+    """Cari header tabel alat dan indeks kolomnya berdasarkan label."""
+    import re
+
+    for header_row, row in enumerate(table.rows[:5]):
+        headers = [_clean_docx_cell(cell.text).casefold() for cell in row.cells]
+        name_col = next(
+            (
+                i
+                for i, value in enumerate(headers)
+                if ("peralatan" in value or re.search(r"\balat\b", value))
+                and ("nama" in value or "jenis" in value or "perlengkapan" in value)
+            ),
+            None,
+        )
+        capacity_col = next(
+            (i for i, value in enumerate(headers) if re.search(r"\bkapasitas\b", value)),
+            None,
+        )
+        quantity_col = next(
+            (i for i, value in enumerate(headers) if re.search(r"\bjumlah\b", value)),
+            None,
+        )
+        if name_col is not None and capacity_col is not None and quantity_col is not None:
+            return header_row, name_col, capacity_col, quantity_col
+    return None
+
+
+def _parse_equipment_docx(path: str) -> list[dict]:
+    """Parse tabel peralatan DOCX; deteksi berdasarkan header, bukan nama file."""
+    import re
+    from docx import Document
+
+    result = []
+    seen = set()
+    doc = Document(path)
+    for table in doc.tables:
+        header = _equipment_header(table)
+        if header is None:
+            continue
+        header_row, name_col, capacity_col, quantity_col = header
+        for row in table.rows[header_row + 1 :]:
+            raw_values = [cell.text or "" for cell in row.cells]
+            values = [_clean_docx_cell(value) for value in raw_values]
+            if not values or not re.match(r"^\s*\d+(?:\s*[.)-]|\s*$)", values[0]):
+                continue
+            if name_col >= len(values):
+                continue
+            names = [_clean_docx_cell(part) for part in raw_values[name_col].splitlines() if part.strip()]
+            if not names:
+                continue
+            capacities = (
+                [_clean_docx_cell(part) for part in raw_values[capacity_col].splitlines() if part.strip()]
+                if capacity_col < len(values)
+                else []
+            )
+            quantities = (
+                [_clean_docx_cell(part) for part in raw_values[quantity_col].splitlines() if part.strip()]
+                if quantity_col < len(values)
+                else []
+            )
+            for index, name in enumerate(names):
+                if name.casefold() in {
+                    "nama peralatan",
+                    "jenis peralatan",
+                    "jenis peralatan/perlengkapan",
+                    "-",
+                }:
+                    continue
+                capacity = capacities[index] if index < len(capacities) else ""
+                quantity = quantities[index] if index < len(quantities) else ""
+                identity = (name.casefold(), capacity.casefold(), quantity.casefold())
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                result.append({"nama": name, "kapasitas": capacity, "jumlah": quantity})
+    return result
+
+
 def _parse_local_enrichment(folder: str) -> dict:
     """Ambil field yang memang bersumber dari artefak lokal paket.
 
@@ -127,13 +218,30 @@ def _parse_local_enrichment(folder: str) -> dict:
             for name in files:
                 low = name.lower()
                 path = os.path.join(root, name)
-                if low.endswith(".docx") and ("peralatan" in low or low.startswith("i.")):
-                    doc = Document(path)
-                    for table in doc.tables:
-                        for row in table.rows[1:]:
-                            vals = [re.sub(r"\s+", " ", c.text or "").replace("\ufffd", " ").replace("\u2019", "'").strip() for c in row.cells]
-                            if len(vals) >= 5 and re.match(r"^\d+", vals[0]) and vals[1]:
-                                out["alat"].append({"nama": vals[1], "kapasitas": vals[3], "jumlah": vals[4]})
+                if low.endswith(".docx"):
+                    # Jangan bergantung pada nama file; dokumen KAK dapat
+                    # memakai nama umum untuk tabel alat yang valid.
+                    try:
+                        for item in _parse_equipment_docx(path):
+                            identity = (
+                                item["nama"].casefold(),
+                                item["kapasitas"].casefold(),
+                                item["jumlah"].casefold(),
+                            )
+                            if not any(
+                                (
+                                    existing["nama"].casefold(),
+                                    existing["kapasitas"].casefold(),
+                                    existing["jumlah"].casefold(),
+                                )
+                                == identity
+                                for existing in out["alat"]
+                            ):
+                                out["alat"].append(item)
+                    except Exception:
+                        # Dokumen non-KAK atau DOCX rusak tidak boleh
+                        # menghentikan pemindaian dokumen lain.
+                        pass
                 if low.endswith(".docx") and low.startswith("rk3"):
                     doc = Document(path)
                     for table in doc.tables:
