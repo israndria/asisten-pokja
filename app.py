@@ -49,6 +49,8 @@ from pl_data_ui import (
     overlay_live_tahap_spse as _overlay_live_tahap_spse,
     parse_jadwal_pl_cached as _parse_jadwal_pl_cached,
     sync_live_paket_umumkan_status as _sync_live_paket_umumkan_status,
+    select_rows_by_checkbox_state as _select_rows_by_checkbox_state,
+    get_manual_ba_date as _get_manual_ba_date,
 )
 from ui_pl_pk import (
     PLPK_TAB_LABELS,
@@ -5759,36 +5761,78 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
         if not _pl8_rows:
             st.info("Tidak ada paket PL di database.")
         else:
+            _pl10_family = "jkk"
             # Tanggal: default OTOMATIS dari tgl_evaluasi per paket (mode tender).
             _pl8_tgl_mode = st.radio(
                 "Mode Tanggal",
                 ["Otomatis (tgl Evaluasi per paket)", "Satu tanggal semua manual"],
-                horizontal=True, key="pl8_tgl_mode",
+                horizontal=True, key=f"pl10_ba_tgl_mode_{_pl10_family}",
             )
-            _pl8_tgl_global = None
+            _pl10_tgl_evaluasi = None
+            _pl10_tgl_pemilihan = None
             if _pl8_tgl_mode == "Satu tanggal semua manual":
-                _pl8_tgl_global = st.date_input(
-                    "Tanggal BA (semua paket)", value=datetime.now().date(),
-                    format="DD/MM/YYYY", key="pl8_tgl_global",
-                )
-                st.caption(f"{_HARI_NAMA[_pl8_tgl_global.weekday()]}, {_pl8_tgl_global.day} "
-                           f"{_BULAN_NAMA[_pl8_tgl_global.month-1]} {_pl8_tgl_global.year}")
+                _pl10_tgl_ev_col, _pl10_tgl_hs_col = st.columns(2)
+                with _pl10_tgl_ev_col:
+                    _pl10_tgl_evaluasi = st.date_input(
+                        "Tanggal BA Hasil Evaluasi", value=datetime.now().date(),
+                        format="DD/MM/YYYY", key=f"pl10_ba_tgl_evaluasi_{_pl10_family}",
+                    )
+                    st.caption(f"{_HARI_NAMA[_pl10_tgl_evaluasi.weekday()]}, {_pl10_tgl_evaluasi.day} "
+                               f"{_BULAN_NAMA[_pl10_tgl_evaluasi.month-1]} {_pl10_tgl_evaluasi.year}")
+                with _pl10_tgl_hs_col:
+                    _pl10_tgl_pemilihan = st.date_input(
+                        "Tanggal BA Hasil Pemilihan", value=datetime.now().date(),
+                        format="DD/MM/YYYY", key=f"pl10_ba_tgl_pemilihan_{_pl10_family}",
+                    )
+                    st.caption(f"{_HARI_NAMA[_pl10_tgl_pemilihan.weekday()]}, {_pl10_tgl_pemilihan.day} "
+                               f"{_BULAN_NAMA[_pl10_tgl_pemilihan.month-1]} {_pl10_tgl_pemilihan.year}")
             else:
                 st.caption("Tanggal otomatis = hari terakhir Evaluasi Penawaran (dari jadwal). "
                            "Nomor BA auto-derive dari Nomor Dokpil.")
 
-            # ── Tombol BULK: cetak+upload SEMUA paket × 2 BA tanpa centang ──
+            _pl10_prefix = f"pl10_ba_chk_{_pl10_family}_"
+            _pl10_codes = [str(r.get("kode_paket") or "") for r in _pl8_rows]
+            for _pl10_code in _pl10_codes:
+                if _pl10_code:
+                    st.session_state.setdefault(f"{_pl10_prefix}{_pl10_code}", False)
+
+            _pl10_pick1, _pl10_pick2, _pl10_pick3 = st.columns([1, 1, 2])
+            if _pl10_pick1.button("✅ Pilih Semua", key="pl10_ba_select_all_jkk", use_container_width=True):
+                for _pl10_code in _pl10_codes:
+                    if _pl10_code:
+                        st.session_state[f"{_pl10_prefix}{_pl10_code}"] = True
+                st.rerun()
+            if _pl10_pick2.button("❌ Batal Semua", key="pl10_ba_deselect_all_jkk", use_container_width=True):
+                for _pl10_code in _pl10_codes:
+                    if _pl10_code:
+                        st.session_state[f"{_pl10_prefix}{_pl10_code}"] = False
+                st.rerun()
+            _pl8_selected_rows = _select_rows_by_checkbox_state(
+                _pl8_rows, st.session_state, _pl10_prefix
+            )
+            _pl10_pick3.markdown(
+                f"**{len(_pl8_selected_rows)} dari {len(_pl8_rows)} paket dipilih**"
+            )
+            st.caption("Bulk hanya memproses paket yang dicentang. Tombol per baris tetap memproses satu paket.")
+
             if st.button(
-                f"🚀🚀 Cetak + Upload SEMUA Paket ({len(_pl8_rows)} paket × 2 BA)",
-                type="primary", key="pl8_bulk_all_paket", use_container_width=True,
+                f"🚀🚀 Cetak + Upload Paket Terpilih ({len(_pl8_selected_rows)} paket × 2 BA)",
+                type="primary", key="pl10_ba_bulk_jkk", use_container_width=True,
+                disabled=not _pl8_selected_rows,
             ):
-                with st.status(f"Proses {len(_pl8_rows)} paket × 2 BA...", expanded=True) as _stb8:
+                with st.status(f"Proses {len(_pl8_selected_rows)} paket × 2 BA...", expanded=True) as _stb8:
                     _ok_total, _gagal_total = 0, 0
-                    for _pbulk in _pl8_rows:
+                    for _pbulk in _pl8_selected_rows:
                         _kb = _pbulk.get("kode_paket", "")
-                        _tgl_b = _pl8_tgl_global if _pl8_tgl_mode == "Satu tanggal semua manual" else _auto_tgl_pl8(_pbulk)
                         _stb8.write(f"**{_pl_label(_pbulk)}**")
                         for _jkb, _lblb in [("evaluasi", "Evaluasi"), ("hasil", "Hasil")]:
+                            _tgl_b = (
+                                _get_manual_ba_date(
+                                    _jkb, _pl10_tgl_evaluasi, _pl10_tgl_pemilihan
+                                )
+                                if _pl8_tgl_mode == "Satu tanggal semua manual"
+                                else _auto_tgl_pl8(_pbulk)
+                            )
                             _nob = _auto_nomor_pl8(_pbulk, _jkb)
                             _okb, _pesb = _proses_ba_pl8(_pbulk, _jkb, _nob, _tgl_b)
                             if _okb:
@@ -5810,23 +5854,36 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 _k8  = _p8.get("kode_paket", "")
                 _id8 = _k8
                 if _pl8_tgl_mode == "Satu tanggal semua manual":
-                    _tgl8 = _pl8_tgl_global
+                    _tgl8_ev = _pl10_tgl_evaluasi
+                    _tgl8_hs = _pl10_tgl_pemilihan
                 else:
-                    _tgl8 = _auto_tgl_pl8(_p8)
+                    _tgl8_ev = _auto_tgl_pl8(_p8)
+                    _tgl8_hs = _tgl8_ev
                 _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
                 _no8hs = _auto_nomor_pl8(_p8, "hasil")
-                _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
+                _col_pick, _col_nama, _col_tgl, _col_btn = st.columns([0.7, 4.3, 3, 2])
+                with _col_pick:
+                    st.checkbox(
+                        "Pilih",
+                        key=f"{_pl10_prefix}{_k8}",
+                        help="Centang untuk memasukkan paket ke proses bulk.",
+                        label_visibility="collapsed",
+                    )
                 with _col_nama:
                     st.markdown(f"**{_pl_label(_p8)}**")
                 with _col_tgl:
-                    if _tgl8:
-                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
+                    if _pl8_tgl_mode == "Satu tanggal semua manual":
+                        st.caption(f"📅 Evaluasi: {_tgl8_ev.day:02d}/{_tgl8_ev.month:02d}/{_tgl8_ev.year}")
+                        st.caption(f"📅 Pemilihan: {_tgl8_hs.day:02d}/{_tgl8_hs.month:02d}/{_tgl8_hs.year}")
+                    elif _tgl8_ev:
+                        st.caption(f"📅 {_HARI_NAMA[_tgl8_ev.weekday()]}, {_tgl8_ev.day} {_BULAN_NAMA[_tgl8_ev.month-1]} {_tgl8_ev.year}")
                     else:
                         st.caption("⚠️ Tanggal belum ada")
                 with _col_btn:
-                    if _tgl8 and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
-                        _tgl8s = _tgl8.strftime("%d-%m-%Y")
+                    if _tgl8_ev and _tgl8_hs and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
                         for _jk8, _no8, _lbl8 in [("evaluasi", _no8ev, "BA Evaluasi"), ("hasil", _no8hs, "BA Hasil")]:
+                            _tgl8_item = _get_manual_ba_date(_jk8, _tgl8_ev, _tgl8_hs)
+                            _tgl8s = _tgl8_item.strftime("%d-%m-%Y")
                             with st.spinner(f"Proses {_lbl8}..."):
                                 _rc8x = _ba_pl_engine5.cetak_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s)
                                 if _rc8x["ok"]:
@@ -9477,36 +9534,78 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
         if not _pl8_rows:
             st.info("Tidak ada paket PL di database.")
         else:
+            _pl10_family = "pk"
             # Tanggal: default OTOMATIS dari tgl_evaluasi per paket (mode tender).
             _pl8_tgl_mode = st.radio(
                 "Mode Tanggal",
                 ["Otomatis (tgl Evaluasi per paket)", "Satu tanggal semua manual"],
-                horizontal=True, key="pl8_tgl_mode",
+                horizontal=True, key=f"pl10_ba_tgl_mode_{_pl10_family}",
             )
-            _pl8_tgl_global = None
+            _pl10_tgl_evaluasi = None
+            _pl10_tgl_pemilihan = None
             if _pl8_tgl_mode == "Satu tanggal semua manual":
-                _pl8_tgl_global = st.date_input(
-                    "Tanggal BA (semua paket)", value=datetime.now().date(),
-                    format="DD/MM/YYYY", key="pl8_tgl_global",
-                )
-                st.caption(f"{_HARI_NAMA[_pl8_tgl_global.weekday()]}, {_pl8_tgl_global.day} "
-                           f"{_BULAN_NAMA[_pl8_tgl_global.month-1]} {_pl8_tgl_global.year}")
+                _pl10_tgl_ev_col, _pl10_tgl_hs_col = st.columns(2)
+                with _pl10_tgl_ev_col:
+                    _pl10_tgl_evaluasi = st.date_input(
+                        "Tanggal BA Hasil Evaluasi", value=datetime.now().date(),
+                        format="DD/MM/YYYY", key=f"pl10_ba_tgl_evaluasi_{_pl10_family}",
+                    )
+                    st.caption(f"{_HARI_NAMA[_pl10_tgl_evaluasi.weekday()]}, {_pl10_tgl_evaluasi.day} "
+                               f"{_BULAN_NAMA[_pl10_tgl_evaluasi.month-1]} {_pl10_tgl_evaluasi.year}")
+                with _pl10_tgl_hs_col:
+                    _pl10_tgl_pemilihan = st.date_input(
+                        "Tanggal BA Hasil Pemilihan", value=datetime.now().date(),
+                        format="DD/MM/YYYY", key=f"pl10_ba_tgl_pemilihan_{_pl10_family}",
+                    )
+                    st.caption(f"{_HARI_NAMA[_pl10_tgl_pemilihan.weekday()]}, {_pl10_tgl_pemilihan.day} "
+                               f"{_BULAN_NAMA[_pl10_tgl_pemilihan.month-1]} {_pl10_tgl_pemilihan.year}")
             else:
                 st.caption("Tanggal otomatis = hari terakhir Evaluasi Penawaran (dari jadwal). "
                            "Nomor BA auto-derive dari Nomor Dokpil.")
 
-            # ── Tombol BULK: cetak+upload SEMUA paket × 2 BA tanpa centang ──
+            _pl10_prefix = f"pl10_ba_chk_{_pl10_family}_"
+            _pl10_codes = [str(r.get("kode_paket") or "") for r in _pl8_rows]
+            for _pl10_code in _pl10_codes:
+                if _pl10_code:
+                    st.session_state.setdefault(f"{_pl10_prefix}{_pl10_code}", False)
+
+            _pl10_pick1, _pl10_pick2, _pl10_pick3 = st.columns([1, 1, 2])
+            if _pl10_pick1.button("✅ Pilih Semua", key="pl10_ba_select_all_pk", use_container_width=True):
+                for _pl10_code in _pl10_codes:
+                    if _pl10_code:
+                        st.session_state[f"{_pl10_prefix}{_pl10_code}"] = True
+                st.rerun()
+            if _pl10_pick2.button("❌ Batal Semua", key="pl10_ba_deselect_all_pk", use_container_width=True):
+                for _pl10_code in _pl10_codes:
+                    if _pl10_code:
+                        st.session_state[f"{_pl10_prefix}{_pl10_code}"] = False
+                st.rerun()
+            _pl8_selected_rows = _select_rows_by_checkbox_state(
+                _pl8_rows, st.session_state, _pl10_prefix
+            )
+            _pl10_pick3.markdown(
+                f"**{len(_pl8_selected_rows)} dari {len(_pl8_rows)} paket dipilih**"
+            )
+            st.caption("Bulk hanya memproses paket yang dicentang. Tombol per baris tetap memproses satu paket.")
+
             if st.button(
-                f"🚀🚀 Cetak + Upload SEMUA Paket ({len(_pl8_rows)} paket × 2 BA)",
-                type="primary", key="pl8_bulk_all_paket", use_container_width=True,
+                f"🚀🚀 Cetak + Upload Paket Terpilih ({len(_pl8_selected_rows)} paket × 2 BA)",
+                type="primary", key="pl10_ba_bulk_pk", use_container_width=True,
+                disabled=not _pl8_selected_rows,
             ):
-                with st.status(f"Proses {len(_pl8_rows)} paket × 2 BA...", expanded=True) as _stb8:
+                with st.status(f"Proses {len(_pl8_selected_rows)} paket × 2 BA...", expanded=True) as _stb8:
                     _ok_total, _gagal_total = 0, 0
-                    for _pbulk in _pl8_rows:
+                    for _pbulk in _pl8_selected_rows:
                         _kb = _pbulk.get("kode_paket", "")
-                        _tgl_b = _pl8_tgl_global if _pl8_tgl_mode == "Satu tanggal semua manual" else _auto_tgl_pl8(_pbulk)
                         _stb8.write(f"**{_pl_label(_pbulk)}**")
                         for _jkb, _lblb in [("evaluasi", "Evaluasi"), ("hasil", "Hasil")]:
+                            _tgl_b = (
+                                _get_manual_ba_date(
+                                    _jkb, _pl10_tgl_evaluasi, _pl10_tgl_pemilihan
+                                )
+                                if _pl8_tgl_mode == "Satu tanggal semua manual"
+                                else _auto_tgl_pl8(_pbulk)
+                            )
                             _nob = _auto_nomor_pl8(_pbulk, _jkb)
                             _okb, _pesb = _proses_ba_pl8(_pbulk, _jkb, _nob, _tgl_b)
                             if _okb:
@@ -9528,23 +9627,36 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 _k8  = _p8.get("kode_paket", "")
                 _id8 = _k8
                 if _pl8_tgl_mode == "Satu tanggal semua manual":
-                    _tgl8 = _pl8_tgl_global
+                    _tgl8_ev = _pl10_tgl_evaluasi
+                    _tgl8_hs = _pl10_tgl_pemilihan
                 else:
-                    _tgl8 = _auto_tgl_pl8(_p8)
+                    _tgl8_ev = _auto_tgl_pl8(_p8)
+                    _tgl8_hs = _tgl8_ev
                 _no8ev = _auto_nomor_pl8(_p8, "evaluasi")
                 _no8hs = _auto_nomor_pl8(_p8, "hasil")
-                _col_nama, _col_tgl, _col_btn = st.columns([5, 3, 2])
+                _col_pick, _col_nama, _col_tgl, _col_btn = st.columns([0.7, 4.3, 3, 2])
+                with _col_pick:
+                    st.checkbox(
+                        "Pilih",
+                        key=f"{_pl10_prefix}{_k8}",
+                        help="Centang untuk memasukkan paket ke proses bulk.",
+                        label_visibility="collapsed",
+                    )
                 with _col_nama:
                     st.markdown(f"**{_pl_label(_p8)}**")
                 with _col_tgl:
-                    if _tgl8:
-                        st.caption(f"📅 {_HARI_NAMA[_tgl8.weekday()]}, {_tgl8.day} {_BULAN_NAMA[_tgl8.month-1]} {_tgl8.year}")
+                    if _pl8_tgl_mode == "Satu tanggal semua manual":
+                        st.caption(f"📅 Evaluasi: {_tgl8_ev.day:02d}/{_tgl8_ev.month:02d}/{_tgl8_ev.year}")
+                        st.caption(f"📅 Pemilihan: {_tgl8_hs.day:02d}/{_tgl8_hs.month:02d}/{_tgl8_hs.year}")
+                    elif _tgl8_ev:
+                        st.caption(f"📅 {_HARI_NAMA[_tgl8_ev.weekday()]}, {_tgl8_ev.day} {_BULAN_NAMA[_tgl8_ev.month-1]} {_tgl8_ev.year}")
                     else:
                         st.caption("⚠️ Tanggal belum ada")
                 with _col_btn:
-                    if _tgl8 and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
-                        _tgl8s = _tgl8.strftime("%d-%m-%Y")
+                    if _tgl8_ev and _tgl8_hs and st.button("🖨️ Cetak + Upload", key=f"pl8_ev_hs_{_k8}", use_container_width=True, type="primary"):
                         for _jk8, _no8, _lbl8 in [("evaluasi", _no8ev, "BA Evaluasi"), ("hasil", _no8hs, "BA Hasil")]:
+                            _tgl8_item = _get_manual_ba_date(_jk8, _tgl8_ev, _tgl8_hs)
+                            _tgl8s = _tgl8_item.strftime("%d-%m-%Y")
                             with st.spinner(f"Proses {_lbl8}..."):
                                 _rc8x = _ba_pl_engine5.cetak_ba_pl(id_nontender=_id8, jenis_key=_jk8, nomor_ba=_no8, tanggal_ba=_tgl8s)
                                 if _rc8x["ok"]:

@@ -18,6 +18,8 @@ from pl_data_ui import (
     get_reviu_full_pdf_path,
     filter_local_pl_rows,
     overlay_live_tahap_spse,
+    select_rows_by_checkbox_state,
+    get_manual_ba_date,
 )
 from ui_pl_pk import (
     PLPK_TAB_LABELS,
@@ -61,6 +63,28 @@ def test_pl8_evaluation_checkbox_defaults_checked_once_and_keep_manual_choice():
     assert state["pl8_do_eval_admin"] is True
     assert state["pl8_do_eval_teknis"] is False
     assert state["pl8_do_eval_harga"] is True
+
+
+def test_select_rows_by_checkbox_state_keeps_source_order_and_ignores_unchecked():
+    rows = [
+        {"kode_paket": "P-2", "nama_paket": "dua"},
+        {"kode_paket": "P-1", "nama_paket": "satu"},
+        {"kode_paket": "", "nama_paket": "kosong"},
+    ]
+    state = {"pl10_jkk_P-1": True, "pl10_jkk_P-2": False}
+
+    result = select_rows_by_checkbox_state(rows, state, "pl10_jkk_")
+
+    assert result == [{"kode_paket": "P-1", "nama_paket": "satu"}]
+
+
+def test_get_manual_ba_date_keeps_evaluation_and_selection_dates_separate():
+    evaluasi = date(2026, 9, 1)
+    pemilihan = date(2026, 9, 3)
+
+    assert get_manual_ba_date("evaluasi", evaluasi, pemilihan) == evaluasi
+    assert get_manual_ba_date("hasil", evaluasi, pemilihan) == pemilihan
+    assert get_manual_ba_date("lainnya", evaluasi, pemilihan) is None
 
 
 def test_pl_setup_draft_filter_excludes_active_or_published_status():

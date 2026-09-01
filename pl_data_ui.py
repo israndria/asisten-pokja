@@ -549,6 +549,28 @@ def filter_local_pl_rows(rows: list[dict]) -> list[dict]:
     return result
 
 
+def select_rows_by_checkbox_state(
+    rows: list[dict], state: dict, key_prefix: str
+) -> list[dict]:
+    """Pilih row berdasarkan checkbox tanpa mengubah urutan daftar sumber."""
+    selected = []
+    for row in rows:
+        kode = str(row.get("kode_paket") or "").strip()
+        if kode and bool(state.get(f"{key_prefix}{kode}", False)):
+            selected.append(row)
+    return selected
+
+
+def get_manual_ba_date(jenis_key: str, tanggal_evaluasi, tanggal_pemilihan):
+    """Ambil tanggal manual sesuai jenis BA yang sedang diproses."""
+    key = str(jenis_key or "").strip().lower()
+    if key == "evaluasi":
+        return tanggal_evaluasi
+    if key == "hasil":
+        return tanggal_pemilihan
+    return None
+
+
 def _hydrate_provider_from_excel(rows: list[dict]) -> list[dict]:
     """Gunakan cell identitas Excel sebagai nilai authoritative lokal.
 
