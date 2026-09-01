@@ -48,13 +48,83 @@ ROW_HASIL_PEMBUKTIAN = 33
 MATRIX_ROW_JP = 52
 MATRIX_ROW_HASIL_PEMBUKTIAN = 53
 
-# Nama bulan English (tanggal ditulis sebagai teks, locale-independent)
+# Nama bulan English untuk helper teks legacy; cell tanggal memakai serial Excel.
 _BULAN_EN = [
     "", "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
 # Nama hari Indonesia (weekday(): Senin=0 .. Minggu=6)
 _HARI_ID = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+
+
+def _coerce_tanggal(tgl):
+    """Normalisasi tanggal input ke ``datetime.date`` tanpa bergantung locale.
+
+    Boundary parser dapat menerima ``date``, ``datetime``, ISO datetime/string
+    tanggal, atau serial Excel. Nilai teks yang tidak dikenali ditolak supaya
+    tidak pernah ditulis sebagai teks ke sel yang dipakai oleh DAY/MONTH/YEAR.
+    """
+    import datetime as _dt
+    import re as _re
+
+    if isinstance(tgl, _dt.datetime):
+        return tgl.date()
+    if isinstance(tgl, _dt.date):
+        return tgl
+    if isinstance(tgl, (int, float)) and not isinstance(tgl, bool):
+        serial = float(tgl)
+        if 1 <= serial <= 100000:
+            return _dt.date(1899, 12, 30) + _dt.timedelta(days=serial)
+        return None
+
+    text = str(tgl or "").strip()
+    if not text:
+        return None
+    if _re.fullmatch(r"\d+(?:\.\d+)?", text):
+        serial = float(text)
+        if 1 <= serial <= 100000:
+            return _dt.date(1899, 12, 30) + _dt.timedelta(days=serial)
+        return None
+
+    # ISO date/datetime, termasuk suffix timezone dari Google Calendar.
+    try:
+        return _dt.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+
+    bulan = {
+        "januari": 1, "februari": 2, "maret": 3, "april": 4,
+        "mei": 5, "juni": 6, "juli": 7, "agustus": 8,
+        "september": 9, "oktober": 10, "november": 11, "desember": 12,
+        "january": 1, "february": 2, "march": 3, "may": 5,
+        "june": 6, "july": 7, "august": 8, "october": 10,
+        "december": 12,
+    }
+    match = _re.fullmatch(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", text)
+    if match:
+        month = bulan.get(match.group(2).lower())
+        if month:
+            try:
+                return _dt.date(int(match.group(3)), month, int(match.group(1)))
+            except ValueError:
+                return None
+
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return _dt.datetime.strptime(text[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _excel_serial_tanggal(tgl) -> int:
+    """Konversi tanggal valid ke serial Excel (sistem 1900)."""
+    import datetime as _dt
+
+    tanggal = _coerce_tanggal(tgl)
+    if tanggal is None:
+        raise ValueError(f"Tanggal tidak valid: {tgl!r}")
+    return (tanggal - _dt.date(1899, 12, 30)).days
 
 
 def _tgl_teks(tgl) -> str:
@@ -252,29 +322,28 @@ def fill_input_ba(
             ).ClearContents()
 
         # ── Tanggal Pembukaan & Pembuktian (kolom C=3) ───────────────────────
-        # Ditulis sebagai TEKS Indonesia ('25 Mei 2026'), bukan date object,
-        # agar tidak bergantung locale Excel (menghindari 'May'/'June').
-        import datetime
+        # Ditulis sebagai serial date agar formula DAY/MONTH/YEAR downstream
+        # tidak menghasilkan #VALUE!.
         if tgl_pembukaan is not None:
             _log(f"  Mengisi tanggal pembukaan: {tgl_pembukaan}")
             cell_buka = ws.Cells(ROW_TGL_PEMBUKAAN, 3)
-            cell_buka.NumberFormat = "@"  # teks
-            cell_buka.Value = _tgl_teks(tgl_pembukaan)
+            cell_buka.NumberFormat = "dd mmmm yyyy"
+            cell_buka.Value = _excel_serial_tanggal(tgl_pembukaan)
             # Kolom D = nama hari Indonesia
-            if isinstance(tgl_pembukaan, (datetime.date, datetime.datetime)):
-                cell_hari = ws.Cells(ROW_TGL_PEMBUKAAN, 4)
-                cell_hari.NumberFormat = "@"
-                cell_hari.Value = _HARI_ID[tgl_pembukaan.weekday()]
+            tanggal_buka = _coerce_tanggal(tgl_pembukaan)
+            cell_hari = ws.Cells(ROW_TGL_PEMBUKAAN, 4)
+            cell_hari.NumberFormat = "@"
+            cell_hari.Value = _HARI_ID[tanggal_buka.weekday()]
 
         if tgl_pembuktian is not None:
             _log(f"  Mengisi tanggal pembuktian: {tgl_pembuktian}")
             cell_bkt = ws.Cells(ROW_TGL_PEMBUKTIAN, 3)
-            cell_bkt.NumberFormat = "@"
-            cell_bkt.Value = _tgl_teks(tgl_pembuktian)
-            if isinstance(tgl_pembuktian, (datetime.date, datetime.datetime)):
-                cell_hari2 = ws.Cells(ROW_TGL_PEMBUKTIAN, 4)
-                cell_hari2.NumberFormat = "@"
-                cell_hari2.Value = _HARI_ID[tgl_pembuktian.weekday()]
+            cell_bkt.NumberFormat = "dd mmmm yyyy"
+            cell_bkt.Value = _excel_serial_tanggal(tgl_pembuktian)
+            tanggal_bkt = _coerce_tanggal(tgl_pembuktian)
+            cell_hari2 = ws.Cells(ROW_TGL_PEMBUKTIAN, 4)
+            cell_hari2.NumberFormat = "@"
+            cell_hari2.Value = _HARI_ID[tanggal_bkt.weekday()]
 
         # Penetapan tidak selalu berlangsung pada hari pembuktian. Simpan di
         # helper terpisah agar BA Pembuktian/Klarifikasi tetap memakai C4.
@@ -284,8 +353,7 @@ def fill_input_ba(
             cell_pen.NumberFormat = "dd mmmm yyyy"
             # Tulis serial Excel, bukan datetime COM, agar timezone WITA tidak
             # menggeser 27 Juli menjadi 26 Juli 16:00.
-            _d_pen = tgl_penetapan.date() if isinstance(tgl_penetapan, datetime.datetime) else tgl_penetapan
-            cell_pen.Value = (_d_pen - datetime.date(1899, 12, 30)).days
+            cell_pen.Value = _excel_serial_tanggal(tgl_penetapan)
 
         # ── Identitas peserta (matrix kanonik C:L) ──────────────────────────
         peserta_ditulis = 0
