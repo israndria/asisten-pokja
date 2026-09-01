@@ -847,6 +847,114 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
     return result
 
 
+def _open_excel_for_pl_action():
+    """Buka instance Excel terisolasi untuk aksi workbook PL."""
+    import pythoncom
+    import pywintypes
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+    except Exception:
+        pythoncom.CoUninitialize()
+        raise
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    try:
+        excel.AutomationSecurity = 1
+    except Exception:
+        pass
+    return pythoncom, pywintypes, excel
+
+
+def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) -> dict:
+    """Jalankan macro refresh ``@ Evaluasi`` tanpa mengisi ``@ Master Data``.
+
+    Macro ``IsiEvaluasiPLStandalone`` membaca metadata workbook/Supabase lalu
+    mengisi sheet ``@ Evaluasi``. Jalur ini sengaja tidak memanggil
+    ``IsiDataPLByKode`` atau helper writer ``@ Master Data``.
+    """
+    def log(message):
+        if progress_cb:
+            progress_cb(message)
+
+    try:
+        workbook = hasil_engine._find_xlsm(kode_paket)
+    except Exception as exc:
+        return {"ok": False, "pesan": f"Gagal mencari workbook: {exc}", "workbook": ""}
+    if not workbook or not os.path.isfile(workbook):
+        return {"ok": False, "pesan": "Workbook .xlsm tidak ditemukan", "workbook": ""}
+
+    pythoncom = None
+    excel = None
+    wb = None
+    try:
+        import pywintypes
+
+        pythoncom, pywintypes, excel = _open_excel_for_pl_action()
+        log(f"Membuka Excel: {os.path.basename(workbook)}")
+        wb = excel.Workbooks.Open(
+            os.path.abspath(workbook),
+            UpdateLinks=0,
+            ReadOnly=False,
+            IgnoreReadOnlyRecommended=True,
+            AddToMru=False,
+        )
+        if bool(wb.ReadOnly):
+            return {
+                "ok": False,
+                "pesan": "Workbook terbuka ReadOnly; tutup Excel paket lalu ulangi.",
+                "workbook": workbook,
+            }
+
+        try:
+            excel.Run("ModDraftPaketPL.SetSilentPL", True)
+        except pywintypes.com_error as exc:
+            return {
+                "ok": False,
+                "pesan": f"Macro SetSilentPL tidak tersedia/compile error: {exc}",
+                "workbook": workbook,
+            }
+
+        log("Menjalankan refresh sheet @ Evaluasi...")
+        excel.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
+        try:
+            excel.CalculateFull()
+            excel.CalculateUntilAsyncQueriesDone()
+        except Exception:
+            # Excel lama dapat tidak mengekspos salah satu metode kalkulasi;
+            # macro tetap sudah selesai dan Save menjadi langkah otoritatif.
+            pass
+        wb.Save()
+        log("@ Evaluasi terisi dan workbook tersimpan.")
+        return {
+            "ok": True,
+            "pesan": "@ Evaluasi berhasil diisi.",
+            "workbook": workbook,
+        }
+    except pywintypes.com_error as exc:
+        return {"ok": False, "pesan": f"Excel COM error: {exc}", "workbook": workbook}
+    except Exception as exc:
+        return {"ok": False, "pesan": str(exc), "workbook": workbook}
+    finally:
+        if wb is not None:
+            try:
+                wb.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+        if pythoncom is not None:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+
 def _provider_master_cells(row: dict) -> tuple[str, str]:
     """Pilih cell identitas penyedia sesuai template workflow PL."""
     jenis = str(row.get("jenis_pl") or "").strip().upper()

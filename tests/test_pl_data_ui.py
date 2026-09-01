@@ -595,6 +595,7 @@ def test_pl7_action_status_is_per_package_and_family_specific():
 
     mark_pl7_action_success(state, "PK", "PK-1", "download")
     mark_pl7_action_success(state, "PK", "PK-1", "parse")
+    mark_pl7_action_success(state, "PK", "PK-1", "parse_eval")
     mark_pl7_action_success(state, "JKK", "PK-2", "hps")
 
     pk_summary = summarize_pl7_action_status(state=state, rows=rows, family="PK", label_fn=pl_ui_helpers._pl_label)
@@ -602,6 +603,7 @@ def test_pl7_action_status_is_per_package_and_family_specific():
 
     assert pk_summary[0]["Download Kualifikasi"] == "✅"
     assert pk_summary[0]["Parse & Populate"] == "✅"
+    assert pk_summary[0]["Parse @ Evaluasi"] == "✅"
     assert pk_summary[0]["Update HPS"] == "—"
     assert pk_summary[0]["Status Paket"] == "Sudah ada aksi sukses"
     assert pk_summary[1]["Status Paket"] == "Belum diproses"
@@ -1136,6 +1138,76 @@ def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, 
     assert (tmp_path / "_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md").is_file()
     assert result["hps_prompt_path"].endswith("_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md")
     assert any(line.startswith("Backup HPS:") for line in logs)
+
+
+def test_refresh_evaluasi_pl_only_runs_evaluation_macro_without_master_writer(
+    tmp_path, monkeypatch
+):
+    workbook = tmp_path / "0. BAPLPK - Uji.xlsm"
+    workbook.write_bytes(b"macro-workbook")
+    calls = []
+
+    class FakePythoncom:
+        def CoUninitialize(self):
+            calls.append("CoUninitialize")
+
+    class FakePywintypes:
+        com_error = RuntimeError
+
+    class FakeWorkbook:
+        ReadOnly = False
+
+        def Save(self):
+            calls.append("Save")
+
+        def Close(self, SaveChanges):
+            calls.append(("Close", SaveChanges))
+
+    class FakeExcel:
+        def __init__(self):
+            self.Workbooks = self
+            self.book = FakeWorkbook()
+
+        def Open(self, *args, **kwargs):
+            calls.append(("Open", args, kwargs))
+            return self.book
+
+        def Run(self, macro, *args):
+            calls.append(("Run", macro, args))
+
+        def Quit(self):
+            calls.append("Quit")
+
+    fake_excel = FakeExcel()
+    monkeypatch.setattr(
+        pl_ui_helpers,
+        "_open_excel_for_pl_action",
+        lambda: (FakePythoncom(), FakePywintypes(), fake_excel),
+        raising=False,
+    )
+
+    class Engine:
+        @staticmethod
+        def _find_xlsm(kode_paket):
+            return str(workbook)
+
+    logs = []
+    result = pl_ui_helpers.refresh_evaluasi_pl_only("PK-1", Engine, logs.append)
+
+    assert result["ok"] is True
+    assert result["workbook"] == str(workbook)
+    assert [call[1] for call in calls if isinstance(call, tuple) and call[0] == "Run"] == [
+        "ModDraftPaketPL.SetSilentPL",
+        "ModDraftPaketPL.IsiEvaluasiPLStandalone",
+    ]
+    assert not any(
+        isinstance(call, tuple)
+        and call[0] == "Run"
+        and "IsiDataPLByKode" in call[1]
+        for call in calls
+    )
+    assert ("Close", False) in calls
+    assert "Quit" in calls
 
 
 def test_update_hps_paket_pl_shortens_backup_for_long_workbook_path(tmp_path, monkeypatch):

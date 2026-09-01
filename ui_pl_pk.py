@@ -394,7 +394,7 @@ def render_provider_search(st, key_prefix: str = "plpk_provider_search") -> None
         _render_provider_detail(st, detail_rows)
 
 
-def render_download_actions(
+def _render_download_actions_legacy(
     st,
     selected_rows: list[dict],
     kualifikasi_engine,
@@ -402,7 +402,7 @@ def render_download_actions(
     label_fn,
     family: str = "PK",
 ) -> None:
-    """Render aksi download kualifikasi + populate evaluasi untuk paket PL."""
+    """Render aksi Tab 7 PL dengan checklist per sumber data."""
     from ui_pl_common import mark_pl7_action_success
 
     jumlah = len(selected_rows)
@@ -412,12 +412,23 @@ def render_download_actions(
 
     st.markdown(f"**{jumlah} paket** dipilih")
     st.caption("Peserta akan di-fetch via CDP saat tombol Jalankan diklik.")
-    do_download = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
-    do_parse = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
-    do_hps = st.checkbox("💰 Update HPS (sheet 5. HPS)", value=True, key="pl7_do_hps_pk")
+    family_key = str(family or "PL").strip().upper()
+    widget_suffix = family_key.lower()
+    do_download = st.checkbox(
+        "⬇️ Download dokumen kualifikasi", value=True,
+        key=f"pl7_do_dl_{widget_suffix}",
+    )
+    do_parse = st.checkbox(
+        "📋 Parse & populate sheet Hasil Evaluasi", value=True,
+        key=f"pl7_do_parse_{widget_suffix}",
+    )
+    do_hps = st.checkbox(
+        "💰 Update HPS (sheet 5. HPS)", value=True,
+        key=f"pl7_do_hps_{widget_suffix}",
+    )
     run = st.button(
         f"▶ Jalankan — {jumlah} paket",
-        type="primary", key="pl7_run", use_container_width=True,
+        type="primary", key=f"pl7_run_{widget_suffix}", use_container_width=True,
     )
     if not run:
         return
@@ -447,7 +458,7 @@ def render_download_actions(
                 hps_result = update_hps_paket_pl(kode, hasil_engine, log_cb)
                 if hps_result.get("ok"):
                     mark_pl7_action_success(
-                        st.session_state, family, kode, "hps",
+                        st.session_state, family_key, kode, "hps",
                         f"{hps_result.get('count', 0)} item",
                     )
                     log_cb(f"[OK] HPS: {hps_result.get('count', 0)} item ditulis")
@@ -495,19 +506,19 @@ def render_download_actions(
 
             peserta = fetched["peserta"]
             log_cb(f"Peserta ({len(peserta)}): {', '.join(p['nama'] for p in peserta)}")
-            folder = kualifikasi_engine.resolve_folder_paket_pl(kode)
-            if not folder.get("ok"):
-                detail = folder.get("pesan", "folder tidak ditemukan")
-                if hps_summary:
-                    detail = f"{detail}; {hps_summary}"
-                log_cb(f"[SKIP] Folder: {detail}")
-                status.update(label=f"SKIP {nama} — {detail}", state="error", expanded=False)
-                summary.append({"nama": nama, "status": "skip", "detail": detail})
-                detail_logs.append((nama, list(logs)))
-                continue
-
-            folder_kualifikasi = folder["path"]
             if do_download:
+                folder = kualifikasi_engine.resolve_folder_paket_pl(kode)
+                if not folder.get("ok"):
+                    detail = folder.get("pesan", "folder tidak ditemukan")
+                    if hps_summary:
+                        detail = f"{detail}; {hps_summary}"
+                    log_cb(f"[SKIP] Folder: {detail}")
+                    status.update(label=f"SKIP {nama} — {detail}", state="error", expanded=False)
+                    summary.append({"nama": nama, "status": "skip", "detail": detail})
+                    detail_logs.append((nama, list(logs)))
+                    continue
+
+                folder_kualifikasi = folder["path"]
                 progress.progress((index + 0.3) / jumlah, text=f"{nama} — download kualifikasi")
                 download_results = []
                 for urutan, peserta_row in enumerate(peserta, 1):
@@ -521,7 +532,7 @@ def render_download_actions(
                 )
                 if download_ok:
                     mark_pl7_action_success(
-                        st.session_state, family, kode, "download",
+                        st.session_state, family_key, kode, "download",
                         f"{len(peserta)} peserta",
                     )
                 else:
@@ -545,43 +556,25 @@ def render_download_actions(
                 log_cb(f"{'[OK]' if result.get('ok') else '[GAGAL]'} {result['pesan']}")
                 if result.get("ok"):
                     mark_pl7_action_success(
-                        st.session_state, family, kode, "parse",
+                        st.session_state, family_key, kode, "parse",
                         result.get("pesan", ""),
                     )
-                if result.get("ok"):
-                    log_cb("--- Refresh @ Master Data ---")
-                    try:
-                        import isi_master_data_pl
-                        workbook = hasil_engine._find_xlsm(kode)
-                        if workbook:
-                            refreshed = isi_master_data_pl.isi_master_data_pl(
-                                kode, workbook, progress_cb=log_cb
-                            )
-                            log_cb(f"{'[OK]' if refreshed.get('ok') else '[WARN]'} {refreshed['pesan']}")
-                        else:
-                            log_cb("[WARN] File .xlsm tidak ditemukan untuk refresh @ Master Data")
-                    except Exception as exc:
-                        log_cb(f"[WARN] Refresh @ Master Data gagal: {exc}")
-                summary.append({
-                    "nama": nama,
-                    "status": "ok" if (
-                        (not do_download or bool(download_ok))
-                        and result.get("ok")
-                        and (not do_hps or bool(hps_result and hps_result.get("ok")))
-                    ) else "gagal",
-                    "detail": "; ".join(
-                        part for part in (result.get("pesan", ""), hps_summary) if part
-                    ),
-                })
-            else:
-                summary.append({
-                    "nama": nama,
-                    "status": "ok" if (
-                        (not do_download or bool(download_ok))
-                        and (not do_hps or bool(hps_result and hps_result.get("ok")))
-                    ) else "gagal",
-                    "detail": "; ".join(part for part in ("download saja", hps_summary) if part),
-                })
+            _result_ok = bool(result and result.get("ok")) if do_parse else True
+            summary.append({
+                "nama": nama,
+                "status": "ok" if (
+                    (not do_download or bool(download_ok))
+                    and _result_ok
+                    and (not do_hps or bool(hps_result and hps_result.get("ok")))
+                ) else "gagal",
+                "detail": "; ".join(
+                    part for part in (
+                        result.get("pesan", "") if result else "",
+                        "",
+                        hps_summary,
+                    ) if part
+                ),
+            })
 
             _package_ok = (not do_download or bool(download_ok)) and (
                 not do_parse or bool(result and result.get("ok"))
@@ -603,4 +596,266 @@ def render_download_actions(
                 st.caption(nama_log)
                 st.code("\n".join(lines_log))
     from batch_summary import render_ringkasan_batch
+    render_ringkasan_batch(st, summary)
+
+
+def render_download_actions(
+    st,
+    selected_rows: list[dict],
+    kualifikasi_engine,
+    hasil_engine,
+    label_fn,
+    family: str = "PK",
+) -> None:
+    """Render empat aksi Tab 7, terpisah per sumber sheet Excel."""
+    from ui_pl_common import mark_pl7_action_success
+    from pl_ui_helpers import refresh_evaluasi_pl_only, update_hps_paket_pl
+
+    jumlah = len(selected_rows)
+    if not selected_rows:
+        st.info("Centang minimal 1 paket di kiri.")
+        return
+
+    family_key = str(family or "PL").strip().upper()
+    widget_suffix = family_key.lower()
+    st.markdown(f"**{jumlah} paket** dipilih")
+    st.caption("Peserta akan di-fetch via CDP saat aksi peserta dijalankan.")
+    do_download = st.checkbox(
+        "⬇️ Download dokumen kualifikasi",
+        value=True,
+        key=f"pl7_do_dl_{widget_suffix}",
+    )
+    do_parse = st.checkbox(
+        "📋 Parse & populate sheet Hasil Evaluasi",
+        value=True,
+        key=f"pl7_do_parse_{widget_suffix}",
+    )
+    do_eval = st.checkbox(
+        "📋 Parse & populate sheet @ Evaluasi",
+        value=True,
+        key=f"pl7_do_eval_{widget_suffix}",
+    )
+    do_hps = st.checkbox(
+        "💰 Update HPS (sheet 5. HPS)",
+        value=True,
+        key=f"pl7_do_hps_{widget_suffix}",
+    )
+    run = st.button(
+        f"▶ Jalankan — {jumlah} paket",
+        type="primary",
+        key=f"pl7_run_{widget_suffix}",
+        use_container_width=True,
+    )
+    if not run:
+        return
+
+    progress = st.progress(0.0, text="Memulai...")
+    summary: list[dict] = []
+    detail_logs: list[tuple[str, list[str]]] = []
+
+    for index, row in enumerate(selected_rows):
+        kode = row["kode_paket"]
+        nama = label_fn(row)
+        status = st.status(f"Paket {index + 1}/{jumlah} — {nama}", expanded=False)
+        with status:
+            logs: list[str] = []
+            log_box = st.empty()
+
+            def log_cb(message, box=log_box, lines=logs):
+                lines.append(str(message))
+                box.caption(str(message).replace("\n", " ")[:120])
+
+            hps_result = None
+            if do_hps:
+                progress.progress(index / jumlah, text=f"{nama} — update HPS")
+                log_cb("--- Update HPS ke sheet 5. HPS ---")
+                hps_result = update_hps_paket_pl(kode, hasil_engine, log_cb)
+                if hps_result.get("ok"):
+                    mark_pl7_action_success(
+                        st.session_state,
+                        family_key,
+                        kode,
+                        "hps",
+                        f"{hps_result.get('count', 0)} item",
+                    )
+                    log_cb(f"[OK] HPS: {hps_result.get('count', 0)} item ditulis")
+                else:
+                    log_cb(f"[GAGAL] HPS: {hps_result.get('pesan', '-')}")
+
+            hps_summary = ""
+            if hps_result is not None:
+                hps_summary = (
+                    f"Update HPS berhasil ({hps_result.get('count', 0)} item)"
+                    if hps_result.get("ok")
+                    else f"Update HPS gagal: {hps_result.get('pesan', '-')}"
+                )
+
+            result = None
+            eval_result = None
+            participant_error = ""
+            download_ok = None
+            peserta: list[dict] = []
+
+            if do_download or do_parse:
+                log_cb(f"[{index + 1}/{jumlah}] Fetch peserta SPSE...")
+                progress.progress(index / jumlah, text=f"{nama} — fetch peserta")
+                fetched = kualifikasi_engine.fetch_peserta_pl(kode)
+                if not fetched.get("ok"):
+                    participant_error = fetched.get(
+                        "pesan", "peserta tidak ditemukan"
+                    )
+                    log_cb(f"[GAGAL] Peserta: {participant_error}")
+                else:
+                    peserta = fetched["peserta"]
+                    log_cb(
+                        f"Peserta ({len(peserta)}): "
+                        f"{', '.join(p['nama'] for p in peserta)}"
+                    )
+
+                    if do_download:
+                        folder = kualifikasi_engine.resolve_folder_paket_pl(kode)
+                        if not folder.get("ok"):
+                            participant_error = folder.get(
+                                "pesan", "folder tidak ditemukan"
+                            )
+                            log_cb(f"[GAGAL] Folder: {participant_error}")
+                        else:
+                            folder_kualifikasi = folder["path"]
+                            progress.progress(
+                                (index + 0.3) / jumlah,
+                                text=f"{nama} — download kualifikasi",
+                            )
+                            download_results = []
+                            for urutan, peserta_row in enumerate(peserta, 1):
+                                log_cb(
+                                    f"--- Download [{urutan}/{len(peserta)}] "
+                                    f"{peserta_row['nama']} ---"
+                                )
+                                download_results.append(
+                                    kualifikasi_engine.download_kualifikasi_peserta_pl(
+                                        peserta_row,
+                                        folder_kualifikasi,
+                                        urutan,
+                                        len(peserta),
+                                        log_cb,
+                                    )
+                                )
+                            download_ok = bool(peserta) and all(
+                                bool(download_result.get("ok"))
+                                for download_result in download_results
+                            )
+                            if download_ok:
+                                mark_pl7_action_success(
+                                    st.session_state,
+                                    family_key,
+                                    kode,
+                                    "download",
+                                    f"{len(peserta)} peserta",
+                                )
+                            else:
+                                log_cb(
+                                    "[GAGAL] Download kualifikasi tidak selesai "
+                                    "untuk semua peserta"
+                                )
+
+                            # Pertahankan ekstraksi dokumen lama; jalur ini tidak
+                            # menulis workbook @ Master Data.
+                            log_cb("--- Serap penyedia (nama/NPWP/personil) ---")
+                            try:
+                                import parse_kak_pl
+
+                                scraped = parse_kak_pl.serap_penyedia_pl(
+                                    kode_paket_filter=kode
+                                )
+                                log_cb(
+                                    f"👤 Penyedia: {scraped.get('updated', 0)} diperbarui"
+                                    if scraped.get("updated", 0) > 0
+                                    else "👤 Penyedia: tidak ada data baru"
+                                )
+                            except Exception as exc:
+                                log_cb(f"⚠ Serap penyedia: {exc}")
+
+                    if do_parse:
+                        progress.progress(
+                            (index + 0.7) / jumlah,
+                            text=f"{nama} — parse evaluasi",
+                        )
+                        log_cb("--- Populate sheet Hasil Evaluasi ---")
+                        result = hasil_engine.populate_hasil_evaluasi_pl(
+                            kode, peserta, log_cb
+                        )
+                        log_cb(
+                            f"{'[OK]' if result.get('ok') else '[GAGAL]'} "
+                            f"{result['pesan']}"
+                        )
+                        if result.get("ok"):
+                            mark_pl7_action_success(
+                                st.session_state,
+                                family_key,
+                                kode,
+                                "parse",
+                                result.get("pesan", ""),
+                            )
+
+            if do_eval:
+                progress.progress(
+                    (index + 0.85) / jumlah,
+                    text=f"{nama} — parse @ Evaluasi",
+                )
+                log_cb("--- Populate sheet @ Evaluasi ---")
+                eval_result = refresh_evaluasi_pl_only(kode, hasil_engine, log_cb)
+                log_cb(
+                    f"{'[OK]' if eval_result.get('ok') else '[GAGAL]'} "
+                    f"{eval_result.get('pesan', '-')}"
+                )
+                if eval_result.get("ok"):
+                    mark_pl7_action_success(
+                        st.session_state,
+                        family_key,
+                        kode,
+                        "parse_eval",
+                        eval_result.get("pesan", ""),
+                    )
+
+            result_ok = bool(result and result.get("ok")) if do_parse else True
+            eval_ok = (
+                bool(eval_result and eval_result.get("ok")) if do_eval else True
+            )
+            participants_ok = not participant_error
+            package_ok = (
+                participants_ok
+                and (not do_download or bool(download_ok))
+                and result_ok
+                and eval_ok
+                and (not do_hps or bool(hps_result and hps_result.get("ok")))
+            )
+            detail_parts = [participant_error]
+            if result:
+                detail_parts.append(result.get("pesan", ""))
+            if eval_result:
+                detail_parts.append(eval_result.get("pesan", ""))
+            detail_parts.append(hps_summary)
+            summary.append(
+                {
+                    "nama": nama,
+                    "status": "ok" if package_ok else "gagal",
+                    "detail": "; ".join(part for part in detail_parts if part),
+                }
+            )
+            status.update(
+                label=f"Selesai — {nama}",
+                state="complete" if package_ok else "error",
+                expanded=False,
+            )
+            detail_logs.append((nama, list(logs)))
+        progress.progress((index + 1) / jumlah, text=f"Selesai {index + 1}/{jumlah} paket")
+
+    progress.progress(1.0, text="Semua paket selesai.")
+    if detail_logs:
+        with st.expander("📋 Log detail proses", expanded=False):
+            for nama_log, lines_log in detail_logs:
+                st.caption(nama_log)
+                st.code("\n".join(lines_log))
+    from batch_summary import render_ringkasan_batch
+
     render_ringkasan_batch(st, summary)

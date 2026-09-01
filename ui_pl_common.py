@@ -5,10 +5,11 @@ import re
 from pathlib import Path
 
 
-_PL7_ACTION_KEYS = ("download", "parse", "hps")
+_PL7_ACTION_KEYS = ("download", "parse", "parse_eval", "hps")
 _PL7_ACTION_LABELS = {
     "download": "Download Kualifikasi",
     "parse": "Parse & Populate",
+    "parse_eval": "Parse @ Evaluasi",
     "hps": "Update HPS",
 }
 _PL7_BACKFILL_PATH = Path(__file__).resolve().parent / "data" / "pl7_action_status_backfill.json"
@@ -97,6 +98,7 @@ def summarize_pl7_action_status(
                 "Paket": label_fn(row),
                 "Download Kualifikasi": "✅" if entry.get("download") else "—",
                 "Parse & Populate": "✅" if entry.get("parse") else "—",
+                "Parse @ Evaluasi": "✅" if entry.get("parse_eval") else "—",
                 "Update HPS": "✅" if entry.get("hps") else "—",
                 "Status Paket": "Sudah ada aksi sukses" if completed else "Belum diproses",
                 "_aksi_sukses": tuple(completed),

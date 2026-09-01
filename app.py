@@ -6101,13 +6101,14 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                     st.markdown(f"**{_n_paket7} paket** dipilih")
                     st.caption("Peserta akan di-fetch via CDP saat tombol Jalankan diklik.")
 
-                    _do_download7 = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl")
-                    _do_parse7    = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse")
+                    _do_download7 = st.checkbox("⬇️ Download dokumen kualifikasi", value=True, key="pl7_do_dl_jkk")
+                    _do_parse7    = st.checkbox("📋 Parse & populate sheet Hasil Evaluasi", value=True, key="pl7_do_parse_jkk")
+                    _do_eval7     = st.checkbox("📋 Parse & populate sheet @ Evaluasi", value=True, key="pl7_do_eval_jkk")
                     _do_hps7      = st.checkbox("💰 Update HPS (sheet 5. HPS)", value=True, key="pl7_do_hps_jkk")
 
                     _btn7 = st.button(
                         f"▶ Jalankan — {_n_paket7} paket",
-                        type="primary", key="pl7_run", use_container_width=True,
+                        type="primary", key="pl7_run_jkk", use_container_width=True,
                     )
 
                     if _btn7:
@@ -6146,7 +6147,36 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         f"Update HPS gagal: {_hps7.get('pesan', '-')}"
                                     )
                                 _hasil7 = None
-                                if not _do_download7 and not _do_parse7:
+                                if not _do_download7 and not _do_parse7 and _do_eval7:
+                                    _pb7.progress((_i7 + 0.85) / _n_paket7, text=f"{_nama7} — parse @ Evaluasi")
+                                    _lcb7("--- Populate sheet @ Evaluasi ---")
+                                    from pl_ui_helpers import refresh_evaluasi_pl_only as _refresh_eval_only7
+                                    _eval_only7 = _refresh_eval_only7(_kpl7, _he_pl, _lcb7)
+                                    _lcb7(f"{'[OK]' if _eval_only7.get('ok') else '[GAGAL]'} {_eval_only7.get('pesan', '-')}")
+                                    if _eval_only7.get("ok"):
+                                        mark_pl7_action_success(
+                                            st.session_state, "JKK", _kpl7, "parse_eval",
+                                            _eval_only7.get("pesan", ""),
+                                        )
+                                    _eval_only_hps_ok7 = not _do_hps7 or bool(_hps7 and _hps7.get("ok"))
+                                    _eval_only_ok7 = bool(_eval_only7.get("ok")) and _eval_only_hps_ok7
+                                    _ringkasan7.append({
+                                        "nama": _nama7,
+                                        "status": "ok" if _eval_only_ok7 else "gagal",
+                                        "detail": "; ".join(
+                                            part for part in (
+                                                _eval_only7.get("pesan", ""),
+                                                _hps7_summary,
+                                            ) if part
+                                        ),
+                                    })
+                                    _status7.update(
+                                        label=f"Selesai — {_nama7}",
+                                        state="complete" if _eval_only_ok7 else "error",
+                                        expanded=False,
+                                    )
+                                    continue
+                                if not _do_download7 and not _do_parse7 and not _do_eval7:
                                     _hps7_ok = bool(_hps7 and _hps7.get("ok"))
                                     _ringkasan7.append({
                                         "nama": _nama7,
@@ -6177,20 +6207,18 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                 _peserta7 = _fp7["peserta"]
                                 _lcb7(f"Peserta ({len(_peserta7)}): {', '.join(p['nama'] for p in _peserta7)}")
 
-                                # Resolve folder
-                                _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
-                                if not _folder7.get("ok"):
-                                    _folder7_detail = _folder7.get("pesan", "folder tidak ditemukan")
-                                    if _hps7_summary:
-                                        _folder7_detail = f"{_folder7_detail}; {_hps7_summary}"
-                                    _lcb7(f"[SKIP] Folder: {_folder7_detail}")
-                                    _status7.update(label=f"SKIP {_nama7} — {_folder7_detail}", state="error", expanded=False)
-                                    _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _folder7_detail})
-                                    continue
-                                _folder_kual7 = _folder7["path"]
-
                                 # Download kualifikasi
                                 if _do_download7:
+                                    _folder7 = _ke_pl.resolve_folder_paket_pl(_kpl7)
+                                    if not _folder7.get("ok"):
+                                        _folder7_detail = _folder7.get("pesan", "folder tidak ditemukan")
+                                        if _hps7_summary:
+                                            _folder7_detail = f"{_folder7_detail}; {_hps7_summary}"
+                                        _lcb7(f"[SKIP] Folder: {_folder7_detail}")
+                                        _status7.update(label=f"SKIP {_nama7} — {_folder7_detail}", state="error", expanded=False)
+                                        _ringkasan7.append({"nama": _nama7, "status": "skip", "detail": _folder7_detail})
+                                        continue
+                                    _folder_kual7 = _folder7["path"]
                                     _pb7.progress((_i7 + 0.3) / _n_paket7, text=f"{_nama7} — download kualifikasi")
                                     _download_results7 = []
                                     for _ui7, _p7 in enumerate(_peserta7, 1):
@@ -6232,47 +6260,46 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                             _hasil7.get("pesan", ""),
                                         )
 
-                                    # Refresh @ Master Data agar tgl_pembukaan benar
-                                    # (penting untuk paket ulang: kode_paket baru → tanggal baru dari Supabase)
-                                    if _hasil7.get("ok"):
-                                        _lcb7("--- Refresh @ Master Data ---")
-                                        try:
-                                            import isi_master_data_pl as _imd7
-                                            _xlsm7 = _he_pl._find_xlsm(_kpl7)
-                                            if _xlsm7:
-                                                _md7 = _imd7.isi_master_data_pl(_kpl7, _xlsm7, progress_cb=_lcb7)
-                                                _lcb7(f"{'[OK]' if _md7.get('ok') else '[WARN]'} {_md7['pesan']}")
-                                            else:
-                                                _lcb7("[WARN] File .xlsm tidak ditemukan untuk refresh @ Master Data")
-                                        except Exception as _e_md7:
-                                            _lcb7(f"[WARN] Refresh @ Master Data gagal: {_e_md7}")
-
-                                    _ringkasan7.append({
-                                        "nama"  : _nama7,
-                                        "status": "ok" if (
-                                            (not _do_download7 or bool(_download_ok7))
-                                            and _hasil7.get("ok")
-                                            and (not _do_hps7 or bool(_hps7 and _hps7.get("ok")))
-                                        ) else "gagal",
-                                        "detail": "; ".join(
-                                            part for part in (_hasil7.get("pesan", ""), _hps7_summary) if part
-                                        ),
-                                    })
                                 else:
-                                    # Tidak ada parse → anggap OK (hanya download)
-                                    _ringkasan7.append({
-                                        "nama": _nama7,
-                                        "status": "ok" if (
-                                            (not _do_download7 or bool(_download_ok7))
-                                            and (not _do_hps7 or bool(_hps7 and _hps7.get("ok")))
-                                        ) else "gagal",
-                                        "detail": "; ".join(
-                                            part for part in ("download saja", _hps7_summary) if part
-                                        ),
-                                    })
+                                    # Tidak ada parse Hasil Evaluasi; operasi lain tetap berjalan.
+                                    pass
+
+                                _eval7 = None
+                                if _do_eval7:
+                                    _pb7.progress((_i7 + 0.85) / _n_paket7, text=f"{_nama7} — parse @ Evaluasi")
+                                    _lcb7("--- Populate sheet @ Evaluasi ---")
+                                    from pl_ui_helpers import refresh_evaluasi_pl_only as _refresh_eval7
+                                    _eval7 = _refresh_eval7(_kpl7, _he_pl, _lcb7)
+                                    _lcb7(f"{'[OK]' if _eval7.get('ok') else '[GAGAL]'} {_eval7.get('pesan', '-')}")
+                                    if _eval7.get("ok"):
+                                        mark_pl7_action_success(
+                                            st.session_state, "JKK", _kpl7, "parse_eval",
+                                            _eval7.get("pesan", ""),
+                                        )
+
+                                _hasil7_ok = bool(_hasil7 and _hasil7.get("ok")) if _do_parse7 else True
+                                _eval7_ok = bool(_eval7 and _eval7.get("ok")) if _do_eval7 else True
+                                _ringkasan7.append({
+                                    "nama": _nama7,
+                                    "status": "ok" if (
+                                        (not _do_download7 or bool(_download_ok7))
+                                        and _hasil7_ok
+                                        and _eval7_ok
+                                        and (not _do_hps7 or bool(_hps7 and _hps7.get("ok")))
+                                    ) else "gagal",
+                                    "detail": "; ".join(
+                                        part for part in (
+                                            _hasil7.get("pesan", "") if _hasil7 else "",
+                                            _eval7.get("pesan", "") if _eval7 else "",
+                                            _hps7_summary,
+                                        ) if part
+                                    ),
+                                })
 
                             _paket7_ok = (not _do_download7 or bool(_download_ok7)) and (
                                 not _do_parse7 or bool(_hasil7 and _hasil7.get("ok"))
+                            ) and (
+                                not _do_eval7 or bool(_eval7 and _eval7.get("ok"))
                             ) and (
                                 not _do_hps7 or bool(_hps7 and _hps7.get("ok"))
                             )
@@ -9740,21 +9767,6 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _lcb7("--- Populate sheet Hasil Evaluasi ---")
                                     _hasil7 = _he_pl.populate_hasil_evaluasi_pl(_kpl7, _peserta7, _lcb7)
                                     _lcb7(f"{'[OK]' if _hasil7.get('ok') else '[GAGAL]'} {_hasil7['pesan']}")
-
-                                    # Refresh @ Master Data agar tgl_pembukaan benar
-                                    # (penting untuk paket ulang: kode_paket baru → tanggal baru dari Supabase)
-                                    if _hasil7.get("ok"):
-                                        _lcb7("--- Refresh @ Master Data ---")
-                                        try:
-                                            import isi_master_data_pl as _imd7
-                                            _xlsm7 = _he_pl._find_xlsm(_kpl7)
-                                            if _xlsm7:
-                                                _md7 = _imd7.isi_master_data_pl(_kpl7, _xlsm7, progress_cb=_lcb7)
-                                                _lcb7(f"{'[OK]' if _md7.get('ok') else '[WARN]'} {_md7['pesan']}")
-                                            else:
-                                                _lcb7("[WARN] File .xlsm tidak ditemukan untuk refresh @ Master Data")
-                                        except Exception as _e_md7:
-                                            _lcb7(f"[WARN] Refresh @ Master Data gagal: {_e_md7}")
 
                                     _ringkasan7.append({
                                         "nama"  : _nama7,
