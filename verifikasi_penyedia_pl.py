@@ -8,6 +8,7 @@ ID yang dipakai: id_nontender (kolom 0 dt/paketpp), bukan kode_paket.
 
 import re
 import requests
+import time
 from datetime import date, timedelta
 from typing import Optional
 
@@ -37,6 +38,14 @@ YANG_HARUS_DIBAWA_DEFAULT = (
     "Dokumen (asli dan copy) sebagaimana disampaikan dalam penawaran "
     "dan pada isian kualifikasi serta dokumen/data dukungnya"
 )
+
+# SPSE kadang lambat merender form verifikasi. GET aman diulang; POST tidak
+# diulang otomatis karena timeout POST bisa terjadi setelah server menerima data.
+FORM_GET_TIMEOUT_SECONDS = 60
+FORM_GET_MAX_ATTEMPTS = 3
+FORM_GET_RETRY_DELAYS_SECONDS = (2, 5)
+POST_TIMEOUT_SECONDS = 60
+RETRYABLE_FORM_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 def hitung_waktu_verifikasi(
@@ -99,16 +108,31 @@ def scrap_verifikasi_context(id_nontender: str, cookie_str: str) -> dict:
         "User-Agent": "Mozilla/5.0",
         "Cookie": cookie_str,
     }
-    try:
-        r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
-        if r.status_code != 200:
-            return {"error": f"GET form gagal: HTTP {r.status_code}"}
-        m = re.search(r'name="authenticityToken"\s+value="([^"]+)"', r.text)
-        if not m:
-            return {"error": "authenticityToken tidak ditemukan di halaman form verifikasi"}
-        return {"token": m.group(1)}
-    except Exception as e:
-        return {"error": str(e)}
+    last_error = ""
+    for attempt in range(FORM_GET_MAX_ATTEMPTS):
+        try:
+            r = requests.get(
+                url,
+                headers=headers,
+                timeout=FORM_GET_TIMEOUT_SECONDS,
+                allow_redirects=True,
+            )
+            if r.status_code == 200:
+                m = re.search(r'name="authenticityToken"\s+value="([^"]+)"', r.text)
+                if m:
+                    return {"token": m.group(1)}
+                last_error = "authenticityToken tidak ditemukan di halaman form verifikasi"
+            elif r.status_code in RETRYABLE_FORM_STATUS_CODES:
+                last_error = f"GET form gagal: HTTP {r.status_code}"
+            else:
+                return {"error": f"GET form gagal: HTTP {r.status_code}"}
+        except Exception as exc:
+            last_error = str(exc)
+
+        if attempt < FORM_GET_MAX_ATTEMPTS - 1:
+            time.sleep(FORM_GET_RETRY_DELAYS_SECONDS[attempt])
+
+    return {"error": last_error or "GET form gagal tanpa respons"}
 
 
 def kirim_verifikasi(
@@ -172,7 +196,7 @@ def kirim_verifikasi(
             url,
             files=files,
             headers=headers,
-            timeout=30,
+            timeout=POST_TIMEOUT_SECONDS,
             allow_redirects=True,
         )
         # Sukses: redirect kembali ke halaman form + ada alert sukses di HTML
