@@ -9,6 +9,8 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 
 import os
 
+from person_name_utils import normalize_equipment_quantity
+
 
 K3_CERT_FALLBACK = "SKK Petugas K3 Konstruksi/Keselamatan Konstruksi"
 PAYMENT_METHOD_MC = (
@@ -187,7 +189,11 @@ def _parse_equipment_docx(path: str) -> list[dict]:
                 if identity in seen:
                     continue
                 seen.add(identity)
-                result.append({"nama": name, "kapasitas": capacity, "jumlah": quantity})
+                result.append({
+                    "nama": name,
+                    "kapasitas": capacity,
+                    "jumlah": normalize_equipment_quantity(quantity),
+                })
     return result
 
 
@@ -296,7 +302,7 @@ def _write_local_enrichment(ws, enrichment: dict) -> None:
     for i, item in enumerate((enrichment.get("alat") or [])[:6]):
         ws.Cells(39 + i, 3).Value = item.get("nama", "")
         ws.Cells(45 + i, 3).Value = item.get("kapasitas", "")
-        ws.Cells(51 + i, 3).Value = item.get("jumlah", "")
+        ws.Cells(51 + i, 3).Value = normalize_equipment_quantity(item.get("jumlah", ""))
     for row in range(66, 76):
         ws.Cells(row, 3).ClearContents()
     for i, value in enumerate((enrichment.get("uraian") or [])[:10]):
@@ -685,6 +691,21 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                     _apply_post_macro_enrichment(wb, excel_path, _log)
                 except Exception as local_e:
                     _log(f"WARN data lokal: {local_e}")
+                # Saat create-folder bulk/single, HPS sudah tersedia di sesi
+                # COM yang sama. Tulis uraian final langsung ke C19 agar tidak
+                # bergantung pada cache/upsert Supabase yang mungkin belum ada.
+                if hps_hasil and hps_hasil.get("items"):
+                    try:
+                        uraian = _hps_eng._build_uraian_singkat_pk(
+                            hps_hasil["items"], excel_path
+                        )
+                        if uraian:
+                            ws_master = wb.Sheets("@ Master Data")
+                            ws_master.Cells(19, 3).NumberFormat = "General"
+                            ws_master.Cells(19, 3).Value = uraian
+                            _log("Uraian singkat C19 dibuat dari DIVISI HPS.")
+                    except Exception as uraian_e:
+                        _log(f"WARN uraian singkat C19: {uraian_e}")
 
             # Macro membaca cache Supabase lebih dulu. Normalisasi di boundary
             # workbook memastikan boilerplate tender "gabungan" tidak masuk

@@ -11,6 +11,7 @@ Output: update kolom personel_1/2 dan alat_1/2/3 di peserta_identitas Supabase.
 import os
 import re
 from config import sb as _sb
+from person_name_utils import clean_person_name, format_equipment_entry
 
 
 def _find_pdf(folder: str, *keywords: str) -> str | None:
@@ -48,7 +49,7 @@ def _parse_peralatan_lines(text: str) -> list[str]:
         nama = re.sub(r"\s+", " ", match.group(1)).strip(" |:-")
         jumlah = re.sub(r"\s+", " ", match.group(2)).strip()
         if nama and not any(k in nama.upper() for k in ("PERALATAN UTAMA", "NAMA PERALATAN")):
-            hasil.append(f"{nama} ({jumlah})")
+            hasil.append(format_equipment_entry(nama, jumlah))
     return hasil[:6]
 
 
@@ -149,7 +150,7 @@ def parse_peralatan(pdf_path: str) -> list[str]:
                             if jumlah and re.match(r"^\d+\.?$", jumlah):
                                 jumlah = ""
                             if jumlah:
-                                alat_list.append(f"{jenis} ({jumlah})")
+                                alat_list.append(format_equipment_entry(jenis, jumlah))
                             else:
                                 alat_list.append(jenis)
                             if len(alat_list) >= 6:
@@ -272,9 +273,8 @@ def parse_personel(pdf_path: str) -> list[str]:
                             # Buang teks yang terlalu panjang / jelas bukan jabatan
                             if len(jabatan) > 80:
                                 jabatan = jabatan[:80]
-                        if jabatan:
-                            personel_list.append(f"{nama} ({jabatan})")
-                        else:
+                        nama = clean_person_name(nama)
+                        if nama:
                             personel_list.append(nama)
                         if len(personel_list) >= 4:
                             break

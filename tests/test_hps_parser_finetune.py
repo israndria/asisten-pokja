@@ -34,6 +34,22 @@ def test_parse_amount_decimal_distinguishes_rupiah_thousands_and_cents():
     assert hps_engine._parse_amount_decimal("199984583.13") == Decimal("199984583.13")
 
 
+def test_build_uraian_singkat_pk_uses_divisi_sentence_format(tmp_path):
+    workbook = tmp_path / "91. PLPK - Rekonstruksi Jalan Desa Hiyung.xlsm"
+    items = [
+        {"jenis_bj": "DIVISI 1. UMUM", "is_divisi": True},
+        {"jenis_bj": "DIVISI 3. PEKERJAAN TANAH DAN GEOSINTETIK", "is_divisi": True},
+        {"jenis_bj": "DIVISI 7. STRUKTUR", "is_divisi": True},
+        {"jenis_bj": "DIVISI 9. PEKERJAAN HARIAN & PEKERJAAN LAIN-LAIN", "is_divisi": True},
+        {"jenis_bj": "DIVISI 9. PEKERJAAN HARIAN & PEKERJAAN LAIN-LAIN", "is_divisi": True},
+    ]
+    assert hps_engine._build_uraian_singkat_pk(items, str(workbook)) == (
+        "Mengerjakan paket pekerjaan Rekonstruksi Jalan Desa Hiyung "
+        "yaitu : DIVISI 1. UMUM, DIVISI 3. PEKERJAAN TANAH DAN GEOSINTETIK, "
+        "DIVISI 7. STRUKTUR DAN DIVISI 9. PEKERJAAN HARIAN & PEKERJAAN LAIN-LAIN"
+    )
+
+
 def test_hps_markdown_preserves_cents(tmp_path):
     path = tmp_path / "0. BAPLPK- Uji.xlsm"
     result = {

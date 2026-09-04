@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 
 import spse_browser
 from config import SPSE_BASE_URL
+from person_name_utils import clean_person_name, format_equipment_entry
 
 # ── Tesseract ──────────────────────────────────────────────────────────────────
 _TESSERACT_CANDIDATES = [
@@ -379,8 +380,10 @@ def parse_preview_html(kualifikasi_id: str, syarat_keywords: list[str] | None = 
         jabatan = row[5].strip() if len(row) > 5 else ""
         if not nama_p or nama_p.lower() in ("nama", "no", "no."):
             continue
-        entry = f"{nama_p} ({jabatan})" if jabatan else nama_p
-        personel_list.append(entry)
+        nama_p = clean_person_name(nama_p)
+        if not nama_p:
+            continue
+        personel_list.append(nama_p)
     hasil["personel_list"] = personel_list
 
     # Tabel 5: PENGALAMAN KERJA
@@ -421,8 +424,7 @@ def parse_preview_html(kualifikasi_id: str, syarat_keywords: list[str] | None = 
         jumlah    = row[1].strip() if len(row) > 1 else ""
         if not nama_alat or nama_alat.lower() in ("nama alat", "peralatan", "no", "no."):
             continue
-        entry = f"{nama_alat} ({jumlah})" if jumlah else nama_alat
-        peralatan_list.append(entry)
+        peralatan_list.append(format_equipment_entry(nama_alat, jumlah))
     hasil["peralatan_list"] = peralatan_list
 
     # Tabel 6: PEKERJAAN SEDANG BERJALAN → hitung JP → SKP

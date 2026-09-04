@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 from config import sb as _sb, SPSE_BASE_URL, POKJA_ROOT, TENDER_ROOT, sanitasi_nama_folder
 import spse_browser
+from person_name_utils import clean_person_name, format_equipment_entry
 
 
 def _headers() -> dict:
@@ -22,14 +23,7 @@ def _headers() -> dict:
 
 
 def _nama_tanpa_gelar(value: str) -> str:
-    """Hilangkan gelar/sufiks setelah koma dari nama direktur.
-
-    SPSE sering mengembalikan nama seperti ``NAMA, GELAR AKADEMIK``.
-    Untuk dokumen BA cukup gunakan nama sebelum koma; nama perusahaan dan
-    field identitas lain tidak melalui normalisasi ini.
-    """
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    return text.split(",", 1)[0].strip() if "," in text else text
+    return clean_person_name(value)
 
 
 # ──────────────────────────────────────────────
@@ -309,7 +303,9 @@ def parse_formulir_kualifikasi(folder_peserta: str) -> dict:
                                     nama_p = nama_p.strip()
                                     jabatan_p = jabatan_p.strip()
                                     if nama_p and nama_p not in ("Nihil", "-"):
-                                        personel_list.append(f"{nama_p} ({jabatan_p})" if jabatan_p else nama_p)
+                                        nama_p = clean_person_name(nama_p)
+                                        if nama_p:
+                                            personel_list.append(nama_p)
 
                         # Tabel peralatan: header mengandung "JENIS PERALATAN" atau "PERALATAN/PERLENGKAPAN"
                         if not peralatan_list and ("JENIS PERALATAN" in header or "PERALATAN" in header and "PERLENGKAPAN" in header):
@@ -329,7 +325,7 @@ def parse_formulir_kualifikasi(folder_peserta: str) -> dict:
                                     jenis_p = jenis_p.strip()
                                     jumlah_p = jumlah_p.strip()
                                     if jenis_p and jenis_p not in ("Nihil", "-"):
-                                        peralatan_list.append(f"{jenis_p} ({jumlah_p} unit)" if jumlah_p else jenis_p)
+                                        peralatan_list.append(format_equipment_entry(jenis_p, jumlah_p))
 
         except Exception:
             continue

@@ -21,6 +21,7 @@ from kualifikasi_parser import (
     _find_file,
     _normalize_npwp_source,
 )
+from person_name_utils import clean_person_name, format_equipment_entry
 
 
 def _decode_cf_email(cf_hex: str) -> str:
@@ -37,18 +38,8 @@ def _decode_cf_email(cf_hex: str) -> str:
 
 def _clean_person_name(value: str) -> str:
     """Buang prefix sistem/NIK agar nilai aman dipakai sebagai nama orang."""
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    # Beberapa PDF/preview menempelkan label field ke nama:
-    # "Nama Lengkap TRI ASTUTI LESTARI Jabatan".
-    # Label bukan bagian identitas dan tidak boleh masuk mail-merge.
-    text = re.sub(r"^Nama\s+Lengkap\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+Jabatan\s*$", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bBADAN\s+USAHA\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b\d{16}\b", "", text)
-    text = re.sub(r"\s{2,}", " ", text).strip(" -:;,.")
-    if not text or re.fullmatch(r"[\d\s./-]+", text):
-        return ""
-    if re.match(r"^(CV|PT|UD|PD|Koperasi|Firma)\b", text, re.IGNORECASE):
+    text = clean_person_name(value)
+    if not text:
         return ""
     return text
 
@@ -195,7 +186,10 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
         jabatan = row[5].strip() if len(row) > 5 else ""
         if not nama_p or nama_p.lower() in ("nama", "no", "no."):
             continue
-        personel_list.append(f"{nama_p} ({jabatan})" if jabatan else nama_p)
+        nama_p = clean_person_name(nama_p)
+        if not nama_p:
+            continue
+        personel_list.append(nama_p)
     hasil["personel_list"] = personel_list
 
     # Tabel PERALATAN — table#table-peralatan
@@ -216,7 +210,7 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
         jumlah    = row[1].strip() if len(row) > 1 else ""
         if not nama_alat or nama_alat.lower() in ("nama alat", "peralatan", "no", "no."):
             continue
-        peralatan_list.append(f"{nama_alat} ({jumlah})" if jumlah else nama_alat)
+        peralatan_list.append(format_equipment_entry(nama_alat, jumlah))
     hasil["peralatan_list"] = peralatan_list
 
     # Tabel 5: PENGALAMAN

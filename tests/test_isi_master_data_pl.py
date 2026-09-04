@@ -53,6 +53,11 @@ def test_equipment_parser_uses_table_headers_not_filename(tmp_path):
     doc.save(source)
 
     assert isi_master_data_pl._parse_equipment_docx(str(source)) == [
-        {"nama": "Dump Truck", "kapasitas": "3,5 Ton", "jumlah": "1"},
-        {"nama": "Tandem Roller", "kapasitas": "6-8 T; 74 HP", "jumlah": "1"},
+        {"nama": "Dump Truck", "kapasitas": "3,5 Ton", "jumlah": "1 Unit"},
+        {"nama": "Tandem Roller", "kapasitas": "6-8 T; 74 HP", "jumlah": "1 Unit"},
     ]
+
+
+def test_equipment_quantity_normalizes_existing_unit_spelling():
+    assert isi_master_data_pl.normalize_equipment_quantity("1") == "1 Unit"
+    assert isi_master_data_pl.normalize_equipment_quantity("1 unit") == "1 Unit"
