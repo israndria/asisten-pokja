@@ -92,6 +92,17 @@ def _headers():
     return {"Cookie": cookie, "User-Agent": "Mozilla/5.0", "Referer": SPSE_BASE_URL}
 
 
+def _normalize_npwp_source(value: str) -> str:
+    """Validate NPWP while preserving representation supplied by SPSE."""
+    text = re.sub(r"\s+", " ", str(value or "").replace("\u00a0", " ")).strip()
+    if not text or text in {"-", "—", "N/A", "NA"}:
+        return ""
+    if not re.fullmatch(r"[0-9.\- ]+", text):
+        return ""
+    digits = re.sub(r"[^0-9]", "", text)
+    return text if len(digits) in {15, 16} else ""
+
+
 # ── Cari file di folder peserta ────────────────────────────────────────────────
 
 def _find_file(folder: str, *patterns: str) -> str | None:
@@ -253,7 +264,7 @@ def parse_preview_html(kualifikasi_id: str, syarat_keywords: list[str] | None = 
     # Tabel 0: IDENTITAS
     t0 = _tbl(0)
     hasil["nama"] = _cell(t0, "Nama")
-    hasil["npwp"] = _cell(t0, "NPWP")
+    hasil["npwp"] = _normalize_npwp_source(_cell(t0, "NPWP"))
     hasil["alamat"] = _cell(t0, "Alamat")
     hasil["email"] = _cell(t0, "Email")
 

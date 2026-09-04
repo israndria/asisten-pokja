@@ -863,8 +863,18 @@ def _open_excel_for_pl_action():
     excel.DisplayAlerts = False
     try:
         excel.AutomationSecurity = 1
-    except Exception:
-        pass
+    except Exception as exc:
+        try:
+            excel.Quit()
+        finally:
+            pythoncom.CoUninitialize()
+        raise RuntimeError(
+            "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+            "aksi workbook dibatalkan agar cache UDF tidak rusak."
+        ) from exc
+    # Macro tetap tersedia untuk UDF, tetapi Workbook_Open/SheetChange tidak
+    # boleh menjadi side effect pada aksi Streamlit.
+    excel.EnableEvents = False
     return pythoncom, pywintypes, excel
 
 

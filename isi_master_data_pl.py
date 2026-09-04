@@ -428,8 +428,12 @@ def tulis_identitas_penyedia_ke_excel(
         xl.DisplayAlerts = False
         try:
             xl.AutomationSecurity = 1
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError(
+                "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                "writer dibatalkan agar cache UDF tidak rusak."
+            ) from exc
+        xl.EnableEvents = False
         _log(f"Membuka Excel: {os.path.basename(excel_path)}")
         wb = xl.Workbooks.Open(
             excel_path,
@@ -503,8 +507,12 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
         # AutomationSecurity=1 (msoAutomationSecurityLow) — izinkan macro jalan
         try:
             xl.AutomationSecurity = 1
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError(
+                "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                "writer dibatalkan agar cache UDF tidak rusak."
+            ) from exc
+        xl.EnableEvents = False
 
         _log(f"Membuka Excel: {os.path.basename(excel_path)}")
         wb = xl.Workbooks.Open(excel_path, UpdateLinks=0)
@@ -631,8 +639,12 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
             xl.DisplayAlerts = False
             try:
                 xl.AutomationSecurity = 1  # msoAutomationSecurityLow
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                    "writer dibatalkan agar cache UDF tidak rusak."
+                ) from exc
+            xl.EnableEvents = False
 
             _log(f"Membuka Excel: {os.path.basename(excel_path)}")
             wb = xl.Workbooks.Open(excel_path, UpdateLinks=0)

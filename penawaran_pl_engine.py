@@ -304,6 +304,16 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
         xl = win32com.client.DispatchEx("Excel.Application")
         xl.Visible = False
         xl.DisplayAlerts = False
+        # Jangan pernah Save workbook PL dengan UDF VBA dalam keadaan macro
+        # disabled: dependent cached values dapat berubah menjadi #NAME?.
+        try:
+            xl.AutomationSecurity = 1  # msoAutomationSecurityLow
+        except Exception as exc:
+            raise RuntimeError(
+                "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                "writer dibatalkan agar cache UDF tidak rusak."
+            ) from exc
+        xl.EnableEvents = False
         try:
             wb = xl.Workbooks.Open(os.path.abspath(xlsm_path), ReadOnly=False)
             ws = None

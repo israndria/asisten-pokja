@@ -453,6 +453,16 @@ def _tulis_hps_ke_sheet(excel_path: str, hasil: dict, progress_cb=None) -> dict:
         xl = win32com.client.DispatchEx("Excel.Application")
         xl.Visible = False
         xl.DisplayAlerts = False
+        # HPS writer menyimpan .xlsm; pastikan fungsi VBA sudah terdaftar
+        # sebelum Excel menghitung formula turunan.
+        try:
+            xl.AutomationSecurity = 1  # msoAutomationSecurityLow
+        except Exception as exc:
+            raise RuntimeError(
+                "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                "writer dibatalkan agar cache UDF tidak rusak."
+            ) from exc
+        xl.EnableEvents = False
         wb = xl.Workbooks.Open(excel_path)
         try:
             ws = wb.Sheets(_SHEET_HPS)

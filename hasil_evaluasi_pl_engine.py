@@ -14,6 +14,7 @@ import re
 import subprocess
 
 from config import POKJA_ROOT
+from kualifikasi_parser import _normalize_npwp_source
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -157,9 +158,8 @@ def _build_rows_peserta(peserta_data: dict, kode_paket: str, no_start: int) -> l
 
     # ── Administrasi ───────────────────────────────────────────────────────────
     _r("Nama Perusahaan", "Administrasi", "preview t0", "ADA" if nama else "PERIKSA", nama)
-    # NPWP: prefix ' agar Excel tidak convert ke scientific notation
-    _npwp_raw = str(peserta_data.get("npwp", "") or "")
-    _npwp_val = ("'" + _npwp_raw) if _npwp_raw.replace(".", "").replace("-", "").isdigit() else _npwp_raw
+    # NPWP: simpan teks sumber tanpa pemformatan tambahan/apostrof.
+    _npwp_val = _normalize_npwp_source(peserta_data.get("npwp", ""))
     _r("NPWP", "Administrasi", "preview t0", catatan=_npwp_val)
     _r("Alamat", "Administrasi", "preview t0", catatan=peserta_data.get("alamat", ""))
     _r("Email", "Administrasi", "preview t0", catatan=peserta_data.get("email", ""))
@@ -384,6 +384,18 @@ def populate_hasil_evaluasi_pl(
         excel = win32com.client.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
+        # Workbook PL berisi UDF VBA (mis. terbilang1). Macro harus aktif
+        # sebelum Open; jika disabled lalu Save, Excel dapat menyimpan cache
+        # UDF sebagai #NAME?. Event workbook tetap dimatikan agar tidak ada
+        # Workbook_Open side effect pada jalur writer.
+        try:
+            excel.AutomationSecurity = 1  # msoAutomationSecurityLow
+        except Exception as exc:
+            raise RuntimeError(
+                "Excel AutomationSecurity gagal diatur ke macro-enabled; "
+                "writer dibatalkan agar cache UDF tidak rusak."
+            ) from exc
+        excel.EnableEvents = False
 
         wb = excel.Workbooks.Open(os.path.abspath(xlsm_path))
         ws = wb.Worksheets("Hasil Evaluasi")
@@ -412,6 +424,11 @@ def populate_hasil_evaluasi_pl(
         clean_rows = [[_san(v) for v in row] for row in all_rows]
         end_row = 1 + len(clean_rows)
         rng = ws.Range(ws.Cells(2, 1), ws.Cells(end_row, 6))
+        # NPWP wajib teks agar 15/16 digit dan leading zero tidak berubah
+        # menjadi angka/notasi ilmiah saat COM mengisi range bulk.
+        for row_idx, row in enumerate(all_rows, start=2):
+            if len(row) > 1 and str(row[1]).strip().upper() == "NPWP":
+                ws.Cells(row_idx, 6).NumberFormat = "@"
         rng.Value = clean_rows
 
         wb.Save()

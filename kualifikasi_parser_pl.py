@@ -19,6 +19,7 @@ from kualifikasi_parser import (
     parse_kinerja_pdf,
     get_skp,
     _find_file,
+    _normalize_npwp_source,
 )
 
 
@@ -95,7 +96,7 @@ def parse_preview_html_pl(kualifikasi_id: str) -> dict:
     # Tabel 0: IDENTITAS
     t0 = _tbl(0)
     hasil["nama"]   = _cell(t0, "Nama")
-    hasil["npwp"]   = _cell(t0, "NPWP")
+    hasil["npwp"]   = _normalize_npwp_source(_cell(t0, "NPWP"))
     hasil["alamat"] = _cell(t0, "Alamat")
     hasil["email"]  = _cell(t0, "Email")
     # SPSE menampilkan placeholder [email protected] saat Cloudflare
@@ -399,7 +400,7 @@ def _parse_pq_pdf(folder_peserta: str) -> dict:
             # Format baku: XX.XXX.XXX.X-XXX.XXX
             m_npwp = re.search(r'(\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3})', full_text)
             if m_npwp:
-                result["npwp_pdf"] = m_npwp.group(1)
+                result["npwp_pdf"] = _normalize_npwp_source(m_npwp.group(1))
 
         # ── Bidang pengalaman (kode SBU di kolom bidang tabel pengalaman) ─────
         # Cari section pengalaman dulu, ekstrak kode SBU dari sana
@@ -460,11 +461,15 @@ def parse_peserta_lengkap_pl(
     _log("[Parser PL] Hitung SKP...")
     skp_data = get_skp(folder_peserta, html_data.get("jp_preview", 0))
 
-    # Enrichment dari PDF: direktur + NPWP + bidang pengalaman
-    # PDF lebih akurat karena dokumen yang diupload peserta (bukan input form SPSE)
+    # Enrichment dari PDF: direktur + NPWP + bidang pengalaman.
+    # Preview SPSE menjadi sumber utama identitas; PDF hanya fallback NPWP
+    # apabila preview tidak menyediakan nilai, agar OCR tidak menimpa sumber resmi.
     _pemilik_spse = html_data.get("pemilik", [])
     _direktur_pdf = pdf_data.get("direktur", "")
-    _npwp_final = pdf_data.get("npwp_pdf", "") or html_data.get("npwp", "")
+    _npwp_final = (
+        _normalize_npwp_source(html_data.get("npwp", ""))
+        or _normalize_npwp_source(pdf_data.get("npwp_pdf", ""))
+    )
 
     # Pemilik: direktur dari PDF jadi baris pertama, sisanya dari SPSE
     if _direktur_pdf:
