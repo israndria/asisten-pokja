@@ -807,7 +807,12 @@ def update_hps_paket_pl(kode_paket: str, hasil_engine, progress_cb=None) -> dict
 
     source = pathlib.Path(workbook)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_candidate = source.with_name(
+    # Backup workbook tidak boleh berada di root paket: resolver VBA/Word
+    # dapat salah memilihnya sebagai workbook aktif. Simpan di subfolder
+    # khusus yang selalu dikecualikan oleh resolver.
+    backup_dir = source.parent / ".vba-backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_candidate = backup_dir / (
         f"{source.stem}.backup_{stamp}_{uuid.uuid4().hex[:8]}{source.suffix}"
     )
     try:
@@ -878,6 +883,31 @@ def _open_excel_for_pl_action():
     return pythoncom, pywintypes, excel
 
 
+def _scan_pl_formula_errors(workbook, sheet_names=None):
+    """Baca error formula cached tanpa memaksa full recalculation workbook."""
+    error_tokens = {"#NAME?", "#VALUE!", "#REF!", "#DIV/0!", "#N/A", "#NUM!", "#NULL!"}
+    names = sheet_names or ("satu_data", "@ Evaluasi", "5. HPS", "7.2 Dengan Nego")
+    found = []
+    for sheet_name in names:
+        try:
+            ws = workbook.Worksheets(sheet_name)
+            used = ws.UsedRange
+            row_count = min(int(used.Rows.Count), 1000)
+            col_count = min(int(used.Columns.Count), 80)
+            first_row = int(used.Row)
+            first_col = int(used.Column)
+            for row in range(first_row, first_row + row_count):
+                for col in range(first_col, first_col + col_count):
+                    text = str(ws.Cells(row, col).Text or "").strip().upper()
+                    if text in error_tokens:
+                        found.append(f"{sheet_name}!{ws.Cells(row, col).Address(False, False)}={text}")
+                        if len(found) >= 20:
+                            return found
+        except Exception:
+            continue
+    return found
+
+
 def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) -> dict:
     """Jalankan macro refresh ``@ Evaluasi`` tanpa mengisi ``@ Master Data``.
 
@@ -899,6 +929,7 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
     pythoncom = None
     excel = None
     wb = None
+    silent_set = False
     try:
         import pywintypes
 
@@ -920,6 +951,7 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
 
         try:
             excel.Run("ModDraftPaketPL.SetSilentPL", True)
+            silent_set = True
         except pywintypes.com_error as exc:
             return {
                 "ok": False,
@@ -928,14 +960,30 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
             }
 
         log("Menjalankan refresh sheet @ Evaluasi...")
+        before_errors = _scan_pl_formula_errors(wb)
+        if before_errors:
+            return {
+                "ok": False,
+                "pesan": "Workbook sudah memiliki error formula; save dibatalkan: " + "; ".join(before_errors[:5]),
+                "workbook": workbook,
+            }
         excel.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
+        # Kalkulasi scoped saja. CalculateFull/CalculateUntilAsyncQueriesDone
+        # pernah mengubah cache UDF tanggal menjadi #NAME? pada workbook PL.
+        wb.Worksheets("@ Evaluasi").Calculate()
         try:
-            excel.CalculateFull()
-            excel.CalculateUntilAsyncQueriesDone()
+            wb.Worksheets("satu_data").Calculate()
         except Exception:
-            # Excel lama dapat tidak mengekspos salah satu metode kalkulasi;
-            # macro tetap sudah selesai dan Save menjadi langkah otoritatif.
             pass
+        after_errors = _scan_pl_formula_errors(wb)
+        if after_errors:
+            return {
+                "ok": False,
+                "pesan": "Refresh dibatalkan karena menghasilkan error formula: " + "; ".join(after_errors[:5]),
+                "workbook": workbook,
+            }
+        excel.Run("ModDraftPaketPL.SetSilentPL", False)
+        silent_set = False
         wb.Save()
         log("@ Evaluasi terisi dan workbook tersimpan.")
         return {
@@ -949,6 +997,11 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
         return {"ok": False, "pesan": str(exc), "workbook": workbook}
     finally:
         if wb is not None:
+            if silent_set and excel is not None:
+                try:
+                    excel.Run("ModDraftPaketPL.SetSilentPL", False)
+                except Exception:
+                    pass
             try:
                 wb.Close(SaveChanges=False)
             except Exception:
@@ -1138,7 +1191,8 @@ def _resolve_nomor_dokpil_excel_pl(row: dict) -> dict:
     }
 
 def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
-                            template_dir_jkk, template_dir_pk, hps_hasil_preloaded=None):
+                            template_dir_jkk, template_dir_pk, hps_hasil_preloaded=None,
+                            tanggal_create=None):
     """Refresh template (jika on) -> resolve xlsm -> fetch HPS (no COM) ->
     1 sesi COM gabungan (HPS + Master Data). Return status terstruktur.
     Urutan BENAR: Refresh dulu (hapus xlsm lama, copy fresh), baru
@@ -1233,7 +1287,11 @@ def _proses_excel_paket_pl(target_dir, kode_paket, jenis_pl, refresh_on,
     # 4. 1 sesi COM: tulis HPS + IsiDataPLByKode
     try:
         _res2 = _imd2.proses_hps_dan_master_data(
-            kode_paket, xlsm, hps_hasil, jenis_pl=jenis_pl
+            kode_paket,
+            xlsm,
+            hps_hasil,
+            jenis_pl=jenis_pl,
+            tanggal_create=tanggal_create,
         )
         _hps_r2 = _res2.get("hps", {})
         _md_r2  = _res2.get("md", {})

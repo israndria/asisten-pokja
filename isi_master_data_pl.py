@@ -8,6 +8,7 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 """
 
 import os
+from datetime import date, datetime, timedelta
 
 from person_name_utils import normalize_equipment_quantity
 
@@ -20,6 +21,83 @@ PAYMENT_METHOD_MC = (
     "Hasil Pekerjaan"
 )
 PAYMENT_METHOD_TERMIN = "Termin"
+
+
+def _coerce_create_folder_date(value=None) -> date:
+    """Normalisasi tanggal yang ditangkap sekali saat tombol create-folder diklik."""
+    if value is None:
+        return datetime.now().date()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise TypeError(f"tanggal create-folder tidak valid: {value!r}")
+
+
+def set_create_folder_dates(workbook, created_on=None, progress_cb=None) -> date:
+    """Isi tanggal BA Reviu dan Dokpil pada boundary workbook PL.
+
+    ``H8:H10`` adalah sumber hari/bulan/tahun BA Reviu, sedangkan ``C21``
+    adalah tanggal Dokpil. C21 sengaja ditulis sebagai nilai tanggal COM,
+    bukan string, supaya formula dan mail merge tetap menerima tanggal Excel.
+    """
+    created = _coerce_create_folder_date(created_on)
+    ws = workbook.Worksheets("@ Master Data")
+
+    for address, value in (
+        ("H8", created.day),
+        ("H9", created.month),
+        ("H10", created.year),
+    ):
+        cell = ws.Range(address)
+        cell.NumberFormat = "General"
+        cell.Value = value
+
+    dokpil_cell = ws.Range("C21")
+    dokpil_cell.NumberFormat = "[$-id-ID]dd mmmm yyyy"
+    # Value2 memakai serial Excel langsung. Mengirim Python datetime melalui
+    # COM dapat bergeser satu hari akibat konversi timezone regional Windows.
+    excel_epoch = date(1899, 12, 30)
+    dokpil_cell.Value2 = (created - excel_epoch).days
+
+    # Fail closed: jangan menyimpan workbook jika Excel tidak menerima nilai
+    # target secara utuh. Tidak memanggil Calculate agar cache UDF tetap aman.
+    for address, expected in (
+        ("H8", created.day),
+        ("H9", created.month),
+        ("H10", created.year),
+    ):
+        actual = ws.Range(address).Value
+        if int(float(actual)) != expected:
+            raise RuntimeError(
+                f"verifikasi {address} gagal: expected={expected!r}, actual={actual!r}"
+            )
+
+    actual_date = dokpil_cell.Value2
+    if isinstance(actual_date, datetime):
+        actual_date = actual_date.date()
+    elif isinstance(actual_date, date):
+        pass
+    elif all(hasattr(actual_date, part) for part in ("year", "month", "day")):
+        actual_date = date(
+            int(actual_date.year), int(actual_date.month), int(actual_date.day)
+        )
+    elif isinstance(actual_date, (int, float)):
+        actual_date = (datetime(1899, 12, 30) + timedelta(days=float(actual_date))).date()
+    else:
+        actual_date = None
+    if actual_date != created:
+        raise RuntimeError(
+            f"verifikasi C21 gagal: expected={created!r}, actual={actual_date!r}"
+        )
+
+    if progress_cb:
+        progress_cb(
+            "Tanggal create-folder: "
+            f"H8:H10={created.day:02d}/{created.month:02d}/{created.year}; "
+            f"C21={created.isoformat()}"
+        )
+    return created
 
 
 def _is_plpk_workbook(excel_path: str, family: str = "") -> bool:
@@ -586,7 +664,8 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                                 hps_hasil: dict = None,
                                 progress_cb=None,
                                 timeout: int = 90,
-                                jenis_pl: str = "") -> dict:
+                                jenis_pl: str = "",
+                                tanggal_create=None) -> dict:
     """1 sesi COM: tulis HPS (jika ada) lalu IsiDataPLByKode — 1x DispatchEx.
 
     Dipakai oleh _proses_excel_paket_pl() di app.py (bulk-create folder PL).
@@ -720,6 +799,18 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                         _log("Jenis kontrak PLPK dinormalisasi: Harga Satuan.")
                 except Exception as contract_e:
                     _log(f"WARN normalisasi jenis kontrak: {contract_e}")
+
+            # Create-folder menetapkan tanggal BA Reviu dan Dokpil sekali,
+            # setelah macro selesai menyalin cache SPSE yang bisa berupa teks.
+            # Jika boundary ini gagal, jangan simpan workbook parsial.
+            if md_res["ok"] and tanggal_create is not None:
+                try:
+                    set_create_folder_dates(wb, tanggal_create, _log)
+                except Exception as date_e:
+                    _log(f"WARN tanggal create-folder: {date_e}")
+                    raise RuntimeError(
+                        f"tanggal create-folder gagal diverifikasi: {date_e}"
+                    ) from date_e
 
             # Refresh @ Evaluasi setelah Master Data terisi
             if md_res["ok"]:

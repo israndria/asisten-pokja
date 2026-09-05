@@ -3360,6 +3360,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 ):
                     import time as _pl_time
                     _pl_t0 = _pl_time.perf_counter()
+                    _pl_create_date = datetime.now().date()
                     _pl_bp = st.progress(0.0)
                     _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0s", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
@@ -3473,6 +3474,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                     _pl_res.get("hps_hasil"),
+                                    tanggal_create=_pl_create_date,
                                 )
                                 for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (
@@ -7249,6 +7251,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 ):
                     import time as _pl_time
                     _pl_t0 = _pl_time.perf_counter()
+                    _pl_create_date = datetime.now().date()
                     _pl_bp = st.progress(0.0)
                     _pl_bulk_status = st.status(f"📁 Memproses {len(_pl_terpilih_plan)} paket terpilih... · ⏱ 0m 0s", expanded=True)
                     _pl_bulk_status_line = _pl_bulk_status.empty()
@@ -7365,6 +7368,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                     _pl_res["jenis_pl"], _pl_rt_refresh,
                                     _pl_res.get("template_dir") or _TEMPLATE_DIR_PL, _TEMPLATE_DIR_PL_PK,
                                     _pl_res.get("hps_hasil"),
+                                    tanggal_create=_pl_create_date,
                                 )
                                 for _el in _excel_res.get("logs", []):
                                     _icon = "📊" if _el.startswith("HPS:") else (

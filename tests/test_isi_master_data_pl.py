@@ -1,8 +1,57 @@
 """Regression gate resolver snapshot V2 untuk workflow PL."""
 
+from datetime import date, datetime
+
 from docx import Document
 
 import isi_master_data_pl
+
+
+class _FakeCell:
+    def __init__(self):
+        self.Value = None
+        self.Value2 = None
+        self.NumberFormat = None
+
+
+class _FakeSheet:
+    def __init__(self):
+        self.cells = {}
+
+    def Range(self, address):
+        return self.cells.setdefault(address, _FakeCell())
+
+
+class _FakeWorkbook:
+    def __init__(self):
+        self.sheet = _FakeSheet()
+
+    def Worksheets(self, name):
+        assert name == "@ Master Data"
+        return self.sheet
+
+
+def test_create_folder_dates_write_native_date_fields():
+    wb = _FakeWorkbook()
+    logs = []
+
+    result = isi_master_data_pl.set_create_folder_dates(
+        wb, date(2026, 9, 5), logs.append
+    )
+
+    assert result == date(2026, 9, 5)
+    assert wb.sheet.Range("H8").Value == 5
+    assert wb.sheet.Range("H9").Value == 9
+    assert wb.sheet.Range("H10").Value == 2026
+    assert wb.sheet.Range("C21").Value2 == 46270
+    assert wb.sheet.Range("C21").NumberFormat == "[$-id-ID]dd mmmm yyyy"
+    assert logs and "C21=2026-09-05" in logs[0]
+
+
+def test_create_folder_date_normalizer_accepts_datetime():
+    assert isi_master_data_pl._coerce_create_folder_date(
+        datetime(2026, 9, 5, 14, 30)
+    ) == date(2026, 9, 5)
 
 
 def test_master_data_v2_resolver_uses_sibling_procurement_core(monkeypatch, tmp_path):
