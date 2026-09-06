@@ -235,10 +235,34 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
         if item.get("template_dir"):
             _cmd_setup += ["--template-dir", item["template_dir"]]
         _cmd_setup.append(nama_folder)
-        r2 = _sp.run(
-            _cmd_setup,
-            capture_output=True, text=True, timeout=120, creationflags=cfg["no_win"],
-        )
+        # Provisioning PL menyentuh Google Drive + beberapa ZIP Word. Pada
+        # bulk paralel, satu operasi dapat transient gagal karena file sedang
+        # disinkronkan/terkunci. Setup engine idempotent: retry aman karena
+        # file existing hanya di-skip lalu seluruh mail merge direlink ulang.
+        _setup_attempts = 2
+        r2 = None
+        _setup_error = ""
+        for _setup_attempt in range(1, _setup_attempts + 1):
+            try:
+                r2 = _sp.run(
+                    _cmd_setup,
+                    capture_output=True, text=True, timeout=120,
+                    creationflags=cfg["no_win"],
+                )
+                _setup_error = (r2.stderr or r2.stdout or "").strip()
+            except _sp.TimeoutExpired as _setup_timeout:
+                r2 = None
+                _setup_error = f"timeout provisioning: {_setup_timeout}"
+            if r2 is not None and r2.returncode == 0:
+                break
+            if _setup_attempt < _setup_attempts:
+                log(
+                    f"⚠ Provisioning percobaan {_setup_attempt}/{_setup_attempts} "
+                    f"gagal; retry idempotent..."
+                )
+                _tm.sleep(2.0)
+        if r2 is None:
+            r2 = _sp.CompletedProcess(_cmd_setup, 1, "", _setup_error)
         if r2.returncode == 0:
             res["setup_ok"] = True
             res["output_ok"], _output_error = _pl_output_dasar_valid(target)
@@ -247,7 +271,7 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 _emit("output dasar tidak valid")
                 return res
         if r2.returncode != 0:
-            log(f"❌ Gagal buat folder: rc={r2.returncode}\nout_base={out_base!r}\nfolder={nama_folder!r}\n{r2.stderr}")
+            log(f"❌ Gagal buat folder: rc={r2.returncode}\nout_base={out_base!r}\nfolder={nama_folder!r}\n{_setup_error or r2.stderr}")
             _emit("❌ gagal buat folder")
             return res
         log("✅ Folder dibuat")
@@ -388,6 +412,26 @@ def _pl_proses_io_satu_paket(item, cookie_str, cfg):
                 _emit(f"📄 HPS {len(_hps['items'])} item")
             else:
                 _local_hps, _local_path = _local_hps_fallback(target, kode)
+                # HPS live dapat mengembalikan halaman kosong sesaat ketika
+                # endpoint SPSE baru selesai dibuat. scrape_hps_pl sudah punya
+                # retry internal; ini adalah satu retry lintas-fase terakhir
+                # sebelum paket dinyatakan retryable.
+                if not _local_hps:
+                    _tm.sleep(2.0)
+                    _retry_hps = _hps_eng.scrape_hps_pl(kode)
+                    if _retry_hps and _retry_hps.get("items"):
+                        _hps = _retry_hps
+                        _hps_eng._tulis_hps_ke_md(kode, _xlsm, _hps)
+                        res["hps_ok"] = True
+                        res["hps_hasil"] = _hps
+                        log(f"📄 HPS.md: {len(_hps['items'])} item (retry lintas-fase)")
+                        _emit(f"📄 HPS {len(_hps['items'])} item")
+                        _step("HPS.md", _t_step)
+                        res["ok"] = _pl_io_success(res, bool(cfg.get("dl_dokumen")))
+                        if not res["ok"]:
+                            log("⚠ I/O belum lengkap; paket tetap retryable")
+                        _emit("🏁 selesai I/O")
+                        return res
                 if _local_hps:
                     res["hps_ok"] = True
                     res["hps_hasil"] = _local_hps

@@ -246,6 +246,23 @@ def test_excel_finalization_uses_preloaded_hps_without_second_live_fetch(
     assert result["hps_source"] == "official_edit_page"
 
 
+def test_excel_finalization_rejects_overlapping_com_writer(tmp_path):
+    workbook = tmp_path / "0. BAPLPK - Uji.xlsm"
+    workbook.write_bytes(b"placeholder")
+
+    assert isi_master_data_pl._PL_COM_WRITER_LOCK.acquire(blocking=False)
+    try:
+        result = isi_master_data_pl.proses_hps_dan_master_data(
+            "PK-LOCK", str(workbook), timeout=0
+        )
+    finally:
+        isi_master_data_pl._PL_COM_WRITER_LOCK.release()
+
+    assert result["ok"] is False
+    assert result["hps"]["pesan"] == "COM writer busy"
+    assert "COM writer masih berjalan" in result["md"]["pesan"]
+
+
 @pytest.mark.parametrize(
     ("jenis_pl", "domain_sop", "other_domain_sop"),
     [

@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 from html import unescape
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
@@ -1135,8 +1136,18 @@ def _fetch_data_var_pl(kode_paket: str) -> list:
 
 def scrape_hps_pl(kode_paket: str) -> dict:
     """Scrape HPS PL via kode_paket (resolve DOKID live). Struktur sama dengan tender."""
-    page = _fetch_hps_page_pl(kode_paket)
-    raw = page.get("items", [])
+    # Pada bulk paralel SPSE kadang mengembalikan halaman 200 tanpa tabel item
+    # walau endpoint sebenarnya siap. Jangan menganggap itu HPS kosong permanen;
+    # ulangi fetch penuh (termasuk resolve DOKID) secara bounded.
+    page = {"items": []}
+    raw = []
+    for attempt in range(3):
+        page = _fetch_hps_page_pl(kode_paket) or {"items": []}
+        raw = page.get("items", []) or []
+        if raw:
+            break
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
     if not raw:
         return {
             "items": [], "total_nilai": 0.0, "total_nilai_bulat": 0.0,

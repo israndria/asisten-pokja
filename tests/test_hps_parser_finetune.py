@@ -135,3 +135,37 @@ def test_scrape_hps_pl_fallback_rounding_is_explicit_and_not_ceil(monkeypatch):
     assert result["total_nilai"] == 10.49
     assert result["total_nilai_bulat"] == 10.0
     assert result["nilai_hps_source"] == "line_item_sum_rounded_fallback"
+
+
+def test_scrape_hps_pl_retries_transient_empty_page(monkeypatch):
+    responses = [
+        {"items": [], "nilai_pagu": ""},
+        {"items": [], "nilai_pagu": ""},
+        {
+            "items": [
+                {
+                    "item": "Pekerjaan",
+                    "unit": "ls",
+                    "vol": 1,
+                    "harga": 100,
+                    "pajak": 0,
+                    "total_harga": 100,
+                    "kbki": "",
+                }
+            ],
+            "nilai_pagu": "",
+        },
+    ]
+    calls = []
+
+    def fake_fetch(_kode):
+        calls.append(True)
+        return responses.pop(0)
+
+    monkeypatch.setattr(hps_engine, "_fetch_hps_page_pl", fake_fetch)
+    monkeypatch.setattr(hps_engine.time, "sleep", lambda _seconds: None)
+
+    result = hps_engine.scrape_hps_pl("X")
+
+    assert len(calls) == 3
+    assert len(result["items"]) == 1

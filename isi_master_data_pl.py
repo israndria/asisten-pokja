@@ -8,6 +8,7 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 """
 
 import os
+import threading
 from datetime import date, datetime, timedelta
 
 from person_name_utils import normalize_equipment_quantity
@@ -21,6 +22,11 @@ PAYMENT_METHOD_MC = (
     "Hasil Pekerjaan"
 )
 PAYMENT_METHOD_TERMIN = "Termin"
+
+# Excel COM writer harus serial walau fase pemanggil memakai ThreadPoolExecutor.
+# Jika thread COM lama melewati timeout, lock tetap ditahan oleh worker sampai
+# finally selesai; panggilan berikutnya tidak akan membuka Excel kedua.
+_PL_COM_WRITER_LOCK = threading.Lock()
 
 
 def _coerce_create_folder_date(value=None) -> date:
@@ -663,7 +669,7 @@ def isi_master_data_pl(kode_paket: str, excel_path: str, progress_cb=None) -> di
 def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                                 hps_hasil: dict = None,
                                 progress_cb=None,
-                                timeout: int = 90,
+                                timeout: int = 180,
                                 jenis_pl: str = "",
                                 tanggal_create=None) -> dict:
     """1 sesi COM: tulis HPS (jika ada) lalu IsiDataPLByKode — 1x DispatchEx.
@@ -703,7 +709,24 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
         }
 
     result_box = [None]
-    import threading
+
+    # Timeout worker tidak boleh membuka jalan bagi writer kedua. Tunggu
+    # bounded; bila writer lama masih hidup, paket ini tetap retryable.
+    try:
+        lock_wait = max(float(timeout), 0.0)
+    except (TypeError, ValueError):
+        lock_wait = 180.0
+    if not _PL_COM_WRITER_LOCK.acquire(timeout=lock_wait):
+        message = (
+            f"COM writer masih berjalan setelah {lock_wait:g}s; "
+            "paket aman untuk diulang setelah Excel selesai"
+        )
+        _log(f"[WARN] {message}")
+        return {
+            "ok": False,
+            "hps": {"ok": False, "pesan": "COM writer busy", "count": 0},
+            "md": {"ok": False, "pesan": message},
+        }
 
     def _run_com():
         import win32com.client
@@ -846,8 +869,20 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
             except Exception:
                 pass
 
-    t = threading.Thread(target=_run_com, daemon=True)
-    t.start()
+    def _run_com_with_release():
+        try:
+            _run_com()
+        finally:
+            _PL_COM_WRITER_LOCK.release()
+
+    t = threading.Thread(target=_run_com_with_release, daemon=True)
+    try:
+        t.start()
+    except Exception:
+        _PL_COM_WRITER_LOCK.release()
+        raise
+    # Bulk finalisasi berjalan serial. Batas 180 detik memberi Excel waktu
+    # menghitung template PLPK besar tanpa membuka writer kedua.
     t.join(timeout=timeout)
     if t.is_alive():
         return {
