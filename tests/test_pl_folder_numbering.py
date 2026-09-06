@@ -1,5 +1,5 @@
 import config
-from pl_engine import _hydrate_nomor_urut_folder
+from pl_engine import _hydrate_nomor_urut_folder, nama_folder_dengan_suffix_ulang
 from pl_ui_helpers import plan_nomor_folder_pl
 
 
@@ -106,3 +106,17 @@ def test_reset_request_falls_back_after_new_pk_folder_exists(tmp_path):
     planned = result["assignments"]["paket-baru"]
     assert planned["nomor_urut"] == 72
     assert planned["source"] == "database"
+
+
+def test_repeat_folder_can_force_suffix_when_number_is_new(tmp_path):
+    root = tmp_path / "pk"
+    root.mkdir()
+    (root / "49. PLPK - Siring Bahu Jalan RT.4 Desa Matang Batas").mkdir()
+
+    result = nama_folder_dengan_suffix_ulang(
+        str(root),
+        "107. PLPK - Siring Bahu Jalan RT.4 Desa Matang Batas",
+        paksa_suffix=True,
+    )
+
+    assert result.endswith("(PL - Ulang)")

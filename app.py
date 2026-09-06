@@ -3298,7 +3298,11 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 if not _bno0:
                     continue
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
-                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
+                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(
+                    _bout_base0,
+                    _bnm_folder0,
+                    paksa_suffix=bool(_br0.get("is_ulang")),
+                )
                 _bnm_folder0 = pl_engine.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),
@@ -7194,7 +7198,11 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 if not _bno0:
                     continue
                 _bnm_folder0 = re.sub(r'[/<>:"\|?*]', "-", f"{_bno0}. {_bpfx0} - {_bnm0}").strip()
-                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(_bout_base0, _bnm_folder0)
+                _bnm_folder0 = pl_engine.nama_folder_dengan_suffix_ulang(
+                    _bout_base0,
+                    _bnm_folder0,
+                    paksa_suffix=bool(_br0.get("is_ulang")),
+                )
                 _bnm_folder0 = _pl_engine_utils.truncate_nama_folder(_bout_base0, _bnm_folder0)
                 _pl_bulk_plan.append({
                     "kode_paket": _br0.get("kode_paket", ""),

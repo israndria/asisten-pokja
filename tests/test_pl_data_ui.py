@@ -999,6 +999,26 @@ def test_strict_resolver_accepts_unique_short_physical_name(monkeypatch, tmp_pat
     assert nomor == "28"
 
 
+def test_strict_resolver_accepts_legacy_unsuffixed_repeat_folder(monkeypatch, tmp_path):
+    import config
+
+    root = tmp_path / "plpk"
+    folder = root / "115. PLPK - PEMBANGUNAN JEMBATAN BOX PANTAI CABE"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(config, "OUTPUT_DIR_PL_PK", str(root))
+
+    resolved, nomor = parse_kak_pl._resolve_folder_pl(
+        115,
+        "PEMBANGUNAN JEMBATAN BOX PANTAI CABE",
+        "PK",
+        is_ulang=True,
+        strict_name=True,
+    )
+
+    assert resolved == str(folder)
+    assert nomor == "115"
+
+
 def test_strict_resolver_rejects_ambiguous_short_physical_name(monkeypatch, tmp_path):
     import config
 

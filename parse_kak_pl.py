@@ -1218,8 +1218,11 @@ def _resolve_folder_pl(
     folder_name = f"{nomor}. PL{jenis} - {nama_clean}"
     candidate = os.path.join(root, folder_name)
     if os.path.isdir(candidate):
-        if not is_ulang:
-            return _ret(candidate)
+        # Paket ulang lama pernah terbuat tanpa suffix ``(PL - Ulang)``
+        # karena allocator hanya melihat folder dengan nomor yang sama.
+        # Nomor + nama exact tetap cukup spesifik dan aman sebagai fallback;
+        # folder bersuffix di atas tetap selalu diprioritaskan bila ada.
+        return _ret(candidate)
 
     # Folder PL dibuat memakai truncate_nama_folder() agar workbook tidak
     # melewati batas MAX_PATH Windows. Strict mode tetap boleh menerima nama
