@@ -782,6 +782,74 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
     return _get_page()
 
 
+async def _page_for_url_with_retry(
+    url: str,
+    *,
+    ready_selector: str = "body",
+    navigation_timeout: int = 60000,
+    attempts: int = 3,
+):
+    """Resolve satu tab URL target tanpa duplikasi dan retry navigasi.
+
+    Dipakai oleh engine yang membaca halaman SPSE dinamis. Connect CDP tidak
+    menavigasi dulu; tab target yang sudah terbuka dipakai ulang. Retry
+    menggunakan objek tab sama agar timeout tidak menumpuk tab baru.
+    """
+    import asyncio
+
+    target_url = str(url).rstrip("/")
+    last_error = None
+    page = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            await _connect_cdp_async("", navigate=False)
+            context = _get_ctx()
+            if page is None or page.is_closed():
+                pages = [
+                    candidate
+                    for candidate in (getattr(context, "pages", []) or [])
+                    if not candidate.is_closed()
+                ]
+                page = next(
+                    (
+                        candidate
+                        for candidate in pages
+                        if str(getattr(candidate, "url", "")).rstrip("/") == target_url
+                    ),
+                    None,
+                )
+                if page is None:
+                    page = await context.new_page()
+
+            if attempt > 0 or str(getattr(page, "url", "")).rstrip("/") != target_url:
+                await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=int(navigation_timeout),
+                )
+            else:
+                await page.wait_for_load_state(
+                    "domcontentloaded",
+                    timeout=int(navigation_timeout),
+                )
+            await page.wait_for_selector(
+                ready_selector,
+                timeout=min(int(navigation_timeout), 20000),
+            )
+            _set_page(page)
+            return page
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 >= max(1, int(attempts)):
+                break
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+    raise RuntimeError(
+        f"Halaman SPSE belum siap setelah {max(1, int(attempts))} percobaan: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
 def _cek_cdp_aktif() -> bool:
     """Cek apakah endpoint DevTools Brave benar-benar sehat.
 

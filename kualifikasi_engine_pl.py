@@ -48,6 +48,16 @@ def _checklist_output_path(dest_folder: str, slug_nama: str) -> str:
     return os.path.join(dest_folder, "checklist_kualifikasi.pdf")
 
 
+async def _participant_page_with_retry(url: str):
+    """Dapatkan halaman peserta SPSE dengan guard CDP bersama."""
+    return await spse_browser._page_for_url_with_retry(
+        url,
+        ready_selector="table",
+        navigation_timeout=60000,
+        attempts=3,
+    )
+
+
 def fetch_peserta_pl(kode_paket: str) -> dict:
     """
     Scrape daftar peserta dari /pesertanontender/{kode}/penawaran via CDP.
@@ -60,7 +70,7 @@ def fetch_peserta_pl(kode_paket: str) -> dict:
     url = f"{base}/pesertanontender/{kode_paket}/penawaran"
 
     async def _fetch():
-        page = await spse_browser._connect_cdp_async(url, navigate=True)
+        page = await _participant_page_with_retry(url)
         await asyncio.sleep(2)
         return await page.evaluate("""() => {
             var peserta = [];

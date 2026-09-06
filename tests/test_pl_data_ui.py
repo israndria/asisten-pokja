@@ -1156,7 +1156,7 @@ def test_update_hps_paket_pl_backs_up_workbook_before_official_writer(tmp_path, 
     assert result["count"] == 3
     assert calls["kode"] == "PK-1"
     assert calls["writer"] == ("PK-1", str(workbook), logs.append)
-    backup = tmp_path / result["backup_path"].split("\\")[-1]
+    backup = pl_ui_helpers.pathlib.Path(result["backup_path"])
     assert backup.is_file()
     assert backup.read_bytes() == workbook.read_bytes()
     assert (tmp_path / "_PROMPT_AUDIT_PERUBAHAN_HPS_AGY.md").is_file()
@@ -1223,6 +1223,7 @@ def test_refresh_evaluasi_pl_only_runs_evaluation_macro_without_master_writer(
     assert [call[1] for call in calls if isinstance(call, tuple) and call[0] == "Run"] == [
         "ModDraftPaketPL.SetSilentPL",
         "ModDraftPaketPL.IsiEvaluasiPLStandalone",
+        "ModDraftPaketPL.SetSilentPL",
     ]
     assert not any(
         isinstance(call, tuple)

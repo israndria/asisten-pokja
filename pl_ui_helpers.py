@@ -970,11 +970,21 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
         excel.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
         # Kalkulasi scoped saja. CalculateFull/CalculateUntilAsyncQueriesDone
         # pernah mengubah cache UDF tanggal menjadi #NAME? pada workbook PL.
-        wb.Worksheets("@ Evaluasi").Calculate()
-        try:
-            wb.Worksheets("satu_data").Calculate()
-        except Exception:
-            pass
+        # Urutan wajib mengikuti dependensi: sumber -> nego -> evaluasi ->
+        # mail-merge. Menghitung @ Evaluasi lebih dulu meninggalkan cache
+        # lama (contoh total Rp8 juta, padahal 7.2 sudah Rp399 juta).
+        for _sheet_name in (
+            "5. HPS",
+            "6. Penawaran",
+            "6. Harga Penawaran",
+            "7.2 Dengan Nego",
+            "@ Evaluasi",
+            "satu_data",
+        ):
+            try:
+                wb.Worksheets(_sheet_name).Calculate()
+            except Exception:
+                pass
         after_errors = _scan_pl_formula_errors(wb)
         if after_errors:
             return {
