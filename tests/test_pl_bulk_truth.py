@@ -568,6 +568,7 @@ def test_pk_download_force_clean_is_scoped_to_document_subfolders(monkeypatch, t
         path = tmp_path / subfolder
         path.mkdir(parents=True, exist_ok=True)
         (path / "old.pdf").write_text("remove", encoding="utf-8")
+        (path / "desktop.ini").write_text("[.ShellClassInfo]", encoding="utf-8")
 
     result = pl_engine_plpk.download_dokumen_paket_pl(
         "X", str(tmp_path), cookie_str="SPSE_SESSION=test", force_clean=True,
@@ -579,6 +580,10 @@ def test_pk_download_force_clean_is_scoped_to_document_subfolders(monkeypatch, t
     assert all(path.exists() for path in protected)
     assert all(
         not (tmp_path / subfolder / "old.pdf").exists()
+        for subfolder in set(pl_engine_plpk.SUBFOLDER_DOK_PPK.values())
+    )
+    assert all(
+        (tmp_path / subfolder / "desktop.ini").exists()
         for subfolder in set(pl_engine_plpk.SUBFOLDER_DOK_PPK.values())
     )
 

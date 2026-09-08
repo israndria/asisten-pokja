@@ -48,14 +48,25 @@ def _submit_url(kode: str) -> str:
 
 def scrap_token_pl(kode: str, cookie_str: str) -> dict:
     """GET halaman kirimpesan PL, ambil authenticityToken + penerima + nama paket."""
-    resp = requests.get(
-        _get_url(kode),
-        headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"},
-        timeout=15,
-        allow_redirects=True,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"GET kirimpesan gagal: HTTP {resp.status_code}")
+    last_err = None
+    resp = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(
+                _get_url(kode),
+                headers={"Cookie": cookie_str, "User-Agent": "Mozilla/5.0"},
+                timeout=45,
+                allow_redirects=True,
+            )
+            if resp.status_code == 200:
+                break
+        except Exception as exc:
+            last_err = exc
+            time.sleep(2)
+
+    if resp is None or resp.status_code != 200:
+        err_msg = f"HTTP {resp.status_code}" if resp is not None else str(last_err)
+        raise RuntimeError(f"GET kirimpesan gagal: {err_msg}")
 
     soup = BeautifulSoup(resp.text, "html.parser")
     token_el = soup.find("input", {"name": "authenticityToken"})
@@ -108,7 +119,7 @@ def upload_lampiran_pl(kode: str, file_bytes: bytes, file_name: str, cookie_str:
                 "isArchieve": "true",
             },
             headers=headers,
-            timeout=15,
+            timeout=35,
         )
         r1.raise_for_status()
         data = r1.json()
@@ -227,7 +238,7 @@ def kirim_undangan_pl(
                 "Referer": _get_url(kode),
                 "Content-Type": "application/x-www-form-urlencoded",
             },
-            timeout=20,
+            timeout=35,
             allow_redirects=True,
         )
     except Exception as e:

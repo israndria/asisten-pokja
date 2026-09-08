@@ -759,6 +759,9 @@ SUBFOLDER_DOK_PPK = {
     "Nota Dinas PPK":            "4. Informasi Lainnya",
 }
 
+# Metadata shell/icon folder wajib dipertahankan saat cleanup download.
+_PRESERVED_CLEANUP_NAMES = frozenset({"desktop.ini"})
+
 
 def buat_subfolder_dokumen(folder_paket: str) -> list:
     """Buat semua subfolder dokumen di folder_paket. Return list subfolder yang baru dibuat."""
@@ -828,6 +831,8 @@ def download_dokumen_paket_pl(
                 continue
             for name in os.listdir(sub_path):
                 path = os.path.join(sub_path, name)
+                if name.casefold() in _PRESERVED_CLEANUP_NAMES:
+                    continue
                 if os.path.isfile(path):
                     os.remove(path)
 
