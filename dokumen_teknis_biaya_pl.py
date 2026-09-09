@@ -28,8 +28,9 @@ def _quiet():
 BASE = SPSE_BASE_URL.rstrip("/")
 
 
-def _headers(referer: str = "") -> dict:
-    cookie = spse_browser.get_spse_cookies()
+def _headers(referer: str = "", cookie: str | None = None) -> dict:
+    if cookie is None:
+        cookie = spse_browser.get_spse_cookies()
     return {
         "Cookie": cookie,
         "User-Agent": "Mozilla/5.0",
@@ -48,13 +49,24 @@ def fetch_dokumen_teknis_biaya_pl(id_nontender: str) -> dict:
     Halaman hanya terbuka setelah evaluasi admin+kualifikasi LULUS.
     Return: {"ok": bool, "dokumen": [{"nama","url"}], "pesan": str}
     """
-    import asyncio
-
     url_detail = f"{BASE}/evaluasinontender/{id_nontender}/detail"
 
     async def _fetch():
         page = await spse_browser._connect_cdp_async(url_detail, navigate=True)
-        await asyncio.sleep(2)
+        # Tunggu section dokumen/link hasil render. Delay tetap 2 detik tidak
+        # menjamin AJAX selesai dan selalu menahan halaman yang sudah siap.
+        try:
+            await page.wait_for_function(
+                """() => Boolean(
+                    document.querySelector("#teknis, #harga") && (
+                        document.querySelector("#teknis a[href*='/dlsec/'], #teknis a[href*='/dl/'], #harga a[href*='/dlsec/'], #harga a[href*='/dl/']") ||
+                        document.querySelector(".alert-danger, .alert-warning")
+                    )
+                )""",
+                timeout=10000,
+            )
+        except Exception:
+            pass
         result = await page.evaluate("""() => {
             // Dokumen teknis/biaya PL pakai /dlsec/ bukan /dl/
             // Ambil dari section #teknis dan #harga saja
@@ -123,16 +135,27 @@ def _promote_download(part_path: str, actual_path: str) -> None:
             raise replace_error
 
 
-def _download_file(url: str, dest_path: str, max_attempts: int = 3) -> dict:
+def _download_file(
+    url: str,
+    dest_path: str,
+    max_attempts: int = 3,
+    *,
+    http_session=None,
+    cookie_str: str | None = None,
+) -> dict:
     """Download atomik dengan retry; file parsial tidak dianggap sukses."""
     errors = []
+    client = http_session or requests
     for attempt in range(1, max_attempts + 1):
         response = None
         part_path = ""
         try:
-            response = requests.get(
+            response = client.get(
                 url,
-                headers=_headers(BASE + "/evaluasinontender"),
+                headers=_headers(
+                    referer=BASE + "/evaluasinontender",
+                    cookie=cookie_str,
+                ),
                 timeout=(20, 180),
                 stream=True,
             )
@@ -218,7 +241,105 @@ def _download_file(url: str, dest_path: str, max_attempts: int = 3) -> dict:
     }
 
 
-def _convert_to_pdf(src_path: str, dest_pdf: str) -> bool:
+class _OfficeConversionSession:
+    """Reuse satu instance Word/Excel untuk konversi satu peserta."""
+
+    def __init__(self):
+        self._pythoncom = None
+        self._word = None
+        self._excel = None
+
+    def _ensure_com(self):
+        if self._pythoncom is not None:
+            return
+        import pythoncom
+
+        pythoncom.CoInitialize()
+        self._pythoncom = pythoncom
+
+    def _word_app(self):
+        self._ensure_com()
+        if self._word is None:
+            import win32com.client
+
+            self._word = win32com.client.DispatchEx("Word.Application")
+            self._word.Visible = False
+            self._word.DisplayAlerts = False
+        return self._word
+
+    def _excel_app(self):
+        self._ensure_com()
+        if self._excel is None:
+            import win32com.client
+
+            self._excel = win32com.client.DispatchEx("Excel.Application")
+            self._excel.Visible = False
+            self._excel.DisplayAlerts = False
+            self._excel.EnableEvents = False
+            self._excel.AutomationSecurity = 3
+        return self._excel
+
+    def convert(self, src_path: str, dest_pdf: str) -> bool:
+        ext = os.path.splitext(src_path)[1].lower()
+        if ext in (".docx", ".doc"):
+            doc = None
+            try:
+                word = self._word_app()
+                doc = word.Documents.Open(os.path.abspath(src_path), ReadOnly=True)
+                doc.SaveAs(os.path.abspath(dest_pdf), FileFormat=17)
+                return True
+            except Exception:
+                return False
+            finally:
+                if doc is not None:
+                    try:
+                        doc.Close(False)
+                    except Exception:
+                        pass
+
+        if ext in (".xlsx", ".xls"):
+            wb = None
+            try:
+                excel = self._excel_app()
+                wb = excel.Workbooks.Open(os.path.abspath(src_path), ReadOnly=True)
+                wb.ExportAsFixedFormat(0, os.path.abspath(dest_pdf))
+                return True
+            except Exception:
+                return False
+            finally:
+                if wb is not None:
+                    try:
+                        wb.Close(False)
+                    except Exception:
+                        pass
+
+        return False
+
+    def close(self):
+        for app_name in ("_word", "_excel"):
+            app = getattr(self, app_name)
+            if app is None:
+                continue
+            try:
+                app.Quit()
+            except Exception:
+                pass
+            setattr(self, app_name, None)
+        if self._pythoncom is not None:
+            try:
+                self._pythoncom.CoUninitialize()
+            except Exception:
+                pass
+            self._pythoncom = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+
+def _convert_to_pdf(src_path: str, dest_pdf: str, office=None) -> bool:
     """
     Konversi file ke PDF.
     .pdf: copy
@@ -229,6 +350,9 @@ def _convert_to_pdf(src_path: str, dest_pdf: str) -> bool:
     """
     import shutil
     ext = os.path.splitext(src_path)[1].lower()
+
+    if office is not None and ext in (".docx", ".doc", ".xlsx", ".xls"):
+        return office.convert(src_path, dest_pdf)
 
     if ext == ".pdf":
         if src_path != dest_pdf:
@@ -384,6 +508,57 @@ def download_teknis_biaya_peserta(
     folder_paket: str,
     urutan: int,
     progress_cb=None,
+    *,
+    http_session=None,
+    office=None,
+) -> dict:
+    """Download satu peserta dengan resource HTTP/Office yang dapat dipakai ulang."""
+    owns_http_session = http_session is None
+    owns_office = office is None
+    if http_session is None:
+        http_session = requests.Session()
+    if office is None:
+        office = _OfficeConversionSession()
+    try:
+        try:
+            cookie_str = spse_browser.get_spse_cookies()
+        except Exception:
+            # Pertahankan fallback lama: _download_file akan mencoba mengambil
+            # cookie ulang per attempt jika snapshot cookie awal gagal.
+            cookie_str = None
+        return _download_teknis_biaya_peserta_impl(
+            id_nontender=id_nontender,
+            nama_peserta=nama_peserta,
+            folder_paket=folder_paket,
+            urutan=urutan,
+            progress_cb=progress_cb,
+            http_session=http_session,
+            office=office,
+            cookie_str=cookie_str,
+        )
+    finally:
+        if owns_office:
+            try:
+                office.close()
+            except Exception:
+                pass
+        if owns_http_session:
+            try:
+                http_session.close()
+            except Exception:
+                pass
+
+
+def _download_teknis_biaya_peserta_impl(
+    id_nontender: str,
+    nama_peserta: str,
+    folder_paket: str,
+    urutan: int,
+    progress_cb=None,
+    *,
+    http_session,
+    office,
+    cookie_str: str | None,
 ) -> dict:
     """
     Download dokumen teknis/biaya 1 peserta → konversi ke PDF → gabung pengepul.
@@ -418,7 +593,12 @@ def download_teknis_biaya_peserta(
         if not any(nama_file.lower().endswith(ext) for ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".zip", ".rar", ".7z")):
             nama_file += ".pdf"
         dest_file = os.path.join(dest_folder, nama_file)
-        res_dl = _download_file(dok["url"], dest_file)
+        res_dl = _download_file(
+            dok["url"],
+            dest_file,
+            http_session=http_session,
+            cookie_str=cookie_str,
+        )
         if not res_dl["ok"]:
             _log(f"    [GAGAL] {res_dl['pesan']}")
             failed_documents.append(
@@ -443,7 +623,7 @@ def download_teknis_biaya_peserta(
                     files_pdf.append(ef)
                 elif ef_ext in (".docx", ".doc", ".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".bmp", ".tiff"):
                     ef_pdf = os.path.splitext(ef)[0] + ".pdf"
-                    if _convert_to_pdf(ef, ef_pdf):
+                    if _convert_to_pdf(ef, ef_pdf, office=office):
                         files_pdf.append(ef_pdf)
                         _log(f"    Konversi {ef_ext} -> PDF OK ({os.path.basename(ef)})")
                     else:
@@ -453,7 +633,7 @@ def download_teknis_biaya_peserta(
         # Konversi ke PDF jika perlu
         if ext != ".pdf":
             pdf_path = os.path.splitext(actual_path)[0] + ".pdf"
-            ok_conv = _convert_to_pdf(actual_path, pdf_path)
+            ok_conv = _convert_to_pdf(actual_path, pdf_path, office=office)
             if ok_conv:
                 files_pdf.append(pdf_path)
                 _log(f"    Konversi {ext} -> PDF OK")
@@ -467,11 +647,27 @@ def download_teknis_biaya_peserta(
     gabungan_path = os.path.join(dest_folder, gabungan_nama)
 
     # Scan ulang folder — include PDF yang mungkin sudah ada sebelumnya
-    semua_pdf = sorted([
+    semua_pdf = []
+    seen_pdf = set()
+    for pdf_path in files_pdf:
+        normalized = os.path.normcase(os.path.abspath(pdf_path))
+        if (
+            os.path.isfile(pdf_path)
+            and normalized not in seen_pdf
+            and os.path.basename(pdf_path) != gabungan_nama
+            and not os.path.basename(pdf_path).startswith("~$")
+        ):
+            semua_pdf.append(pdf_path)
+            seen_pdf.add(normalized)
+    semua_pdf.extend(
         os.path.join(dest_folder, f)
-        for f in os.listdir(dest_folder)
-        if f.lower().endswith(".pdf") and f != gabungan_nama and not f.startswith("~$")
-    ])
+        for f in sorted(os.listdir(dest_folder))
+        if f.lower().endswith(".pdf")
+        and f != gabungan_nama
+        and not f.startswith("~$")
+        and os.path.normcase(os.path.abspath(os.path.join(dest_folder, f)))
+        not in seen_pdf
+    )
 
     if semua_pdf:
         _log(f"  Gabung {len(semua_pdf)} PDF -> {gabungan_nama}...")

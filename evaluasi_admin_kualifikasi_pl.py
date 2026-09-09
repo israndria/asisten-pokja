@@ -48,7 +48,18 @@ def scrape_peserta_evaluasi(kode_paket: str) -> dict:
 
     async def _fetch():
         page = await spse_browser._connect_cdp_async(url, navigate=True)
-        await asyncio.sleep(2)
+        # Tunggu hasil render yang benar-benar dibutuhkan. Delay tetap 2 detik
+        # membuat paket cepat ikut menunggu dan belum menjamin DOM siap.
+        try:
+            await page.wait_for_function(
+                """() => Boolean(
+                    document.querySelector("a[href*='/evaluasinontender/'][href*='/detail']") ||
+                    document.querySelector(".alert-danger, .alert-warning, table tbody tr, .dataTables_empty")
+                )""",
+                timeout=10000,
+            )
+        except Exception:
+            pass
         return await page.evaluate("""() => {
             var peserta = [];
             document.querySelectorAll('a[href]').forEach(function(a) {
@@ -72,51 +83,96 @@ def scrape_peserta_evaluasi(kode_paket: str) -> dict:
         return {"ok": False, "peserta": [], "pesan": str(e)}
 
 
-def _scrape_form_evaluasi(id_nontender: str) -> dict:
+def _scrape_form_evaluasi(
+    id_nontender: str,
+    *,
+    need_kualifikasi: bool = True,
+    need_teknis: bool = False,
+    need_harga: bool = False,
+) -> dict:
     """
     GET /evaluasinontender/{id_nontender}/detail via CDP → scrape semua form evaluasi.
     Pakai CDP bukan requests karena SPSE sering timeout via direct HTTP.
     """
-    import asyncio
-
     url = f"{BASE}/evaluasinontender/{id_nontender}/detail"
 
     async def _fetch():
         page = await spse_browser._connect_cdp_async(url, navigate=True)
-        await asyncio.sleep(2)
+        # Tunggu struktur form yang menjadi sumber checklist. Jangan pakai
+        # sleep tetap: halaman SPSE kadang siap <1 detik, kadang perlu retry.
+        try:
+            await page.wait_for_selector(
+                "form, input[name='authenticityToken']",
+                state="attached",
+                timeout=10000,
+            )
+        except Exception:
+            pass
 
-        # Klik Validasi KSWP via dispatchEvent (tombol ada di tab tersembunyi → Playwright .click() timeout)
-        # Server update hidden input[name='kswp'] via JS XHR callback setelah klik
-        await page.evaluate("""async () => {
-            // Aktifkan tab kualifikasi dulu agar event listener terpasang
-            var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a'));
-            var kualTab = tabs.find(function(t) { return t.innerText.toLowerCase().includes('kualifikasi'); });
-            if (kualTab) kualTab.click();
-            await new Promise(function(r) { setTimeout(r, 300); });
+        # Klik Validasi KSWP hanya jika tahap kualifikasi memang diperlukan.
+        # Nilai hidden kswp dipoll sampai tersedia agar tidak menunggu 2.5 detik
+        # ketika XHR selesai lebih cepat.
+        if need_kualifikasi:
+            await page.evaluate("""async () => {
+                var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a'));
+                var kualTab = tabs.find(function(t) {
+                    return t.innerText.toLowerCase().includes('kualifikasi');
+                });
+                if (kualTab) kualTab.click();
 
-            // Dispatch click pada tombol Validasi KSWP
-            var btn = Array.from(document.querySelectorAll('a')).find(function(el) {
-                return el.innerText.trim() === 'Validasi KSWP';
-            });
-            if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                var clickDeadline = Date.now() + 3000;
+                while (Date.now() < clickDeadline) {
+                    var btn = Array.from(document.querySelectorAll('a')).find(function(el) {
+                        return el.innerText.trim() === 'Validasi KSWP';
+                    });
+                    if (btn) {
+                        btn.dispatchEvent(new MouseEvent('click', {
+                            bubbles: true, cancelable: true
+                        }));
+                        break;
+                    }
+                    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+                }
 
-            // Tunggu XHR selesai + DOM update
-            await new Promise(function(r) { setTimeout(r, 2500); });
-        }""")
-        await asyncio.sleep(0.5)
+                var deadline = Date.now() + 5000;
+                while (Date.now() < deadline) {
+                    var kswp = document.querySelector("input[name='kswp']");
+                    if (kswp && kswp.value) return;
+                    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+                }
+            }""")
 
-        # Klik tab harga agar form harga ter-render (SPSE lazy-render per tab)
-        await page.evaluate("""async () => {
-            var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a, [data-toggle=tab]'));
-            var hargaTab = tabs.find(function(t) {
-                return t.innerText.toLowerCase().includes('harga') || (t.href && t.href.includes('harga'));
-            });
-            if (hargaTab) {
-                hargaTab.click();
-                await new Promise(function(r) { setTimeout(r, 500); });
-            }
-        }""")
-        await asyncio.sleep(0.5)
+        # SPSE merender checklist teknis/harga per tab. Klik hanya tab yang
+        # dibutuhkan, lalu tunggu form target muncul.
+        if need_teknis:
+            await page.evaluate("""async () => {
+                var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a, [data-toggle=tab]'));
+                var tab = tabs.find(function(t) {
+                    return t.innerText.toLowerCase().includes('teknis') ||
+                           (t.href && t.href.includes('teknis'));
+                });
+                if (tab) tab.click();
+                var deadline = Date.now() + 7000;
+                while (Date.now() < deadline) {
+                    if (document.querySelector("form[action*='checklist_teknis']")) return;
+                    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+                }
+            }""")
+
+        if need_harga:
+            await page.evaluate("""async () => {
+                var tabs = Array.from(document.querySelectorAll('.nav-tabs a, .nav a, [data-toggle=tab]'));
+                var tab = tabs.find(function(t) {
+                    return t.innerText.toLowerCase().includes('harga') ||
+                           (t.href && t.href.includes('harga'));
+                });
+                if (tab) tab.click();
+                var deadline = Date.now() + 7000;
+                while (Date.now() < deadline) {
+                    if (document.querySelector("form[action*='checklist_harga']")) return;
+                    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+                }
+            }""")
 
         return await page.evaluate("""() => {
             var result = {
@@ -232,7 +288,12 @@ def submit_evaluasi_lulus_peserta(
                 pass
 
     _log(f"  Scrape form evaluasi id={id_nontender}...")
-    form_data = _scrape_form_evaluasi(id_nontender)
+    form_data = _scrape_form_evaluasi(
+        id_nontender,
+        need_kualifikasi=kualifikasi,
+        need_teknis=teknis,
+        need_harga=harga,
+    )
     if "error" in form_data:
         return {"ok": False, "admin_ok": False, "kualifikasi_ok": False, "teknis_ok": False, "harga_ok": False, "pesan": form_data["error"]}
 
@@ -281,7 +342,11 @@ def submit_evaluasi_lulus_peserta(
             # SPSE gating: form teknis hanya muncul setelah admin+kual LULUS di server.
             # Re-scrape halaman untuk ambil form teknis yang kini sudah ter-render.
             _log("  Re-scrape form teknis (SPSE gating)...")
-            form_data2 = _scrape_form_evaluasi(id_nontender)
+            form_data2 = _scrape_form_evaluasi(
+                id_nontender,
+                need_kualifikasi=False,
+                need_teknis=True,
+            )
             if "error" not in form_data2:
                 vals_tek = form_data2.get("checklist_teknis", [])
                 token = form_data2.get("token") or token
@@ -302,7 +367,11 @@ def submit_evaluasi_lulus_peserta(
             # SPSE gating: form harga hanya muncul setelah teknis LULUS di server.
             # Re-scrape untuk ambil form harga.
             _log("  Re-scrape form harga (SPSE gating)...")
-            form_data_hrg = _scrape_form_evaluasi(id_nontender)
+            form_data_hrg = _scrape_form_evaluasi(
+                id_nontender,
+                need_kualifikasi=False,
+                need_harga=True,
+            )
             if "error" not in form_data_hrg:
                 vals_hrg = form_data_hrg.get("checklist_harga", [])
                 harga_terkoreksi = form_data_hrg.get("harga_terkoreksi") or harga_terkoreksi
@@ -343,6 +412,7 @@ def evaluasi_batch_lulus(
     teknis: bool = False,
     harga: bool = False,
     progress_cb=None,
+    peserta_list: list[dict] | None = None,
 ) -> dict:
     """
     Scrape list peserta dari /evaluasinontender/{kode_paket} lalu submit LULUS semua.
@@ -360,12 +430,15 @@ def evaluasi_batch_lulus(
             except Exception:
                 pass
 
-    _log(f"Scrape peserta evaluasi paket {kode_paket}...")
-    res_peserta = scrape_peserta_evaluasi(kode_paket)
-    if not res_peserta["ok"]:
-        return {"ok": False, "hasil": [], "ringkasan": res_peserta["pesan"]}
-
-    peserta_list = res_peserta["peserta"]
+    if peserta_list is None:
+        _log(f"Scrape peserta evaluasi paket {kode_paket}...")
+        res_peserta = scrape_peserta_evaluasi(kode_paket)
+        if not res_peserta["ok"]:
+            return {"ok": False, "hasil": [], "ringkasan": res_peserta["pesan"]}
+        peserta_list = res_peserta["peserta"]
+    else:
+        peserta_list = list(peserta_list)
+        _log(f"Pakai {len(peserta_list)} peserta dari scrape awal")
     _log(f"{len(peserta_list)} peserta ditemukan")
 
     hasil = []
@@ -413,12 +486,23 @@ def evaluasi_batch_lulus(
     if kualifikasi and any(h["kualifikasi_ok"] for h in hasil):
         _log("Auto-konfirmasi verifikasi data SIKaP...")
         try:
-            import asyncio
             url_list = f"{BASE}/evaluasinontender/{kode_paket}"
 
             async def _process_sikap():
                 page = await spse_browser._connect_cdp_async(url_list, navigate=True)
-                await asyncio.sleep(2)
+                try:
+                    await page.wait_for_function(
+                        """() => Boolean(
+                            document.querySelector("input[name='authenticityToken']") &&
+                            (
+                                document.querySelector("a[href*='konfirmasi_verifikasi']") ||
+                                document.querySelector(".alert-danger, .alert-warning, table tbody tr, .dataTables_empty")
+                            )
+                        )""",
+                        timeout=10000,
+                    )
+                except Exception:
+                    pass
                 return await page.evaluate("""() => {
                     var token = "";
                     var f = document.querySelector("input[name='authenticityToken']");

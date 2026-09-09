@@ -263,7 +263,14 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
 
     Return: {"ok": bool, "pesan": str, "total_penawaran": float}
     """
-    import os, glob, pythoncom, win32com.client
+    import glob
+    import os
+    import shutil
+    import uuid
+    from datetime import datetime
+
+    import pythoncom
+    import win32com.client
 
     def _log(msg):
         if progress_cb:
@@ -298,9 +305,40 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
     xlsm_path = xlsm_files[0]
     _log(f"  Tulis ke {os.path.basename(xlsm_path)} → sheet '6. Penawaran'...")
 
+    # Simpan backup recoverable sebelum membuka writer COM. Folder khusus
+    # tidak ikut dipilih resolver workbook aktif dan menjaga pemulihan bila
+    # Excel gagal menyimpan workbook macro-enabled.
+    backup_dir = os.path.join(os.path.dirname(xlsm_path), ".vba-backup")
+    backup_path = os.path.join(
+        backup_dir,
+        f"{os.path.splitext(os.path.basename(xlsm_path))[0]}"
+        f".backup_tab8_{datetime.now():%Y%m%d-%H%M%S}_{uuid.uuid4().hex[:8]}.xlsm",
+    )
+    try:
+        os.makedirs(backup_dir, exist_ok=True)
+        try:
+            from dokumen_ppk_engine import _fit_local_destination
+
+            backup_path, _ = _fit_local_destination(backup_path)
+        except Exception:
+            pass
+        shutil.copy2(xlsm_path, backup_path)
+        _log(f"  Backup Tab 8: {os.path.basename(backup_path)}")
+    except Exception as e:
+        return {
+            "ok": False,
+            "pesan": f"Backup workbook gagal: {e}",
+            "total_penawaran": total,
+            "backup_path": "",
+        }
+
     # 3. Tulis via COM
+    com_initialized = False
+    xl = None
+    wb = None
     try:
         pythoncom.CoInitialize()
+        com_initialized = True
         xl = win32com.client.DispatchEx("Excel.Application")
         xl.Visible = False
         xl.DisplayAlerts = False
@@ -323,12 +361,24 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
                     break
             if ws is None:
                 wb.Close(False)
-                return {"ok": False, "pesan": "Sheet '6. Penawaran' tidak ditemukan", "total_penawaran": total}
+                return {
+                    "ok": False,
+                    "pesan": "Sheet '6. Penawaran' tidak ditemukan",
+                    "total_penawaran": total,
+                    "backup_path": backup_path,
+                }
 
-            # Hapus data lama (baris 2 dst)
-            last_row = ws.UsedRange.Rows.Count
-            if last_row > 1:
-                ws.Rows(f"2:{last_row}").Delete()
+            # Hapus nilai data lama tanpa menghapus baris.
+            # Rows.Delete mengubah referensi lintas-sheet 7.2 Dengan Nego
+            # menjadi #REF!; struktur baris harus dipertahankan.
+            # UsedRange dapat membesar karena formatting sampai puluhan ribu
+            # baris. Data aktif selalu memiliki No/Jenis di kolom A/B; End(xlUp)
+            # menghindari ClearContents terhadap baris formatting kosong.
+            last_a = ws.Cells(ws.Rows.Count, 1).End(-4162).Row  # xlUp
+            last_b = ws.Cells(ws.Rows.Count, 2).End(-4162).Row  # xlUp
+            last_row = max(int(last_a), int(last_b))
+            if last_row >= 2:
+                ws.Range(f"A2:I{last_row}").ClearContents()
 
             # Tulis header-compatible: No | Jenis | Satuan | Volume | Harga Satuan |
             #   Total sbl Pajak | Pajak% | Total stlh Pajak | Keterangan
@@ -381,9 +431,18 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
             ws.Cells(total_row, 8).NumberFormat = FMT_RP
 
             # Sheet 7.2 berisi formula turunan dari sheet 6. Penawaran.
-            # Hitung ulang dulu, lalu rapikan row setelah semua nilai masuk.
+            # Hitung rentang aktif saja; UsedRange workbook dapat sangat besar
+            # akibat formatting, sehingga Calculate() penuh membuang waktu.
             try:
-                wb.Calculate()
+                for sheet_name, address in (
+                    ("7.2 Dengan Nego", "A1:AL42"),
+                    ("@ Evaluasi", "A1:E47"),
+                    ("satu_data", "A1:CD3"),
+                ):
+                    try:
+                        wb.Worksheets(sheet_name).Range(address).Calculate()
+                    except Exception:
+                        pass
                 xl.Run(f"'{wb.Name}'!FixSheetByName", "7.2 Dengan Nego")
                 _log("  Autofit otomatis: sheet '7.2 Dengan Nego' dirapikan.")
             except Exception as e:
@@ -392,15 +451,41 @@ def tulis_penawaran_ke_excel(folder_paket: str, id_nontender: str, progress_cb=N
             wb.Save()
             wb.Close(False)
             _log(f"  Berhasil tulis {no_counter} item + Total → {os.path.basename(xlsm_path)}")
-            return {"ok": True, "pesan": f"{no_counter} item ditulis", "total_penawaran": total}
+            return {
+                "ok": True,
+                "pesan": f"{no_counter} item ditulis",
+                "total_penawaran": total,
+                "backup_path": backup_path,
+            }
         finally:
             try:
-                xl.Quit()
+                if wb is not None:
+                    wb.Close(False)
             except Exception:
                 pass
-            pythoncom.CoUninitialize()
+            try:
+                if xl is not None:
+                    xl.Quit()
+            except Exception:
+                pass
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                finally:
+                    com_initialized = False
     except Exception as e:
-        return {"ok": False, "pesan": f"COM error: {e}", "total_penawaran": total}
+        if com_initialized:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+            com_initialized = False
+        return {
+            "ok": False,
+            "pesan": f"COM error: {e}",
+            "total_penawaran": total,
+            "backup_path": backup_path,
+        }
 
 
 def download_penawaran_batch(

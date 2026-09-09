@@ -6610,6 +6610,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                                         kualifikasi=_do_eval_admin,
                                         teknis=_do_eval_teknis,
                                         harga=_do_eval_harga,
+                                        peserta_list=_peserta8,
                                         progress_cb=_lcb8
                                     )
                                     _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
@@ -10130,6 +10131,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                         kualifikasi=_do_eval_admin,
                                         teknis=False,
                                         harga=False,
+                                        peserta_list=_peserta8,
                                         progress_cb=_lcb8
                                     )
                                     _lcb8(f"{'[OK]' if _eval8.get('ok') else '[SEBAGIAN GAGAL]'} {_eval8['ringkasan']}")
@@ -10166,6 +10168,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                                             kualifikasi=False,
                                             teknis=_do_eval_teknis,
                                             harga=_do_eval_harga,
+                                            peserta_list=_peserta8,
                                             progress_cb=_lcb8,
                                         )
                                         _lcb8(

@@ -31,3 +31,12 @@ def test_no_production_writer_forces_recalc_with_macro_disabled():
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "AutomationSecurity = 3" not in source, relative
+
+
+def test_penawaran_writer_preserves_rows_and_uses_scoped_recalculation():
+    source = (ROOT / "penawaran_pl_engine.py").read_text(encoding="utf-8")
+
+    assert 'ws.Range(f"A2:I{last_row}").ClearContents()' in source
+    assert 'ws.Rows(f"2:{last_row}").Delete()' not in source
+    assert "wb.Calculate()" not in source
+    assert '("7.2 Dengan Nego", "A1:AL42")' in source

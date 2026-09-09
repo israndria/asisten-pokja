@@ -928,25 +928,40 @@ def _open_excel_for_pl_action():
 
 
 def _scan_pl_formula_errors(workbook, sheet_names=None):
-    """Baca error formula cached tanpa memaksa full recalculation workbook."""
-    error_tokens = {"#NAME?", "#VALUE!", "#REF!", "#DIV/0!", "#N/A", "#NUM!", "#NULL!"}
+    """Baca error formula cached tanpa scan COM cell-by-cell.
+
+    UsedRange workbook PL dapat membesar karena formatting (puluhan ribu
+    baris), sedangkan error formula biasanya hanya beberapa sel. SpecialCells
+    meminta Excel mengembalikan sel error secara langsung sehingga biaya scan
+    tidak lagi sebanding dengan ukuran UsedRange.
+    """
+    # xlCellTypeConstants=2, xlCellTypeFormulas=-4123, xlErrors=16.
+    error_sources = (2, -4123)
     names = sheet_names or ("satu_data", "@ Evaluasi", "5. HPS", "7.2 Dengan Nego")
     found = []
     for sheet_name in names:
         try:
             ws = workbook.Worksheets(sheet_name)
             used = ws.UsedRange
-            row_count = min(int(used.Rows.Count), 1000)
-            col_count = min(int(used.Columns.Count), 80)
-            first_row = int(used.Row)
-            first_col = int(used.Column)
-            for row in range(first_row, first_row + row_count):
-                for col in range(first_col, first_col + col_count):
-                    text = str(ws.Cells(row, col).Text or "").strip().upper()
-                    if text in error_tokens:
-                        found.append(f"{sheet_name}!{ws.Cells(row, col).Address(False, False)}={text}")
-                        if len(found) >= 20:
-                            return found
+            for source_type in error_sources:
+                try:
+                    error_cells = used.SpecialCells(source_type, 16)
+                except Exception:
+                    # Excel raises COM error jika tidak ada sel yang cocok.
+                    continue
+                count = min(int(error_cells.Count), 20 - len(found))
+                for index in range(1, count + 1):
+                    cell = error_cells.Cells.Item(index)
+                    text = str(cell.Text or "").strip().upper()
+                    try:
+                        address = cell.Address(False, False)
+                    except TypeError:
+                        # Beberapa versi pywin32 mengekspos Address sebagai
+                        # string, bukan callable COM property.
+                        address = str(cell.Address).replace("$", "")
+                    found.append(f"{sheet_name}!{address}={text}")
+                    if len(found) >= 20:
+                        return found
         except Exception:
             continue
     return found
@@ -1014,19 +1029,17 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
         excel.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
         # Kalkulasi scoped saja. CalculateFull/CalculateUntilAsyncQueriesDone
         # pernah mengubah cache UDF tanggal menjadi #NAME? pada workbook PL.
-        # Urutan wajib mengikuti dependensi: sumber -> nego -> evaluasi ->
-        # mail-merge. Menghitung @ Evaluasi lebih dulu meninggalkan cache
-        # lama (contoh total Rp8 juta, padahal 7.2 sudah Rp399 juta).
-        for _sheet_name in (
-            "5. HPS",
-            "6. Penawaran",
-            "6. Harga Penawaran",
-            "7.2 Dengan Nego",
-            "@ Evaluasi",
-            "satu_data",
+        # Urutan mengikuti dependensi: master -> nego -> evaluasi -> mail-merge.
+        # 7.2 memiliki UsedRange ~50 ribu baris akibat formatting, tetapi
+        # formula aktif berada di area A1:AL42.
+        for _sheet_name, _address in (
+            ("@ Master Data", "A1:I90"),
+            ("7.2 Dengan Nego", "A1:AL42"),
+            ("@ Evaluasi", "A1:E47"),
+            ("satu_data", "A1:CD3"),
         ):
             try:
-                wb.Worksheets(_sheet_name).Calculate()
+                wb.Worksheets(_sheet_name).Range(_address).Calculate()
             except Exception:
                 pass
         after_errors = _scan_pl_formula_errors(wb)
