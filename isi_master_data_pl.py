@@ -793,21 +793,6 @@ def proses_hps_dan_master_data(kode_paket: str, excel_path: str,
                     _apply_post_macro_enrichment(wb, excel_path, _log)
                 except Exception as local_e:
                     _log(f"WARN data lokal: {local_e}")
-                # Saat create-folder bulk/single, HPS sudah tersedia di sesi
-                # COM yang sama. Tulis uraian final langsung ke C19 agar tidak
-                # bergantung pada cache/upsert Supabase yang mungkin belum ada.
-                if hps_hasil and hps_hasil.get("items"):
-                    try:
-                        uraian = _hps_eng._build_uraian_singkat_pk(
-                            hps_hasil["items"], excel_path
-                        )
-                        if uraian:
-                            ws_master = wb.Sheets("@ Master Data")
-                            ws_master.Cells(19, 3).NumberFormat = "General"
-                            ws_master.Cells(19, 3).Value = uraian
-                            _log("Uraian singkat C19 dibuat dari DIVISI HPS.")
-                    except Exception as uraian_e:
-                        _log(f"WARN uraian singkat C19: {uraian_e}")
 
             # Macro membaca cache Supabase lebih dulu. Normalisasi di boundary
             # workbook memastikan boilerplate tender "gabungan" tidak masuk

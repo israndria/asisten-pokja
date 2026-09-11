@@ -1,5 +1,6 @@
 """Regression bounded untuk status bulk PL; tanpa SPSE, network, atau COM."""
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -244,6 +245,13 @@ def test_excel_finalization_uses_preloaded_hps_without_second_live_fetch(
 
     assert result["ok"] is True
     assert result["hps_source"] == "official_edit_page"
+
+
+def test_plpk_finalization_keeps_master_c19_as_workbook_formula():
+    source = inspect.getsource(isi_master_data_pl.proses_hps_dan_master_data)
+
+    assert "_build_uraian_singkat_pk" not in source
+    assert "Cells(19, 3).Value" not in source
 
 
 def test_excel_finalization_rejects_overlapping_com_writer(tmp_path):
