@@ -163,7 +163,7 @@ def resolve_folder_paket_pl(kode_paket: str, buat_subfolder: bool = True) -> dic
     """
     Lookup folder paket PL dari draft_paket_pl, resolve via parse_kak_pl._resolve_folder_pl.
     Return: {"ok": bool, "path": str, "pesan": str}
-    path = folder_paket / 1. Dokumen Kualifikasi/ (dibuat jika belum ada)
+    path = folder_paket / 8. Dokumen Kualifikasi/ (dibuat jika belum ada)
     """
     try:
         from config import sb
@@ -389,7 +389,7 @@ def download_kualifikasi_peserta_pl(
 
     Args:
         peserta       : {"nama", "kualifikasi_id", "kode_paket"}
-        folder_output : path 1. Dokumen Kualifikasi/ (sudah resolved)
+        folder_output : path 8. Dokumen Kualifikasi/ (sudah resolved)
         urutan        : nomor urut peserta (1, 2, ...)
         total_peserta : 1 peserta → flat, ≥2 → subfolder "{urutan}. {nama}/"
         progress_cb   : callback(pesan: str)

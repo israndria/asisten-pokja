@@ -6,7 +6,7 @@ def test_find_tender_xlsm_prefers_bapk_in_package_root(tmp_path):
     (tmp_path / "Z. cadangan.xlsm").write_bytes(b"z")
     preferred = tmp_path / "0. BAPK - Uji.xlsm"
     preferred.write_bytes(b"bapk")
-    nested = tmp_path / "1. Dokumen Kualifikasi"
+    nested = tmp_path / "8. Dokumen Kualifikasi"
     nested.mkdir()
     (nested / "nested.xlsm").write_bytes(b"nested")
 

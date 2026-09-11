@@ -5,10 +5,17 @@ Scan D:\data\biddings, lookup Supabase, pindah file ke folder paket, gabung PDF 
 import os
 import re
 import shutil
-from config import sb as _sb, POKJA_ROOT, TENDER_ROOT, sanitasi_nama_folder
+from config import (
+    sb as _sb,
+    POKJA_ROOT,
+    TENDER_ROOT,
+    TENDER_KUALIFIKASI_SUBFOLDER,
+    TENDER_PENAWARAN_SUBFOLDER,
+    sanitasi_nama_folder,
+)
 
 APENDO_ROOT       = os.path.join(os.path.splitdrive(POKJA_ROOT)[0] + os.sep, "data", "biddings")
-DEST_SUBFOLDER    = "1. Dokumen Penawaran"
+DEST_SUBFOLDER    = TENDER_PENAWARAN_SUBFOLDER
 TEKNIS_DIR        = "administrasi-dan-teknis"
 HARGA_DIR         = "harga"
 SKIP_DIRS         = {"harga rhs"}
@@ -269,8 +276,8 @@ def build_package_status(package_rows: list[dict], scanned_items: list[dict]) ->
 def resolve_dest(item: dict, total_per_paket: dict) -> str:
     """
     Folder tujuan per peserta:
-    1 peserta  → 1. Dokumen Penawaran/ (flat)
-    ≥2 peserta → 1. Dokumen Penawaran/{urutan}. {nama_perusahaan}/
+    1 peserta  → 9. Dokumen Penawaran Teknis & Biaya/ (flat)
+    ≥2 peserta → 9. Dokumen Penawaran Teknis & Biaya/{urutan}. {nama_perusahaan}/
     """
     base = os.path.join(item["folder_paket"], DEST_SUBFOLDER)
     if total_per_paket.get(item["kode_tender"], 1) >= 2:
@@ -362,7 +369,7 @@ def cari_dokumen_lengkap(folder_paket: str) -> list[str]:
 
 def cari_checklist_kualifikasi(folder_paket: str) -> list[str]:
     """Cari checklist kualifikasi SPSE untuk sumber utama admin/kualifikasi."""
-    root = os.path.join(folder_paket, "1. Dokumen Kualifikasi")
+    root = os.path.join(folder_paket, TENDER_KUALIFIKASI_SUBFOLDER)
     if not os.path.isdir(root):
         return []
     hasil = []
@@ -383,8 +390,8 @@ def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
     Gabung DoktekFull + DokkualifFull per peserta → 1. Dokumen Gabungan/{urutan}. {nama}/1. DokFull_{nama}_{pokja}.pdf
 
     Scan:
-      - {folder_paket}/1. Dokumen Penawaran/{urutan}. {nama}/1. DoktekFull_*.pdf
-      - {folder_paket}/1. Dokumen Kualifikasi/{urutan}. {nama}/1. DokkualifFull_*.pdf
+      - {folder_paket}/9. Dokumen Penawaran Teknis & Biaya/{urutan}. {nama}/1. DoktekFull_*.pdf
+      - {folder_paket}/8. Dokumen Kualifikasi/{urutan}. {nama}/1. DokkualifFull_*.pdf
 
     Return: {"ok": int, "gagal": [...]}
     """
@@ -397,7 +404,7 @@ def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
         return {"ok": 0, "gagal": ["PyMuPDF tidak tersedia"]}
 
     folder_penawaran  = os.path.join(folder_paket, DEST_SUBFOLDER)
-    folder_kualifikasi = os.path.join(folder_paket, "1. Dokumen Kualifikasi")
+    folder_kualifikasi = os.path.join(folder_paket, TENDER_KUALIFIKASI_SUBFOLDER)
     folder_gabungan   = os.path.join(folder_paket, GABUNGAN_SUBFOLDER)
 
     if not os.path.isdir(folder_penawaran):
@@ -407,8 +414,8 @@ def gabung_dokumen_lengkap(folder_paket: str, log=None) -> dict:
     gagal = []
 
     # Iterasi peserta dalam dua format:
-    # - nested: 1. Dokumen Penawaran/{urutan}. {nama}/1. DoktekFull_*.pdf
-    # - flat:   1. Dokumen Penawaran/1. DoktekFull_*.pdf
+    # - nested: 9. Dokumen Penawaran Teknis & Biaya/{urutan}. {nama}/1. DoktekFull_*.pdf
+    # - flat:   9. Dokumen Penawaran Teknis & Biaya/1. DoktekFull_*.pdf
     peserta_entries = []
     for entry in sorted(os.listdir(folder_penawaran)):
         sub_penawaran = os.path.join(folder_penawaran, entry)

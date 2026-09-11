@@ -856,6 +856,8 @@ from config import (
     ASISTEN_ALLOWED_ROLES,
     ASISTEN_DEFAULT_ROLE,
     APP_ICON_PATH,
+    TENDER_KUALIFIKASI_SUBFOLDER,
+    TENDER_PENAWARAN_SUBFOLDER,
 )
 import spse_browser
 import ldk_engine
@@ -14104,7 +14106,7 @@ if _tender_active_tab == "6️⃣ Download Kualifikasi":
                             _excel_path = None
                             if do_write_kk and folder_out:
                                 try:
-                                    # folder_out = .../{folder_paket}/1. Dokumen Kualifikasi
+                                    # folder_out = .../{folder_paket}/8. Dokumen Kualifikasi
                                     # xlsm ada di folder paket (parent), bukan subfolder kualifikasi
                                     _folder_paket = os.path.dirname(folder_out)
                                     _xlsm_list = [kualifikasi_engine.find_xlsm_paket(_folder_paket)]
@@ -14375,8 +14377,8 @@ PREFLIGHT WAJIB — berhenti dengan ERROR jika gagal
    prioritaskan salinan di folder paket/5. Evaluator Kualifikasi & Teknis/.
 4. Pastikan Dokpil tersedia. Prioritaskan `3. Dokpil Full PK v1.docx`, `dokpil_*.pdf`,
    dan dokumen pemilihan di root paket/subfolder `2. Rancangan Kontrak/`.
-5. Cari penyedia pada struktur aktual Tender: `1. Dokumen Penawaran/`,
-   `1. Dokumen Gabungan/`, dan `8. Dokumen Kualifikasi/`. File gabungan per peserta
+5. Cari penyedia pada struktur aktual Tender: `{TENDER_PENAWARAN_SUBFOLDER}/`,
+   `1. Dokumen Gabungan/`, dan `{TENDER_KUALIFIKASI_SUBFOLDER}/`. File gabungan per peserta
    adalah sumber baca utama; file pecahan hanya fallback jika gabungan rusak/tidak terbaca.
    Jika struktur berbeda, lakukan Glob seluruh root paket dan jelaskan struktur aktual.
    Jangan mengarang penyedia atau dokumen.
@@ -14796,8 +14798,8 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         from config import TENDER_ROOT as _TENDER_ROOT_GAB
         _gab_valid = [
             _gp for _gp in sorted(_gab_paket_list, key=lambda x: x.get("folder_dibuat", ""))
-            if os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "1. Dokumen Penawaran"))
-            or os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], "8. Dokumen Kualifikasi"))
+            if os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], TENDER_PENAWARAN_SUBFOLDER))
+            or os.path.isdir(os.path.join(_TENDER_ROOT_GAB, _gp["folder_dibuat"], TENDER_KUALIFIKASI_SUBFOLDER))
         ]
         # Pilihan Section 3 independen dari pilihan Section 2, tetapi daftar
         # paketnya tetap dibatasi ke tahap pasca-pembukaan.
@@ -15078,10 +15080,10 @@ Mulai sekarang."""
 
             _log_cb(f"=== Input BA: {kode_tender} ===")
 
-            # Folder dok teknis ada di "1. Dokumen Penawaran" (sibling folder kualifikasi),
-            # BUKAN di "8. Dokumen Kualifikasi". Resolve dari parent folder paket.
+            # Folder dok teknis ada di folder penawaran Tender (sibling folder kualifikasi),
+            # BUKAN di folder kualifikasi. Resolve dari parent folder paket.
             _folder_paket_root = os.path.dirname(folder_kualifikasi) if folder_kualifikasi else ""
-            _folder_penawaran = os.path.join(_folder_paket_root, "1. Dokumen Penawaran") if _folder_paket_root else ""
+            _folder_penawaran = os.path.join(_folder_paket_root, TENDER_PENAWARAN_SUBFOLDER) if _folder_paket_root else ""
 
             # ── 1. (Opsional) parse dok teknis untuk update alat/personel ke Supabase ──
             if do_teknis:
@@ -15100,11 +15102,11 @@ Mulai sekarang."""
                             if os.path.isdir(os.path.join(_folder_penawaran, d))
                         ]
                     else:
-                        _log_cb(f"  ⚠️ Folder '1. Dokumen Penawaran' tidak ada — skip parse teknis")
+                        _log_cb(f"  ⚠️ Folder '{TENDER_PENAWARAN_SUBFOLDER}' tidak ada — skip parse teknis")
 
                     if not _sub_penawaran:
                         _log_cb(
-                            "  ℹ️ Struktur Dokumen Penawaran flat; resolver akan mencari "
+                            f"  ℹ️ Struktur {TENDER_PENAWARAN_SUBFOLDER} flat; resolver akan mencari "
                             "file teknis di root karena peserta tunggal."
                         )
 

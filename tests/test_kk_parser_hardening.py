@@ -20,7 +20,7 @@ def test_local_requirement_has_priority_over_stale_database(monkeypatch):
     )
 
     tokens = kualifikasi_parser._ambil_syarat_sbu_keywords(
-        "10160074000", r"D:\paket\1. Dokumen Kualifikasi\1. Peserta"
+        "10160074000", r"D:\paket\8. Dokumen Kualifikasi\1. Peserta"
     )
     assert "41012" in tokens
     assert "BG002" in tokens

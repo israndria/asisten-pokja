@@ -9,7 +9,7 @@ Flow:
 
 import re
 from datetime import date, timedelta
-from config import sb as _sb
+from config import sb as _sb, TENDER_PENAWARAN_SUBFOLDER
 
 # ------------------------------------------------------------------
 # Normalisasi nama personil
@@ -486,10 +486,10 @@ def sync_from_doktek_folder(kode_tender: str, log=print) -> dict:
         pid = row["peserta_id"]
         nama_penyedia = row.get("nama_perusahaan", "")
 
-        # Cari DoktekFull_*.pdf: coba subfolder "1. Dokumen Penawaran\*nama*" dulu, lalu glob recursive
+        # Cari DoktekFull_*.pdf: coba subfolder "9. Dokumen Penawaran Teknis & Biaya\*nama*" dulu, lalu glob recursive
         pdf_path = None
         # Subfolder dokumen penawaran — coba match nama perusahaan (substring case-insensitive)
-        dok_dir = os.path.join(folder_paket, "1. Dokumen Penawaran")
+        dok_dir = os.path.join(folder_paket, TENDER_PENAWARAN_SUBFOLDER)
         if os.path.isdir(dok_dir):
             nama_lower = nama_penyedia.lower()
             for sub in os.listdir(dok_dir):

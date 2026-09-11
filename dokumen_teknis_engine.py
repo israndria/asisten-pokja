@@ -1,7 +1,7 @@
 """
 Parse Dokumen Teknis peserta tender dari PDF.
 
-File target (ada di folder 1. Dokumen Kualifikasi/{urutan}. {nama}/):
+File target (ada di folder 9. Dokumen Penawaran Teknis & Biaya/{urutan}. {nama}/):
   04E*.pdf / *peralatan*.pdf → daftar peralatan utama
   04D*.pdf / *personel*.pdf  → daftar personel manajerial
 

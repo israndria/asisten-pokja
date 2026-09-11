@@ -203,6 +203,10 @@ def find_secret(filename: str) -> pathlib.Path:
 # === Tender Output Dir ===
 TENDER_ROOT = os.path.join(POKJA_ROOT, "@ Tender 2026")
 os.makedirs(TENDER_ROOT, exist_ok=True)
+# Struktur paket Tender harus sama dengan template provisioning di
+# procurement_core/setup_paket_baru.py. Jangan duplikasi nama folder di engine.
+TENDER_KUALIFIKASI_SUBFOLDER = "8. Dokumen Kualifikasi"
+TENDER_PENAWARAN_SUBFOLDER = "9. Dokumen Penawaran Teknis & Biaya"
 
 # === PL Output Dirs ===
 OUTPUT_DIR_PL_JKK = os.path.join(POKJA_ROOT, "@ Pejabat Pengadaan 2026", "@ Pengadaan Langsung JKK")
