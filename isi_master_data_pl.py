@@ -8,6 +8,7 @@ template. Menggantikan tombol manual "Muat Paket PL" + "Isi Data PL" di Excel.
 """
 
 import os
+import re
 import threading
 from datetime import date, datetime, timedelta
 
@@ -198,6 +199,16 @@ def _clean_docx_cell(value: str) -> str:
     )
 
 
+def _docx_open_path(path: str) -> str:
+    """Tambahkan prefix Windows extended path untuk DOCX yang terlalu panjang."""
+    path = os.fspath(path)
+    if os.name != "nt" or path.startswith("\\\\?\\") or len(path) < 240:
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
 def _equipment_header(table):
     """Cari header tabel alat dan indeks kolomnya berdasarkan label."""
     import re
@@ -233,7 +244,7 @@ def _parse_equipment_docx(path: str) -> list[dict]:
 
     result = []
     seen = set()
-    doc = Document(path)
+    doc = Document(_docx_open_path(path))
     for table in doc.tables:
         header = _equipment_header(table)
         if header is None:
@@ -279,6 +290,180 @@ def _parse_equipment_docx(path: str) -> list[dict]:
                     "jumlah": normalize_equipment_quantity(quantity),
                 })
     return result
+
+
+_RK3K_HIGHEST_RISK_RE = re.compile(
+    r"\br[ei]siko\s+(?:tertinggi|paling\s+tinggi)\b", re.IGNORECASE
+)
+
+
+def _parse_rk3k_table(table) -> list[dict]:
+    """Parse baris RK3K berdasarkan header, termasuk baris risiko tertinggi."""
+    header = None
+    for header_row, row in enumerate(table.rows[:8]):
+        headers = [_clean_docx_cell(cell.text).casefold() for cell in row.cells]
+        hazard_col = next(
+            (
+                index
+                for index, value in enumerate(headers)
+                if "bahaya" in value or "hazard" in value
+            ),
+            None,
+        )
+        uraian_col = next(
+            (
+                index
+                for index, value in enumerate(headers)
+                if "uraian" in value
+                and ("pekerjaan" in value or "work item" in value)
+            ),
+            None,
+        )
+        # Beberapa export Word memisahkan label "Uraian" dan "Pekerjaan".
+        # Terima label pendek hanya bila tabel juga memiliki kolom bahaya,
+        # supaya tabel lain di dokumen tidak salah dianggap sebagai RK3K.
+        if uraian_col is None and hazard_col is not None:
+            uraian_col = next(
+                (
+                    index
+                    for index, value in enumerate(headers)
+                    if value in {"uraian", "uraian pekerjaan", "work item"}
+                ),
+                None,
+            )
+        ket_col = next(
+            (
+                index
+                for index, value in enumerate(headers)
+                if value in {"ket", "keterangan"} or "keterangan" in value
+            ),
+            None,
+        )
+        if uraian_col is not None:
+            header = header_row, uraian_col, hazard_col, ket_col
+            break
+    if header is None:
+        return []
+
+    header_row, uraian_col, hazard_col, ket_col = header
+    result = []
+    for row in table.rows[header_row + 1 :]:
+        values = [_clean_docx_cell(cell.text) for cell in row.cells]
+        if not values or not re.match(
+            r"^\s*\d+\s*[.)-]?(?:\s|$)", values[0]
+        ):
+            continue
+        if uraian_col >= len(values):
+            continue
+        uraian = values[uraian_col]
+        if not uraian or uraian.casefold() in {"2", "uraian", "uraian pekerjaan"}:
+            continue
+        bahaya = (
+            values[hazard_col]
+            if hazard_col is not None and hazard_col < len(values)
+            else ""
+        )
+        bahaya = re.sub(r"^\s*(?:[-\u2022]\s*)+", "", bahaya).strip()
+        marker_source = (
+            values[ket_col]
+            if ket_col is not None and ket_col < len(values)
+            else ""
+        )
+        if not _RK3K_HIGHEST_RISK_RE.search(marker_source):
+            # Fallback menjaga kompatibilitas bila kolom Ket bergeser/merge.
+            marker_source = " ".join(values)
+        result.append(
+            {
+                "uraian": uraian,
+                "bahaya": bahaya,
+                "risiko_tertinggi": bool(
+                    _RK3K_HIGHEST_RISK_RE.search(marker_source)
+                ),
+            }
+        )
+    return result
+
+
+def _rk3k_source_groups(folder: str) -> list[list[str]]:
+    """Kembalikan kandidat RK3K berurutan: Upload Baru lalu baseline.
+
+    Folder backup dikecualikan. Setiap file hanya masuk satu grup agar file
+    lama tidak tercampur dengan dokumen hasil download terbaru.
+    """
+    folder = os.path.abspath(folder)
+    kak_root = os.path.join(folder, "1. KAK & Spesifikasi Teknis")
+    roots = [
+        os.path.join(kak_root, "1. KAK & Spesifikasi Teknis (Upload Baru)"),
+        kak_root,
+        folder,
+    ]
+    seen = set()
+    groups = []
+
+    def is_backup_dir(name: str) -> bool:
+        low = name.casefold()
+        return (
+            low.startswith(".backup")
+            or low.startswith("backup")
+            or low in {".workflow-backups", ".docx-header-backup"}
+        )
+
+    def mtime_ns(path: str) -> int:
+        try:
+            return os.stat(path).st_mtime_ns
+        except OSError:
+            return 0
+
+    for source_root in roots:
+        if not os.path.isdir(source_root):
+            continue
+        paths = []
+        for root, dirs, files in os.walk(source_root):
+            dirs[:] = [name for name in dirs if not is_backup_dir(name)]
+            for name in files:
+                low = name.casefold()
+                if not (low.startswith("rk3") and low.endswith(".docx")):
+                    continue
+                path = os.path.abspath(os.path.join(root, name))
+                if path.casefold() in seen:
+                    continue
+                seen.add(path.casefold())
+                paths.append(path)
+        if paths:
+            paths.sort(
+                key=lambda path: (
+                    -mtime_ns(path),
+                    path.casefold(),
+                )
+            )
+            groups.append(paths)
+    return groups
+
+
+def _parse_rk3k_sources(folder: str) -> list[dict]:
+    """Ambil satu sumber RK3K authoritative, dengan fallback aman ke baseline."""
+    from docx import Document
+
+    for paths in _rk3k_source_groups(folder):
+        for path in paths:
+            try:
+                doc = Document(_docx_open_path(path))
+            except Exception:
+                # File Google Drive yang belum selesai tersinkron tidak boleh
+                # memblokir fallback ke file valid atau baseline.
+                continue
+            records = []
+            for table in doc.tables:
+                try:
+                    records.extend(_parse_rk3k_table(table))
+                except Exception:
+                    # Satu tabel rusak tidak membatalkan dokumen yang sudah
+                    # berhasil dibuka dan tidak menghidupkan data donor lama.
+                    continue
+            # Dokumen pertama yang berhasil dibuka pada grup prioritas adalah
+            # sumber resmi, termasuk bila tabelnya kosong/formatnya baru.
+            return records
+    return []
 
 
 def _parse_local_enrichment(folder: str) -> dict:
@@ -332,17 +517,31 @@ def _parse_local_enrichment(folder: str) -> dict:
                         # Dokumen non-KAK atau DOCX rusak tidak boleh
                         # menghentikan pemindaian dokumen lain.
                         pass
-                if low.endswith(".docx") and low.startswith("rk3"):
-                    doc = Document(path)
-                    for table in doc.tables:
-                        for row in table.rows:
-                            vals = [re.sub(r"\s+", " ", c.text or "").replace("\ufffd", " ").replace("\u2019", "'").strip() for c in row.cells]
-                            if len(vals) >= 3 and re.match(r"^\d+", vals[0]) and vals[1] not in {"2", "Uraian Pekerjaan"}:
-                                if vals[1] and vals[1] not in out["uraian_rk3"]:
-                                    out["uraian_rk3"].append(vals[1])
-                                if len(vals) >= 8 and "resiko paling tinggi" in vals[-1].lower():
-                                    out["risiko_tertinggi"] = vals[2].lstrip("-• ").strip() or out["risiko_tertinggi"]
     except Exception:
+        pass
+    # RK3K punya sumber kanonik sendiri. Prioritaskan hasil download terbaru
+    # di Upload Baru agar baseline lama tidak menang hanya karena urutan
+    # os.walk, lalu fallback ke baseline bila file baru tidak bisa dibuka.
+    try:
+        rk3_records = _parse_rk3k_sources(folder)
+        for record in rk3_records:
+            if record["uraian"] not in out["uraian_rk3"]:
+                out["uraian_rk3"].append(record["uraian"])
+        marked_records = [
+            record for record in rk3_records if record["risiko_tertinggi"]
+        ]
+        if marked_records:
+            # Bila lebih dari satu baris ditandai, pilih yang membawa bahaya
+            # aktual agar C64 tidak terisi kosong hanya karena marker pertama.
+            selected = next(
+                (record for record in marked_records if record["bahaya"]),
+                marked_records[0],
+            )
+            out["risiko"] = selected["uraian"]
+            out["risiko_tertinggi"] = selected["bahaya"]
+    except Exception:
+        # RK3K bersifat enrichment; kegagalan parsial tidak boleh memutus
+        # pengisian field Master Data lain.
         pass
     for name in os.listdir(folder):
         if name.lower().startswith("_hps_") and name.lower().endswith(".md"):
@@ -355,8 +554,6 @@ def _parse_local_enrichment(folder: str) -> dict:
                             out["uraian"].append(value)
             except Exception:
                 pass
-    if out["uraian_rk3"]:
-        out["risiko"] = ", ".join(out["uraian_rk3"][:6])
     return out
 
 

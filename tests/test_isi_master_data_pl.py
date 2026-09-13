@@ -110,3 +110,107 @@ def test_equipment_parser_uses_table_headers_not_filename(tmp_path):
 def test_equipment_quantity_normalizes_existing_unit_spelling():
     assert isi_master_data_pl.normalize_equipment_quantity("1") == "1 Unit"
     assert isi_master_data_pl.normalize_equipment_quantity("1 unit") == "1 Unit"
+
+
+def test_docx_open_path_handles_windows_long_paths():
+    path = "C:\\" + ("x" * 240) + ".docx"
+
+    result = isi_master_data_pl._docx_open_path(path)
+
+    if isi_master_data_pl.os.name == "nt":
+        assert result == "\\\\?\\" + path
+    else:
+        assert result == path
+
+
+def test_rk3_parser_maps_c63_to_marked_highest_risk_work_item(tmp_path):
+    source = tmp_path / "RK3K jalan.docx"
+    doc = Document()
+    table = doc.add_table(rows=1, cols=8)
+    for cell, value in zip(
+        table.rows[0].cells,
+        (
+            "No.",
+            "Uraian Pekerjaan",
+            "Identifikasi Bahaya",
+            "Sasaran K3 Proyek",
+            "Pengendalian Risiko K3",
+            "Program Sumber Daya",
+            "Biaya (Rp)",
+            "Ket",
+        ),
+    ):
+        cell.text = value
+    for values in (
+        ("1.", "Mobilisasi", "", "", "", "", "", ""),
+        ("2.", "PEKERJAAN PREVENTIF\n-Latasir Kelas A (SS-A)", "- Terkena aspal cair", "", "", "", "", "Resiko Paling Tinggi"),
+        ("3.", "PERKERASAN BERBUTIR\n-Lapis Pondasi Agregat Kelas A", "", "", "", "", "", ""),
+    ):
+        cells = table.add_row().cells
+        for cell, value in zip(cells, values):
+            cell.text = value
+    doc.save(source)
+
+    result = isi_master_data_pl._parse_local_enrichment(str(tmp_path))
+
+    assert result["uraian_rk3"] == [
+        "Mobilisasi",
+        "PEKERJAAN PREVENTIF -Latasir Kelas A (SS-A)",
+        "PERKERASAN BERBUTIR -Lapis Pondasi Agregat Kelas A",
+    ]
+    assert result["risiko"] == "PEKERJAAN PREVENTIF -Latasir Kelas A (SS-A)"
+    assert result["risiko_tertinggi"] == "Terkena aspal cair"
+
+
+def _write_rk3k_fixture(path, work_item, hazard, marker):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = Document()
+    table = doc.add_table(rows=1, cols=4)
+    for cell, value in zip(
+        table.rows[0].cells,
+        ("No.", "Uraian Pekerjaan", "Identifikasi Bahaya", "Ket"),
+    ):
+        cell.text = value
+    cells = table.add_row().cells
+    for cell, value in zip(cells, ("1.", work_item, hazard, marker)):
+        cell.text = value
+    doc.save(path)
+
+
+def test_rk3_parser_prioritizes_upload_baru_over_baseline(tmp_path):
+    kak_root = tmp_path / "1. KAK & Spesifikasi Teknis"
+    _write_rk3k_fixture(
+        kak_root / "RK3K baseline.docx",
+        "Pekerjaan baseline",
+        "Bahaya baseline",
+        "Risiko Tertinggi",
+    )
+    _write_rk3k_fixture(
+        kak_root / "1. KAK & Spesifikasi Teknis (Upload Baru)" / "RK3K terbaru.docx",
+        "Pekerjaan terbaru",
+        "Bahaya terbaru",
+        "Risiko Tertinggi",
+    )
+
+    result = isi_master_data_pl._parse_local_enrichment(str(tmp_path))
+
+    assert result["risiko"] == "Pekerjaan terbaru"
+    assert result["risiko_tertinggi"] == "Bahaya terbaru"
+
+
+def test_rk3_parser_falls_back_to_baseline_when_upload_is_corrupt(tmp_path):
+    kak_root = tmp_path / "1. KAK & Spesifikasi Teknis"
+    _write_rk3k_fixture(
+        kak_root / "RK3K baseline.docx",
+        "Pekerjaan baseline",
+        "Bahaya baseline",
+        "Resiko Paling Tinggi",
+    )
+    upload = kak_root / "1. KAK & Spesifikasi Teknis (Upload Baru)" / "RK3K terbaru.docx"
+    upload.parent.mkdir(parents=True, exist_ok=True)
+    upload.write_bytes(b"DOCX belum selesai tersinkron")
+
+    result = isi_master_data_pl._parse_local_enrichment(str(tmp_path))
+
+    assert result["risiko"] == "Pekerjaan baseline"
+    assert result["risiko_tertinggi"] == "Bahaya baseline"
