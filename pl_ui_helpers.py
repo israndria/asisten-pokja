@@ -1019,7 +1019,14 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
             }
 
         log("Menjalankan refresh sheet @ Evaluasi...")
-        before_errors = _scan_pl_formula_errors(wb)
+        # Tab 7 hanya menulis/refresh sheet @ Evaluasi. Jangan menghitung atau
+        # memblokir proses karena sheet 7.2 Dengan Nego milik tahap harga.
+        # Formula nego dapat berisi rumus manual (mis. =K11*1.1) yang valid
+        # saat baris HPS berisi item, tetapi menjadi #VALUE! saat baris itu
+        # berubah menjadi divisi/kosong setelah Update HPS. Tab 8 akan
+        # menghitung 7.2 setelah data penawaran tersedia.
+        _refresh_error_sheets = ("@ Evaluasi",)
+        before_errors = _scan_pl_formula_errors(wb, _refresh_error_sheets)
         if before_errors:
             return {
                 "ok": False,
@@ -1029,20 +1036,14 @@ def refresh_evaluasi_pl_only(kode_paket: str, hasil_engine, progress_cb=None) ->
         excel.Run("ModDraftPaketPL.IsiEvaluasiPLStandalone")
         # Kalkulasi scoped saja. CalculateFull/CalculateUntilAsyncQueriesDone
         # pernah mengubah cache UDF tanggal menjadi #NAME? pada workbook PL.
-        # Urutan mengikuti dependensi: master -> nego -> evaluasi -> mail-merge.
-        # 7.2 memiliki UsedRange ~50 ribu baris akibat formatting, tetapi
-        # formula aktif berada di area A1:AL42.
-        for _sheet_name, _address in (
-            ("@ Master Data", "A1:I90"),
-            ("7.2 Dengan Nego", "A1:AL42"),
-            ("@ Evaluasi", "A1:E47"),
-            ("satu_data", "A1:CD3"),
-        ):
+        # Jangan menghitung sheet 7.2/satu_data di sini: keduanya bergantung
+        # pada penawaran/nego dan bukan target refresh Tab 7.
+        for _sheet_name, _address in (("@ Evaluasi", "A1:E47"),):
             try:
                 wb.Worksheets(_sheet_name).Range(_address).Calculate()
             except Exception:
                 pass
-        after_errors = _scan_pl_formula_errors(wb)
+        after_errors = _scan_pl_formula_errors(wb, _refresh_error_sheets)
         if after_errors:
             return {
                 "ok": False,

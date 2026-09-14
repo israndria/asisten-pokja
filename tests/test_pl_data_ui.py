@@ -1255,6 +1255,103 @@ def test_refresh_evaluasi_pl_only_runs_evaluation_macro_without_master_writer(
     assert "Quit" in calls
 
 
+def test_refresh_evaluasi_pl_only_does_not_recalculate_nego_sheet(
+    tmp_path, monkeypatch
+):
+    workbook = tmp_path / "0. BAPLPK - Uji.xlsm"
+    workbook.write_bytes(b"macro-workbook")
+    calls = []
+
+    class FakeRange:
+        def Calculate(self):
+            calls.append(("Calculate", self.sheet_name, self.address))
+
+    class FakeUsedRange:
+        def SpecialCells(self, source_type, value):
+            raise RuntimeError("No cells were found")
+
+    class FakeSheet:
+        def __init__(self, name):
+            self.name = name
+            self.UsedRange = FakeUsedRange()
+
+        def Range(self, address):
+            result = FakeRange()
+            result.sheet_name = self.name
+            result.address = address
+            return result
+
+    class FakeSheets:
+        def __init__(self):
+            self.names = []
+
+        def __call__(self, name):
+            self.names.append(name)
+            return FakeSheet(name)
+
+    class FakePythoncom:
+        def CoUninitialize(self):
+            calls.append("CoUninitialize")
+
+    class FakePywintypes:
+        com_error = RuntimeError
+
+    class FakeWorkbook:
+        ReadOnly = False
+
+        def __init__(self):
+            self.Worksheets = FakeSheets()
+
+        def Save(self):
+            calls.append("Save")
+
+        def Close(self, SaveChanges):
+            calls.append(("Close", SaveChanges))
+
+    class FakeExcel:
+        def __init__(self):
+            self.Workbooks = self
+            self.book = FakeWorkbook()
+
+        def Open(self, *args, **kwargs):
+            calls.append(("Open", args, kwargs))
+            return self.book
+
+        def Run(self, macro, *args):
+            calls.append(("Run", macro, args))
+
+        def Quit(self):
+            calls.append("Quit")
+
+    fake_excel = FakeExcel()
+    monkeypatch.setattr(
+        pl_ui_helpers,
+        "_open_excel_for_pl_action",
+        lambda: (FakePythoncom(), FakePywintypes(), fake_excel),
+        raising=False,
+    )
+
+    class Engine:
+        @staticmethod
+        def _find_xlsm(kode_paket):
+            return str(workbook)
+
+    result = pl_ui_helpers.refresh_evaluasi_pl_only("PK-1", Engine)
+
+    assert result["ok"] is True
+    assert ("Calculate", "@ Evaluasi", "A1:E47") in calls
+    assert not any(
+        call[0] == "Calculate" and call[1] == "7.2 Dengan Nego"
+        for call in calls
+        if isinstance(call, tuple)
+    )
+    assert fake_excel.book.Worksheets.names == [
+        "@ Evaluasi",
+        "@ Evaluasi",
+        "@ Evaluasi",
+    ]
+
+
 def test_update_hps_paket_pl_shortens_backup_for_long_workbook_path(tmp_path, monkeypatch):
     filename = "0. BAPLJKK " + ("x" * 30) + ".xlsm"
     package_dir = tmp_path
