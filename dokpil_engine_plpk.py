@@ -431,13 +431,18 @@ def submit_ldk_pl(
 
     # ── SYARAT TEKNIS ─────────────────────────────────────────────
     valid_teknis = {str(x.get("ckm_id", "")) for x in ctx["teknis_list"]}
-    requested_teknis = {str(x) for x in (teknis_centang_ckm_ids or [])}
-    if not requested_teknis & valid_teknis:
-        teknis_centang_ckm_ids = ctx.get("checked_teknis_ids") or [
-            str(x.get("ckm_id")) for x in ctx["teknis_list"][:2]
-        ]
+    default_teknis = ["437", "438", "439"]
+    if teknis_centang_ckm_ids is None:
+        # Default PLPK konstruksi: 437 (Pengalaman), 438 (SKP), 439 (Usaha Kecil < 3 thn)
+        existing = [str(x) for x in (ctx.get("checked_teknis_ids") or []) if str(x) in valid_teknis]
+        teknis_centang_ckm_ids = list(dict.fromkeys(existing + [x for x in default_teknis if x in valid_teknis]))
     else:
-        teknis_centang_ckm_ids = [str(x) for x in requested_teknis if str(x) in valid_teknis]
+        requested_teknis = {str(x) for x in teknis_centang_ckm_ids}
+        if not requested_teknis & valid_teknis:
+            existing = [str(x) for x in (ctx.get("checked_teknis_ids") or []) if str(x) in valid_teknis]
+            teknis_centang_ckm_ids = list(dict.fromkeys(existing + [x for x in default_teknis if x in valid_teknis]))
+        else:
+            teknis_centang_ckm_ids = [str(x) for x in requested_teknis if str(x) in valid_teknis]
 
     # Logika Kinerja (996): Cek apakah sudah ada di teknis_list
     kinerja_exists = False

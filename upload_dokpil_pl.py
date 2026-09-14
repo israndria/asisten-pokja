@@ -51,7 +51,7 @@ def _dokpil_failure(stage: str, error: object, status: int | None = None) -> dic
 # ─────────────────────────────────────────────────────────────────────────────
 
 _NOMOR_DOKPIL_RE = re.compile(
-    r"^000\.3\.3(?:/PLU)?/\d+/PL/PP-\d+/[^/?\s]+/[^/?\s]+/\d{4}$"
+    r"^000\.3\.3(?:/PLU)?/\d+(?:/PL)?/PP-\d+/[^/?\s]+/[^/?\s]+/\d{4}$"
 )
 
 
