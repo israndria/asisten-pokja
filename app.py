@@ -1355,6 +1355,10 @@ with _login_popover:
     # buka_browser() dipanggil oleh engine saat submit, bukan di sini setiap refresh
 
     _cdp_active = spse_browser._cek_cdp_aktif()
+    if not _cdp_active:
+        # Flag ini hanya berlaku selama browser CDP hidup. Jangan biarkan
+        # status koneksi manual lama mengubah UI setelah Brave benar-benar tutup.
+        st.session_state.pop("manual_spse_connected", None)
     _spse_base = SPSE_BASE_URL.rstrip("/")
     url_aktif = spse_browser.get_url() if _cdp_active else None
 
@@ -1403,6 +1407,7 @@ with _login_popover:
 
         if _role_label:
             # Sudah login berhasil
+            st.session_state.pop("manual_spse_connected", None)
             st.success("Browser terhubung")
             _spse_home = SPSE_BASE_URL.rstrip("/") + "/home"
             if _role_label == "PPK":
@@ -1449,15 +1454,36 @@ with _login_popover:
             # Browser terbuka tapi masih di halaman login / gagal — tampilkan retry
             st.warning("⏳ Menunggu login...")
             st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
+            if st.session_state.get("manual_spse_connected"):
+                st.caption("Login manual dilakukan di Brave; setelah selesai refresh status di sini.")
+                if st.button("🔄 Refresh status login", type="primary", use_container_width=True,
+                             key="btn_refresh_manual_loginpass"):
+                    st.rerun()
             if st.button("❌ Tutup & Mulai Ulang", use_container_width=True):
                 spse_browser.tutup_browser()
                 st.session_state.pop("login_failed", None)
                 st.session_state.pop("login_failed_role", None)
+                st.session_state.pop("manual_spse_connected", None)
+                st.rerun()
+        elif st.session_state.get("manual_spse_connected"):
+            # Koneksi manual memang sengaja tidak menjalankan auto-login. Beri
+            # user ruang untuk menyelesaikan login di Brave tanpa menyuruhnya
+            # menutup browser yang baru saja dibuka.
+            st.info("🌐 Brave SPSE terhubung. Silakan selesaikan login manual di Brave.")
+            st.caption("Setelah berhasil login, klik Refresh status untuk membaca role.")
+            if st.button("🔄 Refresh status login", type="primary", use_container_width=True,
+                         key="btn_refresh_manual_spse"):
+                st.rerun()
+            if st.button("❌ Tutup Browser", use_container_width=True,
+                         key="btn_tutup_manual_spse"):
+                spse_browser.tutup_browser()
+                st.session_state.pop("manual_spse_connected", None)
                 st.rerun()
         else:
             # Browser hidup tapi tidak dalam sesi login yang dikenali (role recovery di atas
-            # sudah gagal). Bukan dead-end: sediakan tutup bersih lalu form login.
-            st.warning("⚠️ Sesi SPSE tidak dikenali — silakan tutup lalu login ulang.")
+            # sudah gagal). Jangan menutup browser secara otomatis; user dapat
+            # memilih login manual dari tombol yang tersedia di form.
+            st.warning("⚠️ Sesi SPSE belum dikenali — gunakan koneksi/login manual atau tutup bila perlu.")
             st.caption(url_aktif[:60] + "..." if len(url_aktif) > 60 else url_aktif)
             if st.button("❌ Tutup Browser & Login Ulang", type="primary", use_container_width=True):
                 spse_browser.tutup_browser()
@@ -1611,8 +1637,9 @@ if _spse_role == "PPK":
                 session_epoch=st.session_state.get("_spse_session_epoch", 0),
             )
         except _PpkAuthError:
-            # Jangan tampilkan 0 paket ketika session SPSE invalid. Tutup
-            # browser stale agar rerun menampilkan form login yang bersih.
+            # Jangan tampilkan 0 paket ketika session SPSE invalid. Lepaskan
+            # koneksi automation saja; Brave tetap hidup agar user dapat login
+            # manual atau mengulang auto-login tanpa browser ikut tertutup.
             invalidate_ppk_session_state()
             st.session_state.pop("spse_role", None)
             st.session_state.pop("_cdp_role_miss_count", None)
@@ -1620,13 +1647,14 @@ if _spse_role == "PPK":
             st.session_state["selected_login_role"] = "PPK"
             st.session_state.pop("login_failed", None)
             st.session_state.pop("login_failed_role", None)
+            st.session_state.pop("manual_spse_connected", None)
             st.session_state["_spse_relogin_reason"] = (
                 "Sesi SPSE PPK sudah kedaluwarsa/ditolak (HTTP 401/403). "
                 "Silakan login ulang."
             )
             try:
                 import spse_browser as _sb_invalid
-                _sb_invalid.tutup_browser()
+                _sb_invalid.diskonek()
             except Exception:
                 pass
             _load_paket_ppk.clear()

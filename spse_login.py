@@ -830,7 +830,12 @@ async def _ensure_loginpass(
 
 
 async def _fetch_captcha_bytes(page) -> bytes:
-    captcha_el = await page.query_selector("img[src*='showcaptcha']")
+    # Setelah refresh SPSE dapat menyisakan gambar CAPTCHA lama yang hidden.
+    # Ambil elemen yang terlihat terlebih dahulu agar OCR dan token server
+    # selalu merujuk ke CAPTCHA yang sama.
+    captcha_el = await page.query_selector("img[src*='showcaptcha']:visible")
+    if not captcha_el:
+        captcha_el = await page.query_selector("img[src*='showcaptcha']")
     if not captcha_el:
         raise RuntimeError("Elemen CAPTCHA tidak ditemukan di halaman login.")
     await page.wait_for_function(

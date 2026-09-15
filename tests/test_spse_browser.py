@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import requests
@@ -84,7 +84,8 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
         self.assertNotIn("--headless", command)
 
     def test_launch_brave_uses_original_popen(self):
-        with patch.object(spse_browser, "clone_profil_ke_session", return_value=(True, "")), \
+        with patch.object(spse_browser, "_cek_cdp_aktif", return_value=False), \
+                patch.object(spse_browser, "clone_profil_ke_session", return_value=(True, "")), \
                 patch.object(spse_browser, "_OrigPopen") as original_popen:
             spse_browser.launch_chrome_dengan_cdp()
 
@@ -92,6 +93,32 @@ class SpseBrowserTabSelectionTest(unittest.TestCase):
         command = original_popen.call_args.args[0]
         self.assertIn(f"--remote-debugging-port={spse_browser.CDP_PORT}", command)
         self.assertNotIn("startupinfo", original_popen.call_args.kwargs)
+        self.assertNotEqual(original_popen.call_args.kwargs["creationflags"], 0)
+
+
+class SpseBrowserConnectionReuseTest(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_context_is_reused_without_second_cdp_attach(self):
+        page = SimpleNamespace(goto=AsyncMock())
+        with (
+            patch.object(spse_browser, "_get_ctx", return_value=object()),
+            patch.object(
+                spse_browser,
+                "_select_context_page_async",
+                AsyncMock(return_value=page),
+            ),
+            patch.object(
+                spse_browser,
+                "_get_pw",
+                side_effect=AssertionError("tidak boleh attach CDP kedua"),
+            ),
+        ):
+            result = await spse_browser._connect_cdp_async(
+                "https://spse.inaproc.id/tapinkab/",
+                navigate=True,
+            )
+
+        self.assertIs(result, page)
+        page.goto.assert_awaited_once()
 
     def test_access_denied_title_is_not_valid_spse_tab(self):
         base = spse_browser.SPSE_BASE_URL.rstrip("/")

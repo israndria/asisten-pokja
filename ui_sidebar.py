@@ -231,7 +231,7 @@ def _sidebar_login_form():
     if _relogin_reason:
         st.warning(_relogin_reason)
 
-    if st.button("🌐 Hubungkan ke Brave SPSE", type="primary", use_container_width=True):
+    if st.button("🌐 Hubungkan ke Brave yang sudah berjalan", type="primary", use_container_width=True):
         try:
             with st.spinner("Menghubungkan..."):
                 spse_browser.buka_browser(SPSE_BASE_URL)
@@ -241,6 +241,24 @@ def _sidebar_login_form():
             st.rerun(scope="app")
         except RuntimeError as e:
             st.error(str(e))
+
+    if st.button(
+        "🚀 Buka Brave SPSE (Login Manual)",
+        use_container_width=True,
+        key="btn_buka_brave_manual",
+        help="Meluncurkan/menyambungkan Brave saja. Tidak membaca credential dan tidak menjalankan auto-login.",
+    ):
+        try:
+            with st.spinner("Membuka Brave SPSE tanpa auto-login..."):
+                spse_browser.hubungkan_manual()
+            st.session_state["manual_spse_connected"] = True
+            st.success(
+                "Brave SPSE siap. Silakan login manual di Brave; setelah selesai klik "
+                "Refresh status pada panel Browser SPSE."
+            )
+            st.rerun(scope="app")
+        except Exception as exc:
+            st.error(f"Gagal membuka Brave SPSE: {exc}")
 
     st.divider()
     st.caption("💡 **Opsi otomatis:** Brave akan diluncurkan langsung dari sini")

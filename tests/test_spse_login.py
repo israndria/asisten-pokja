@@ -340,6 +340,10 @@ class SpseSessionFirstTest(unittest.IsolatedAsyncioTestCase):
         result = await spse_login._fetch_captcha_bytes(page)
 
         self.assertEqual(result, displayed)
+        self.assertEqual(
+            page.query_selector.await_args.args[0],
+            "img[src*='showcaptcha']:visible",
+        )
         page.wait_for_function.assert_awaited_once()
         element.evaluate.assert_awaited_once()
 

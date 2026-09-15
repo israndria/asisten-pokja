@@ -39,6 +39,8 @@ if not hasattr(_builtins_sb, "_spse_loop_state"):
     _builtins_sb._spse_loop_state = {"loop": None, "thread": None}
 if not hasattr(_builtins_sb, "_spse_restore_state"):
     _builtins_sb._spse_restore_state = {"signature": None}
+if not hasattr(_builtins_sb, "_spse_launch_state"):
+    _builtins_sb._spse_launch_state = {"lock": threading.Lock(), "process": None}
 
 def _get_pw():      return _builtins_sb._spse_cdp_state["pw"]
 def _set_pw(v):     _builtins_sb._spse_cdp_state["pw"] = v
@@ -46,6 +48,10 @@ def _get_ctx():     return _builtins_sb._spse_cdp_state["context"]
 def _set_ctx(v):    _builtins_sb._spse_cdp_state["context"] = v
 def _get_page():    return _builtins_sb._spse_cdp_state["page"]
 def _set_page(v):   _builtins_sb._spse_cdp_state["page"] = v
+
+
+def _get_launch_lock():
+    return _builtins_sb._spse_launch_state["lock"]
 
 def _get_loop():    return _builtins_sb._spse_loop_state["loop"]
 def _set_loop(v):   _builtins_sb._spse_loop_state["loop"] = v
@@ -714,11 +720,62 @@ def clone_profil_ke_session(force: bool = False) -> tuple[bool, str]:
     return True, f"Profil berhasil {label}: {copied} item disalin, {skipped} dilewati."
 
 
+async def _select_context_page_async():
+    """Pilih page terbaik dari context Playwright yang sudah tersambung."""
+    context = _get_ctx()
+    pages = [page for page in context.pages if not page.is_closed()]
+    if not pages:
+        page = await context.new_page()
+        _set_page(page)
+        return page
+
+    candidates = []
+    for page in pages:
+        try:
+            candidates.append(await _deskripsikan_page_pemilihan(page))
+        except Exception:
+            continue
+    if not candidates:
+        _set_page(pages[0])
+        return pages[0]
+
+    from urllib.parse import urlsplit as _urlsplit
+    base_netloc = _urlsplit(SPSE_BASE_URL).netloc
+    spse_candidates = [
+        item for item in candidates
+        if _urlsplit(item["url"]).netloc == base_netloc
+    ]
+    best = max(spse_candidates or candidates, key=lambda item: item["score"])
+    _set_page(best["page"])
+    return best["page"]
+
+
 async def _connect_cdp_async(url: str = "", navigate: bool = True):
     """Connect ke Chrome yang sudah jalan via CDP.
     Jika navigate=False, hanya connect tanpa membuka tab baru (cepat, untuk auto-reconnect).
     """
     from playwright.async_api import async_playwright
+
+    # Streamlit rerun dan beberapa engine dapat memanggil buka_browser berkali-
+    # kali. Reuse context yang sehat; connect_over_cdp baru setiap kali dapat
+    # menumpuk koneksi WebSocket dan meninggalkan context stale.
+    if _get_ctx() is not None:
+        try:
+            page = await _select_context_page_async()
+            if navigate and url:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return page
+        except Exception:
+            # Context lama putus; lepaskan driver Playwright saja. Jangan
+            # menutup Brave karena browser tetap milik user.
+            try:
+                if _get_pw() is not None:
+                    await _get_pw().stop()
+            except Exception:
+                pass
+            _set_pw(None)
+            _set_ctx(None)
+            _set_page(None)
     if _get_pw() is None:
         _set_pw(await async_playwright().start())
     import os as _os
@@ -756,27 +813,7 @@ async def _connect_cdp_async(url: str = "", navigate: bool = True):
         pass
     # Pakai tab SPSE paling relevan. Urutan ``context.pages`` bukan urutan tab
     # foreground dan bisa menempatkan loginpass/root di posisi pertama.
-    if _get_ctx().pages:
-        _page_candidates = []
-        for page in _get_ctx().pages:
-            if page.is_closed():
-                continue
-            try:
-                _page_candidates.append(await _deskripsikan_page_pemilihan(page))
-            except Exception:
-                continue
-        # Jika ada page SPSE, jangan biarkan tab eksternal mengalahkannya.
-        from urllib.parse import urlsplit as _urlsplit
-        _base_netloc = _urlsplit(SPSE_BASE_URL).netloc
-        _spse_candidates = [
-            item for item in _page_candidates
-            if _urlsplit(item["url"]).netloc == _base_netloc
-        ]
-        _choice_pool = _spse_candidates or _page_candidates
-        _best = max(_choice_pool, key=lambda item: item["score"]) if _choice_pool else None
-        _set_page(_best["page"] if _best else _get_ctx().pages[0])
-    else:
-        _set_page(await _get_ctx().new_page())
+    await _select_context_page_async()
     if navigate and url:
         await _get_page().goto(url, wait_until="domcontentloaded", timeout=30000)
     return _get_page()
@@ -995,20 +1032,65 @@ def launch_chrome_dengan_cdp():
     Pakai profil clone dari israndria (Profile 1) — bookmark & setting terbawa.
     Clone hanya dilakukan sekali; gunakan clone_profil_ke_session(force=True) untuk update.
     """
-    import subprocess
     session_dir = BROWSER_SESSION_DIR
     os.makedirs(session_dir, exist_ok=True)
-    # Clone profil jika belum pernah (idempoten)
-    clone_profil_ke_session(force=False)
-    # Jangan pakai subprocess.Popen module-level: di atas sudah di-patch
-    # SW_HIDE untuk proses Playwright dan itu membuat window Brave invisible.
-    _OrigPopen(
-        _visible_brave_command(with_cdp=True),
-        stdin=_subprocess.DEVNULL,
-        stdout=_subprocess.DEVNULL,
-        stderr=_subprocess.DEVNULL,
-        close_fds=True,
-    )
+
+    # Dua rerun Streamlit yang datang berdekatan tidak boleh meluncurkan dua
+    # Brave dengan profile CDP yang sama. Call kedua cukup menunggu instance
+    # pertama melalui caller (tunggu_cdp_ready).
+    with _get_launch_lock():
+        if _cek_cdp_aktif():
+            return False
+
+        # Clone profil jika belum pernah (idempoten)
+        clone_profil_ke_session(force=False)
+        # Lepaskan Brave dari lifecycle Streamlit. Dengan begitu hot-reload/
+        # restart app tidak ikut menutup browser GUI milik user.
+        creationflags = (
+            getattr(_subprocess, "DETACHED_PROCESS", 0)
+            | getattr(_subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+        # Jangan pakai subprocess.Popen module-level: di atas sudah di-patch
+        # SW_HIDE untuk proses Playwright dan itu membuat window Brave invisible.
+        process = _OrigPopen(
+            _visible_brave_command(with_cdp=True),
+            stdin=_subprocess.DEVNULL,
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=creationflags,
+        )
+        _builtins_sb._spse_launch_state["process"] = process
+        return True
+
+
+def hubungkan_manual(url: str = SPSE_BASE_URL):
+    """Buka/attach Brave SPSE tanpa credential atau pipeline auto-login.
+
+    Jika instance CDP belum hidup, Brave diluncurkan lalu ditunggu sampai
+    endpoint siap. Tab SPSE existing tidak ditimpa; jika belum ada, satu tab
+    baru dibuka. Return page Playwright agar caller dapat melakukan health-check.
+    """
+    if not _cek_cdp_aktif():
+        launch_chrome_dengan_cdp()
+        if not tunggu_cdp_ready(timeout_seconds=20):
+            raise RuntimeError(
+                f"Brave/CDP port {CDP_PORT} belum siap setelah diluncurkan."
+            )
+
+    buka_browser(navigate=False)
+    page = tunggu_tab_spse_ready(timeout_seconds=10)
+    if page is None:
+        page = _run(_buka_tab_baru_async(url), timeout=40)
+    else:
+        try:
+            _run(page.bring_to_front(), timeout=10)
+        except Exception:
+            pass
+    # Fokuskan window yang sudah ada saja; jangan melakukan Popen kedua jika
+    # Windows menolak SetForegroundWindow.
+    _fokuskan_jendela_brave()
+    return page
 
 
 async def _tutup_async():
@@ -1282,6 +1364,14 @@ def keepalive_browser() -> bool:
 def diskonek():
     """Reset koneksi Playwright tanpa menutup browser. Berguna jika CDP sudah ditutup manual."""
     global _cdp_tabs_cache, _cdp_tabs_cache_ts
+    pw = _get_pw()
+    loop = _get_loop()
+    if pw is not None and loop is not None and loop.is_running():
+        try:
+            future = asyncio.run_coroutine_threadsafe(pw.stop(), loop)
+            future.result(timeout=5)
+        except Exception:
+            pass
     _set_pw(None)
     _set_ctx(None)
     _set_page(None)
