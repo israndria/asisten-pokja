@@ -28,7 +28,13 @@ from ui_state import (
     ppk_upload_expander_label,
     restore_selection_from_query,
 )
-from tender_package_filters import filter_tender_candidates, is_draft, package_code, stale_selection_keys
+from tender_package_filters import (
+    filter_tender_candidates,
+    is_draft,
+    overlay_missing_stage,
+    package_code,
+    stale_selection_keys,
+)
 from pl_data_ui import (
     fetch_peserta_pl_cached as _fetch_peserta_pl_cached,
     fetch_status_semua_paket_cached as _fetch_status_semua_paket_cached,
@@ -1001,8 +1007,17 @@ def _load_draft_paket_cached() -> list:
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return []
 
+    def _overlay_cached_stage(rows):
+        """Tambahkan stage live cache tanpa mengganti stage yang sudah dikenal."""
+        try:
+            _cache_stage = kirimpesan_engine.load_paket_cache() or {}
+            return overlay_missing_stage(rows, _cache_stage.get("tahap_map") or {})
+        except Exception:
+            return rows
+
     try:
         rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+        rows = _overlay_cached_stage(rows)
         _save_local(rows)
         return [r for r in rows if not _is_tender_excluded(r)]
     except Exception:
@@ -1015,6 +1030,7 @@ def _load_draft_paket_cached() -> list:
             pass
         try:
             rows = inbox_engine._sb().table("draft_paket").select("*").order("diambil_pada", desc=True).execute().data or []
+            rows = _overlay_cached_stage(rows)
             _save_local(rows)
             return [r for r in rows if not _is_tender_excluded(r)]
         except Exception:
@@ -1041,6 +1057,10 @@ def _load_draft_paket_cached() -> list:
                     for p in _session_paket
                     if p.get("kode") or p.get("id_lelang")
                 ]
+            # SQLite fallback can contain an old stage label after a previous
+            # SPSE sync. Use the latest persisted live stage map only when the
+            # row stage is empty/unknown, preserving recognized DB values.
+            rows = _overlay_cached_stage(rows)
             return [r for r in rows if not _is_tender_excluded(r)]
 
 
@@ -14510,6 +14530,17 @@ Mulai evaluasi sekarang."""
 if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     import pindah_penawaran_engine as _pe
 
+    # Direct URL ke Tab 7 tidak melewati bootstrap Tab 0. Pulihkan stage live
+    # yang sudah tersimpan agar session map lama tidak menutup paket valid.
+    try:
+        _tab7_cache = kirimpesan_engine.load_paket_cache() or {}
+        if _tab7_cache.get("tahap_map"):
+            st.session_state.setdefault("tender_tahap_map", {}).update(
+                _tab7_cache["tahap_map"]
+            )
+    except Exception:
+        pass
+
     st.markdown("### 7️⃣ Dokumen Penawaran")
     st.caption(
         "Alur kerja: scan hasil decrypt Apendo → pindahkan/gabung dokumen → evaluasi dan input BA."
@@ -14522,6 +14553,8 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         with _dp_col_scan:
             if st.button("🔍 Scan Ulang Apendo", key="dp_scan", type="primary", use_container_width=True):
                 st.session_state["dp_reset_selection_on_scan"] = True
+                st.session_state.pop("dp_tab7_fresh_retry", None)
+                _load_draft_paket_cached.clear()
                 st.session_state.pop("dp_scan_result", None)
                 st.rerun()
 
@@ -14567,13 +14600,30 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                 st.code("\n".join(_dp_report["details"]))
 
     # ── Daftar paket bersama untuk seluruh workflow Tab 6 ────────────────────
-    _dp_paket_base = [
-        _r for _r in _load_draft_paket_cached()
-        if _r.get("folder_dibuat")
-        and not _is_tender_excluded(_r)
-        and not _is_tender_selesai(_r)
-    ]
-    _dp_paket_candidates = _get_tender_tab_candidates(7, _dp_paket_base)
+    def _load_tab7_package_rows():
+        _base = [
+            dict(_r) for _r in _load_draft_paket_cached()
+            if _r.get("folder_dibuat")
+            and not _is_tender_excluded(_r)
+        ]
+        # Untuk row paket yang sudah dimuat dari Supabase, status_tahap row
+        # menjadi sumber utama. Map session hanya mengisi status kosong/unknown;
+        # map lama tidak boleh menutup row aktif yang stage-nya valid.
+        _base = overlay_missing_stage(
+            _base, st.session_state.get("tender_tahap_map", {})
+        )
+        _base = [_r for _r in _base if not _is_tender_selesai(_r)]
+        return _base, filter_tender_candidates(_base, 7, tahap_map={})
+
+    _dp_paket_base, _dp_paket_candidates = _load_tab7_package_rows()
+    # Cache transient/stale dapat berisi daftar lama atau kosong. Retry sekali
+    # pada render ini; tidak melakukan scan Apendo dan tidak memindahkan file.
+    if not _dp_paket_candidates and not st.session_state.get("dp_tab7_fresh_retry"):
+        st.session_state["dp_tab7_fresh_retry"] = True
+        _load_draft_paket_cached.clear()
+        _dp_paket_base, _dp_paket_candidates = _load_tab7_package_rows()
+    elif _dp_paket_candidates:
+        st.session_state.pop("dp_tab7_fresh_retry", None)
     _dp_paket_rows = _dp_paket_candidates
     _dp_ready_codes = {package_code(_r) for _r in _dp_paket_rows}
     _dp_paket_pra_pembukaan = [
@@ -14592,11 +14642,15 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
     if st.session_state.pop("dp_reset_selection_on_scan", False):
         for _status in _dp_status_rows:
             _dp_code = _status["kode_tender"]
-            st.session_state[f"dp_chk_{_dp_code}"] = _status["status_key"] == "source_ready"
+            st.session_state[f"dp_chk_{_dp_code}"] = (
+                _status["status_key"] in {"source_ready", "output_present"}
+                and _status.get("folder_ada", False)
+            )
 
     st.caption(
-        "Paket aktif ditampilkan bersama status sumber Apendo. Paket siap scan "
-        "otomatis tercentang; Pilih Semua/Batal Semua tersedia untuk aksi bulk."
+        "Paket aktif ditampilkan bersama status sumber Apendo. Paket dengan sumber "
+        "siap atau output lokal sudah ada otomatis tercentang; Pilih Semua/Batal "
+        "Semua tersedia untuk aksi bulk."
     )
     if _dp_paket_pra_pembukaan:
         st.info(
@@ -14622,7 +14676,7 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
             if _dp_ck not in st.session_state:
                 _dp_status = _dp_status_by_code.get(_dp_kt, {})
                 st.session_state[_dp_ck] = (
-                    _dp_status.get("status_key") == "source_ready"
+                    _dp_status.get("status_key") in {"source_ready", "output_present"}
                     and _dp_status.get("folder_ada", False)
                 )
             if _dp_check_cols[_dp_i % 2].checkbox(
@@ -14640,7 +14694,20 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
             _status["kode_tender"] for _status in _dp_status_rows
             if _status["status_key"] == "source_ready" and _status["folder_ada"]
         }
-        _dp_blocked_selected = _dp_selected_kodes - _dp_actionable_kodes
+        # output_present boleh ikut pilihan untuk Input BA dan Gabung Dokumen,
+        # tetapi tidak boleh masuk aksi pindah agar file tidak diproses ulang.
+        _dp_already_present_selected = {
+            _status["kode_tender"] for _status in _dp_status_rows
+            if _status["kode_tender"] in _dp_selected_kodes
+            and _status["status_key"] == "output_present"
+        }
+        _dp_blocked_selected = {
+            _status["kode_tender"] for _status in _dp_status_rows
+            if _status["kode_tender"] in _dp_selected_kodes
+            and _status["status_key"] in {
+                "source_missing", "source_incomplete", "folder_missing"
+            }
+        }
         if _dp_blocked_selected:
             _blocked_labels = [
                 _dp_status_by_code[_code].get("folder_dibuat") or _code
@@ -14649,6 +14716,15 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
             st.warning(
                 "Paket terpilih tetapi belum diproses karena sumber Apendo belum "
                 "siap/folder belum valid: " + "; ".join(_blocked_labels)
+            )
+        if _dp_already_present_selected:
+            _present_labels = [
+                _dp_status_by_code[_code].get("folder_dibuat") or _code
+                for _code in sorted(_dp_already_present_selected)
+            ]
+            st.info(
+                "Dokumen penawaran sudah tersedia di folder paket; paket berikut "
+                "tidak akan dipindahkan ulang: " + "; ".join(_present_labels)
             )
         _dp_not_ready = [
             _status for _status in _dp_status_rows
@@ -14686,7 +14762,26 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
         )
 
     if not _dp_items:
-        st.info("Belum ada peserta valid dari `D:\\data\\biddings`; periksa status paket di daftar di atas.")
+        _dp_local_ready = [
+            _status for _status in _dp_status_rows
+            if _status["status_key"] == "output_present"
+        ]
+        if _dp_local_ready:
+            _local_labels = [
+                _status.get("folder_dibuat") or _status["kode_tender"]
+                for _status in _dp_local_ready
+            ]
+            st.success(
+                "Sumber Apendo sudah tidak diperlukan: dokumen penawaran "
+                "paket berikut sudah ada di folder tujuan: "
+                + "; ".join(_local_labels)
+            )
+            st.caption(
+                "Lanjutkan di bagian **Gabung Dokumen Lengkap** dan **Input BA**. "
+                "Jangan jalankan Scan/Pindah untuk mengulang dokumen yang sudah ada."
+            )
+        else:
+            st.info("Belum ada peserta valid dari `D:\\data\\biddings`; periksa status paket di daftar di atas.")
     else:
         # Hitung total peserta per paket untuk resolve_dest
         _dp_total: dict[str, int] = {}
@@ -14729,6 +14824,8 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                     st.session_state["dp_notif"] = (
                         f"✅ {len(_bulk_ok)} file berhasil dipindah dari {len(_dp_scan_selected)} paket."
                     )
+                    _load_draft_paket_cached.clear()
+                    st.session_state["dp_reset_selection_on_scan"] = True
                     st.session_state.pop("dp_scan_result", None)
                     st.rerun()
                 if _bulk_fail:
@@ -14791,6 +14888,8 @@ if _tender_active_tab == "7️⃣ Dokumen Penawaran":
                                     f"→ `{_dest_dirs[0]}`"
                                 )
                                 st.session_state["dp_notif"] = _notif
+                                _load_draft_paket_cached.clear()
+                                st.session_state["dp_reset_selection_on_scan"] = True
                                 st.session_state.pop("dp_scan_result", None)
                                 st.rerun()
                             for _msg in _log_msgs:

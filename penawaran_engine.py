@@ -482,6 +482,10 @@ def scrape_penawaran_ke_excel(kode_tender: str, xlsm_path: str,
     try:
         _log(f"Membuka Excel: {os.path.basename(xlsm_path)}")
         xl = win32com.client.DispatchEx("Excel.Application")
+        # UDF VBA tetap tersedia saat Save(), tetapi event workbook tidak
+        # boleh menjalankan side effect di luar scope penulisan Sheet 6.
+        xl.AutomationSecurity = 1  # msoAutomationSecurityLow
+        xl.EnableEvents = False
         xl.Visible = False
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Open(xlsm_path)
@@ -569,6 +573,8 @@ def update_rumus_penawaran_72(xlsm_path: str, progress_cb=None) -> dict:
     try:
         _log(f"Buka Excel untuk update rumus 7.2: {os.path.basename(xlsm_path)}")
         xl = win32com.client.DispatchEx("Excel.Application")
+        xl.AutomationSecurity = 1  # msoAutomationSecurityLow
+        xl.EnableEvents = False
         xl.Visible = False
         xl.DisplayAlerts = False
         wb = xl.Workbooks.Open(xlsm_path)

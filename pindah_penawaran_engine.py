@@ -234,7 +234,12 @@ def build_package_status(package_rows: list[dict], scanned_items: list[dict]) ->
         )
         folder_ada = bool(folder_paket and os.path.isdir(folder_paket))
         folder_penawaran = os.path.join(folder_paket, DEST_SUBFOLDER) if folder_paket else ""
-        output_file_count = len(_collect_files(folder_penawaran)) if os.path.isdir(folder_penawaran) else 0
+        # Hanya PDF dianggap output dokumen. desktop.ini/icon metadata tidak
+        # boleh membuat paket tampak sudah diproses.
+        output_file_count = (
+            len(_collect_files(folder_penawaran, ext_filter=".pdf"))
+            if os.path.isdir(folder_penawaran) else 0
+        )
         apendo_dirs = _apendo_package_dirs(kode)
 
         if not folder_ada:

@@ -17,6 +17,7 @@ def test_build_package_status_keeps_packages_without_apendo_source(tmp_path, mon
     (output / "penawaran.pdf").write_bytes(b"pdf")
     output_existing = tender_root / "046" / engine.DEST_SUBFOLDER
     output_existing.mkdir(parents=True)
+    (output_existing / "desktop.ini").write_bytes(b"icon metadata")
     (output_existing / "doktek.pdf").write_bytes(b"pdf")
 
     rows = [
@@ -40,6 +41,23 @@ def test_build_package_status_keeps_packages_without_apendo_source(tmp_path, mon
     assert result["045"]["status_key"] == "source_missing"
     assert "D:\\data\\biddings" in result["045"]["status_detail"]
     assert result["046"]["status_key"] == "output_present"
+
+
+def test_build_package_status_does_not_treat_desktop_ini_as_output(tmp_path, monkeypatch):
+    tender_root = tmp_path / "tender"
+    apendo_root = tmp_path / "biddings"
+    output = tender_root / "047" / engine.DEST_SUBFOLDER
+    output.mkdir(parents=True)
+    (output / "desktop.ini").write_bytes(b"icon metadata")
+    monkeypatch.setattr(engine, "TENDER_ROOT", str(tender_root))
+    monkeypatch.setattr(engine, "APENDO_ROOT", str(apendo_root))
+
+    result = engine.build_package_status(
+        [{"kode_tender": "047", "folder_dibuat": "047"}], []
+    )[0]
+
+    assert result["status_key"] == "source_missing"
+    assert result["output_file_count"] == 0
 
 
 def test_build_package_status_distinguishes_incomplete_apendo_folder(tmp_path, monkeypatch):

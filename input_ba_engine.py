@@ -258,6 +258,11 @@ def fill_input_ba(
     try:
         # DispatchEx = instance Excel terisolasi, tidak ganggu file yang sedang dibuka user
         xl = win32com.client.DispatchEx("Excel.Application")
+        # UDF VBA workbook tetap tersedia saat Save(), tetapi event workbook
+        # dimatikan agar Workbook_Open/SheetChange tidak mengubah data di luar
+        # scope Input BA.
+        xl.AutomationSecurity = 1  # msoAutomationSecurityLow
+        xl.EnableEvents = False
         xl.Visible = False
         xl.DisplayAlerts = False
 

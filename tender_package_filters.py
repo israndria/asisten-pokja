@@ -104,16 +104,21 @@ def stage_rank(row: Mapping[str, object], tahap_map: Mapping[str, object] | None
     """Resolve current Tender stage, preferring live session map over row cache."""
     tahap_map = tahap_map or {}
     code = package_code(row)
-    raw = tahap_map.get(code)
-    if raw in (None, ""):
-        raw = next((row.get(key) for key in ("status_tahap", "tahap_tender", "tahap_spse", "status") if row.get(key)), "")
-    normalized = normalize_stage(raw)
-    if not normalized:
-        return None
-    # Long/specific labels must win over generic words such as "penawaran".
-    for key, aliases in _STAGE_ALIASES:
-        if any(alias in normalized for alias in aliases):
-            return _STAGE_RANKS[key]
+    # Map live/session tetap diprioritaskan, tetapi label map lama/unknown
+    # tidak boleh menutupi status_tahap row yang sudah valid dari Supabase.
+    raw_values = [tahap_map.get(code)]
+    raw_values.extend(
+        row.get(key)
+        for key in ("status_tahap", "tahap_tender", "tahap_spse", "status")
+    )
+    for raw in raw_values:
+        normalized = normalize_stage(raw)
+        if not normalized:
+            continue
+        # Long/specific labels must win over generic words such as "penawaran".
+        for key, aliases in _STAGE_ALIASES:
+            if any(alias in normalized for alias in aliases):
+                return _STAGE_RANKS[key]
     return None
 
 
@@ -157,6 +162,28 @@ def filter_tender_candidates(
         rank = stage_rank(copied, tahap_map)
         if is_terminal(copied, tahap_map) or not _within_tab_stage(tab, rank):
             continue
+        result.append(copied)
+    return result
+
+
+def overlay_missing_stage(
+    rows: Iterable[Mapping[str, object]],
+    stage_map: Mapping[str, object] | None = None,
+) -> list[dict]:
+    """Overlay stage cache only when row status is empty/unknown.
+
+    Supabase/local metadata may lag behind the latest live stage. A cached
+    live map is useful as fallback, but must not overwrite a recognized stage.
+    """
+    stage_map = stage_map or {}
+    result = []
+    for row in rows:
+        copied = dict(row)
+        if stage_rank(copied, {}) is None:
+            code = package_code(copied)
+            stage = str(stage_map.get(code) or "").strip()
+            if stage:
+                copied["status_tahap"] = stage
         result.append(copied)
     return result
 
