@@ -3295,6 +3295,8 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 st.session_state["pl_cb_isi_excel"] = True
                 st.session_state["pl_cb_isi_excel_default_version"] = "v3"
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel")
+            if not _pl_isi_excel:
+                st.warning("Centang **Isi Excel @ Master Data** sebelum membuat folder paket.")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -3387,7 +3389,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 ]
                 if st.button(
                     f"📁 Buat Folder Terpilih ({len(_pl_terpilih_plan)} paket)",
-                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts),
+                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts) or not _pl_isi_excel,
                     use_container_width=True,
                     key="pl_btn_buat_terpilih",
                     type="primary",
@@ -7193,6 +7195,8 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 st.session_state["pl_cb_isi_excel_pk"] = True
                 st.session_state["pl_cb_isi_excel_pk_default_v2"] = True
             _pl_isi_excel = st.checkbox("📊 Isi Excel @ Master Data (wajib jika workbook langsung dipakai)", key="pl_cb_isi_excel_pk")
+            if not _pl_isi_excel:
+                st.warning("Centang **Isi Excel @ Master Data** sebelum membuat folder paket.")
 
             # ── Bulk: Buat Semua Folder ──────────────────────────────
             st.divider()
@@ -7283,7 +7287,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 ]
                 if st.button(
                     f"📁 Buat Folder Terpilih ({len(_pl_terpilih_plan)} paket)",
-                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts),
+                    disabled=len(_pl_terpilih_plan) == 0 or bool(_pl_number_conflicts) or not _pl_isi_excel,
                     use_container_width=True,
                     key="pl_btn_buat_terpilih",
                     type="primary",
