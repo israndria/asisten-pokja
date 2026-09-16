@@ -155,6 +155,57 @@ _SUPABASE_COL = {
     3: "tgl_negosiasi",   # T4 Klarifikasi+Nego → ambil tanggal mulai
     4: "tgl_penetapan",   # T5 Penandatanganan → ambil tanggal mulai
 }
+_SUPABASE_SCHEDULE_FIELDS = (
+    "tgl_pembukaan",
+    "tgl_buka_penawaran",
+    "tgl_evaluasi",
+    "tgl_negosiasi",
+    "tgl_penetapan",
+)
+
+
+def _schedule_supabase_update(jadwal_list: list[dict]) -> dict[str, str]:
+    """Bangun payload tanggal Supabase dari jadwal SPSE authoritative."""
+    update = {}
+    for i, tahap in enumerate(jadwal_list):
+        col = _SUPABASE_COL.get(i)
+        if not col:
+            continue
+        # T3 evaluasi → ambil selesai; T2/T4/T5 → ambil mulai.
+        dt = tahap["selesai"] if i == 2 else tahap["mulai"]
+        nilai_tanggal = dt.date().isoformat()
+        update[col] = nilai_tanggal
+        if col == "tgl_pembukaan":
+            # Dua nama kolom historis harus selalu sama.
+            update["tgl_buka_penawaran"] = nilai_tanggal
+    return update
+
+
+def _supabase_schedule_complete(row: dict | None, jadwal_list: list[dict]) -> bool:
+    """True hanya jika semua tanggal yang dibutuhkan workbook sudah terisi."""
+    if not isinstance(row, dict):
+        return False
+    expected = _schedule_supabase_update(jadwal_list)
+    if not expected or any(field not in expected for field in _SUPABASE_SCHEDULE_FIELDS):
+        return False
+    return all(
+        str(row.get(field) or "").strip()[:10] == expected[field]
+        for field in _SUPABASE_SCHEDULE_FIELDS
+    )
+
+
+def _load_supabase_schedule_row(kode_paket: str) -> dict:
+    """Baca metadata tanggal saat caller langsung memakai sync satu paket."""
+    try:
+        from config import sb as _sb
+
+        rows = _sb().table("draft_paket_pl").select(
+            ",".join(_SUPABASE_SCHEDULE_FIELDS)
+        ).eq("kode_paket", kode_paket).limit(1).execute().data or []
+        return rows[0] if rows else {}
+    except Exception:
+        # Gagal membaca metadata tidak boleh mengaktifkan skip palsu.
+        return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +511,38 @@ def _pl_folder_identity_valid(folder_name: str, kode_paket: str) -> bool:
     )
 
 
+def _resolve_pl_folder_for_row(row: dict) -> str:
+    """Resolve folder seperti loader Streamlit, dengan fallback metadata lama."""
+    code = str(row.get("kode_paket") or "").strip()
+    if not code:
+        return ""
+
+    raw_folder = row.get("folder_dibuat")
+    candidates = []
+    if isinstance(raw_folder, str) and raw_folder.strip():
+        candidates.append(raw_folder.strip())
+
+    # Coba metadata/path tersimpan dahulu. Jika stale atau NULL, cari folder
+    # fisik memakai resolver yang sama dengan filter_local_pl_rows di Streamlit.
+    for folder in candidates:
+        if _pl_folder_identity_valid(folder, code):
+            return folder
+
+    try:
+        from parse_kak_pl import _resolve_folder_pl
+
+        folder, _ = _resolve_folder_pl(
+            row.get("nomor_urut"),
+            row.get("nama_paket") or "",
+            row.get("jenis_pl") or "JKK",
+            is_ulang=bool(row.get("is_ulang")),
+            strict_name=True,
+        )
+    except (ImportError, OSError, TypeError, ValueError):
+        folder = None
+    return folder if folder and _pl_folder_identity_valid(folder, code) else ""
+
+
 def _auto_enroll_folder_pl() -> None:
     """Enroll PL yang foldernya dibuat user, termasuk jadwal yang dibuat teman."""
     from config import sb as _sb
@@ -474,23 +557,7 @@ def _auto_enroll_folder_pl() -> None:
     ).execute().data or []
     for row in rows:
         code = str(row.get("kode_paket") or "").strip()
-        raw_folder = row.get("folder_dibuat")
-        folder_name = str(raw_folder or "").strip()
-        if isinstance(raw_folder, bool):
-            folder_name = ""
-            if raw_folder:
-                try:
-                    from parse_kak_pl import _resolve_folder_pl
-
-                    folder_name, _ = _resolve_folder_pl(
-                        row.get("nomor_urut"),
-                        row.get("nama_paket") or "",
-                        row.get("jenis_pl") or "JKK",
-                        is_ulang=bool(row.get("is_ulang")),
-                        strict_name=True,
-                    )
-                except (ImportError, OSError, TypeError, ValueError):
-                    folder_name = ""
+        folder_name = _resolve_pl_folder_for_row(row)
         if (
             not code
             or not folder_name
@@ -507,7 +574,7 @@ def _auto_enroll_folder_pl() -> None:
         )
 
 
-def _load_owned_pl_rows() -> list[dict]:
+def _load_owned_pl_rows(*, include_schedule_metadata: bool = False) -> list[dict]:
     """Ambil semua target PL aktif dari registry.
 
     Registry adalah allowlist eksplisit untuk kalender. Data
@@ -523,7 +590,7 @@ def _load_owned_pl_rows() -> list[dict]:
         return []
     codes = [str(target.get("kode_paket") or "").strip() for target in targets]
     rows = _sb().table("draft_paket_pl").select(
-        "kode_paket,nama_paket,tahap_spse"
+        "kode_paket,nama_paket,tahap_spse," + ",".join(_SUPABASE_SCHEDULE_FIELDS)
     ).in_("kode_paket", codes).execute().data or []
     by_code = {str(row.get("kode_paket") or "").strip(): row for row in rows}
     result = []
@@ -545,10 +612,16 @@ def _load_owned_pl_rows() -> list[dict]:
             continue
         if str((row or {}).get("tahap_spse") or "").strip() == "Paket Sudah Selesai":
             continue
-        result.append({
+        item = {
             "kode_paket": code,
             "nama_paket": target.get("nama_paket") or (row or {}).get("nama_paket") or code,
-        })
+        }
+        if include_schedule_metadata:
+            item["_supabase_schedule"] = {
+                field: (row or {}).get(field)
+                for field in _SUPABASE_SCHEDULE_FIELDS
+            }
+        result.append(item)
     return result
 
 
@@ -575,6 +648,7 @@ def sync_jadwal_pl(
     nama_paket: str,
     *,
     skip_unchanged: bool = False,
+    supabase_row: dict | None = None,
 ) -> dict:
     """
     1. Baca jadwal aktual dari SPSE /nontender/{kode}/jadwal
@@ -593,7 +667,17 @@ def sync_jadwal_pl(
 
     schedule_hash = _schedule_hash(jadwal_list)
     if skip_unchanged and _load_schedule_state().get(str(kode_paket)) == schedule_hash:
-        if _gcal_schedule_complete(kode_paket, jadwal_list):
+        # Hash/event lengkap belum cukup: workbook membaca tanggal dari
+        # Supabase. Jangan skip bila metadata tanggal masih NULL/stale.
+        metadata = (
+            supabase_row
+            if supabase_row is not None
+            else _load_supabase_schedule_row(kode_paket)
+        )
+        if (
+            _gcal_schedule_complete(kode_paket, jadwal_list)
+            and _supabase_schedule_complete(metadata, jadwal_list)
+        ):
             return {
                 "ok": True,
                 "skipped": True,
@@ -607,21 +691,7 @@ def sync_jadwal_pl(
     gcal_result = push_jadwal_pl_ke_gcal(kode_paket, nama_paket, jadwal_list)
 
     # Upsert Supabase — ambil tanggal dari tahap index 1..4.
-    # Tanggal pembukaan punya dua nama kolom historis; sinkronkan keduanya.
-    sb_update = {}
-    for i, tahap in enumerate(jadwal_list):
-        col = _SUPABASE_COL.get(i)
-        if not col:
-            continue
-        # T3 evaluasi → ambil selesai; T4 nego + T5 penetapan → ambil mulai
-        if i == 2:
-            dt = tahap["selesai"]   # T3 Evaluasi → selesai
-        else:
-            dt = tahap["mulai"]     # T2/T4/T5 → mulai
-        nilai_tanggal = dt.date().isoformat()
-        sb_update[col] = nilai_tanggal
-        if col == "tgl_pembukaan":
-            sb_update["tgl_buka_penawaran"] = nilai_tanggal
+    sb_update = _schedule_supabase_update(jadwal_list)
 
     sb_result = {"ok": False, "error": ""}
     if sb_update:
@@ -666,7 +736,7 @@ def sync_semua_paket_pl(
     """
     from config import sb as _sb
 
-    rows = _load_owned_pl_rows()
+    rows = _load_owned_pl_rows(include_schedule_metadata=True)
     total = max(len(rows), 1)
     results = []
 
@@ -675,7 +745,12 @@ def sync_semua_paket_pl(
         nama = row["nama_paket"] or kode
         if progress_cb:
             progress_cb((i + 1) / total, f"Sync {kode} — {nama[:40]}")
-        r = sync_jadwal_pl(kode, nama, skip_unchanged=skip_unchanged)
+        r = sync_jadwal_pl(
+            kode,
+            nama,
+            skip_unchanged=skip_unchanged,
+            supabase_row=row.get("_supabase_schedule"),
+        )
         results.append({
             "kode_paket": kode,
             "nama_paket": nama[:50],

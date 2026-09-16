@@ -164,6 +164,50 @@ class GcalPlHelperTest(unittest.TestCase):
         )
         self.assertEqual(upsert.call_args.kwargs["folder_name"], expected_folder)
 
+    def test_auto_enroll_pl_resolves_folder_when_db_status_is_null(self):
+        expected_folder = r"D:\PL\109. PLPK - Paket Aktif"
+
+        class _Query:
+            def select(self, *_columns):
+                return self
+
+            def execute(self):
+                return type("Response", (), {"data": [{
+                    "kode_paket": "11032488000",
+                    "nama_paket": "Paket Aktif",
+                    "folder_dibuat": None,
+                    "jenis_pl": "PK",
+                    "nomor_urut": 109,
+                    "is_ulang": False,
+                }]})()
+
+        class _Client:
+            def table(self, name):
+                assert name == "draft_paket_pl"
+                return _Query()
+
+        with patch.object(config, "sb", return_value=_Client()), patch.object(
+            gcal_pl_helper, "load_targets", return_value=[]
+        ), patch.object(
+            gcal_pl_helper,
+            "_pl_folder_identity_valid",
+            side_effect=lambda folder, code: folder == expected_folder and code == "11032488000",
+        ), patch.object(gcal_pl_helper, "upsert_target") as upsert, patch(
+            "parse_kak_pl._resolve_folder_pl",
+            return_value=(expected_folder, "109"),
+        ) as resolve:
+            gcal_pl_helper._auto_enroll_folder_pl()
+
+        resolve.assert_called_once_with(
+            109,
+            "Paket Aktif",
+            "PK",
+            is_ulang=False,
+            strict_name=True,
+        )
+        self.assertEqual(upsert.call_args.args[:2], ("pl", "11032488000"))
+        self.assertEqual(upsert.call_args.kwargs["folder_name"], expected_folder)
+
     def test_tapin_uses_wita_timezone(self):
         self.assertEqual(gcal_pl_helper.TZ, "Asia/Makassar")
 
@@ -176,12 +220,47 @@ class GcalPlHelperTest(unittest.TestCase):
             gcal_pl_helper, "push_jadwal_pl_ke_gcal"
         ) as push:
             result = gcal_pl_helper.sync_jadwal_pl(
-                "123", "Paket Uji", skip_unchanged=True
+                "123", "Paket Uji", skip_unchanged=True,
+                supabase_row={
+                    "tgl_pembukaan": "2026-08-06",
+                    "tgl_buka_penawaran": "2026-08-06",
+                    "tgl_evaluasi": "2026-08-06",
+                    "tgl_negosiasi": "2026-08-06",
+                    "tgl_penetapan": "2026-08-06",
+                },
             )
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["skipped"])
         push.assert_not_called()
+
+    def test_automatic_sync_does_not_skip_when_supabase_dates_are_missing(self):
+        jadwal = _jadwal_lima_tahap()
+        schedule_hash = gcal_pl_helper._schedule_hash(jadwal)
+
+        with patch.object(gcal_pl_helper, "parse_jadwal_pl_dari_spse", return_value=jadwal), patch.object(
+            gcal_pl_helper, "_load_schedule_state", return_value={"123": schedule_hash}
+        ), patch.object(gcal_pl_helper, "_gcal_schedule_complete", return_value=True), patch.object(
+            gcal_pl_helper,
+            "push_jadwal_pl_ke_gcal",
+            return_value={"ok": True, "inserted": 0, "deleted": 0, "error": ""},
+        ) as push:
+            result = gcal_pl_helper.sync_jadwal_pl(
+                "123",
+                "Paket Uji",
+                skip_unchanged=True,
+                supabase_row={
+                    "tgl_pembukaan": None,
+                    "tgl_buka_penawaran": None,
+                    "tgl_evaluasi": None,
+                    "tgl_negosiasi": None,
+                    "tgl_penetapan": None,
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["skipped"])
+        push.assert_called_once()
 
     def test_all_events_inserted(self):
         service = _FakeService()
