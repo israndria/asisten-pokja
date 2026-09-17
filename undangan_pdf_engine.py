@@ -78,7 +78,7 @@ def _nomor_urut_folder_pl(data: dict) -> str:
 
 
 def _build_nomor_surat_pl(nomor_folder: str, singkatan_satker: str, tahun: int) -> str:
-    return f"000.3.3/PP-{int(nomor_folder):02d}/{singkatan_satker}/Reviu/{tahun}"
+    return f"000.3.2/PP-{int(nomor_folder):02d}/{singkatan_satker}/Reviu/{tahun}"
 
 
 def _build_nomor_surat(kode_pokja: str, kode_unik: str, tahun: int) -> str:

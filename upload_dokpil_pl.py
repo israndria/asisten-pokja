@@ -9,7 +9,7 @@ Flow (S3 signed URL, dengan otorisasi ACL):
   5. POST /dokumennontender/{kode_paket}/doknontendersubmit  (multipart)
      fields: authenticityToken, ref, nomorSDP, tglSDP (DD-MM-YYYY), path, fileId
 
-Nomor Dokpil pattern: 000.3.3/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
+Nomor Dokpil pattern: 000.3.2/01/PL/PP-NN/{KodeUnik}/{SkpdSingkat}/{Tahun}
 """
 import re
 import time
@@ -51,7 +51,7 @@ def _dokpil_failure(stage: str, error: object, status: int | None = None) -> dic
 # ─────────────────────────────────────────────────────────────────────────────
 
 _NOMOR_DOKPIL_RE = re.compile(
-    r"^000\.3\.3(?:/PLU)?/\d+(?:/PL)?/PP-\d+/[^/?\s]+/[^/?\s]+/\d{4}$"
+    r"^000\.3\.2(?:/PLU)?/\d+(?:/PL)?/PP-\d+/[^/?\s]+/[^/?\s]+/\d{4}$"
 )
 
 
@@ -80,12 +80,12 @@ def _extract_digit_paket(nama_paket: str) -> str:
 
 
 def _sisip_plu(nomor: str) -> str:
-    """Sisip '/PLU' tepat setelah prefix '000.3.3' (paket ulang). Idempoten.
-    000.3.3/01/PL/... -> 000.3.3/PLU/01/PL/..."""
+    """Sisip '/PLU' tepat setelah prefix '000.3.2' (paket ulang). Idempoten.
+    000.3.2/01/PL/... -> 000.3.2/PLU/01/PL/..."""
     if not nomor or "/PLU/" in nomor:
         return nomor
-    if nomor.startswith("000.3.3"):
-        return "000.3.3/PLU" + nomor[7:]
+    if nomor.startswith("000.3.2"):
+        return "000.3.2/PLU" + nomor[7:]
     return nomor
 
 
@@ -98,9 +98,9 @@ def generate_nomor_dokpil(
     nomor_urut: str | int | None = None,
 ) -> str:
     """
-    Pattern: 000.3.3/01/PL/PP-{NN}/{KodeUnik}/{SkpdSingkat}/{Tahun}
-    Contoh:  000.3.3/01/PL/PP-01/KPP1/DPUPR/2026
-    paket_ulang=True → sisip /PLU/ setelah 000.3.3.
+    Pattern: 000.3.2/01/PL/PP-{NN}/{KodeUnik}/{SkpdSingkat}/{Tahun}
+    Contoh:  000.3.2/01/PL/PP-01/KPP1/DPUPR/2026
+    paket_ulang=True → sisip /PLU/ setelah 000.3.2.
     """
     # Nomor urut paket dari database adalah sumber utama. Ekstraksi dari
     # nama paket hanya fallback legacy; nama paket bisa tidak memuat nomor
@@ -116,7 +116,7 @@ def generate_nomor_dokpil(
         skpd_singkat = "DPUPR"
     if not tahun:
         tahun = datetime.now().year
-    nomor = f"000.3.3/01/PL/PP-{pp_nn}/{kode_unik}/{skpd_singkat}/{tahun}"
+    nomor = f"000.3.2/01/PL/PP-{pp_nn}/{kode_unik}/{skpd_singkat}/{tahun}"
     return _sisip_plu(nomor) if paket_ulang else nomor
 
 

@@ -5979,7 +5979,7 @@ if st.session_state["app_mode"] == "PL - Konsultansi":
                 with _pl8_lc2:
                     _nomor_lain8  = st.text_input(
                         "Nomor BA",
-                        placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
+                        placeholder="000.3.2/06/PL/PP-01/KPP1/DPUPR/2026",
                         key="pl8_nomor_lain",
                     )
                 _tgl_lain8 = st.date_input(
@@ -9761,7 +9761,7 @@ if st.session_state["app_mode"] == "PL - Konstruksi":
                 with _pl8_lc2:
                     _nomor_lain8  = st.text_input(
                         "Nomor BA",
-                        placeholder="000.3.3/06/PL/PP-01/KPP1/DPUPR/2026",
+                        placeholder="000.3.2/06/PL/PP-01/KPP1/DPUPR/2026",
                         key="pl8_nomor_lain",
                     )
                 _tgl_lain8 = st.date_input(
